@@ -34,9 +34,9 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
@@ -120,8 +120,8 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// Launch the Codex desktop app (downloads the macOS installer if missing).
-    #[cfg(target_os = "macos")]
+    /// Launch the Codex desktop app (opens the app installer if missing).
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
@@ -808,7 +808,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1730,6 +1730,15 @@ mod tests {
     }
 
     #[test]
+    fn plugin_marketplace_remove_parses_under_plugin() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "remove", "debug"])
+                .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
     fn marketplace_no_longer_parses_at_top_level() {
         let add_result =
             MultitoolCli::try_parse_from(["codex", "marketplace", "add", "owner/repo"]);
@@ -1738,6 +1747,10 @@ mod tests {
         let upgrade_result =
             MultitoolCli::try_parse_from(["codex", "marketplace", "upgrade", "debug"]);
         assert!(upgrade_result.is_err());
+
+        let remove_result =
+            MultitoolCli::try_parse_from(["codex", "marketplace", "remove", "debug"]);
+        assert!(remove_result.is_err());
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

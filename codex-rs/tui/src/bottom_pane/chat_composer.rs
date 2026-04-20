@@ -171,6 +171,7 @@ use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
@@ -239,6 +240,7 @@ pub enum InputResult {
     Queued {
         text: String,
         text_elements: Vec<TextElement>,
+        action: QueuedInputAction,
     },
     /// A bare slash command parsed by the composer.
     ///
@@ -252,6 +254,13 @@ pub enum InputResult {
     /// committed only if dispatch accepts it.
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedInputAction {
+    Plain,
+    ParseSlash,
+    RunShell,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -359,9 +368,11 @@ pub(crate) struct ChatComposer {
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    side_conversation_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    side_conversation_context_label: Option<String>,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
     history_search: Option<HistorySearchSession>,
@@ -398,6 +409,12 @@ enum ActivePopup {
     Skill(SkillPopup),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlashValidation {
+    Immediate,
+    Deferred,
+}
+
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
@@ -411,6 +428,7 @@ impl ChatComposer {
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+            side_conversation_active: self.side_conversation_active,
         }
     }
 
@@ -494,12 +512,14 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
             is_zellij: matches!(
                 codex_terminal_detection::terminal_info().multiplexer,
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
             ),
             status_line_value: None,
             status_line_enabled: false,
+            side_conversation_context_label: None,
             active_agent_label: None,
             history_search: None,
         };
@@ -592,6 +612,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_side_conversation_active(&mut self, active: bool) {
+        self.side_conversation_active = active;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -1389,14 +1413,48 @@ impl ChatComposer {
                 // before applying completion.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
-                if let Some(sel) = popup.selected_item() {
+                let selected_cmd = popup.selected_item().map(|sel| {
                     let CommandItem::Builtin(cmd) = sel;
+                    cmd
+                });
+                if let Some(cmd) = selected_cmd {
                     if cmd == SlashCommand::Skills {
                         self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
                         return (InputResult::Command(cmd), true);
                     }
 
+                    let selected_command_text = format!("/{}", cmd.command());
+                    let starts_with_cmd =
+                        first_line.trim_start().starts_with(&selected_command_text);
+                    if !starts_with_cmd {
+                        self.textarea
+                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                        if !self.textarea.text().is_empty() {
+                            self.textarea.set_cursor(self.textarea.text().len());
+                        }
+                        return (InputResult::None, true);
+                    }
+                }
+                if self.is_task_running {
+                    return self.handle_submission(/*should_queue*/ true);
+                }
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Char('/'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                // Treat "/" as accepting the highlighted command as text completion
+                // while the slash-command popup is active.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                popup.on_composer_text_change(first_line.to_string());
+                let selected_cmd = popup.selected_item().map(|sel| {
+                    let CommandItem::Builtin(cmd) = sel;
+                    cmd
+                });
+                if let Some(cmd) = selected_cmd {
                     let starts_with_cmd = first_line
                         .trim_start()
                         .starts_with(&format!("/{}", cmd.command()));
@@ -2170,6 +2228,14 @@ impl ChatComposer {
         &mut self,
         record_history: bool,
     ) -> Option<(String, Vec<TextElement>)> {
+        self.prepare_submission_text_with_options(record_history, SlashValidation::Immediate)
+    }
+
+    fn prepare_submission_text_with_options(
+        &mut self,
+        record_history: bool,
+        slash_validation: SlashValidation,
+    ) -> Option<(String, Vec<TextElement>)> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -2199,7 +2265,8 @@ impl ChatComposer {
         text = text.trim().to_string();
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if self.slash_commands_enabled()
+        if slash_validation == SlashValidation::Immediate
+            && self.slash_commands_enabled()
             && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
@@ -2282,6 +2349,31 @@ impl ChatComposer {
         should_queue: bool,
         now: Instant,
     ) -> (InputResult, bool) {
+        if should_queue {
+            let raw_text = self.textarea.text();
+            let defer_slash_validation =
+                self.should_parse_as_slash_on_dequeue_from_raw_text(raw_text);
+            if let Some((text, text_elements)) = self.prepare_submission_text_with_options(
+                /*record_history*/ true,
+                if defer_slash_validation {
+                    SlashValidation::Deferred
+                } else {
+                    SlashValidation::Immediate
+                },
+            ) {
+                let action = self.queued_input_action(&text, defer_slash_validation);
+                return (
+                    InputResult::Queued {
+                        text,
+                        text_elements,
+                        action,
+                    },
+                    true,
+                );
+            }
+            return (InputResult::None, true);
+        }
+
         // If the first line is a bare built-in slash command (no args),
         // dispatch it even when the slash popup isn't visible. This preserves
         // the workflow: type a prefix ("/di"), press Tab to complete to
@@ -2346,6 +2438,7 @@ impl ChatComposer {
                     InputResult::Queued {
                         text,
                         text_elements,
+                        action: QueuedInputAction::Plain,
                     },
                     true,
                 )
@@ -2475,6 +2568,24 @@ impl ChatComposer {
             history_cell::new_error_event(message),
         )));
         true
+    }
+
+    fn should_parse_as_slash_on_dequeue_from_raw_text(&self, text: &str) -> bool {
+        self.slash_commands_enabled() && !text.starts_with(' ') && text.trim().starts_with('/')
+    }
+
+    fn queued_input_action(
+        &self,
+        prepared_text: &str,
+        defer_slash_validation: bool,
+    ) -> QueuedInputAction {
+        if defer_slash_validation && prepared_text.starts_with('/') {
+            QueuedInputAction::ParseSlash
+        } else if prepared_text.starts_with('!') {
+            QueuedInputAction::RunShell
+        } else {
+            QueuedInputAction::Plain
+        }
     }
 
     /// Stage the current slash-command text for later local recall.
@@ -2690,7 +2801,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } if !self.is_bang_shell_command() => self.handle_submission(self.is_task_running),
+            } if self.is_task_running || !self.is_bang_shell_command() => {
+                self.handle_submission(self.is_task_running)
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -3258,6 +3371,7 @@ impl ChatComposer {
                         realtime_conversation_enabled,
                         audio_device_selection_enabled,
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+                        side_conversation_active: self.side_conversation_active,
                     });
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
@@ -3502,6 +3616,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) -> bool {
+        if self.side_conversation_context_label == label {
+            return false;
+        }
+        self.side_conversation_context_label = label;
+        true
+    }
+
     /// Replaces the contextual footer label for the currently viewed agent.
     ///
     /// Returning `false` means the value was unchanged, so callers can skip redraw work. This
@@ -3711,12 +3833,13 @@ impl ChatComposer {
                     } else {
                         self.collaboration_mode_indicator
                     };
+                    let active_footer_hint_override = self.footer_hint_override.as_ref();
                     let mut left_width = if self.footer_flash_visible() {
                         self.footer_flash
                             .as_ref()
                             .map(|flash| flash.line.width() as u16)
                             .unwrap_or(0)
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         footer_hint_items_width(items)
                     } else if status_line_active {
                         truncated_status_line
@@ -3732,7 +3855,11 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line = if status_line_active {
+                    let right_line = if let Some(label) =
+                        self.side_conversation_context_label.as_ref()
+                    {
+                        Some(side_conversation_context_line(label))
+                    } else if status_line_active {
                         let full =
                             mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
                         let compact = mode_indicator_line(
@@ -3765,7 +3892,7 @@ impl ChatComposer {
                     let can_show_left_and_context =
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
-                        self.footer_flash_visible() || self.footer_hint_override.is_some();
+                        self.footer_flash_visible() || active_footer_hint_override.is_some();
                     let single_line_layout = if has_override || status_line_active {
                         None
                     } else {
@@ -3843,7 +3970,7 @@ impl ChatComposer {
                         if let Some(flash) = self.footer_flash.as_ref() {
                             flash.line.render(inset_footer_hint_area(hint_rect), buf);
                         }
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         render_footer_hint_items(hint_rect, buf, items);
                     } else if status_line_active {
                         if let Some(line) = truncated_status_line {
@@ -3860,7 +3987,6 @@ impl ChatComposer {
                             show_queue_hint,
                         );
                     }
-
                     if show_right && let Some(line) = &right_line {
                         render_context_right(hint_rect, buf, line);
                     }
@@ -6544,6 +6670,131 @@ mod tests {
     }
 
     #[test]
+    fn tab_queues_slash_led_prompts_while_task_running_without_validation() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        fn assert_queued_slash(input: &str) {
+            let (tx, mut rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_task_running(/*running*/ true);
+            composer.textarea.set_text_clearing_elements(input);
+
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+            match result {
+                InputResult::Queued {
+                    text,
+                    text_elements,
+                    action,
+                } => {
+                    assert_eq!(text, input);
+                    assert!(text_elements.is_empty());
+                    assert_eq!(action, QueuedInputAction::ParseSlash);
+                }
+                other => panic!("expected slash-led input to queue, got {other:?}"),
+            }
+            assert!(composer.textarea.is_empty());
+            assert!(
+                rx.try_recv().is_err(),
+                "queueing should not report slash errors"
+            );
+        }
+
+        assert_queued_slash("/compact");
+        assert_queued_slash("/review check regressions");
+        assert_queued_slash("/fast on");
+        assert_queued_slash("/does-not-exist");
+    }
+
+    #[test]
+    fn tab_queues_leading_space_slash_as_plain_text_while_task_running() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+        composer
+            .textarea
+            .set_text_clearing_elements(" /does-not-exist");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Queued { text, action, .. } => {
+                assert_eq!(text, "/does-not-exist");
+                assert_eq!(action, QueuedInputAction::Plain);
+            }
+            other => panic!("expected leading-space slash input to queue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tab_queues_bang_shell_prompts_while_task_running_without_execution() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        fn assert_queued_shell(input: &str, expected_text: &str) {
+            let (tx, mut rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                /*has_input_focus*/ true,
+                sender,
+                /*enhanced_keys_supported*/ false,
+                "Ask Codex to do anything".to_string(),
+                /*disable_paste_burst*/ false,
+            );
+            composer.set_task_running(/*running*/ true);
+            composer.textarea.set_text_clearing_elements(input);
+
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+            match result {
+                InputResult::Queued {
+                    text,
+                    text_elements,
+                    action,
+                } => {
+                    assert_eq!(text, expected_text);
+                    assert!(text_elements.is_empty());
+                    assert_eq!(action, QueuedInputAction::RunShell);
+                }
+                other => panic!("expected bang shell input to queue, got {other:?}"),
+            }
+            assert!(composer.textarea.is_empty());
+            assert!(
+                rx.try_recv().is_err(),
+                "queueing should not show shell help immediately"
+            );
+        }
+
+        assert_queued_shell("!echo hi", "!echo hi");
+        assert_queued_shell("!", "!");
+        assert_queued_shell(" !echo hi", "!echo hi");
+    }
+
+    #[test]
     fn slash_tab_completion_moves_cursor_to_end() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -6565,6 +6816,59 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
         assert_eq!(composer.textarea.text(), "/compact ");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn slash_tab_completion_wins_over_queueing_while_task_running() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.textarea.text(), "/model ");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn slash_key_completes_selected_slash_command_as_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'm']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.textarea.text(), "/model ");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 

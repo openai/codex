@@ -71,7 +71,6 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -86,7 +85,7 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
         response
             .marketplaces
             .iter()
-            .all(|marketplace| { marketplace.path != marketplace_path }),
+            .all(|marketplace| { marketplace.path.as_ref() != Some(&marketplace_path) }),
         "invalid marketplace should be skipped"
     );
     assert_eq!(response.marketplace_load_errors.len(), 1);
@@ -200,7 +199,6 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 AbsolutePathBuf::try_from(valid_repo_root.path())?,
                 AbsolutePathBuf::try_from(invalid_repo_root.path())?,
             ]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -215,7 +213,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
         response.marketplaces,
         vec![PluginMarketplaceEntry {
             name: "valid-marketplace".to_string(),
-            path: valid_marketplace_path,
+            path: Some(valid_marketplace_path),
             interface: None,
             plugins: vec![PluginSummary {
                 id: "valid-plugin@valid-marketplace".to_string(),
@@ -243,7 +241,6 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
         "unexpected error: {:?}",
         response.marketplace_load_errors
     );
-    assert_eq!(response.remote_sync_error, None);
     assert!(response.featured_plugin_ids.is_empty());
     Ok(())
 }
@@ -314,7 +311,6 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -329,7 +325,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
         response.marketplaces,
         vec![PluginMarketplaceEntry {
             name: "alternate-marketplace".to_string(),
-            path: marketplace_path,
+            path: Some(marketplace_path),
             interface: None,
             plugins: vec![
                 PluginSummary {
@@ -355,8 +351,11 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                         default_prompt: None,
                         brand_color: None,
                         composer_icon: None,
+                        composer_icon_url: None,
                         logo: None,
+                        logo_url: None,
                         screenshots: Vec::new(),
+                        screenshot_urls: Vec::new(),
                     }),
                 },
                 PluginSummary {
@@ -412,10 +411,7 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            force_remote_sync: false,
-        })
+        .send_plugin_list_request(PluginListParams { cwds: None })
         .await?;
 
     let response: JSONRPCResponse = timeout(
@@ -486,7 +482,6 @@ enabled = false
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -501,11 +496,13 @@ enabled = false
         .marketplaces
         .into_iter()
         .find(|marketplace| {
-            marketplace.path
-                == AbsolutePathBuf::try_from(
-                    repo_root.path().join(".agents/plugins/marketplace.json"),
+            marketplace.path.as_ref()
+                == Some(
+                    &AbsolutePathBuf::try_from(
+                        repo_root.path().join(".agents/plugins/marketplace.json"),
+                    )
+                    .expect("absolute marketplace path"),
                 )
-                .expect("absolute marketplace path")
         })
         .expect("expected repo marketplace entry");
 
@@ -641,7 +638,6 @@ enabled = false
                 AbsolutePathBuf::try_from(workspace_enabled.path())?,
                 AbsolutePathBuf::try_from(workspace_default.path())?,
             ]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -725,7 +721,6 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -838,7 +833,6 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
         })
         .await?;
 
@@ -861,163 +855,6 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
             .as_ref()
             .and_then(|interface| interface.default_prompt.clone()),
         Some(vec!["Starter prompt for trying a plugin".to_string()])
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn plugin_list_force_remote_sync_returns_remote_sync_error_on_fail_open() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_plugin_sync_config(codex_home.path(), "https://chatgpt.com/backend-api/")?;
-    write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
-    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            force_remote_sync: true,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginListResponse = to_response(response)?;
-
-    assert!(
-        response
-            .remote_sync_error
-            .as_deref()
-            .is_some_and(|message| message.contains("chatgpt authentication required"))
-    );
-    let curated_marketplace = response
-        .marketplaces
-        .into_iter()
-        .find(|marketplace| marketplace.name == "openai-curated")
-        .expect("expected openai-curated marketplace entry");
-    assert_eq!(
-        curated_marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| (plugin.id, plugin.installed, plugin.enabled))
-            .collect::<Vec<_>>(),
-        vec![("linear@openai-curated".to_string(), true, false)]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let server = MockServer::start().await;
-    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail", "calendar"])?;
-    write_installed_plugin(&codex_home, "openai-curated", "linear")?;
-    write_installed_plugin(&codex_home, "openai-curated", "gmail")?;
-    write_installed_plugin(&codex_home, "openai-curated", "calendar")?;
-
-    Mock::given(method("GET"))
-        .and(path("/backend-api/plugins/list"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"[
-  {"id":"1","name":"linear","marketplace_name":"openai-curated","version":"1.0.0","enabled":true},
-  {"id":"2","name":"gmail","marketplace_name":"openai-curated","version":"1.0.0","enabled":false}
-]"#,
-        ))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/backend-api/plugins/featured"))
-        .and(query_param("platform", "codex"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"["linear@openai-curated","calendar@openai-curated"]"#),
-        )
-        .mount(&server)
-        .await;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            force_remote_sync: true,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginListResponse = to_response(response)?;
-    assert_eq!(response.remote_sync_error, None);
-    assert_eq!(
-        response.featured_plugin_ids,
-        vec![
-            "linear@openai-curated".to_string(),
-            "calendar@openai-curated".to_string(),
-        ]
-    );
-
-    let curated_marketplace = response
-        .marketplaces
-        .into_iter()
-        .find(|marketplace| marketplace.name == "openai-curated")
-        .expect("expected openai-curated marketplace entry");
-    assert_eq!(
-        curated_marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| (plugin.id, plugin.installed, plugin.enabled))
-            .collect::<Vec<_>>(),
-        vec![
-            ("linear@openai-curated".to_string(), true, true),
-            ("gmail@openai-curated".to_string(), false, false),
-            ("calendar@openai-curated".to_string(), false, false),
-        ]
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
-    assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
-    assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
-
-    assert!(
-        codex_home
-            .path()
-            .join("plugins/cache/openai-curated/linear/local")
-            .is_dir()
-    );
-    assert!(
-        !codex_home
-            .path()
-            .join("plugins/cache/openai-curated/gmail")
-            .exists()
-    );
-    assert!(
-        !codex_home
-            .path()
-            .join("plugins/cache/openai-curated/calendar")
-            .exists()
     );
     Ok(())
 }
@@ -1069,10 +906,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
         wait_for_remote_plugin_request_count(&server, "/plugins/list", /*expected_count*/ 1)
             .await?;
         let request_id = mcp
-            .send_plugin_list_request(PluginListParams {
-                cwds: None,
-                force_remote_sync: false,
-            })
+            .send_plugin_list_request(PluginListParams { cwds: None })
             .await?;
         let response: JSONRPCResponse = timeout(
             DEFAULT_TIMEOUT,
@@ -1128,10 +962,7 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            force_remote_sync: false,
-        })
+        .send_plugin_list_request(PluginListParams { cwds: None })
         .await?;
 
     let response: JSONRPCResponse = timeout(
@@ -1145,7 +976,6 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
         response.featured_plugin_ids,
         vec!["linear@openai-curated".to_string()]
     );
-    assert_eq!(response.remote_sync_error, None);
     Ok(())
 }
 
@@ -1169,10 +999,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
     wait_for_featured_plugin_request_count(&server, /*expected_count*/ 1).await?;
 
     let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: None,
-            force_remote_sync: false,
-        })
+        .send_plugin_list_request(PluginListParams { cwds: None })
         .await?;
 
     let response: JSONRPCResponse = timeout(
@@ -1186,7 +1013,6 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
         response.featured_plugin_ids,
         vec!["linear@openai-curated".to_string()]
     );
-    assert_eq!(response.remote_sync_error, None);
     Ok(())
 }
 

@@ -22,6 +22,7 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -74,8 +75,18 @@ impl ApplyPatchRuntime {
             return None;
         }
 
+        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            attempt.policy,
+            attempt.sandbox_cwd,
+        );
+        let file_system_sandbox_policy = (attempt.file_system_policy
+            != &legacy_file_system_sandbox_policy)
+            .then(|| attempt.file_system_policy.clone());
+
         Some(FileSystemSandboxContext {
             sandbox_policy: attempt.policy.clone(),
+            sandbox_policy_cwd: Some(attempt.sandbox_cwd.clone()),
+            file_system_sandbox_policy,
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,

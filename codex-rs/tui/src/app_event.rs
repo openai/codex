@@ -32,6 +32,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::UserMessage;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::plugins::PluginCapabilitySummary;
 
@@ -105,6 +106,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+
+    /// Fork the current thread into a transient side conversation.
+    StartSide {
+        parent_thread_id: ThreadId,
+        user_message: Option<UserMessage>,
+    },
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
@@ -293,6 +300,21 @@ pub(crate) enum AppEvent {
         plugin_id: String,
         plugin_display_name: String,
         result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Enable or disable an installed plugin.
+    SetPluginEnabled {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    },
+
+    /// Result of enabling or disabling a plugin.
+    PluginEnabledSet {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+        result: Result<(), String>,
     },
 
     /// Refresh plugin mention bindings from the current config.

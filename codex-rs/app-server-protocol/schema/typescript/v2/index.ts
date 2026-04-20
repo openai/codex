@@ -366,6 +366,7 @@ export type { TurnStatus } from "./TurnStatus";
 export type { TurnSteerParams } from "./TurnSteerParams";
 export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
+export type { WarningNotification } from "./WarningNotification";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsSandboxSetupCompletedNotification } from "./WindowsSandboxSetupCompletedNotification";
 export type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";

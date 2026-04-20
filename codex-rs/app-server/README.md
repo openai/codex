@@ -185,7 +185,7 @@ Example with notification opt-out:
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
-- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
+- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
@@ -957,6 +957,10 @@ All filesystem paths in this section must be absolute.
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
 
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
+
+Recoverable configuration and initialization warnings use the existing `configWarning` notification: `{ summary, details?, path?, range? }`. App-server may emit it during initialization for config parsing and related setup diagnostics.
+
+Generic runtime warnings use the `warning` notification: `{ threadId?, message }`. App-server emits this for non-fatal warnings from the core event stream, including cases where not all enabled skills are included in the model-visible skills list for a session.
 
 ### Notification opt-out
 

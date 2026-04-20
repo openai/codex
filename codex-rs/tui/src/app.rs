@@ -28,6 +28,8 @@ use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_agent_config_migration_startup::ExternalAgentConfigMigrationStartupOutcome;
+use crate::external_agent_config_migration_startup::handle_external_agent_config_migration_prompt_if_needed;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -76,6 +78,8 @@ use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -83,6 +87,7 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -141,6 +146,8 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
+use ratatui::backend::Backend;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -148,6 +155,7 @@ use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -170,12 +178,14 @@ mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod side;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::side::SideThreadState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -481,16 +491,12 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
         };
-        if layer.disabled_reason.is_none() {
+        let Some(disabled_reason) = &layer.disabled_reason else {
             continue;
-        }
+        };
         disabled_folders.push((
             dot_codex_folder.as_path().display().to_string(),
-            layer
-                .disabled_reason
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
+            disabled_reason.clone(),
         ));
     }
 
@@ -499,8 +505,8 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     }
 
     let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
+        "Project-local config, hooks, and exec policies are disabled in the following folders ",
+        "until the project is trusted, but skills still load.\n",
     )
     .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
@@ -1040,6 +1046,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    side_threads: HashMap<ThreadId, SideThreadState>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
@@ -1047,6 +1054,10 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    // Serialize plugin enablement writes per plugin so stale completions cannot
+    // overwrite a newer toggle, even if the plugin is toggled from different
+    // cwd contexts.
+    pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
 }
 
 #[derive(Default)]
@@ -1414,10 +1425,12 @@ impl App {
             return;
         }
 
+        let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
-        let show_memory_enable_notice = feature_updates_to_apply
-            .iter()
-            .any(|(feature, enabled)| *feature == Feature::MemoryTool && *enabled);
+        let show_memory_enable_notice =
+            feature_updates_to_apply.iter().any(|(feature, enabled)| {
+                *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
+            });
         for (feature, effective_enabled) in feature_updates_to_apply {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
@@ -1862,6 +1875,7 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_side_thread_ui();
     }
 
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
@@ -2182,6 +2196,48 @@ impl App {
                 cwd: cwd_for_event,
                 plugin_id: plugin_id_for_event,
                 plugin_display_name,
+                result,
+            });
+        });
+    }
+
+    fn set_plugin_enabled(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        if let Some(queued_enabled) = self.pending_plugin_enabled_writes.get_mut(&plugin_id) {
+            *queued_enabled = Some(enabled);
+            return;
+        }
+
+        self.pending_plugin_enabled_writes
+            .insert(plugin_id.clone(), None);
+        self.spawn_plugin_enabled_write(app_server, cwd, plugin_id, enabled);
+    }
+
+    fn spawn_plugin_enabled_write(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let plugin_id_for_event = plugin_id.clone();
+            let result = write_plugin_enabled(request_handle, plugin_id, enabled)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to update plugin config: {err}"));
+            app_event_tx.send(AppEvent::PluginEnabledSet {
+                cwd: cwd_for_event,
+                plugin_id: plugin_id_for_event,
+                enabled,
                 result,
             });
         });
@@ -3019,11 +3075,7 @@ impl App {
         is_replay_only: bool,
         snapshot: &mut ThreadEventSnapshot,
     ) {
-        let should_refresh = !is_replay_only
-            && snapshot.session.as_ref().is_none_or(|session| {
-                session.model.trim().is_empty() || session.rollout_path.is_none()
-            });
-        if !should_refresh {
+        if !self.should_refresh_snapshot_session(thread_id, is_replay_only, snapshot) {
             return;
         }
 
@@ -3043,6 +3095,19 @@ impl App {
                 );
             }
         }
+    }
+
+    fn should_refresh_snapshot_session(
+        &self,
+        thread_id: ThreadId,
+        is_replay_only: bool,
+        snapshot: &ThreadEventSnapshot,
+    ) -> bool {
+        !is_replay_only
+            && !self.side_threads.contains_key(&thread_id)
+            && snapshot.session.as_ref().is_none_or(|session| {
+                session.model.trim().is_empty() || session.rollout_path.is_none()
+            })
     }
 
     async fn apply_refreshed_snapshot_thread(
@@ -3078,6 +3143,9 @@ impl App {
             }
         }
         for thread_id in thread_ids {
+            if self.side_threads.contains_key(&thread_id) {
+                continue;
+            }
             if !self
                 .refresh_agent_picker_thread_liveness(app_server, thread_id)
                 .await
@@ -3492,11 +3560,26 @@ impl App {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
+        tui.clear_pending_history_lines();
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
+        Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
+        Ok(())
+    }
+
+    fn clear_terminal_for_thread_switch<B>(
+        terminal: &mut crate::custom_terminal::Terminal<B>,
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
+        terminal.clear_scrollback_and_visible_screen_ansi()?;
+        let mut area = terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            terminal.set_viewport_area(area);
+        }
         Ok(())
     }
 
@@ -3504,6 +3587,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.side_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -3775,7 +3859,11 @@ impl App {
         resume_restored_queue: bool,
     ) {
         if let Some(session) = snapshot.session {
-            self.chat_widget.handle_thread_session(session);
+            if self.side_threads.contains_key(&session.thread_id) {
+                self.chat_widget.handle_side_thread_session(session);
+            } else {
+                self.chat_widget.handle_thread_session(session);
+            }
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ true);
@@ -3833,6 +3921,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
@@ -3850,6 +3939,38 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let external_agent_config_migration_outcome =
+            handle_external_agent_config_migration_prompt_if_needed(
+                tui,
+                &mut app_server,
+                &mut config,
+                &cli_kv_overrides,
+                &harness_overrides,
+                entered_trust_nux,
+            )
+            .await?;
+        let external_agent_config_migration_message = match external_agent_config_migration_outcome
+        {
+            ExternalAgentConfigMigrationStartupOutcome::Continue { success_message } => {
+                success_message
+            }
+            ExternalAgentConfigMigrationStartupOutcome::ExitRequested => {
+                app_server
+                    .shutdown()
+                    .await
+                    .inspect_err(|err| {
+                        tracing::warn!("app-server shutdown failed: {err}");
+                    })
+                    .ok();
+                return Ok(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+        };
         let bootstrap = app_server.bootstrap(&config).await?;
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
@@ -4020,6 +4141,9 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
 
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
@@ -4061,6 +4185,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            side_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -4068,6 +4193,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -4759,6 +4885,13 @@ impl App {
             } => {
                 self.fetch_plugin_uninstall(app_server, cwd, plugin_id, plugin_display_name);
             }
+            AppEvent::SetPluginEnabled {
+                cwd,
+                plugin_id,
+                enabled,
+            } => {
+                self.set_plugin_enabled(app_server, cwd, plugin_id, enabled);
+            }
             AppEvent::PluginInstallLoaded {
                 cwd,
                 marketplace_path,
@@ -4789,11 +4922,52 @@ impl App {
                             app_server,
                             cwd,
                             PluginReadParams {
-                                marketplace_path,
+                                marketplace_path: Some(marketplace_path),
+                                remote_marketplace_name: None,
                                 plugin_name,
                             },
                         );
                     }
+                }
+            }
+            AppEvent::PluginEnabledSet {
+                cwd,
+                plugin_id,
+                enabled,
+                result,
+            } => {
+                let queued_enabled = self
+                    .pending_plugin_enabled_writes
+                    .get_mut(&plugin_id)
+                    .and_then(Option::take);
+                let should_apply_result = if let Some(queued_enabled) = queued_enabled
+                    && (result.is_err() || queued_enabled != enabled)
+                {
+                    self.spawn_plugin_enabled_write(
+                        app_server,
+                        cwd.clone(),
+                        plugin_id.clone(),
+                        queued_enabled,
+                    );
+                    false
+                } else {
+                    true
+                };
+                if should_apply_result {
+                    self.pending_plugin_enabled_writes.remove(&plugin_id);
+                    let update_succeeded = result.is_ok();
+                    if update_succeeded {
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after plugin toggle"
+                            );
+                        }
+                        self.chat_widget.refresh_plugin_mentions();
+                        self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    }
+                    self.chat_widget
+                        .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
             AppEvent::FetchMcpInventory => {
@@ -5704,7 +5878,16 @@ impl App {
                 self.open_agent_picker(app_server).await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, app_server, thread_id).await?;
+                self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                    .await?;
+            }
+            AppEvent::StartSide {
+                parent_thread_id,
+                user_message,
+            } => {
+                return self
+                    .handle_start_side(tui, app_server, parent_thread_id, user_message)
+                    .await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -6114,8 +6297,14 @@ impl App {
                 self.active_non_primary_shutdown_target(notification)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread(tui, app_server, primary_thread_id)
-                .await?;
+            if self.side_threads.contains_key(&closed_thread_id) {
+                self.discard_closed_side_thread(closed_thread_id).await;
+                self.select_agent_thread(tui, app_server, primary_thread_id)
+                    .await?;
+            } else {
+                self.select_agent_thread_and_discard_side(tui, app_server, primary_thread_id)
+                    .await?;
+            }
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
@@ -6301,7 +6490,9 @@ impl App {
                 .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
                 .await
             {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                    .await;
             }
             return;
         }
@@ -6316,15 +6507,22 @@ impl App {
                 .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
                 .await
             {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                    .await;
             }
+            return;
+        }
+        if side_return_shortcut_matches(key_event)
+            && self.maybe_return_from_side(tui, app_server).await
+        {
             return;
         }
 
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('t'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6335,7 +6533,7 @@ impl App {
             }
             KeyEvent {
                 code: KeyCode::Char('l'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6354,7 +6552,7 @@ impl App {
             }
             KeyEvent {
                 code: KeyCode::Char('g'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6446,6 +6644,23 @@ impl App {
                 });
             }
         });
+    }
+}
+
+fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
+    match key_event {
+        KeyEvent {
+            code: KeyCode::Esc,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        } => true,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => true,
+        _ => false,
     }
 }
 
@@ -6547,7 +6762,6 @@ async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                force_remote_sync: false,
             },
         })
         .await
@@ -6585,9 +6799,9 @@ async fn fetch_plugin_install(
         .request_typed(ClientRequest::PluginInstall {
             request_id,
             params: PluginInstallParams {
-                marketplace_path,
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
                 plugin_name,
-                force_remote_sync: false,
             },
         })
         .await
@@ -6602,13 +6816,31 @@ async fn fetch_plugin_uninstall(
     request_handle
         .request_typed(ClientRequest::PluginUninstall {
             request_id,
-            params: PluginUninstallParams {
-                plugin_id,
-                force_remote_sync: false,
-            },
+            params: PluginUninstallParams { plugin_id },
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
+}
+
+async fn write_plugin_enabled(
+    request_handle: AppServerRequestHandle,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<ConfigWriteResponse> {
+    let request_id = RequestId::String(format!("plugin-enable-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigValueWrite {
+            request_id,
+            params: ConfigValueWriteParams {
+                key_path: format!("plugins.{plugin_id}"),
+                value: serde_json::json!({ "enabled": enabled }),
+                merge_strategy: MergeStrategy::Upsert,
+                file_path: None,
+                expected_version: None,
+            },
+        })
+        .await
+        .wrap_err("config/value/write failed while updating plugin enablement in TUI")
 }
 
 fn build_feedback_upload_params(
@@ -6733,6 +6965,8 @@ mod tests {
     use codex_app_server_protocol::HookScope as AppServerHookScope;
     use codex_app_server_protocol::HookStartedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::McpServerStartupState;
+    use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
@@ -6804,19 +7038,18 @@ mod tests {
             marketplaces: vec![
                 PluginMarketplaceEntry {
                     name: "openai-bundled".to_string(),
-                    path: test_absolute_path("/marketplaces/openai-bundled"),
+                    path: Some(test_absolute_path("/marketplaces/openai-bundled")),
                     interface: None,
                     plugins: Vec::new(),
                 },
                 PluginMarketplaceEntry {
                     name: "openai-curated".to_string(),
-                    path: test_absolute_path("/marketplaces/openai-curated"),
+                    path: Some(test_absolute_path("/marketplaces/openai-curated")),
                     interface: None,
                     plugins: Vec::new(),
                 },
             ],
             marketplace_load_errors: Vec::new(),
-            remote_sync_error: None,
             featured_plugin_ids: Vec::new(),
         };
 
@@ -6826,7 +7059,7 @@ mod tests {
             response.marketplaces,
             vec![PluginMarketplaceEntry {
                 name: "openai-curated".to_string(),
-                path: test_absolute_path("/marketplaces/openai-curated"),
+                path: Some(test_absolute_path("/marketplaces/openai-curated")),
                 interface: None,
                 plugins: Vec::new(),
             }]
@@ -9571,6 +9804,400 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
+        let mut app = make_test_app().await;
+        app.config.developer_instructions = Some("Existing developer policy.".to_string());
+        let original_approval_policy = app.config.permissions.approval_policy.value();
+        let original_sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+
+        let fork_config = app.side_fork_config();
+
+        assert!(fork_config.ephemeral);
+        assert_eq!(
+            fork_config.permissions.approval_policy.value(),
+            original_approval_policy
+        );
+        assert_eq!(
+            fork_config.permissions.sandbox_policy.get(),
+            &original_sandbox_policy
+        );
+        let developer_instructions = fork_config
+            .developer_instructions
+            .as_deref()
+            .expect("side developer instructions");
+        assert!(developer_instructions.contains("Existing developer policy."));
+        assert!(
+            developer_instructions.contains("You are in a side conversation, not the main thread.")
+        );
+        assert!(
+            developer_instructions
+                .contains("inherited fork history is provided only as reference context")
+        );
+        assert!(developer_instructions.contains(
+            "Only instructions submitted after the side-conversation boundary are active"
+        ));
+        assert!(developer_instructions.contains("Do not continue, execute, or complete any task"));
+        assert!(
+            developer_instructions
+                .contains("External tools may be available according to this thread's current")
+        );
+        assert!(
+            developer_instructions
+                .contains("Any MCP or external tool calls or outputs visible in the inherited")
+        );
+        assert!(developer_instructions.contains("non-mutating inspection"));
+        assert!(developer_instructions.contains("Do not modify files"));
+        assert!(developer_instructions.contains("Do not request escalated permissions"));
+        assert!(app.transcript_cells.is_empty());
+    }
+
+    #[test]
+    fn side_boundary_prompt_marks_inherited_history_reference_only() {
+        let item = App::side_boundary_prompt_item();
+        let codex_protocol::models::ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected hidden side boundary prompt to be a user message");
+        };
+        assert_eq!(role, "user");
+        let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected hidden side boundary prompt text");
+        };
+        assert!(text.contains("Side conversation boundary."));
+        assert!(text.contains("Everything before this boundary is inherited history"));
+        assert!(text.contains("It is not your current task."));
+        assert!(text.contains("Only messages submitted after this boundary are active"));
+        assert!(text.contains("Do not continue, execute, or complete"));
+        assert!(text.contains("separate from the main thread"));
+        assert!(
+            text.contains("External tools may be available according to this thread's current")
+        );
+        assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
+        assert!(text.contains("Do not modify files"));
+    }
+
+    #[test]
+    fn side_return_shortcuts_match_esc_and_ctrl_c() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+    }
+
+    #[tokio::test]
+    async fn side_start_block_message_tracks_open_side_conversation() {
+        let mut app = make_test_app().await;
+        assert_eq!(
+            app.side_start_block_message(),
+            Some("'/side' is unavailable until the main thread is ready.")
+        );
+
+        app.primary_thread_id = Some(ThreadId::new());
+        assert_eq!(app.side_start_block_message(), None);
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        assert_eq!(
+            app.side_start_block_message(),
+            Some(
+                "A side conversation is already open. Press Esc to return before starting another."
+            )
+        );
+
+        app.side_threads.remove(&side_thread_id);
+        assert_eq!(app.side_start_block_message(), None);
+    }
+
+    #[test]
+    fn side_start_error_message_explains_missing_first_prompt() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
+        );
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
+        );
+    }
+
+    #[test]
+    fn side_start_error_message_uses_generic_start_wording() {
+        let err = color_eyre::eyre::eyre!("transport disconnected");
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "Failed to start side conversation: transport disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_hides_forked_parent_transcript() {
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 4);
+        let session = ThreadSessionState {
+            forked_from_id: Some(parent_thread_id),
+            ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+        };
+        let parent_turn = test_turn(
+            "parent-turn",
+            TurnStatus::Completed,
+            vec![ThreadItem::UserMessage {
+                id: "parent-user".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "parent prompt should stay hidden".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+        );
+
+        App::install_side_thread_snapshot(&mut store, session, vec![parent_turn]);
+
+        let stored_session = store.session.as_ref().expect("side session");
+        assert_eq!(stored_session.thread_id, side_thread_id);
+        assert_eq!(stored_session.forked_from_id, None);
+        assert_eq!(store.turns, Vec::<Turn>::new());
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_does_not_refresh_from_fork_history() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                rollout_path: None,
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        assert!(!app.should_refresh_snapshot_session(
+            side_thread_id,
+            /*is_replay_only*/ false,
+            &snapshot
+        ));
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_skips_session_header_preamble() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                forked_from_id: Some(parent_thread_id),
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert_eq!(app.chat_widget.thread_id(), Some(side_thread_id));
+        assert_eq!(rendered_cells, Vec::<String>::new());
+        assert_eq!(
+            app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn side_thread_ignores_global_mcp_startup_notifications() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+        app.sync_side_thread_ui();
+
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    name: "sentry".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("sentry is not logged in".to_string()),
+                }),
+            ),
+        )
+        .await;
+
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn side_restore_user_message_puts_inline_question_back_in_composer() {
+        let mut app = make_test_app().await;
+        let user_message = crate::chatwidget::UserMessage::from("side question");
+
+        app.restore_side_user_message(Some(user_message));
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "side question"
+        );
+    }
+
+    #[tokio::test]
+    async fn side_discard_selection_keeps_current_side_thread() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        assert_eq!(
+            app.side_thread_to_discard_after_switch(side_thread_id),
+            None
+        );
+        assert_eq!(
+            app.side_thread_to_discard_after_switch(parent_thread_id),
+            Some(side_thread_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut side_config = app.chat_widget.config_ref().clone();
+        side_config.ephemeral = true;
+        let started = app_server.start_thread(&side_config).await?;
+        let side_thread_id = started.session.thread_id;
+        app.side_threads.insert(
+            side_thread_id,
+            SideThreadState {
+                parent_thread_id: ThreadId::new(),
+            },
+        );
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            !app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.active_thread_id, Some(side_thread_id));
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .map(|state| state.parent_thread_id),
+            Some(parent_thread_id)
+        );
+        assert!(app.agent_navigation.get(&side_thread_id).is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+        app.thread_event_channels
+            .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.discard_closed_side_thread(side_thread_id).await;
+
+        assert_eq!(app.active_thread_id, None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+    }
+
+    #[tokio::test]
     async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
     {
         let mut app = make_test_app().await;
@@ -9855,6 +10482,7 @@ guardian_approval = true
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            side_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -9862,6 +10490,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
         }
     }
 
@@ -9912,6 +10541,7 @@ guardian_approval = true
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                side_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
@@ -9919,6 +10549,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                pending_plugin_enabled_writes: HashMap::new(),
             },
             rx,
             op_rx,

@@ -24,6 +24,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
@@ -511,6 +512,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputImage {
                     image_url: legacy_image_url.to_string(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 }],
                 end_turn: None,
                 phase: None,

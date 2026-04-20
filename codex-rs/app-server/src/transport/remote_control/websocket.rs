@@ -392,7 +392,14 @@ impl RemoteControlWebsocket {
         ping_interval: std::time::Duration,
         shutdown_token: CancellationToken,
     ) -> io::Result<()> {
-        for server_envelope in state.lock().await.outbound_buffer.server_envelopes() {
+        let server_envelopes = state
+            .lock()
+            .await
+            .outbound_buffer
+            .server_envelopes()
+            .cloned()
+            .collect::<Vec<_>>();
+        for server_envelope in server_envelopes {
             let payload = match serde_json::to_string(&server_envelope) {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -594,21 +601,22 @@ impl RemoteControlWebsocket {
                 }
             };
 
-            let mut websocket_state = state.lock().await;
-            if let Some(cursor) = client_envelope.cursor.as_deref() {
-                websocket_state.subscribe_cursor = Some(cursor.to_string());
-            }
-            if let ClientEvent::Ack = &client_envelope.event
-                && let Some(acked_seq_id) = client_envelope.seq_id
-                && let Some(stream_id) = client_envelope.stream_id.as_ref()
             {
-                websocket_state.outbound_buffer.ack(
-                    &client_envelope.client_id,
-                    stream_id,
-                    acked_seq_id,
-                );
+                let mut websocket_state = state.lock().await;
+                if let Some(cursor) = client_envelope.cursor.as_deref() {
+                    websocket_state.subscribe_cursor = Some(cursor.to_string());
+                }
+                if let ClientEvent::Ack = &client_envelope.event
+                    && let Some(acked_seq_id) = client_envelope.seq_id
+                    && let Some(stream_id) = client_envelope.stream_id.as_ref()
+                {
+                    websocket_state.outbound_buffer.ack(
+                        &client_envelope.client_id,
+                        stream_id,
+                        acked_seq_id,
+                    );
+                }
             }
-            drop(websocket_state);
 
             if client_tracker
                 .handle_message(client_envelope)
