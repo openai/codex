@@ -1701,7 +1701,7 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 }
 
 #[tokio::test]
-async fn active_goal_suppresses_agent_turn_complete_notification() {
+async fn active_goal_without_follow_up_sends_agent_turn_complete_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.handle_server_notification(
@@ -1729,7 +1729,35 @@ async fn active_goal_suppresses_agent_turn_complete_notification() {
         msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
     });
 
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response == "Still working"
+    );
+}
+
+#[tokio::test]
+async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message("Continue".into());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
+    });
+
     assert_matches!(chat.pending_notification, None);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
 }
 
 #[tokio::test]

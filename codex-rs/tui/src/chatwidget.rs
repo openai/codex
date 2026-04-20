@@ -2737,11 +2737,11 @@ impl ChatWidget {
             self.saw_plan_item_this_turn = false;
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
-        // Emit a notification when the agent is truly waiting for the user. An
-        // active goal will immediately continue with hidden follow-up input, so
-        // notifying at this boundary would feel like a false "needs attention".
-        if !self.active_goal_in_progress() {
+        let follow_up_started = self.maybe_send_next_queued_input();
+        // Emit a notification when the agent is truly waiting for the user.
+        // Queued follow-up input starts the next turn immediately, so notifying
+        // at that boundary would feel like a false "needs attention".
+        if !follow_up_started {
             self.notify(Notification::AgentTurnComplete {
                 response: notification_response,
             });
@@ -7768,20 +7768,21 @@ impl ChatWidget {
     }
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
-    pub(crate) fn maybe_send_next_queued_input(&mut self) {
+    pub(crate) fn maybe_send_next_queued_input(&mut self) -> bool {
         if self.suppress_queue_autosend {
-            return;
+            return false;
         }
         if self.is_user_turn_pending_or_running() {
-            return;
+            return false;
         }
+        let mut submitted_follow_up = false;
         while !self.is_user_turn_pending_or_running() {
             let Some((queued_message, history_record)) = self.pop_next_queued_user_message() else {
                 break;
             };
             match queued_message.action {
                 QueuedInputAction::Plain => {
-                    self.submit_user_message_with_history_record(
+                    submitted_follow_up = self.submit_user_message_with_history_record(
                         queued_message.into_user_message(),
                         history_record,
                     );
@@ -7790,12 +7791,14 @@ impl ChatWidget {
                 QueuedInputAction::ParseSlash => {
                     let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
                     if drain == QueueDrain::Stop {
+                        submitted_follow_up = true;
                         break;
                     }
                 }
                 QueuedInputAction::RunShell => {
                     let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
                     if drain == QueueDrain::Stop {
+                        submitted_follow_up = true;
                         break;
                     }
                 }
@@ -7803,6 +7806,7 @@ impl ChatWidget {
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
+        submitted_follow_up
     }
 
     pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
@@ -10502,14 +10506,6 @@ impl ChatWidget {
         self.current_goal_status
             .as_ref()
             .and_then(|state| state.indicator(now, self.goal_status_active_turn_started_at))
-    }
-
-    fn active_goal_in_progress(&self) -> bool {
-        self.config.features.enabled(Feature::Goals)
-            && self
-                .current_goal_status
-                .as_ref()
-                .is_some_and(GoalStatusState::is_active)
     }
 
     fn on_thread_goal_updated(&mut self, goal: AppThreadGoal, turn_id: Option<String>) {
