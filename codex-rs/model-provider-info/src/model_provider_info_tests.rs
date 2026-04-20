@@ -225,8 +225,6 @@ base_url = "https://bedrock.example.com/v1"
 
 [aws]
 profile = "codex-bedrock"
-region = "us-east-1"
-service = "bedrock"
         "#;
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
@@ -235,8 +233,6 @@ service = "bedrock"
         provider.aws,
         Some(ModelProviderAwsAuthInfo {
             profile: Some("codex-bedrock".to_string()),
-            region: Some("us-east-1".to_string()),
-            service: Some("bedrock".to_string()),
         })
     );
 }
@@ -252,11 +248,7 @@ fn test_create_amazon_bedrock_provider() {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
-            aws: Some(ModelProviderAwsAuthInfo {
-                profile: None,
-                region: None,
-                service: None,
-            }),
+            aws: Some(ModelProviderAwsAuthInfo { profile: None }),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -286,11 +278,7 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
 #[test]
 fn test_validate_provider_aws_rejects_conflicting_auth() {
     let provider = ModelProviderInfo {
-        aws: Some(ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-            service: None,
-        }),
+        aws: Some(ModelProviderAwsAuthInfo { profile: None }),
         env_key: Some("AWS_BEARER_TOKEN_BEDROCK".to_string()),
         supports_websockets: false,
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
@@ -305,11 +293,7 @@ fn test_validate_provider_aws_rejects_conflicting_auth() {
 #[test]
 fn test_validate_provider_aws_rejects_websockets() {
     let provider = ModelProviderInfo {
-        aws: Some(ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-            service: None,
-        }),
+        aws: Some(ModelProviderAwsAuthInfo { profile: None }),
         requires_openai_auth: false,
         supports_websockets: true,
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
@@ -318,24 +302,6 @@ fn test_validate_provider_aws_rejects_websockets() {
     assert_eq!(
         provider.validate(),
         Err("provider aws cannot be combined with supports_websockets".to_string())
-    );
-}
-
-#[test]
-fn test_validate_provider_aws_rejects_empty_service() {
-    let provider = ModelProviderInfo {
-        aws: Some(ModelProviderAwsAuthInfo {
-            profile: None,
-            region: None,
-            service: Some("   ".to_string()),
-        }),
-        requires_openai_auth: false,
-        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
-    };
-
-    assert_eq!(
-        provider.validate(),
-        Err("provider aws.service must not be empty".to_string())
     );
 }
 

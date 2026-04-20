@@ -1809,8 +1809,11 @@ impl Config {
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             if key == AMAZON_BEDROCK_PROVIDER_ID {
-                if let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID) {
-                    built_in.aws = provider.aws;
+                if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
+                    && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+                    && let Some(aws) = built_in.aws.as_mut()
+                {
+                    aws.profile = Some(profile);
                 }
             } else {
                 model_providers.entry(key).or_insert(provider);

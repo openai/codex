@@ -49,6 +49,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::AMAZON_BEDROCK_DEFAULT_BASE_URL;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -373,10 +374,10 @@ command = "print-token"
 fn rejects_provider_aws_for_custom_provider() {
     let err = toml::from_str::<ConfigToml>(
         r#"
-[model_providers.bedrock]
-name = "Amazon Bedrock"
+[model_providers.custom]
+name = "Custom Provider"
 
-[model_providers.bedrock.aws]
+[model_providers.custom.aws]
 profile = "codex-bedrock"
 "#,
     )
@@ -384,7 +385,7 @@ profile = "codex-bedrock"
 
     assert!(
         err.to_string().contains(
-            "model_providers.bedrock: provider aws is only supported for `amazon-bedrock`"
+            "model_providers.custom: provider aws is only supported for `amazon-bedrock`"
         )
     );
 }
@@ -429,6 +430,50 @@ profile = "codex-bedrock"
     .expect("load config");
 
     assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+}
+
+#[tokio::test]
+async fn load_config_ignores_unsupported_amazon_bedrock_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+name = "Custom Bedrock"
+base_url = "https://bedrock.example.com/v1"
+requires_openai_auth = true
+supports_websockets = true
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock unsupported overrides should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider.name, "Amazon Bedrock");
+    assert_eq!(
+        config.model_provider.base_url.as_deref(),
+        Some(AMAZON_BEDROCK_DEFAULT_BASE_URL)
+    );
+    assert_eq!(config.model_provider.wire_api, WireApi::Responses);
+    assert!(!config.model_provider.requires_openai_auth);
+    assert!(!config.model_provider.supports_websockets);
     assert_eq!(
         config
             .model_provider
