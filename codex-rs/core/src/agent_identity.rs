@@ -3,23 +3,22 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_agent_identity::AgentBillOfMaterials;
+use codex_agent_identity::AgentIdentityKey;
+use codex_agent_identity::agent_identity_biscuit_url;
+use codex_agent_identity::agent_identity_request_id;
+use codex_agent_identity::agent_registration_url;
+use codex_agent_identity::build_abom;
+use codex_agent_identity::generate_agent_key_material;
+use codex_agent_identity::public_key_ssh_from_private_key_pkcs8_base64;
 use codex_features::Feature;
 use codex_login::AgentIdentityAuthRecord;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
 use codex_protocol::protocol::SessionSource;
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::VerifyingKey;
-use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::pkcs8::EncodePrivateKey;
-use rand::TryRngCore;
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -67,13 +66,6 @@ pub(crate) struct StoredAgentIdentity {
     pub(crate) abom: AgentBillOfMaterials,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct AgentBillOfMaterials {
-    pub(crate) agent_version: String,
-    pub(crate) agent_harness_id: String,
-    pub(crate) running_location: String,
-}
-
 #[derive(Debug, Serialize)]
 struct RegisterAgentRequest {
     abom: AgentBillOfMaterials,
@@ -92,11 +84,6 @@ struct AgentIdentityBinding {
     chatgpt_account_id: String,
     chatgpt_user_id: Option<String>,
     access_token: String,
-}
-
-struct GeneratedAgentKeyMaterial {
-    private_key_pkcs8_base64: String,
-    public_key_ssh: String,
 }
 
 impl AgentIdentityManager {
@@ -392,14 +379,15 @@ impl StoredAgentIdentity {
                 binding.chatgpt_account_id
             );
         }
-        let signing_key = signing_key_from_private_key_pkcs8_base64(&record.agent_private_key)?;
+        let public_key_ssh =
+            public_key_ssh_from_private_key_pkcs8_base64(&record.agent_private_key)?;
         Ok(Self {
             binding_id: binding.binding_id.clone(),
             chatgpt_account_id: binding.chatgpt_account_id.clone(),
             chatgpt_user_id: record.chatgpt_user_id,
             agent_runtime_id: record.agent_runtime_id,
             private_key_pkcs8_base64: record.agent_private_key,
-            public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
+            public_key_ssh,
             registered_at: record.registered_at,
             abom,
         })
@@ -425,8 +413,8 @@ impl StoredAgentIdentity {
     }
 
     fn validate_key_material(&self) -> Result<()> {
-        let signing_key = self.signing_key()?;
-        let derived_public_key = encode_ssh_ed25519_public_key(&signing_key.verifying_key());
+        let derived_public_key =
+            public_key_ssh_from_private_key_pkcs8_base64(&self.private_key_pkcs8_base64)?;
         anyhow::ensure!(
             self.public_key_ssh == derived_public_key,
             "stored public key does not match the private key"
@@ -434,8 +422,11 @@ impl StoredAgentIdentity {
         Ok(())
     }
 
-    pub(crate) fn signing_key(&self) -> Result<SigningKey> {
-        signing_key_from_private_key_pkcs8_base64(&self.private_key_pkcs8_base64)
+    pub(crate) fn agent_identity_key(&self) -> AgentIdentityKey<'_> {
+        AgentIdentityKey {
+            agent_runtime_id: &self.agent_runtime_id,
+            private_key_pkcs8_base64: &self.private_key_pkcs8_base64,
+        }
     }
 }
 
@@ -480,83 +471,12 @@ impl AgentIdentityBinding {
     }
 }
 
-fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
-    AgentBillOfMaterials {
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
-        agent_harness_id: match &session_source {
-            SessionSource::VSCode => "codex-app".to_string(),
-            SessionSource::Cli
-            | SessionSource::Exec
-            | SessionSource::Mcp
-            | SessionSource::Custom(_)
-            | SessionSource::SubAgent(_)
-            | SessionSource::Unknown => "codex-cli".to_string(),
-        },
-        running_location: format!("{}-{}", session_source, std::env::consts::OS),
-    }
-}
-
-fn generate_agent_key_material() -> Result<GeneratedAgentKeyMaterial> {
-    let mut secret_key_bytes = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut secret_key_bytes)
-        .context("failed to generate agent identity private key bytes")?;
-    let signing_key = SigningKey::from_bytes(&secret_key_bytes);
-    let private_key_pkcs8 = signing_key
-        .to_pkcs8_der()
-        .context("failed to encode agent identity private key as PKCS#8")?;
-
-    Ok(GeneratedAgentKeyMaterial {
-        private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
-        public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
-    })
-}
-
-fn encode_ssh_ed25519_public_key(verifying_key: &VerifyingKey) -> String {
-    let mut blob = Vec::with_capacity(4 + 11 + 4 + 32);
-    append_ssh_string(&mut blob, b"ssh-ed25519");
-    append_ssh_string(&mut blob, verifying_key.as_bytes());
-    format!("ssh-ed25519 {}", BASE64_STANDARD.encode(blob))
-}
-
-fn append_ssh_string(buf: &mut Vec<u8>, value: &[u8]) {
-    buf.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    buf.extend_from_slice(value);
-}
-
-fn agent_registration_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/register")
-}
-
-fn signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64: &str) -> Result<SigningKey> {
-    let private_key = BASE64_STANDARD
-        .decode(private_key_pkcs8_base64)
-        .context("stored agent identity private key is not valid base64")?;
-    SigningKey::from_pkcs8_der(&private_key)
-        .context("stored agent identity private key is not valid PKCS#8")
-}
-
-fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/authenticate_app_v2")
-}
-
-fn agent_identity_request_id() -> Result<String> {
-    let mut request_id_bytes = [0u8; 16];
-    OsRng
-        .try_fill_bytes(&mut request_id_bytes)
-        .context("failed to generate agent identity request id")?;
-    Ok(format!(
-        "codex-agent-identity-{}",
-        URL_SAFE_NO_PAD.encode(request_id_bytes)
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use codex_app_server_protocol::AuthMode as ApiAuthMode;
     use codex_login::AuthCredentialsStoreMode;

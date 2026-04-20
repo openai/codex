@@ -16,6 +16,7 @@ use crate::agent_identity::RegisteredAgentTask;
 use crate::agent_identity::StoredAgentIdentity;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_agent_identity::verifying_key_from_private_key_pkcs8_base64;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -197,10 +198,8 @@ fn assert_agent_assertion_header(
             .expect("base64 signature"),
     )
     .expect("signature bytes");
-    stored_identity
-        .signing_key()
-        .expect("signing key")
-        .verifying_key()
+    verifying_key_from_private_key_pkcs8_base64(&stored_identity.private_key_pkcs8_base64)
+        .expect("verifying key")
         .verify(
             format!(
                 "{}:{}:{}",

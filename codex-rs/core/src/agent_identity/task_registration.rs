@@ -2,14 +2,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_login::AgentTaskAuthorizationTarget;
+use codex_agent_identity::AgentTaskAuthorizationTarget;
+use codex_agent_identity::agent_task_registration_url;
+use codex_agent_identity::decrypt_task_id_response;
+use codex_agent_identity::sign_task_registration_payload;
 use codex_protocol::protocol::SessionAgentTask;
-use crypto_box::SecretKey as Curve25519SecretKey;
-use ed25519_dalek::Signer as _;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha512;
 use tracing::info;
 
 use super::*;
@@ -58,7 +57,10 @@ impl AgentIdentityManager {
 
         let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let request_body = RegisterTaskRequest {
-            signature: sign_task_registration_payload(&stored_identity, &timestamp)?,
+            signature: sign_task_registration_payload(
+                stored_identity.agent_identity_key(),
+                &timestamp,
+            )?,
             timestamp,
         };
 
@@ -83,7 +85,7 @@ impl AgentIdentityManager {
             let registered_task = RegisteredAgentTask {
                 agent_runtime_id: stored_identity.agent_runtime_id.clone(),
                 task_id: decrypt_task_id_response(
-                    &stored_identity,
+                    stored_identity.agent_identity_key(),
                     &response_body.encrypted_task_id,
                 )?,
                 registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -127,47 +129,12 @@ impl RegisteredAgentTask {
     }
 }
 
-fn sign_task_registration_payload(
-    stored_identity: &StoredAgentIdentity,
-    timestamp: &str,
-) -> Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let payload = format!("{}:{timestamp}", stored_identity.agent_runtime_id);
-    Ok(BASE64_STANDARD.encode(signing_key.sign(payload.as_bytes()).to_bytes()))
-}
-
-fn decrypt_task_id_response(
-    stored_identity: &StoredAgentIdentity,
-    encrypted_task_id: &str,
-) -> Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let ciphertext = BASE64_STANDARD
-        .decode(encrypted_task_id)
-        .context("encrypted task id is not valid base64")?;
-    let plaintext = curve25519_secret_key_from_signing_key(&signing_key)
-        .unseal(&ciphertext)
-        .map_err(|_| anyhow::anyhow!("failed to decrypt encrypted task id"))?;
-    String::from_utf8(plaintext).context("decrypted task id is not valid UTF-8")
-}
-
-fn curve25519_secret_key_from_signing_key(signing_key: &SigningKey) -> Curve25519SecretKey {
-    let digest = Sha512::digest(signing_key.to_bytes());
-    let mut secret_key = [0u8; 32];
-    secret_key.copy_from_slice(&digest[..32]);
-    secret_key[0] &= 248;
-    secret_key[31] &= 127;
-    secret_key[31] |= 64;
-    Curve25519SecretKey::from(secret_key)
-}
-
-fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
-}
-
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use codex_agent_identity::curve25519_secret_key_from_private_key_pkcs8_base64;
     use codex_app_server_protocol::AuthMode as ApiAuthMode;
     use codex_login::AuthCredentialsStoreMode;
     use codex_login::AuthDotJson;
@@ -417,8 +384,10 @@ mod tests {
         task_id: &str,
     ) -> Result<String> {
         let mut rng = crypto_box::aead::OsRng;
-        let public_key =
-            curve25519_secret_key_from_signing_key(&stored_identity.signing_key()?).public_key();
+        let public_key = curve25519_secret_key_from_private_key_pkcs8_base64(
+            &stored_identity.private_key_pkcs8_base64,
+        )?
+        .public_key();
         let ciphertext = public_key
             .seal(&mut rng, task_id.as_bytes())
             .map_err(|_| anyhow::anyhow!("failed to encrypt test task id"))?;

@@ -1376,6 +1376,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-identity"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "codex-protocol",
+ "crypto_box",
+ "ed25519-dalek",
+ "pretty_assertions",
+ "rand 0.9.3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+]
+
+[[package]]
 name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
@@ -1917,6 +1935,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-identity",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2003,7 +2022,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha1",
- "sha2",
  "shlex",
  "similar",
  "tempfile",
@@ -2375,6 +2393,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "codex-agent-identity",
  "codex-app-server-protocol",
  "codex-client",
  "codex-config",
@@ -2385,8 +2404,6 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
- "crypto_box",
- "ed25519-dalek",
  "keyring",
  "once_cell",
  "os_info",

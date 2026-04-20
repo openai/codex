@@ -1,27 +1,27 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_agent_identity::AgentBillOfMaterials;
+use codex_agent_identity::AgentIdentityKey;
+use codex_agent_identity::agent_identity_biscuit_url;
+use codex_agent_identity::agent_identity_request_id;
+use codex_agent_identity::agent_registration_url;
+use codex_agent_identity::agent_task_registration_url;
+use codex_agent_identity::authorization_header_for_agent_task;
+use codex_agent_identity::build_abom;
+use codex_agent_identity::decrypt_task_id_response;
+use codex_agent_identity::generate_agent_key_material;
+use codex_agent_identity::normalize_chatgpt_base_url;
+use codex_agent_identity::public_key_ssh_from_private_key_pkcs8_base64;
+use codex_agent_identity::sign_task_registration_payload;
+use codex_agent_identity::supports_background_agent_task_auth;
 use codex_protocol::protocol::SessionSource;
-use crypto_box::SecretKey as Curve25519SecretKey;
-use ed25519_dalek::Signer as _;
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::VerifyingKey;
-use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::pkcs8::EncodePrivateKey;
-use rand::TryRngCore;
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha512;
 use tokio::sync::Semaphore;
 use tracing::debug;
 use tracing::info;
@@ -89,13 +89,6 @@ struct StoredAgentIdentity {
     abom: AgentBillOfMaterials,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct AgentBillOfMaterials {
-    agent_version: String,
-    agent_harness_id: String,
-    running_location: String,
-}
-
 #[derive(Debug, Serialize)]
 struct RegisterAgentRequest {
     abom: AgentBillOfMaterials,
@@ -125,11 +118,6 @@ struct AgentIdentityBinding {
     chatgpt_account_id: String,
     chatgpt_user_id: Option<String>,
     access_token: String,
-}
-
-struct GeneratedAgentKeyMaterial {
-    private_key_pkcs8_base64: String,
-    public_key_ssh: String,
 }
 
 impl BackgroundAgentTaskManager {
@@ -311,7 +299,10 @@ impl BackgroundAgentTaskManager {
     ) -> Result<String> {
         let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let request_body = RegisterTaskRequest {
-            signature: sign_task_registration_payload(stored_identity, &timestamp)?,
+            signature: sign_task_registration_payload(
+                stored_identity.agent_identity_key(),
+                &timestamp,
+            )?,
             timestamp,
         };
 
@@ -333,8 +324,10 @@ impl BackgroundAgentTaskManager {
                 .json::<RegisterTaskResponse>()
                 .await
                 .with_context(|| format!("failed to parse background task response from {url}"))?;
-            let background_task_id =
-                decrypt_task_id_response(stored_identity, &response_body.encrypted_task_id)?;
+            let background_task_id = decrypt_task_id_response(
+                stored_identity.agent_identity_key(),
+                &response_body.encrypted_task_id,
+            )?;
             info!(
                 agent_runtime_id = %stored_identity.agent_runtime_id,
                 task_id = %background_task_id,
@@ -487,14 +480,15 @@ impl StoredAgentIdentity {
                 binding.chatgpt_account_id
             );
         }
-        let signing_key = signing_key_from_private_key_pkcs8_base64(&record.agent_private_key)?;
+        let public_key_ssh =
+            public_key_ssh_from_private_key_pkcs8_base64(&record.agent_private_key)?;
         Ok(Self {
             binding_id: binding.binding_id.clone(),
             chatgpt_account_id: binding.chatgpt_account_id.clone(),
             chatgpt_user_id: record.chatgpt_user_id,
             agent_runtime_id: record.agent_runtime_id.clone(),
             private_key_pkcs8_base64: record.agent_private_key,
-            public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
+            public_key_ssh,
             registered_at: record.registered_at,
             background_task_id: record.background_task_id,
             abom,
@@ -521,8 +515,8 @@ impl StoredAgentIdentity {
     }
 
     fn validate_key_material(&self) -> Result<()> {
-        let signing_key = self.signing_key()?;
-        let derived_public_key = encode_ssh_ed25519_public_key(&signing_key.verifying_key());
+        let derived_public_key =
+            public_key_ssh_from_private_key_pkcs8_base64(&self.private_key_pkcs8_base64)?;
         anyhow::ensure!(
             self.public_key_ssh == derived_public_key,
             "stored public key does not match the private key"
@@ -530,8 +524,11 @@ impl StoredAgentIdentity {
         Ok(())
     }
 
-    fn signing_key(&self) -> Result<SigningKey> {
-        signing_key_from_private_key_pkcs8_base64(&self.private_key_pkcs8_base64)
+    fn agent_identity_key(&self) -> AgentIdentityKey<'_> {
+        AgentIdentityKey {
+            agent_runtime_id: &self.agent_runtime_id,
+            private_key_pkcs8_base64: &self.private_key_pkcs8_base64,
+        }
     }
 }
 
@@ -580,184 +577,13 @@ fn authorization_header_for_task(
     stored_identity: &StoredAgentIdentity,
     background_task_id: &str,
 ) -> Result<String> {
-    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let signature = sign_agent_assertion_payload(stored_identity, background_task_id, &timestamp)?;
-    let payload = serde_json::to_vec(&BTreeMap::from([
-        (
-            "agent_runtime_id",
-            stored_identity.agent_runtime_id.as_str(),
-        ),
-        ("signature", signature.as_str()),
-        ("task_id", background_task_id),
-        ("timestamp", timestamp.as_str()),
-    ]))
-    .context("failed to serialize agent assertion envelope")?;
-    Ok(format!(
-        "AgentAssertion {}",
-        URL_SAFE_NO_PAD.encode(payload)
-    ))
-}
-
-fn sign_agent_assertion_payload(
-    stored_identity: &StoredAgentIdentity,
-    background_task_id: &str,
-    timestamp: &str,
-) -> Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let payload = format!(
-        "{}:{background_task_id}:{timestamp}",
-        stored_identity.agent_runtime_id
-    );
-    Ok(BASE64_STANDARD.encode(signing_key.sign(payload.as_bytes()).to_bytes()))
-}
-
-fn sign_task_registration_payload(
-    stored_identity: &StoredAgentIdentity,
-    timestamp: &str,
-) -> Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let payload = format!("{}:{timestamp}", stored_identity.agent_runtime_id);
-    Ok(BASE64_STANDARD.encode(signing_key.sign(payload.as_bytes()).to_bytes()))
-}
-
-fn decrypt_task_id_response(
-    stored_identity: &StoredAgentIdentity,
-    encrypted_task_id: &str,
-) -> Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let ciphertext = BASE64_STANDARD
-        .decode(encrypted_task_id)
-        .context("encrypted task id is not valid base64")?;
-    let plaintext = curve25519_secret_key_from_signing_key(&signing_key)
-        .unseal(&ciphertext)
-        .map_err(|_| anyhow::anyhow!("failed to decrypt encrypted task id"))?;
-    String::from_utf8(plaintext).context("decrypted task id is not valid UTF-8")
-}
-
-fn curve25519_secret_key_from_signing_key(signing_key: &SigningKey) -> Curve25519SecretKey {
-    let digest = Sha512::digest(signing_key.to_bytes());
-    let mut secret_key = [0u8; 32];
-    secret_key.copy_from_slice(&digest[..32]);
-    secret_key[0] &= 248;
-    secret_key[31] &= 127;
-    secret_key[31] |= 64;
-    Curve25519SecretKey::from(secret_key)
-}
-
-fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
-    AgentBillOfMaterials {
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
-        agent_harness_id: match &session_source {
-            SessionSource::VSCode => "codex-app".to_string(),
-            SessionSource::Cli
-            | SessionSource::Exec
-            | SessionSource::Mcp
-            | SessionSource::Custom(_)
-            | SessionSource::SubAgent(_)
-            | SessionSource::Unknown => "codex-cli".to_string(),
+    authorization_header_for_agent_task(
+        stored_identity.agent_identity_key(),
+        codex_agent_identity::AgentTaskAuthorizationTarget {
+            agent_runtime_id: &stored_identity.agent_runtime_id,
+            task_id: background_task_id,
         },
-        running_location: format!("{}-{}", session_source, std::env::consts::OS),
-    }
-}
-
-fn generate_agent_key_material() -> Result<GeneratedAgentKeyMaterial> {
-    let mut secret_key_bytes = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut secret_key_bytes)
-        .context("failed to generate agent identity private key bytes")?;
-    let signing_key = SigningKey::from_bytes(&secret_key_bytes);
-    let private_key_pkcs8 = signing_key
-        .to_pkcs8_der()
-        .context("failed to encode agent identity private key as PKCS#8")?;
-
-    Ok(GeneratedAgentKeyMaterial {
-        private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
-        public_key_ssh: encode_ssh_ed25519_public_key(&signing_key.verifying_key()),
-    })
-}
-
-fn encode_ssh_ed25519_public_key(verifying_key: &VerifyingKey) -> String {
-    let mut blob = Vec::with_capacity(4 + 11 + 4 + 32);
-    append_ssh_string(&mut blob, b"ssh-ed25519");
-    append_ssh_string(&mut blob, verifying_key.as_bytes());
-    format!("ssh-ed25519 {}", BASE64_STANDARD.encode(blob))
-}
-
-fn append_ssh_string(buf: &mut Vec<u8>, value: &[u8]) {
-    buf.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    buf.extend_from_slice(value);
-}
-
-fn signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64: &str) -> Result<SigningKey> {
-    let private_key = BASE64_STANDARD
-        .decode(private_key_pkcs8_base64)
-        .context("stored agent identity private key is not valid base64")?;
-    SigningKey::from_pkcs8_der(&private_key)
-        .context("stored agent identity private key is not valid PKCS#8")
-}
-
-fn agent_registration_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/register")
-}
-
-fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
-}
-
-fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/authenticate_app_v2")
-}
-
-fn agent_identity_request_id() -> Result<String> {
-    let mut request_id_bytes = [0u8; 16];
-    OsRng
-        .try_fill_bytes(&mut request_id_bytes)
-        .context("failed to generate agent identity request id")?;
-    Ok(format!(
-        "codex-agent-identity-{}",
-        URL_SAFE_NO_PAD.encode(request_id_bytes)
-    ))
-}
-
-fn normalize_chatgpt_base_url(chatgpt_base_url: &str) -> String {
-    let mut base_url = chatgpt_base_url.trim_end_matches('/').to_string();
-    for suffix in [
-        "/wham/remote/control/server/enroll",
-        "/wham/remote/control/server",
-    ] {
-        if let Some(stripped) = base_url.strip_suffix(suffix) {
-            base_url = stripped.to_string();
-            break;
-        }
-    }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    if let Some(stripped) = base_url.strip_suffix("/codex") {
-        stripped.to_string()
-    } else {
-        base_url
-    }
-}
-
-fn supports_background_agent_task_auth(chatgpt_base_url: &str) -> bool {
-    let Ok(url) = url::Url::parse(chatgpt_base_url) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    host == "chatgpt.com"
-        || host == "chat.openai.com"
-        || host == "chatgpt-staging.com"
-        || host.ends_with(".chatgpt.com")
-        || host.ends_with(".chatgpt-staging.com")
+    )
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_agent_identity::AgentBillOfMaterials;
+use codex_agent_identity::curve25519_secret_key_from_private_key_pkcs8_base64;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_login::AgentIdentityAuthRecord;
@@ -129,7 +131,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
-use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
 use opentelemetry::trace::TraceContextExt;
@@ -139,8 +140,6 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
-use sha2::Digest as _;
-use sha2::Sha512;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -4455,7 +4454,7 @@ fn seed_stored_identity(
         private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
         public_key_ssh: "ssh-ed25519 test".to_string(),
         registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        abom: crate::agent_identity::AgentBillOfMaterials {
+        abom: AgentBillOfMaterials {
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             agent_harness_id: "codex-cli".to_string(),
             running_location: format!("{}-{}", SessionSource::Exec, std::env::consts::OS),
@@ -4479,25 +4478,15 @@ fn encrypt_task_id_for_identity(
     stored_identity: &StoredAgentIdentity,
     task_id: &str,
 ) -> anyhow::Result<String> {
-    let signing_key = stored_identity.signing_key()?;
     let mut rng = crypto_box::aead::OsRng;
-    let public_key = curve25519_secret_key_from_signing_key_for_tests(&signing_key).public_key();
+    let public_key = curve25519_secret_key_from_private_key_pkcs8_base64(
+        &stored_identity.private_key_pkcs8_base64,
+    )?
+    .public_key();
     let ciphertext = public_key
         .seal(&mut rng, task_id.as_bytes())
         .map_err(|_| anyhow::anyhow!("failed to encrypt test task id"))?;
     Ok(BASE64_STANDARD.encode(ciphertext))
-}
-
-fn curve25519_secret_key_from_signing_key_for_tests(
-    signing_key: &SigningKey,
-) -> Curve25519SecretKey {
-    let digest = Sha512::digest(signing_key.to_bytes());
-    let mut secret_key = [0u8; 32];
-    secret_key.copy_from_slice(&digest[..32]);
-    secret_key[0] &= 248;
-    secret_key[31] &= 127;
-    secret_key[31] |= 64;
-    Curve25519SecretKey::from(secret_key)
 }
 
 fn generate_test_signing_key() -> SigningKey {
