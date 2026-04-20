@@ -49,6 +49,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::AMAZON_BEDROCK_DEFAULT_BASE_URL;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -439,9 +440,9 @@ profile = "codex-bedrock"
     );
 }
 
-#[test]
-fn rejects_unsupported_amazon_bedrock_overrides() {
-    let err = toml::from_str::<ConfigToml>(
+#[tokio::test]
+async fn load_config_ignores_unsupported_amazon_bedrock_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
         r#"
 model_provider = "amazon-bedrock"
 
@@ -455,11 +456,32 @@ supports_websockets = true
 profile = "codex-bedrock"
 "#,
     )
-    .unwrap_err();
+    .expect("Amazon Bedrock unsupported overrides should deserialize");
 
-    assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock: `amazon-bedrock` is a built-in provider; only `aws.profile` can be configured"
-    ));
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider.name, "Amazon Bedrock");
+    assert_eq!(
+        config.model_provider.base_url.as_deref(),
+        Some(AMAZON_BEDROCK_DEFAULT_BASE_URL)
+    );
+    assert_eq!(config.model_provider.wire_api, WireApi::Responses);
+    assert!(!config.model_provider.requires_openai_auth);
+    assert!(!config.model_provider.supports_websockets);
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
 }
 
 #[test]

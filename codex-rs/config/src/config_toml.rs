@@ -806,8 +806,6 @@ pub fn validate_model_providers(
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
-            validate_amazon_bedrock_provider_override(provider)
-                .map_err(|message| format!("model_providers.{key}: {message}"))?;
             continue;
         }
         if provider.aws.is_some() {
@@ -825,77 +823,6 @@ pub fn validate_model_providers(
             .map_err(|message| format!("model_providers.{key}: {message}"))?;
     }
     Ok(())
-}
-
-fn validate_amazon_bedrock_provider_override(provider: &ModelProviderInfo) -> Result<(), String> {
-    let mut conflicts = Vec::new();
-    if !provider.name.trim().is_empty() {
-        conflicts.push("name");
-    }
-    if provider.base_url.is_some() {
-        conflicts.push("base_url");
-    }
-    if provider.env_key.is_some() {
-        conflicts.push("env_key");
-    }
-    if provider.env_key_instructions.is_some() {
-        conflicts.push("env_key_instructions");
-    }
-    if provider.experimental_bearer_token.is_some() {
-        conflicts.push("experimental_bearer_token");
-    }
-    if provider.auth.is_some() {
-        conflicts.push("auth");
-    }
-    if provider.query_params.is_some() {
-        conflicts.push("query_params");
-    }
-    if provider.http_headers.is_some() {
-        conflicts.push("http_headers");
-    }
-    if provider.env_http_headers.is_some() {
-        conflicts.push("env_http_headers");
-    }
-    if provider.request_max_retries.is_some() {
-        conflicts.push("request_max_retries");
-    }
-    if provider.stream_max_retries.is_some() {
-        conflicts.push("stream_max_retries");
-    }
-    if provider.stream_idle_timeout_ms.is_some() {
-        conflicts.push("stream_idle_timeout_ms");
-    }
-    if provider.websocket_connect_timeout_ms.is_some() {
-        conflicts.push("websocket_connect_timeout_ms");
-    }
-    if provider.requires_openai_auth {
-        conflicts.push("requires_openai_auth");
-    }
-    if provider.supports_websockets {
-        conflicts.push("supports_websockets");
-    }
-    if provider.wire_api != Default::default() {
-        conflicts.push("wire_api");
-    }
-
-    let Some(aws) = provider.aws.as_ref() else {
-        return Ok(());
-    };
-    if aws.region.is_some() {
-        conflicts.push("aws.region");
-    }
-    if aws.service.is_some() {
-        conflicts.push("aws.service");
-    }
-
-    if conflicts.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{AMAZON_BEDROCK_PROVIDER_ID}` is a built-in provider; only `aws.profile` can be configured, but found {}",
-            conflicts.join(", ")
-        ))
-    }
 }
 
 fn deserialize_model_providers<'de, D>(

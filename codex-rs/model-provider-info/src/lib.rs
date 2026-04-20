@@ -136,28 +136,11 @@ pub struct ModelProviderInfo {
 pub struct ModelProviderAwsAuthInfo {
     /// AWS profile name to use. When unset, the AWS SDK default chain decides.
     pub profile: Option<String>,
-    /// AWS region to use. When unset, the AWS SDK default chain decides.
-    pub region: Option<String>,
-    /// AWS SigV4 service name. Defaults to `bedrock` when unset.
-    pub service: Option<String>,
-}
-
-impl ModelProviderAwsAuthInfo {
-    pub fn service_name(&self) -> &str {
-        self.service.as_deref().unwrap_or("bedrock")
-    }
 }
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
-        if let Some(aws) = self.aws.as_ref() {
-            if aws
-                .service
-                .as_ref()
-                .is_some_and(|service| service.trim().is_empty())
-            {
-                return Err("provider aws.service must not be empty".to_string());
-            }
+        if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
                 // upgrade requests before allowing AWS-authenticated providers
@@ -369,11 +352,7 @@ impl ModelProviderInfo {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
-            aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo {
-                profile: None,
-                region: None,
-                service: None,
-            })),
+            aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo { profile: None })),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -450,25 +429,7 @@ pub fn merge_configured_model_providers(
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
     for (key, mut provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
-            let aws_override = provider.aws.take();
-            if provider != ModelProviderInfo::default() {
-                return Err(format!(
-                    "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
-`aws.profile`; other non-default provider fields are not supported"
-                ));
-            }
-
-            let Some(aws_override) = aws_override else {
-                continue;
-            };
-            if aws_override.region.is_some() || aws_override.service.is_some() {
-                return Err(format!(
-                    "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
-`aws.profile`; other non-default provider fields are not supported"
-                ));
-            }
-
-            if let Some(profile) = aws_override.profile
+            if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
                 && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
                 && let Some(aws) = built_in.aws.as_mut()
             {
