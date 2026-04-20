@@ -634,6 +634,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         mut app_server: AppServerSession,
