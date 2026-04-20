@@ -224,7 +224,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
 #[tokio::test]
 async fn preamble_keeps_working_status_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
 
     // Regression sequence: a preamble line is committed to history before any exec/tool event.

@@ -11476,6 +11476,14 @@ guardian_approval = true
         crate::legacy_core::test_support::all_model_presets().clone()
     }
 
+    fn picker_visible_model_slugs(presets: &[ModelPreset]) -> Vec<String> {
+        presets
+            .iter()
+            .filter(|preset| preset.show_in_picker)
+            .map(|preset| preset.model.clone())
+            .collect()
+    }
+
     fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
         ModelAvailabilityNuxConfig {
             shown_count: shown_count
@@ -11547,12 +11555,16 @@ guardian_approval = true
         presets.iter_mut().for_each(|preset| {
             preset.availability_nux = None;
         });
+        let target_model = picker_visible_model_slugs(&presets)
+            .into_iter()
+            .next()
+            .expect("picker-visible preset present");
         let target = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5")
+            .find(|preset| preset.model == target_model)
             .expect("target preset present");
         target.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5 is available".to_string(),
+            message: format!("{target_model} is available"),
         });
 
         let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
@@ -11560,8 +11572,8 @@ guardian_approval = true
         assert_eq!(
             selected,
             Some(StartupTooltipOverride {
-                model_slug: "gpt-5".to_string(),
-                message: "gpt-5 is available".to_string(),
+                model_slug: target_model.clone(),
+                message: format!("{target_model} is available"),
             })
         );
     }
@@ -11572,31 +11584,41 @@ guardian_approval = true
         presets.iter_mut().for_each(|preset| {
             preset.availability_nux = None;
         });
-        let gpt_5 = presets
+        let mut visible_models = picker_visible_model_slugs(&presets).into_iter();
+        let exhausted_model = visible_models
+            .next()
+            .expect("picker-visible preset present");
+        let selected_model = visible_models
+            .next()
+            .expect("second picker-visible preset present");
+        let exhausted = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5")
-            .expect("gpt-5 preset present");
-        gpt_5.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5 is available".to_string(),
+            .find(|preset| preset.model == exhausted_model)
+            .expect("exhausted preset present");
+        exhausted.availability_nux = Some(ModelAvailabilityNux {
+            message: format!("{exhausted_model} is available"),
         });
-        let gpt_5_2 = presets
+        let selected_preset = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5.2")
-            .expect("gpt-5.2 preset present");
-        gpt_5_2.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5.2 is available".to_string(),
+            .find(|preset| preset.model == selected_model)
+            .expect("selected preset present");
+        selected_preset.availability_nux = Some(ModelAvailabilityNux {
+            message: format!("{selected_model} is available"),
         });
 
         let selected = select_model_availability_nux(
             &presets,
-            &model_availability_nux_config(&[("gpt-5", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+            &model_availability_nux_config(&[(
+                exhausted_model.as_str(),
+                MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT,
+            )]),
         );
 
         assert_eq!(
             selected,
             Some(StartupTooltipOverride {
-                model_slug: "gpt-5.2".to_string(),
-                message: "gpt-5.2 is available".to_string(),
+                model_slug: selected_model.clone(),
+                message: format!("{selected_model} is available"),
             })
         );
     }
@@ -11669,18 +11691,25 @@ guardian_approval = true
         presets.iter_mut().for_each(|preset| {
             preset.availability_nux = None;
         });
-        let first = presets
+        let mut visible_models = picker_visible_model_slugs(&presets).into_iter();
+        let higher_priority_model = visible_models
+            .next()
+            .expect("picker-visible preset present");
+        let lower_priority_model = visible_models
+            .next()
+            .expect("second picker-visible preset present");
+        let higher_priority = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5")
-            .expect("gpt-5 preset present");
-        first.availability_nux = Some(ModelAvailabilityNux {
+            .find(|preset| preset.model == higher_priority_model)
+            .expect("higher-priority preset present");
+        higher_priority.availability_nux = Some(ModelAvailabilityNux {
             message: "first".to_string(),
         });
-        let second = presets
+        let lower_priority = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5.2")
-            .expect("gpt-5.2 preset present");
-        second.availability_nux = Some(ModelAvailabilityNux {
+            .find(|preset| preset.model == lower_priority_model)
+            .expect("lower-priority preset present");
+        lower_priority.availability_nux = Some(ModelAvailabilityNux {
             message: "second".to_string(),
         });
 
@@ -11689,8 +11718,8 @@ guardian_approval = true
         assert_eq!(
             selected,
             Some(StartupTooltipOverride {
-                model_slug: "gpt-5.2".to_string(),
-                message: "second".to_string(),
+                model_slug: higher_priority_model,
+                message: "first".to_string(),
             })
         );
     }
@@ -11701,17 +11730,24 @@ guardian_approval = true
         presets.iter_mut().for_each(|preset| {
             preset.availability_nux = None;
         });
+        let target_model = picker_visible_model_slugs(&presets)
+            .into_iter()
+            .next()
+            .expect("picker-visible preset present");
         let target = presets
             .iter_mut()
-            .find(|preset| preset.model == "gpt-5")
+            .find(|preset| preset.model == target_model)
             .expect("target preset present");
         target.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5 is available".to_string(),
+            message: format!("{target_model} is available"),
         });
 
         let selected = select_model_availability_nux(
             &presets,
-            &model_availability_nux_config(&[("gpt-5", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+            &model_availability_nux_config(&[(
+                target_model.as_str(),
+                MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT,
+            )]),
         );
 
         assert_eq!(selected, None);
