@@ -1809,6 +1809,17 @@ impl Config {
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             if key == AMAZON_BEDROCK_PROVIDER_ID {
+                let mut unsupported = provider.clone();
+                unsupported.aws = None;
+                if unsupported != ModelProviderInfo::default() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing `aws.profile`; other non-default provider fields are not supported"
+                        ),
+                    ));
+                }
+
                 if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
                     && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
                     && let Some(aws) = built_in.aws.as_mut()
