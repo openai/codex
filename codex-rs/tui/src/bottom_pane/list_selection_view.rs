@@ -842,6 +842,16 @@ impl BottomPaneView for ListSelectionView {
                 && !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
             {
+                if let Some(idx) = self.items.iter().position(|item| {
+                    item.display_shortcut
+                        .is_some_and(|shortcut| shortcut.is_press(key_event))
+                        && item.disabled_reason.is_none()
+                        && !item.is_disabled
+                }) {
+                    self.state.selected_idx = Some(idx);
+                    self.accept();
+                    return;
+                }
                 if let Some(idx) = c
                     .to_digit(10)
                     .map(|d| d as usize)

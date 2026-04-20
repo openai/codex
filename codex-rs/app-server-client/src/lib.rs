@@ -64,28 +64,15 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 /// module exists so clients can remove a direct `codex-core` dependency
 /// while legacy startup/config paths are migrated to RPCs.
 pub mod legacy_core {
-    pub use codex_core::Cursor;
     pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
-    pub use codex_core::INTERACTIVE_SESSION_SOURCES;
     pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
-    pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
-    pub use codex_core::RolloutRecorder;
-    pub use codex_core::TOOL_MENTION_SIGIL;
-    pub use codex_core::ThreadItem;
-    pub use codex_core::ThreadSortKey;
-    pub use codex_core::ThreadsPage;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
-    pub use codex_core::find_thread_meta_by_name_str;
-    pub use codex_core::find_thread_name_by_id;
-    pub use codex_core::find_thread_names_by_ids;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
     pub use codex_core::message_history_metadata;
-    pub use codex_core::path_utils;
-    pub use codex_core::read_session_meta_line;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -94,10 +81,6 @@ pub mod legacy_core {
         pub mod edit {
             pub use codex_core::config::edit::*;
         }
-    }
-
-    pub mod config_loader {
-        pub use codex_core::config_loader::*;
     }
 
     pub mod connectors {
@@ -122,10 +105,6 @@ pub mod legacy_core {
 
     pub mod review_prompts {
         pub use codex_core::review_prompts::*;
-    }
-
-    pub mod skills {
-        pub use codex_core::skills::*;
     }
 
     pub mod test_support {

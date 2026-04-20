@@ -151,20 +151,15 @@ impl ShellSnapshot {
             temp_path.display()
         );
 
-        let temp_snapshot = Self {
-            path: temp_path.clone(),
-            cwd: session_cwd.clone(),
-        };
-
-        if let Err(err) = validate_snapshot(shell, &temp_snapshot.path, session_cwd).await {
+        if let Err(err) = validate_snapshot(shell, &temp_path, session_cwd).await {
             tracing::error!("Shell snapshot validation failed: {err:?}");
-            remove_snapshot_file(&temp_snapshot.path).await;
+            remove_snapshot_file(&temp_path).await;
             return Err("validation_failed");
         }
 
-        if let Err(err) = fs::rename(&temp_snapshot.path, &path).await {
+        if let Err(err) = fs::rename(&temp_path, &path).await {
             tracing::warn!("Failed to finalize shell snapshot: {err:?}");
-            remove_snapshot_file(&temp_snapshot.path).await;
+            remove_snapshot_file(&temp_path).await;
             return Err("write_failed");
         }
 

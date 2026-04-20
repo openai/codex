@@ -297,7 +297,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     .await;
 
     let mut resume_builder = test_codex().with_config(|config| {
-        config.model = Some("gpt-5.2-codex".to_string());
+        config.model = Some("gpt-5.3-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     resumed
@@ -412,7 +412,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     .await;
 
     let mut resume_builder = test_codex().with_config(|config| {
-        config.model = Some("gpt-5.2-codex".to_string());
+        config.model = Some("gpt-5.3-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     resumed
@@ -423,7 +423,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
             approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             effort: None,
             summary: None,
             service_tier: None,
