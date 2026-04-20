@@ -474,14 +474,13 @@ impl Session {
         self.abort_all_tasks_without_goal_accounting(reason.clone())
             .await;
 
-        for (turn_context, _) in active_tasks {
-            if let Err(err) = self
+        if let Some((turn_context, _)) = active_tasks.first()
+            && let Err(err) = self
                 .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
                 .await
             {
                 warn!("failed to account thread goal progress after abort: {err}");
             }
-        }
 
         if reason == TurnAbortReason::Interrupted
             && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
