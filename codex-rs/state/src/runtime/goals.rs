@@ -109,12 +109,14 @@ RETURNING
         status: crate::ThreadGoalStatus,
         token_budget: Option<i64>,
     ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        let goal_id = Uuid::new_v4().to_string();
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let status = status_after_budget_limit(status, /*tokens_used*/ 0, token_budget);
         let result = sqlx::query(
             r#"
 INSERT INTO thread_goals (
     thread_id,
+    goal_id,
     objective,
     status,
     token_budget,
@@ -122,11 +124,12 @@ INSERT INTO thread_goals (
     time_used_seconds,
     created_at_ms,
     updated_at_ms
-) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
 ON CONFLICT(thread_id) DO NOTHING
             "#,
         )
         .bind(thread_id.to_string())
+        .bind(goal_id)
         .bind(objective)
         .bind(status.as_str())
         .bind(token_budget)
