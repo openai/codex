@@ -467,20 +467,6 @@ impl Session {
         updates: SessionSettingsUpdate,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<Arc<TurnContext>> {
-        let turn_environments = match self.resolve_turn_environments(environment_selections) {
-            Ok(turn_environments) => turn_environments,
-            Err(err) => {
-                self.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
-                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                    }),
-                })
-                .await;
-                return Err(err);
-            }
-        };
         let update_result = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
@@ -524,6 +510,23 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
+        let effective_environment_selections =
+            environment_selections.or_else(|| session_configuration.environment_selections.clone());
+        let turn_environments =
+            match self.resolve_turn_environments(effective_environment_selections) {
+                Ok(turn_environments) => turn_environments,
+                Err(err) => {
+                    self.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: err.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return Err(err);
+                }
+            };
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,

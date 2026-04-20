@@ -2352,8 +2352,18 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
+            environments,
             persist_extended_history,
         } = params;
+        let environments = environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect()
+        });
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2391,6 +2401,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                environments,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -2465,6 +2476,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -2612,6 +2624,7 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 service_name,
                 request_trace,
+                environment_selections,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -7211,6 +7224,7 @@ impl CodexMessageProcessor {
                         service_tier: params.service_tier,
                         collaboration_mode,
                         personality: params.personality,
+                        environments: None,
                     },
                 )
                 .await;
