@@ -1117,20 +1117,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use toml::from_str;
 
-    fn merge_unset_fields_for_test(
-        target: &mut ConfigRequirementsWithSources,
-        source: RequirementSource,
-        mut other: ConfigRequirementsToml,
-        remote_override_active: bool,
-    ) {
-        if remote_override_active
-            && let Some(remote_allowed_sandbox_modes) = other.remote_allowed_sandbox_modes.clone()
-        {
-            other.allowed_sandbox_modes = Some(remote_allowed_sandbox_modes);
-        }
-        target.merge_unset_fields(source, other);
-    }
-
     fn tokens(cmd: &[&str]) -> Vec<String> {
         cmd.iter().map(std::string::ToString::to_string).collect()
     }
@@ -1214,7 +1200,7 @@ mod tests {
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
-            allowed_sandbox_modes: Some(allowed_sandbox_modes),
+            allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             remote_allowed_sandbox_modes: Some(remote_allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
@@ -1227,12 +1213,7 @@ mod tests {
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
 
-        merge_unset_fields_for_test(
-            &mut target,
-            source.clone(),
-            other,
-            /*remote_override_active*/ true,
-        );
+        target.merge_unset_fields(source.clone(), other);
 
         assert_eq!(
             target,
@@ -1245,10 +1226,7 @@ mod tests {
                     allowed_approvals_reviewers,
                     source.clone(),
                 )),
-                allowed_sandbox_modes: Some(Sourced::new(
-                    remote_allowed_sandbox_modes.clone(),
-                    source.clone(),
-                )),
+                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 remote_allowed_sandbox_modes: Some(Sourced::new(
                     remote_allowed_sandbox_modes,
                     source.clone(),
@@ -1991,186 +1969,14 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn remote_sandbox_modes_preserve_raw_source() {
-        let mut target = ConfigRequirementsWithSources::default();
-        let source = RequirementSource::CloudRequirements;
-        let remote_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::WorkspaceWrite,
-        ];
-
-        merge_unset_fields_for_test(
-            &mut target,
-            source.clone(),
-            ConfigRequirementsToml {
-                remote_allowed_sandbox_modes: Some(remote_modes.clone()),
-                ..Default::default()
-            },
-            /*remote_override_active*/ true,
-        );
-
-        assert_eq!(
-            target.allowed_sandbox_modes,
-            Some(Sourced::new(remote_modes.clone(), source.clone()))
-        );
-        assert_eq!(
-            target.remote_allowed_sandbox_modes,
-            Some(Sourced::new(remote_modes, source))
-        );
-    }
-
-    #[test]
-    fn remote_sandbox_modes_use_source_precedence_first() {
-        let mut target = ConfigRequirementsWithSources::default();
-        let higher_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::WorkspaceWrite,
-        ];
-        let lower_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::DangerFullAccess,
-        ];
-
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::CloudRequirements,
-            ConfigRequirementsToml {
-                remote_allowed_sandbox_modes: Some(higher_modes.clone()),
-                ..Default::default()
-            },
-            /*remote_override_active*/ true,
-        );
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-            ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(lower_modes),
-                ..Default::default()
-            },
-            /*remote_override_active*/ true,
-        );
-
-        assert_eq!(
-            target.allowed_sandbox_modes,
-            Some(Sourced::new(
-                higher_modes,
-                RequirementSource::CloudRequirements
-            ))
-        );
-    }
-
-    #[test]
-    fn remote_sandbox_modes_do_not_affect_local_fallback() {
-        let mut target = ConfigRequirementsWithSources::default();
-        let lower_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::DangerFullAccess,
-        ];
-
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::CloudRequirements,
-            ConfigRequirementsToml {
-                remote_allowed_sandbox_modes: Some(vec![
-                    SandboxModeRequirement::ReadOnly,
-                    SandboxModeRequirement::WorkspaceWrite,
-                ]),
-                ..Default::default()
-            },
-            /*remote_override_active*/ false,
-        );
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-            ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(lower_modes.clone()),
-                ..Default::default()
-            },
-            /*remote_override_active*/ false,
-        );
-
-        assert_eq!(
-            target.allowed_sandbox_modes,
-            Some(Sourced::new(
-                lower_modes,
-                RequirementSource::LegacyManagedConfigTomlFromMdm
-            ))
-        );
-    }
-
-    #[test]
-    fn remote_sandbox_modes_beat_allowed_sandbox_modes_in_same_source_when_remote() {
-        let mut target = ConfigRequirementsWithSources::default();
-        let active_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::WorkspaceWrite,
-        ];
-
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::CloudRequirements,
-            ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(vec![
-                    SandboxModeRequirement::ReadOnly,
-                    SandboxModeRequirement::DangerFullAccess,
-                ]),
-                remote_allowed_sandbox_modes: Some(active_modes.clone()),
-                ..Default::default()
-            },
-            /*remote_override_active*/ true,
-        );
-
-        assert_eq!(
-            target.allowed_sandbox_modes,
-            Some(Sourced::new(
-                active_modes,
-                RequirementSource::CloudRequirements
-            ))
-        );
-    }
-
-    #[test]
-    fn allowed_sandbox_modes_is_local_fallback_when_remote_sandbox_modes_is_present() {
-        let mut target = ConfigRequirementsWithSources::default();
-        let fallback_modes = vec![
-            SandboxModeRequirement::ReadOnly,
-            SandboxModeRequirement::DangerFullAccess,
-        ];
-
-        merge_unset_fields_for_test(
-            &mut target,
-            RequirementSource::CloudRequirements,
-            ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(fallback_modes.clone()),
-                remote_allowed_sandbox_modes: Some(vec![
-                    SandboxModeRequirement::ReadOnly,
-                    SandboxModeRequirement::WorkspaceWrite,
-                ]),
-                ..Default::default()
-            },
-            /*remote_override_active*/ false,
-        );
-
-        assert_eq!(
-            target.allowed_sandbox_modes,
-            Some(Sourced::new(
-                fallback_modes,
-                RequirementSource::CloudRequirements
-            ))
-        );
-    }
-
-    #[test]
     fn remote_sandbox_modes_must_include_read_only() {
         let mut target = ConfigRequirementsWithSources::default();
-        merge_unset_fields_for_test(
-            &mut target,
+        target.merge_unset_fields(
             RequirementSource::CloudRequirements,
             ConfigRequirementsToml {
                 remote_allowed_sandbox_modes: Some(vec![SandboxModeRequirement::WorkspaceWrite]),
                 ..Default::default()
             },
-            /*remote_override_active*/ true,
         );
 
         assert_eq!(
