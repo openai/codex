@@ -301,17 +301,14 @@ impl RpcClient {
             return Err(RpcCallError::Closed);
         }
 
-        let mut disconnected_rx = self.disconnected_rx.clone();
-        let result: Result<Value, RpcCallError> = tokio::select! {
-            result = response_rx => result.map_err(|_| RpcCallError::Closed)?,
-            _ = disconnected_rx.changed() => {
-                // The connection closed while the request was in flight. Remove
-                // the pending sender here so `drain_pending` does not need to
-                // deliver a second terminal result for the same request.
-                self.pending.lock().await.remove(&request_id);
-                return Err(RpcCallError::Closed);
-            }
-        };
+        // Do not race in-flight requests directly against the transport-close
+        // watch value. The connection reader receives JSON-RPC messages and
+        // the terminal disconnect event on one ordered queue, then drains any
+        // still-pending requests. Awaiting this receiver preserves that order:
+        // responses already read before EOF still win, and truly pending calls
+        // are failed once the reader observes the disconnect.
+        let result: Result<Value, RpcCallError> =
+            response_rx.await.map_err(|_| RpcCallError::Closed)?;
         let response = match result {
             Ok(response) => response,
             Err(error) => return Err(error),
