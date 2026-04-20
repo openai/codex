@@ -4137,7 +4137,12 @@ async fn multi_environment_feature_without_selections_uses_single_environment_be
     let (_session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |config| config.features.enable(Feature::MultiEnvironmentTools),
+        |config| {
+            config
+                .features
+                .enable(Feature::MultiEnvironmentTools)
+                .expect("multi-environment tools feature should enable");
+        },
     )
     .await;
 
@@ -4162,7 +4167,12 @@ async fn multi_environment_tools_enable_only_with_feature_and_selection() {
     let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |config| config.features.enable(Feature::MultiEnvironmentTools),
+        |config| {
+            config
+                .features
+                .enable(Feature::MultiEnvironmentTools)
+                .expect("multi-environment tools feature should enable");
+        },
     )
     .await;
     let selected_cwd =
