@@ -9667,6 +9667,7 @@ guardian_approval = true
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![test_absolute_path("/tmp/read-only")]),
                 write: Some(vec![test_absolute_path("/tmp/write")]),
+                glob_scan_max_depth: None,
                 entries: None,
             }),
         });
@@ -9775,6 +9776,7 @@ guardian_approval = true
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![test_absolute_path("/tmp/read-only")]),
                         write: Some(vec![test_absolute_path("/tmp/write")]),
+                        glob_scan_max_depth: None,
                         entries: None,
                     }),
                 },
