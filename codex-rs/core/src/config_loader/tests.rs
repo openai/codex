@@ -135,6 +135,7 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
             ..Default::default()
         },
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
@@ -165,6 +166,7 @@ async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io:
             ..Default::default()
         },
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
@@ -1508,6 +1510,7 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
@@ -1730,6 +1733,7 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            &codex_config::NoopThreadConfigLoader,
         )
         .await?;
         let project_layers: Vec<_> = layers
