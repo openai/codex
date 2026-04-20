@@ -115,6 +115,7 @@ pub struct ConfigService {
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    requirements_hostname: Option<String>,
 }
 
 impl ConfigService {
@@ -129,6 +130,7 @@ impl ConfigService {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            requirements_hostname: None,
         }
     }
 
@@ -138,7 +140,13 @@ impl ConfigService {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
+            requirements_hostname: None,
         }
+    }
+
+    pub fn with_requirements_hostname(mut self, requirements_hostname: Option<String>) -> Self {
+        self.requirements_hostname = requirements_hostname;
+        self
     }
 
     #[cfg(test)]
@@ -166,6 +174,7 @@ impl ConfigService {
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
                     .cloud_requirements(self.cloud_requirements.clone())
+                    .requirements_hostname(self.requirements_hostname.clone())
                     .build()
                     .await
                     .map_err(|err| {
@@ -429,11 +438,19 @@ impl ConfigService {
             &self.codex_home,
             cwd,
             &self.cli_overrides,
-            self.loader_overrides.clone(),
+            self.loader_overrides_with_hostname(),
             self.cloud_requirements.clone(),
             &codex_config::NoopThreadConfigLoader,
         )
         .await
+    }
+
+    fn loader_overrides_with_hostname(&self) -> LoaderOverrides {
+        let mut loader_overrides = self.loader_overrides.clone();
+        if self.requirements_hostname.is_some() {
+            loader_overrides.requirements_hostname = self.requirements_hostname.clone();
+        }
+        loader_overrides
     }
 }
 

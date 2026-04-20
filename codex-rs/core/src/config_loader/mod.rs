@@ -55,6 +55,7 @@ pub use codex_config::NetworkRequirementsToml;
 pub use codex_config::NetworkUnixSocketPermissionToml;
 pub use codex_config::NetworkUnixSocketPermissionsToml;
 pub use codex_config::RequirementSource;
+pub use codex_config::RemoteSandboxConfigToml;
 pub use codex_config::ResidencyRequirement;
 pub use codex_config::SandboxModeRequirement;
 pub use codex_config::Sourced;
@@ -134,6 +135,7 @@ pub async fn load_config_layers_state(
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
+    let requirements_hostname = overrides.requirements_hostname.clone();
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -163,6 +165,7 @@ pub async fn load_config_layers_state(
         loaded_config_layers.clone(),
     )
     .await?;
+    config_requirements_toml.apply_remote_sandbox_config(requirements_hostname.as_deref());
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,

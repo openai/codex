@@ -657,6 +657,7 @@ pub struct ConfigBuilder {
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
+    requirements_hostname: Option<String>,
 }
 
 impl ConfigBuilder {
@@ -698,6 +699,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn requirements_hostname(mut self, requirements_hostname: Option<String>) -> Self {
+        self.requirements_hostname = requirements_hostname;
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             codex_home,
@@ -707,6 +713,7 @@ impl ConfigBuilder {
             cloud_requirements,
             thread_config_loader,
             fallback_cwd,
+            requirements_hostname,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -714,7 +721,10 @@ impl ConfigBuilder {
         };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
-        let loader_overrides = loader_overrides.unwrap_or_default();
+        let mut loader_overrides = loader_overrides.unwrap_or_default();
+        if requirements_hostname.is_some() {
+            loader_overrides.requirements_hostname = requirements_hostname;
+        }
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,

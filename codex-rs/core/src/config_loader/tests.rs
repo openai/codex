@@ -24,7 +24,6 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
-#[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -764,6 +763,7 @@ allowed_approval_policies = ["on-request"]
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
@@ -818,6 +818,7 @@ allowed_approval_policies = ["on-request"]
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: None,
             feature_requirements: None,
             mcp_servers: None,
@@ -974,6 +975,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
@@ -1013,6 +1015,56 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
             allowed: "[Never]".into(),
             requirement_source: RequirementSource::CloudRequirements,
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements: ConfigRequirementsToml = toml::from_str(
+        r#"
+            allowed_sandbox_modes = ["read-only"]
+
+            [[remote_sandbox_config]]
+            hostname_pattern = ["runner-*.ci"]
+            allowed_sandbox_modes = ["read-only", "workspace-write"]
+        "#,
+    )?;
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+    let loader_overrides = LoaderOverrides {
+        requirements_hostname: Some("runner-01.ci".to_string()),
+        ..LoaderOverrides::default()
+    };
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        loader_overrides,
+        cloud_requirements,
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_sandbox_modes,
+        Some(vec![
+            crate::config_loader::SandboxModeRequirement::ReadOnly,
+            crate::config_loader::SandboxModeRequirement::WorkspaceWrite,
+        ])
+    );
+    assert!(
+        layers
+            .requirements()
+            .sandbox_policy
+            .can_set(&SandboxPolicy::new_workspace_write_policy())
+            .is_ok()
     );
 
     Ok(())

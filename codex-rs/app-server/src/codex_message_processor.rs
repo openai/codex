@@ -767,6 +767,7 @@ impl CodexMessageProcessor {
             .cli_overrides(self.current_cli_overrides())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
+            .requirements_hostname(app_server_requirements_hostname())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -6531,12 +6532,14 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
+            let mut loader_overrides = LoaderOverrides::default();
+            loader_overrides.requirements_hostname = app_server_requirements_hostname();
             let config_layer_stack = match load_config_layers_state(
                 LOCAL_FS.as_ref(),
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,
-                LoaderOverrides::default(),
+                loader_overrides,
                 CloudRequirementsLoader::default(),
                 self.thread_config_loader.as_ref(),
             )
@@ -9438,6 +9441,7 @@ async fn sync_default_client_residency_requirement(
     match codex_core::config::ConfigBuilder::default()
         .cli_overrides(cli_overrides.to_vec())
         .cloud_requirements(loader)
+        .requirements_hostname(app_server_requirements_hostname())
         .build()
         .await
     {
@@ -9484,6 +9488,7 @@ async fn derive_config_from_params(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
+        .requirements_hostname(app_server_requirements_hostname())
         .thread_config_loader(thread_config_loader)
         .build()
         .await?;
@@ -9517,10 +9522,17 @@ async fn derive_config_for_cwd(
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
         .cloud_requirements(cloud_requirements.clone())
+        .requirements_hostname(app_server_requirements_hostname())
         .build()
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
+}
+
+fn app_server_requirements_hostname() -> Option<String> {
+    let hostname = gethostname::gethostname();
+    let hostname = hostname.to_string_lossy().trim().to_string();
+    (!hostname.is_empty()).then_some(hostname)
 }
 
 async fn read_history_cwd_from_state_db(

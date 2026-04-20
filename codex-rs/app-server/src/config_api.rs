@@ -109,6 +109,7 @@ impl ConfigApi {
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
         )
+        .with_requirements_hostname(app_server_requirements_hostname())
     }
 
     fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
@@ -142,6 +143,7 @@ impl ConfigApi {
             .loader_overrides(self.loader_overrides.clone())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
+            .requirements_hostname(app_server_requirements_hostname())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -361,6 +363,12 @@ pub(crate) fn apply_runtime_feature_enablement(
     }
 }
 
+fn app_server_requirements_hostname() -> Option<String> {
+    let hostname = gethostname::gethostname();
+    let hostname = hostname.to_string_lossy().trim().to_string();
+    (!hostname.is_empty()).then_some(hostname)
+}
+
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
@@ -563,6 +571,7 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
@@ -675,6 +684,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
@@ -733,6 +743,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
