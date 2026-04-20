@@ -11,6 +11,7 @@
 //! 3. Fail closed on timeout, execution failure, or malformed output.
 //! 4. Apply the guardian's explicit allow/deny outcome.
 
+mod analytics;
 mod approval_request;
 mod prompt;
 mod review;
@@ -93,6 +94,8 @@ use prompt::parse_guardian_assessment;
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::GuardianReviewOutcome;
+#[cfg(test)]
+use review::GuardianReviewSessionResult;
 #[cfg(test)]
 use review::run_guardian_review_session as run_guardian_review_session_for_test;
 #[cfg(test)]
