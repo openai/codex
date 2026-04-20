@@ -3,6 +3,7 @@ mod helpers;
 mod list_threads;
 mod read_thread;
 mod unarchive_thread;
+mod update_thread_metadata;
 
 #[cfg(test)]
 mod test_support;
@@ -17,7 +18,6 @@ use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -75,15 +75,11 @@ impl ThreadStore for LocalThreadStore {
         list_threads::list_threads(self, params).await
     }
 
-    async fn set_thread_name(&self, _params: SetThreadNameParams) -> ThreadStoreResult<()> {
-        unsupported("set_thread_name")
-    }
-
     async fn update_thread_metadata(
         &self,
-        _params: UpdateThreadMetadataParams,
+        params: UpdateThreadMetadataParams,
     ) -> ThreadStoreResult<StoredThread> {
-        unsupported("update_thread_metadata")
+        update_thread_metadata::update_thread_metadata(self, params).await
     }
 
     async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {

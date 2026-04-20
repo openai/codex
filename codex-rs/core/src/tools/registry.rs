@@ -97,6 +97,11 @@ pub(crate) trait ToolArgumentDiffConsumer: Send {
     /// Consume the next argument diff for a tool call.
     fn consume_diff(&mut self, turn: &TurnContext, call_id: String, diff: &str)
     -> Option<EventMsg>;
+
+    /// Flush any buffered event before the tool call completes.
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        None
+    }
 }
 
 pub(crate) struct AnyToolResult {

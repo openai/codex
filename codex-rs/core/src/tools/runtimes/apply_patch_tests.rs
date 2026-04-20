@@ -85,10 +85,10 @@ fn file_system_sandbox_context_uses_active_attempt() {
         .abs();
     let additional_permissions = PermissionProfile {
         network: None,
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(Vec::new()),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(Vec::new()),
+        )),
     };
     let req = ApplyPatchRequest {
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),

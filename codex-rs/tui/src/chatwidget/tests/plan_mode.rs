@@ -1032,16 +1032,15 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         msg: EventMsg::SessionConfigured(configured),
     });
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    chat.bottom_pane.set_plugin_mentions(Some(vec![
-        crate::legacy_core::plugins::PluginCapabilitySummary {
+    chat.bottom_pane
+        .set_plugin_mentions(Some(vec![codex_plugin::PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
             description: None,
             has_skills: true,
             mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),
-        },
-    ]));
+        }]));
 
     chat.submit_user_message(UserMessage {
         text: "$sample".to_string(),
