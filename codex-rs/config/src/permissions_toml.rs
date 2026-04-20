@@ -395,7 +395,7 @@ impl NetworkMitmHookToml {
                     action
                         .inject_request_headers
                         .iter()
-                        .map(|header| header.to_runtime()),
+                        .map(NetworkMitmInjectedHeaderToml::to_runtime),
                 );
             }
         }
