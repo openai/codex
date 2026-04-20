@@ -160,16 +160,16 @@ impl Session {
             .await
             .context("failed to materialize rollout before opening state db for thread goals")?;
 
-        if let Some(state_db) = self.state_db() {
-            return Ok(Some(state_db));
-        }
-
-        let state_db = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-        )
-        .await
-        .context("failed to initialize sqlite state db for thread goals")?;
+        let state_db = if let Some(state_db) = self.state_db() {
+            state_db
+        } else {
+            codex_state::StateRuntime::init(
+                config.sqlite_home.clone(),
+                config.model_provider_id.clone(),
+            )
+            .await
+            .context("failed to initialize sqlite state db for thread goals")?
+        };
 
         if let Some(rollout_path) = self.current_rollout_path().await {
             reconcile_rollout(
