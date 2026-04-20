@@ -7088,6 +7088,42 @@ async fn idle_plan_mode_external_mutation_does_not_account_goal_wall_clock() -> 
 }
 
 #[tokio::test]
+async fn plan_mode_resume_does_not_activate_paused_goal() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Paused),
+            token_budget: None,
+        },
+    )
+    .await?;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
+    }
+
+    let activated = sess.activate_paused_thread_goal_after_resume().await?;
+    assert!(!activated);
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+    assert_eq!(0, goal.time_used_seconds);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn goal_accounting_charges_out_of_band_completed_goal_at_turn_boundary() -> anyhow::Result<()>
 {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
