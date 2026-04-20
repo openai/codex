@@ -101,7 +101,7 @@ impl CodexThread {
     pub async fn apply_goal_set_runtime_effects(
         &self,
         goal_status: ThreadGoalStatus,
-        goal_was_active: bool,
+        goal_may_have_in_flight_turn: bool,
         goal_was_replaced: bool,
         should_continue_active_goal: bool,
     ) {
@@ -111,7 +111,7 @@ impl CodexThread {
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
-                if goal_was_active && goal_was_replaced {
+                if goal_may_have_in_flight_turn && goal_was_replaced {
                     self.codex
                         .session
                         .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
@@ -123,13 +123,15 @@ impl CodexThread {
                     .await;
             }
             ThreadGoalStatus::Active => {}
-            ThreadGoalStatus::BudgetLimited if goal_was_active => {
+            ThreadGoalStatus::BudgetLimited if goal_may_have_in_flight_turn => {
                 self.codex
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
             }
-            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete if goal_was_active => {
+            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete
+                if goal_may_have_in_flight_turn =>
+            {
                 self.codex
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
