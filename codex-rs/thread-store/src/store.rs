@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use async_trait::async_trait;
 
 use crate::AppendThreadItemsParams;
@@ -7,7 +9,6 @@ use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -17,7 +18,11 @@ use crate::UpdateThreadMetadataParams;
 
 /// Storage-neutral thread persistence boundary.
 #[async_trait]
-pub trait ThreadStore: Send + Sync {
+pub trait ThreadStore: Any + Send + Sync {
+    /// Return this store as [`Any`] so callers at API boundaries can reject requests that only
+    /// make sense for a concrete store implementation.
+    fn as_any(&self) -> &dyn Any;
+
     /// Creates a new thread and returns a live recorder for future appends.
     async fn create_thread(
         &self,
@@ -44,9 +49,6 @@ pub trait ThreadStore: Send + Sync {
 
     /// Lists stored threads matching the supplied filters.
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage>;
-
-    /// Sets a user-facing thread name.
-    async fn set_thread_name(&self, params: SetThreadNameParams) -> ThreadStoreResult<()>;
 
     /// Applies a mutable metadata patch and returns the updated thread.
     async fn update_thread_metadata(

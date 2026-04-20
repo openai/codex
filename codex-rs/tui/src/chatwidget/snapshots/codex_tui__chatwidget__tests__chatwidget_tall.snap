@@ -1,10 +1,12 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2288
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
+
 • Working (0s • esc to interrupt)
 
-• Queued follow-up messages
+• Queued follow-up inputs
   ↳ Hello, world! 0
   ↳ Hello, world! 1
   ↳ Hello, world! 2
@@ -24,4 +26,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 › Ask Codex to do anything
 
-  gpt-5.3-codex default · /tmp/project
+  gpt-5.4 default · /tmp/project

@@ -17,6 +17,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
+use codex_model_provider::AuthorizationHeaderAuthProvider;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -253,6 +254,16 @@ impl ModelsManager {
         self.build_available_models(remote_models)
     }
 
+    /// Return the active raw model catalog, refreshing according to the specified strategy.
+    pub async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
+        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
+            error!("failed to refresh available models: {err}");
+        }
+        ModelsResponse {
+            models: self.get_remote_models().await,
+        }
+    }
+
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
@@ -443,7 +454,23 @@ impl ModelsManager {
         let auth = self.provider.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.api_provider().await?;
-        let api_auth = self.provider.api_auth().await?;
+        let mut api_auth = self.provider.api_auth().await?;
+        if let Some(auth_manager) = auth_manager.as_ref()
+            && let Some(auth) = auth.as_ref().filter(|auth| auth.is_chatgpt_auth())
+            && provider_uses_codex_login_auth(self.provider.info())
+            && let Some(authorization_header_value) = auth_manager
+                .chatgpt_authorization_header_for_auth(auth)
+                .await
+        {
+            let mut auth_provider = AuthorizationHeaderAuthProvider::new(
+                Some(authorization_header_value),
+                auth.get_account_id(),
+            );
+            if auth.is_fedramp_account() {
+                auth_provider = auth_provider.with_fedramp_routing_header();
+            }
+            api_auth = Arc::new(auth_provider);
+        }
         let auth_env = collect_auth_env_telemetry(self.provider.info(), codex_api_key_env_enabled);
         let transport = ReqwestTransport::new(build_reqwest_client());
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
@@ -589,6 +616,10 @@ impl ModelsManager {
         };
         Self::construct_model_info_from_candidates(model, candidates, config)
     }
+}
+
+fn provider_uses_codex_login_auth(provider: &ModelProviderInfo) -> bool {
+    provider.env_key.is_none() && provider.experimental_bearer_token.is_none()
 }
 
 #[cfg(test)]

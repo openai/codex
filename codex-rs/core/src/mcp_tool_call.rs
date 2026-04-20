@@ -541,11 +541,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
-    {
+    if !turn_context.config.memories.disable_on_external_context {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(

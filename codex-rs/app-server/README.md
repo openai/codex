@@ -142,11 +142,12 @@ Example with notification opt-out:
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/turns/list` — page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
+- `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
@@ -184,7 +185,8 @@ Example with notification opt-out:
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `marketplace/add` — add a remote plugin marketplace from an HTTP(S) Git URL, SSH Git URL, or GitHub `owner/repo` shorthand, then persist it into the user marketplace config. Returns the installed root path plus whether the marketplace was already present.
-- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
+- `marketplace/remove` — remove a configured marketplace by name from the user marketplace config, and delete its installed marketplace root when one exists.
+- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata, fail-open `marketplaceLoadErrors` entries for marketplace files that could not be parsed or loaded, and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names. Returned plugin skills include their current `enabled` state after local config filtering. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
@@ -281,11 +283,13 @@ Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `per
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.
 - `sortKey` — `created_at` (default) or `updated_at`.
+- `sortDirection` — `desc` (default) or `asc`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 - `cwd` — restrict results to threads whose session cwd exactly matches this path. Relative paths are resolved against the app-server process cwd before matching.
 - `searchTerm` — restrict results to threads whose extracted title contains this substring (case-sensitive).
+- Responses include `nextCursor` to continue in the same direction and `backwardsCursor` to pass as `cursor` when reversing `sortDirection`.
 - Responses include `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 Example:
@@ -301,7 +305,8 @@ Example:
         { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" }, "agentNickname": "Atlas", "agentRole": "explorer" },
         { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
-    "nextCursor": "opaque-token-or-null"
+    "nextCursor": "opaque-token-or-null",
+    "backwardsCursor": "opaque-token-or-null"
 } }
 ```
 
@@ -363,7 +368,7 @@ Later, after the idle unload timeout:
 
 ### Example: Read a thread
 
-Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the full rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
@@ -376,6 +381,23 @@ Use `thread/read` to fetch a stored thread by id without resuming it. Pass `incl
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
 { "id": 23, "result": {
     "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
+```
+
+### Example: List thread turns
+
+Use `thread/turns/list` to page a stored thread’s turn history without resuming it. By default, results are sorted descending so clients can start at the present and fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` on a later request with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
+
+```json
+{ "method": "thread/turns/list", "id": 24, "params": {
+    "threadId": "thr_123",
+    "limit": 50,
+    "sortDirection": "desc"
+} }
+{ "id": 24, "result": {
+    "data": [ ... ],
+    "nextCursor": "older-turns-cursor-or-null",
+    "backwardsCursor": "newer-turns-cursor-or-null"
 } }
 ```
 
@@ -426,7 +448,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Archive a thread
 
-Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory.
+Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory and attempt to move any spawned descendant thread rollouts.
 
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
@@ -937,6 +959,10 @@ Event notifications are the server-initiated event stream for thread lifecycles,
 
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 
+Recoverable configuration and initialization warnings use the existing `configWarning` notification: `{ summary, details?, path?, range? }`. App-server may emit it during initialization for config parsing and related setup diagnostics.
+
+Generic runtime warnings use the `warning` notification: `{ threadId?, message }`. App-server emits this for non-fatal warnings from the core event stream, including cases where not all enabled skills are included in the model-visible skills list for a session.
+
 ### Notification opt-out
 
 Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.
@@ -1043,6 +1069,7 @@ There are additional item-specific events:
 
 #### fileChange
 
+- `item/fileChange/patchUpdated` - when `features.apply_patch_streaming_events` is enabled, streams structured file-change snapshots parsed from the model-generated patch before it is executed.
 - `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 
 ### Errors
@@ -1167,7 +1194,7 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
 
-Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns.
+Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns. When `tool_search` is available, deferred dynamic tools are searchable and can be exposed by a matching search result.
 
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 
@@ -1423,6 +1450,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
+- `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 - `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes for a loaded thread; payload includes `{ name, status, error }` where `status` is `starting`, `ready`, `failed`, or `cancelled`.
 
@@ -1515,7 +1543,7 @@ Field notes:
 
 ```json
 { "method": "account/rateLimits/read", "id": 7 }
-{ "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null } } }
+{ "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
 { "method": "account/rateLimits/updated", "params": { "rateLimits": { … } } }
 ```
 
@@ -1524,6 +1552,16 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
+- `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
+
+### 8) Notify a workspace owner about a limit
+
+```json
+{ "method": "account/sendAddCreditsNudgeEmail", "id": 8, "params": { "creditType": "credits" } }
+{ "id": 8, "result": { "status": "sent" } }
+```
+
+Use `creditType: "credits"` when workspace credits are depleted, or `creditType: "usage_limit"` when the workspace usage limit has been reached. If the owner was already notified recently, the response status is `cooldown_active`.
 
 ## Experimental API Opt-in
 

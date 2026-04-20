@@ -3,6 +3,7 @@ mod helpers;
 mod list_threads;
 mod read_thread;
 mod unarchive_thread;
+mod update_thread_metadata;
 
 #[cfg(test)]
 mod test_support;
@@ -17,7 +18,6 @@ use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -38,10 +38,30 @@ impl LocalThreadStore {
     pub fn new(config: RolloutConfig) -> Self {
         Self { config }
     }
+
+    /// Read a local rollout-backed thread by path.
+    pub async fn read_thread_by_rollout_path(
+        &self,
+        rollout_path: std::path::PathBuf,
+        include_archived: bool,
+        include_history: bool,
+    ) -> ThreadStoreResult<StoredThread> {
+        read_thread::read_thread_by_rollout_path(
+            self,
+            rollout_path,
+            include_archived,
+            include_history,
+        )
+        .await
+    }
 }
 
 #[async_trait]
 impl ThreadStore for LocalThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn create_thread(
         &self,
         _params: CreateThreadParams,
@@ -75,15 +95,11 @@ impl ThreadStore for LocalThreadStore {
         list_threads::list_threads(self, params).await
     }
 
-    async fn set_thread_name(&self, _params: SetThreadNameParams) -> ThreadStoreResult<()> {
-        unsupported("set_thread_name")
-    }
-
     async fn update_thread_metadata(
         &self,
-        _params: UpdateThreadMetadataParams,
+        params: UpdateThreadMetadataParams,
     ) -> ThreadStoreResult<StoredThread> {
-        unsupported("update_thread_metadata")
+        update_thread_metadata::update_thread_metadata(self, params).await
     }
 
     async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {

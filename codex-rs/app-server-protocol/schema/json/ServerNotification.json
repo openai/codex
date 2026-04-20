@@ -993,6 +993,32 @@
       ],
       "type": "object"
     },
+    "FileChangePatchUpdatedNotification": {
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/definitions/FileUpdateChange"
+          },
+          "type": "array"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "changes",
+        "itemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -2046,6 +2072,16 @@
       ],
       "type": "string"
     },
+    "RateLimitReachedType": {
+      "enum": [
+        "rate_limit_reached",
+        "workspace_owner_credits_depleted",
+        "workspace_member_credits_depleted",
+        "workspace_owner_usage_limit_reached",
+        "workspace_member_usage_limit_reached"
+      ],
+      "type": "string"
+    },
     "RateLimitSnapshot": {
       "properties": {
         "credits": {
@@ -2084,6 +2120,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitReachedType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitReachedType"
             },
             {
               "type": "null"
@@ -3970,6 +4016,25 @@
         }
       ]
     },
+    "WarningNotification": {
+      "properties": {
+        "message": {
+          "description": "Concise warning message for the user.",
+          "type": "string"
+        },
+        "threadId": {
+          "description": "Optional thread target when the warning applies to a specific thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
     "WebSearchAction": {
       "oneOf": [
         {
@@ -4633,6 +4698,26 @@
       "properties": {
         "method": {
           "enum": [
+            "item/fileChange/patchUpdated"
+          ],
+          "title": "Item/fileChange/patchUpdatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FileChangePatchUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/fileChange/patchUpdatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "serverRequest/resolved"
           ],
           "title": "ServerRequest/resolvedNotificationMethod",
@@ -4908,6 +4993,26 @@
         "params"
       ],
       "title": "Model/reroutedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "warning"
+          ],
+          "title": "WarningNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WarningNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WarningNotification",
       "type": "object"
     },
     {

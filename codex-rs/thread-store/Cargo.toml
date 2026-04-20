@@ -21,6 +21,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-git-utils = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
+codex-state = { workspace = true }
 prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -29,7 +30,6 @@ tonic = { workspace = true }
 tonic-prost = { workspace = true }
 
 [dev-dependencies]
-codex-state = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

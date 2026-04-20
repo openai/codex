@@ -94,7 +94,7 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
 async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
     let config = test_config().await;
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
-        "gpt-5-codex",
+        "gpt-5.4",
         &config.to_models_manager_config(),
     );
     let features = Features::with_defaults();

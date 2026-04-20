@@ -79,6 +79,7 @@ async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<boo
             page_size: 1,
             cursor: None,
             sort_key: ThreadSortKey::CreatedAt,
+            sort_direction: codex_thread_store::SortDirection::Desc,
             allowed_sources: Vec::new(),
             model_providers: None,
             archived,

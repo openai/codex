@@ -22,16 +22,16 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::config::Config;
+
 mod task_registration;
 
 pub(crate) use task_registration::RegisteredAgentTask;
-
-use crate::config::Config;
 
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_IDENTITY_BISCUIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -42,7 +42,7 @@ pub(crate) struct AgentIdentityManager {
     chatgpt_base_url: String,
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
-    ensure_lock: Arc<Mutex<()>>,
+    ensure_lock: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for AgentIdentityManager {
@@ -110,7 +110,7 @@ impl AgentIdentityManager {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             feature_enabled: config.features.enabled(Feature::UseAgentIdentity),
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -137,7 +137,11 @@ impl AgentIdentityManager {
         auth: &CodexAuth,
         binding: &AgentIdentityBinding,
     ) -> Result<StoredAgentIdentity> {
-        let _guard = self.ensure_lock.lock().await;
+        let _guard = self
+            .ensure_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("agent identity ensure semaphore closed"))?;
 
         if let Some(stored_identity) = self.load_stored_identity(auth, binding)? {
             info!(
@@ -153,14 +157,16 @@ impl AgentIdentityManager {
         Ok(stored_identity)
     }
 
-    pub(crate) async fn task_matches_current_binding(&self, task: &RegisteredAgentTask) -> bool {
+    pub(crate) async fn task_matches_current_identity(&self, task: &RegisteredAgentTask) -> bool {
         if !self.feature_enabled {
             return false;
         }
 
-        self.current_auth_binding()
+        self.current_stored_identity()
             .await
-            .is_some_and(|(_, binding)| task.matches_binding(&binding))
+            .is_some_and(|stored_identity| {
+                stored_identity.agent_runtime_id == task.agent_runtime_id
+            })
     }
 
     async fn current_auth_binding(&self) -> Option<(CodexAuth, AgentIdentityBinding)> {
@@ -175,6 +181,11 @@ impl AgentIdentityManager {
             debug!("skipping agent identity flow because ChatGPT auth is unavailable");
         }
         binding.map(|binding| (auth, binding))
+    }
+
+    async fn current_stored_identity(&self) -> Option<StoredAgentIdentity> {
+        let (auth, binding) = self.current_auth_binding().await?;
+        self.load_stored_identity(&auth, &binding).ok().flatten()
     }
 
     async fn register_agent_identity(
@@ -328,7 +339,7 @@ impl AgentIdentityManager {
     }
 
     #[cfg(test)]
-    fn new_for_tests(
+    pub(crate) fn new_for_tests(
         auth_manager: Arc<AuthManager>,
         feature_enabled: bool,
         chatgpt_base_url: String,
@@ -339,8 +350,32 @@ impl AgentIdentityManager {
             chatgpt_base_url,
             feature_enabled,
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn seed_generated_identity_for_tests(
+        &self,
+        agent_runtime_id: &str,
+    ) -> Result<StoredAgentIdentity> {
+        let (auth, binding) = self
+            .current_auth_binding()
+            .await
+            .context("test agent identity requires ChatGPT auth")?;
+        let key_material = generate_agent_key_material()?;
+        let stored_identity = StoredAgentIdentity {
+            binding_id: binding.binding_id.clone(),
+            chatgpt_account_id: binding.chatgpt_account_id.clone(),
+            chatgpt_user_id: binding.chatgpt_user_id,
+            agent_runtime_id: agent_runtime_id.to_string(),
+            private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
+            public_key_ssh: key_material.public_key_ssh,
+            registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            abom: self.abom.clone(),
+        };
+        self.store_identity(&auth, &stored_identity)?;
+        Ok(stored_identity)
     }
 }
 
@@ -377,6 +412,7 @@ impl StoredAgentIdentity {
             agent_runtime_id: self.agent_runtime_id.clone(),
             agent_private_key: self.private_key_pkcs8_base64.clone(),
             registered_at: self.registered_at.clone(),
+            background_task_id: None,
         }
     }
 
@@ -572,7 +608,7 @@ mod tests {
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent_123",
+                "agent_runtime_id": "agent-123",
             })))
             .expect(1)
             .mount(&server)
@@ -598,7 +634,7 @@ mod tests {
             .unwrap()
             .expect("identity should be reused");
 
-        assert_eq!(first.agent_runtime_id, "agent_123");
+        assert_eq!(first.agent_runtime_id, "agent-123");
         assert_eq!(first, second);
         assert_eq!(first.abom.agent_harness_id, "codex-cli");
         assert_eq!(first.chatgpt_account_id, "account-123");
@@ -614,7 +650,7 @@ mod tests {
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent_456",
+                "agent_runtime_id": "agent-456",
             })))
             .expect(1)
             .mount(&server)
@@ -637,6 +673,7 @@ mod tests {
             agent_runtime_id: "agent_invalid".to_string(),
             agent_private_key: "not-valid-base64".to_string(),
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed invalid identity");
 
@@ -646,11 +683,11 @@ mod tests {
             .unwrap()
             .expect("identity should be registered");
 
-        assert_eq!(stored.agent_runtime_id, "agent_456");
+        assert_eq!(stored.agent_runtime_id, "agent-456");
         let persisted = auth
             .get_agent_identity(&binding.chatgpt_account_id)
             .expect("stored identity");
-        assert_eq!(persisted.agent_runtime_id, "agent_456");
+        assert_eq!(persisted.agent_runtime_id, "agent-456");
     }
 
     #[tokio::test]
@@ -676,6 +713,7 @@ mod tests {
             agent_runtime_id: "agent_old".to_string(),
             agent_private_key: stale_key.private_key_pkcs8_base64,
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed stale identity");
 

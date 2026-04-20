@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_login::AgentTaskAuthorizationTarget;
+use codex_protocol::protocol::SessionAgentTask;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
 use serde::Deserialize;
@@ -16,9 +18,6 @@ const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RegisteredAgentTask {
-    pub(crate) binding_id: String,
-    pub(crate) chatgpt_account_id: String,
-    pub(crate) chatgpt_user_id: Option<String>,
     pub(crate) agent_runtime_id: String,
     pub(crate) task_id: String,
     pub(crate) registered_at: String,
@@ -82,9 +81,6 @@ impl AgentIdentityManager {
                 .await
                 .with_context(|| format!("failed to parse agent task response from {url}"))?;
             let registered_task = RegisteredAgentTask {
-                binding_id: stored_identity.binding_id.clone(),
-                chatgpt_account_id: stored_identity.chatgpt_account_id.clone(),
-                chatgpt_user_id: stored_identity.chatgpt_user_id.clone(),
                 agent_runtime_id: stored_identity.agent_runtime_id.clone(),
                 task_id: decrypt_task_id_response(
                     &stored_identity,
@@ -107,18 +103,27 @@ impl AgentIdentityManager {
 }
 
 impl RegisteredAgentTask {
-    pub(super) fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
-        binding.matches_parts(
-            &self.binding_id,
-            &self.chatgpt_account_id,
-            self.chatgpt_user_id.as_deref(),
-        )
+    pub(crate) fn authorization_target(&self) -> AgentTaskAuthorizationTarget<'_> {
+        AgentTaskAuthorizationTarget {
+            agent_runtime_id: &self.agent_runtime_id,
+            task_id: &self.task_id,
+        }
     }
 
-    pub(crate) fn has_same_binding(&self, other: &Self) -> bool {
-        self.binding_id == other.binding_id
-            && self.chatgpt_account_id == other.chatgpt_account_id
-            && self.chatgpt_user_id == other.chatgpt_user_id
+    pub(crate) fn to_session_agent_task(&self) -> SessionAgentTask {
+        SessionAgentTask {
+            agent_runtime_id: self.agent_runtime_id.clone(),
+            task_id: self.task_id.clone(),
+            registered_at: self.registered_at.clone(),
+        }
+    }
+
+    pub(crate) fn from_session_agent_task(task: SessionAgentTask) -> Self {
+        Self {
+            agent_runtime_id: task.agent_runtime_id,
+            task_id: task.task_id,
+            registered_at: task.registered_at,
+        }
     }
 }
 
@@ -242,9 +247,6 @@ mod tests {
         assert_eq!(
             task,
             RegisteredAgentTask {
-                binding_id: "chatgpt-account-account-123".to_string(),
-                chatgpt_account_id: "account-123".to_string(),
-                chatgpt_user_id: Some("user-123".to_string()),
                 agent_runtime_id: "agent-123".to_string(),
                 task_id: "task_123".to_string(),
                 registered_at: task.registered_at.clone(),
@@ -331,9 +333,6 @@ mod tests {
         assert_eq!(
             task,
             RegisteredAgentTask {
-                binding_id: "chatgpt-account-account-123".to_string(),
-                chatgpt_account_id: "account-123".to_string(),
-                chatgpt_user_id: Some("user-123".to_string()),
                 agent_runtime_id: "agent-123".to_string(),
                 task_id: "task_123".to_string(),
                 registered_at: task.registered_at.clone(),
@@ -342,7 +341,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_matches_current_binding_rejects_stale_auth_binding() {
+    async fn task_matches_current_identity_rejects_stale_registered_identity() {
         let auth_manager =
             AuthManager::from_auth_for_testing(make_chatgpt_auth("account-456", Some("user-456")));
         let manager = AgentIdentityManager::new_for_tests(
@@ -352,15 +351,12 @@ mod tests {
             SessionSource::Cli,
         );
         let task = RegisteredAgentTask {
-            binding_id: "chatgpt-account-account-123".to_string(),
-            chatgpt_account_id: "account-123".to_string(),
-            chatgpt_user_id: Some("user-123".to_string()),
             agent_runtime_id: "agent-123".to_string(),
             task_id: "task_123".to_string(),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
         };
 
-        assert!(!manager.task_matches_current_binding(&task).await);
+        assert!(!manager.task_matches_current_identity(&task).await);
     }
 
     async fn mount_human_biscuit(

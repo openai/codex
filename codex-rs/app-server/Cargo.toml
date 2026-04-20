@@ -97,6 +97,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 core_test_support = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

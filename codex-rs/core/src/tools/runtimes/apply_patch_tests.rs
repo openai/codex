@@ -3,6 +3,9 @@ use crate::tools::sandboxing::SandboxAttempt;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -82,10 +85,10 @@ fn file_system_sandbox_context_uses_active_attempt() {
         .abs();
     let additional_permissions = PermissionProfile {
         network: None,
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(Vec::new()),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(Vec::new()),
+        )),
     };
     let req = ApplyPatchRequest {
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
@@ -99,7 +102,12 @@ fn file_system_sandbox_context_uses_active_attempt() {
         permissions_preapproved: false,
     };
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let mut file_system_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, path.as_path());
+    file_system_policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path: path.clone() },
+        access: FileSystemAccessMode::None,
+    });
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
@@ -119,6 +127,11 @@ fn file_system_sandbox_context_uses_active_attempt() {
         .expect("sandbox context");
 
     assert_eq!(sandbox.sandbox_policy, sandbox_policy);
+    assert_eq!(sandbox.sandbox_policy_cwd, Some(path.clone()));
+    assert_eq!(
+        sandbox.file_system_sandbox_policy,
+        Some(file_system_policy.clone())
+    );
     assert_eq!(sandbox.additional_permissions, Some(additional_permissions));
     assert_eq!(
         sandbox.windows_sandbox_level,
@@ -126,6 +139,47 @@ fn file_system_sandbox_context_uses_active_attempt() {
     );
     assert_eq!(sandbox.windows_sandbox_private_desktop, true);
     assert_eq!(sandbox.use_legacy_landlock, true);
+}
+
+#[test]
+fn file_system_sandbox_context_omits_legacy_equivalent_policy() {
+    let path = std::env::temp_dir()
+        .join("apply-patch-runtime-legacy-equivalent.txt")
+        .abs();
+    let req = ApplyPatchRequest {
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
+        file_paths: vec![path.clone()],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, path.as_path());
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::MacosSeatbelt,
+        policy: &sandbox_policy,
+        file_system_policy: &file_system_policy,
+        network_policy: NetworkSandboxPolicy::Restricted,
+        enforce_managed_network: false,
+        manager: &manager,
+        sandbox_cwd: &path,
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: true,
+        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+        windows_sandbox_private_desktop: true,
+    };
+
+    let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
+        .expect("sandbox context");
+
+    assert_eq!(sandbox.sandbox_policy_cwd, Some(path));
+    assert_eq!(sandbox.file_system_sandbox_policy, None);
 }
 
 #[test]

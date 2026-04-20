@@ -471,10 +471,22 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let auth = sess.services.auth_manager.auth().await;
+    let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
+        sess.services
+            .auth_manager
+            .chatgpt_authorization_header_for_auth(auth)
+            .await
+    } else {
+        None
+    };
     let mcp_servers = sess
         .services
         .mcp_manager
-        .effective_servers(config, auth.as_ref())
+        .effective_servers_with_authorization_header(
+            config,
+            auth.as_ref(),
+            background_authorization_header_value.as_deref(),
+        )
         .await;
     let snapshot = collect_mcp_snapshot_from_manager(
         &mcp_connection_manager,
@@ -533,6 +545,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             empty_cli_overrides,
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            &codex_config::NoopThreadConfigLoader,
         )
         .await
         {
