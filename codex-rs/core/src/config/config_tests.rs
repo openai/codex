@@ -23,6 +23,7 @@ use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
+use codex_config::permissions_toml::NetworkMitmActionToml;
 use codex_config::permissions_toml::NetworkMitmHookToml;
 use codex_config::permissions_toml::NetworkMitmToml;
 use codex_config::permissions_toml::NetworkToml;
@@ -55,7 +56,6 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
-use codex_network_proxy::MitmHookActionsConfig;
 use codex_network_proxy::NetworkMode;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -513,7 +513,7 @@ strip_request_headers = ["authorization"]
                             )])),
                             actions: Some(BTreeMap::from([(
                                 "strip_auth".to_string(),
-                                MitmHookActionsConfig {
+                                NetworkMitmActionToml {
                                     strip_request_headers: vec!["authorization".to_string()],
                                     inject_request_headers: Vec::new(),
                                 },
@@ -544,7 +544,7 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
             )])),
             actions: Some(BTreeMap::from([(
                 "strip_auth".to_string(),
-                MitmHookActionsConfig {
+                NetworkMitmActionToml {
                     strip_request_headers: vec!["authorization".to_string()],
                     inject_request_headers: Vec::new(),
                 },

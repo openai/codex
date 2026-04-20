@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use codex_network_proxy::InjectedHeaderConfig;
 use codex_network_proxy::MitmHookActionsConfig;
 use codex_network_proxy::MitmHookBodyConfig;
 use codex_network_proxy::MitmHookConfig;
@@ -170,8 +171,7 @@ pub struct NetworkToml {
 pub struct NetworkMitmToml {
     pub enabled: Option<bool>,
     pub hooks: Option<BTreeMap<String, NetworkMitmHookToml>>,
-    #[schemars(with = "Option<BTreeMap<String, MitmHookActionsConfigSchema>>")]
-    pub actions: Option<BTreeMap<String, MitmHookActionsConfig>>,
+    pub actions: Option<BTreeMap<String, NetworkMitmActionToml>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -198,14 +198,14 @@ enum NetworkModeSchema {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(default)]
-struct MitmHookActionsConfigSchema {
+pub struct NetworkMitmActionToml {
     pub strip_request_headers: Vec<String>,
-    pub inject_request_headers: Vec<InjectedHeaderConfigSchema>,
+    pub inject_request_headers: Vec<NetworkMitmInjectedHeaderToml>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(default)]
-struct InjectedHeaderConfigSchema {
+pub struct NetworkMitmInjectedHeaderToml {
     pub name: String,
     pub secret_env_var: Option<String>,
     pub secret_file: Option<String>,
@@ -291,7 +291,7 @@ impl NetworkToml {
 impl NetworkMitmHookToml {
     fn to_runtime(
         &self,
-        actions_by_name: Option<&BTreeMap<String, MitmHookActionsConfig>>,
+        actions_by_name: Option<&BTreeMap<String, NetworkMitmActionToml>>,
     ) -> MitmHookConfig {
         MitmHookConfig {
             host: self.host.clone(),
@@ -308,7 +308,7 @@ impl NetworkMitmHookToml {
 
     fn selected_actions(
         &self,
-        actions_by_name: Option<&BTreeMap<String, MitmHookActionsConfig>>,
+        actions_by_name: Option<&BTreeMap<String, NetworkMitmActionToml>>,
     ) -> MitmHookActionsConfig {
         let Some(actions_by_name) = actions_by_name else {
             return MitmHookActionsConfig::default();
@@ -320,12 +320,26 @@ impl NetworkMitmHookToml {
                 selected
                     .strip_request_headers
                     .extend(action.strip_request_headers.clone());
-                selected
-                    .inject_request_headers
-                    .extend(action.inject_request_headers.clone());
+                selected.inject_request_headers.extend(
+                    action
+                        .inject_request_headers
+                        .iter()
+                        .map(|header| header.to_runtime()),
+                );
             }
         }
         selected
+    }
+}
+
+impl NetworkMitmInjectedHeaderToml {
+    fn to_runtime(&self) -> InjectedHeaderConfig {
+        InjectedHeaderConfig {
+            name: self.name.clone(),
+            secret_env_var: self.secret_env_var.clone(),
+            secret_file: self.secret_file.clone(),
+            prefix: self.prefix.clone(),
+        }
     }
 }
 
