@@ -766,6 +766,43 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn mark_active_thread_goal_after_external_mutation(&self, goal_id: String) {
+        if !self.enabled(Feature::Goals) {
+            return;
+        }
+        let turn_context = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().and_then(|active_turn| {
+                active_turn
+                    .tasks
+                    .first()
+                    .map(|(_, task)| Arc::clone(&task.turn_context))
+            })
+        };
+        let Some(turn_context) = turn_context else {
+            return;
+        };
+        if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
+            return;
+        }
+
+        let _accounting_guard = turn_context.goal_accounting.accounting_lock.lock().await;
+        let wall_clock_guard = self
+            .thread_goal_wall_clock_accounting
+            .accounting_lock
+            .lock()
+            .await;
+        let current_token_usage = self.total_token_usage().await.unwrap_or_default();
+        turn_context
+            .goal_accounting
+            .reset_baseline(current_token_usage)
+            .await;
+        self.thread_goal_wall_clock_accounting
+            .mark_active_goal(&wall_clock_guard, goal_id.clone())
+            .await;
+        turn_context.goal_accounting.mark_active_goal(goal_id).await;
+    }
+
     async fn account_thread_goal_wall_clock_usage(
         &self,
         state_db: &StateDbHandle,
@@ -884,7 +921,7 @@ impl Session {
         };
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
         )
         .await?;
         let Some(goal) = state_db

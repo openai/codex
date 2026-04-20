@@ -189,6 +189,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let goal_id = goal.goal_id.clone();
         let goal = api_thread_goal_from_state(goal);
         let goal_status = goal.status;
         self.outgoing
@@ -211,6 +212,7 @@ impl CodexMessageProcessor {
             thread
                 .apply_goal_set_runtime_effects(
                     goal_status.to_core(),
+                    goal_id,
                     goal_may_have_in_flight_turn,
                     replacing_goal,
                     should_continue_active_goal,
