@@ -166,9 +166,17 @@ pub struct NetworkToml {
     pub mitm: Option<NetworkMitmToml>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NetworkMitmToml {
+    pub enabled: Option<bool>,
+    pub hooks: Option<BTreeMap<String, NetworkMitmHookToml>>,
+    pub actions: Option<BTreeMap<String, NetworkMitmActionToml>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkMitmTomlUnchecked {
     pub enabled: Option<bool>,
     pub hooks: Option<BTreeMap<String, NetworkMitmHookToml>>,
     pub actions: Option<BTreeMap<String, NetworkMitmActionToml>>,
@@ -215,6 +223,69 @@ pub struct NetworkMitmInjectedHeaderToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(transparent)]
 struct MitmHookBodyConfigSchema(pub serde_json::Value);
+
+impl<'de> Deserialize<'de> for NetworkMitmToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let unchecked = NetworkMitmTomlUnchecked::deserialize(deserializer)?;
+        let mitm = Self {
+            enabled: unchecked.enabled,
+            hooks: unchecked.hooks,
+            actions: unchecked.actions,
+        };
+        mitm.validate_action_references()
+            .map_err(serde::de::Error::custom)?;
+        Ok(mitm)
+    }
+}
+
+impl NetworkMitmToml {
+    fn validate_action_references(&self) -> Result<(), String> {
+        if let Some(actions) = self.actions.as_ref() {
+            for (action_name, action) in actions {
+                if action.is_empty() {
+                    return Err(format!(
+                        "network.mitm.actions.{action_name} must define at least one operation"
+                    ));
+                }
+            }
+        }
+
+        let Some(hooks) = self.hooks.as_ref() else {
+            return Ok(());
+        };
+
+        for (hook_name, hook) in hooks {
+            if hook.action.is_empty() {
+                return Err(format!(
+                    "network.mitm.hooks.{hook_name}.action must not be empty"
+                ));
+            }
+
+            for action_name in &hook.action {
+                if self
+                    .actions
+                    .as_ref()
+                    .is_none_or(|actions| !actions.contains_key(action_name))
+                {
+                    return Err(format!(
+                        "network.mitm.hooks.{hook_name}.action references undefined action `{action_name}`"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl NetworkMitmActionToml {
+    fn is_empty(&self) -> bool {
+        self.strip_request_headers.is_empty() && self.inject_request_headers.is_empty()
+    }
+}
 
 impl NetworkToml {
     pub fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
