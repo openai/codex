@@ -1,12 +1,13 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::original_image_detail::sanitize_original_image_detail;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -463,10 +464,10 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                     | codex_protocol::models::ContentItem::OutputText { text } => {
                         FunctionCallOutputContentItem::InputText { text }
                     }
-                    codex_protocol::models::ContentItem::InputImage { image_url } => {
+                    codex_protocol::models::ContentItem::InputImage { image_url, detail } => {
                         FunctionCallOutputContentItem::InputImage {
                             image_url,
-                            detail: None,
+                            detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
                         }
                     }
                 })

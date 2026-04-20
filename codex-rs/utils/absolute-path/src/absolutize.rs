@@ -12,6 +12,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub(super) fn absolutize(path: &Path) -> std::io::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(normalize_path(path));
+    }
+
     Ok(absolutize_from(path, &std::env::current_dir()?))
 }
 

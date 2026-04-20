@@ -17,7 +17,7 @@ use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
@@ -105,6 +105,7 @@ pub(crate) struct TurnState {
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
+    pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
 

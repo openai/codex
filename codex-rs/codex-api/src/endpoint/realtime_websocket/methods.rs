@@ -65,9 +65,9 @@ enum WsCommand {
 impl WsStream {
     fn new(
         inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    ) -> (Self, mpsc::UnboundedReceiver<Result<Message, WsError>>) {
+    ) -> (Self, async_channel::Receiver<Result<Message, WsError>>) {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
-        let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
+        let (tx_message, rx_message) = async_channel::unbounded::<Result<Message, WsError>>();
 
         let pump_task = tokio::spawn(async move {
             let mut inner = inner;
@@ -110,7 +110,7 @@ impl WsStream {
                                 trace!(payload_len = payload.len(), "realtime websocket received ping");
                                 if let Err(err) = inner.send(Message::Pong(payload)).await {
                                     error!("realtime websocket failed to send pong: {err}");
-                                    let _ = tx_message.send(Err(err));
+                                    let _ = tx_message.send(Err(err)).await;
                                     break;
                                 }
                             }
@@ -138,7 +138,7 @@ impl WsStream {
                                     }
                                     Message::Ping(_) | Message::Pong(_) => {}
                                 }
-                                if tx_message.send(Ok(message)).is_err() {
+                                if tx_message.send(Ok(message)).await.is_err() {
                                     break;
                                 }
                                 if is_close {
@@ -147,7 +147,7 @@ impl WsStream {
                             }
                             Err(err) => {
                                 error!("realtime websocket receive failed: {err}");
-                                let _ = tx_message.send(Err(err));
+                                let _ = tx_message.send(Err(err)).await;
                                 break;
                             }
                         }
@@ -208,7 +208,7 @@ pub struct RealtimeWebsocketWriter {
 
 #[derive(Clone)]
 pub struct RealtimeWebsocketEvents {
-    rx_message: Arc<Mutex<mpsc::UnboundedReceiver<Result<Message, WsError>>>>,
+    rx_message: async_channel::Receiver<Result<Message, WsError>>,
     active_transcript: Arc<Mutex<ActiveTranscriptState>>,
     event_parser: RealtimeEventParser,
     is_closed: Arc<AtomicBool>,
@@ -256,7 +256,7 @@ impl RealtimeWebsocketConnection {
 
     fn new(
         stream: WsStream,
-        rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
+        rx_message: async_channel::Receiver<Result<Message, WsError>>,
         event_parser: RealtimeEventParser,
     ) -> Self {
         let stream = Arc::new(stream);
@@ -268,7 +268,7 @@ impl RealtimeWebsocketConnection {
                 event_parser,
             },
             events: RealtimeWebsocketEvents {
-                rx_message: Arc::new(Mutex::new(rx_message)),
+                rx_message,
                 active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
                 event_parser,
                 is_closed,
@@ -369,16 +369,16 @@ impl RealtimeWebsocketEvents {
         }
 
         loop {
-            let msg = match self.rx_message.lock().await.recv().await {
-                Some(Ok(msg)) => msg,
-                Some(Err(err)) => {
+            let msg = match self.rx_message.recv().await {
+                Ok(Ok(msg)) => msg,
+                Ok(Err(err)) => {
                     self.is_closed.store(true, Ordering::SeqCst);
                     error!("realtime websocket read failed: {err}");
                     return Err(ApiError::Stream(format!(
                         "failed to read websocket message: {err}"
                     )));
                 }
-                None => {
+                Err(_) => {
                     self.is_closed.store(true, Ordering::SeqCst);
                     info!("realtime websocket event stream ended");
                     return Ok(None);

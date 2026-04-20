@@ -20,6 +20,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
+    pub(crate) side_conversation_active: bool,
 }
 
 /// Return the built-ins that should be visible/usable for the current input.
@@ -37,16 +38,23 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
 
-/// Find a single built-in command by exact name, after applying the gating rules.
+/// Find a single built-in command by exact name, after applying feature gating.
+///
+/// Side-conversation gating is intentionally enforced by dispatch rather than exact lookup so a
+/// typed command can produce a side-specific unavailable message while the popup still hides it.
 pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Option<SlashCommand> {
     let cmd = SlashCommand::from_str(name).ok()?;
-    builtins_for_input(flags)
-        .into_iter()
-        .any(|(_, visible_cmd)| visible_cmd == cmd)
-        .then_some(cmd)
+    builtins_for_input(BuiltinCommandFlags {
+        side_conversation_active: false,
+        ..flags
+    })
+    .into_iter()
+    .any(|(_, visible_cmd)| visible_cmd == cmd)
+    .then_some(cmd)
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
@@ -71,6 +79,7 @@ mod tests {
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
             allow_elevate_sandbox: true,
+            side_conversation_active: false,
         }
     }
 
@@ -131,5 +140,40 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
         assert_eq!(find_builtin_command("settings", flags), None);
+    }
+
+    #[test]
+    fn side_conversation_hides_commands_without_side_flag() {
+        let commands = builtins_for_input(BuiltinCommandFlags {
+            side_conversation_active: true,
+            ..all_enabled_flags()
+        })
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            commands,
+            vec![
+                SlashCommand::Copy,
+                SlashCommand::Diff,
+                SlashCommand::Mention,
+                SlashCommand::Status,
+            ]
+        );
+    }
+
+    #[test]
+    fn side_conversation_exact_lookup_still_resolves_hidden_commands_for_dispatch_error() {
+        assert_eq!(
+            find_builtin_command(
+                "review",
+                BuiltinCommandFlags {
+                    side_conversation_active: true,
+                    ..all_enabled_flags()
+                },
+            ),
+            Some(SlashCommand::Review)
+        );
     }
 }

@@ -1,7 +1,7 @@
 use crate::client::ModelClient;
-use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
+use crate::session::session::Session;
 use anyhow::Context;
 use async_channel::Receiver;
 use async_channel::RecvError;
@@ -1278,8 +1278,11 @@ async fn handle_realtime_server_event(
             false
         }
         RealtimeEvent::Error(_) => true,
-        RealtimeEvent::SessionUpdated { .. }
-        | RealtimeEvent::InputTranscriptDelta(_)
+        RealtimeEvent::SessionUpdated { session_id, .. } => {
+            info!(realtime_session_id = %session_id, "realtime session updated");
+            false
+        }
+        RealtimeEvent::InputTranscriptDelta(_)
         | RealtimeEvent::InputTranscriptDone(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
         | RealtimeEvent::OutputTranscriptDone(_)

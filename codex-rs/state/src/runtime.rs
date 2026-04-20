@@ -63,6 +63,7 @@ mod test_support;
 mod threads;
 
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
@@ -257,7 +258,15 @@ async fn remove_legacy_db_files(
     // sidecar-style paths first so the main file is attempted last.
     legacy_paths.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
     for legacy_path in legacy_paths {
-        if let Err(err) = tokio::fs::remove_file(&legacy_path).await {
+        let mut result = tokio::fs::remove_file(&legacy_path).await;
+        for _ in 0..3 {
+            if result.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            result = tokio::fs::remove_file(&legacy_path).await;
+        }
+        if let Err(err) = result {
             warn!(
                 "failed to remove legacy {db_label} db file {}: {err}",
                 legacy_path.display(),

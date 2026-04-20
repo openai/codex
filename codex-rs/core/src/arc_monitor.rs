@@ -5,14 +5,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use reqwest::header::AUTHORIZATION;
 
 const ARC_MONITOR_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE: &str = "CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE";
@@ -109,13 +110,31 @@ pub(crate) async fn monitor_action(
         },
         None => None,
     };
-    let token = if let Some(token) = read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN) {
-        token
+    let (authorization_header_value, account_id) = if let Some(token) =
+        read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN)
+    {
+        (
+            format!("Bearer {token}"),
+            auth.as_ref().and_then(CodexAuth::get_account_id),
+        )
+    } else if let Some(authorization_header_value) =
+        match sess.authorization_header_for_current_agent_task().await {
+            Ok(authorization_header_value) => authorization_header_value,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "skipping safety monitor because agent assertion authorization is unavailable"
+                );
+                return ArcMonitorOutcome::Ok;
+            }
+        }
+    {
+        (authorization_header_value, None)
     } else {
         let Some(auth) = auth.as_ref() else {
             return ArcMonitorOutcome::Ok;
         };
-        match auth.get_token() {
+        let token = match auth.get_token() {
             Ok(token) => token,
             Err(err) => {
                 warn!(
@@ -124,7 +143,8 @@ pub(crate) async fn monitor_action(
                 );
                 return ArcMonitorOutcome::Ok;
             }
-        }
+        };
+        (format!("Bearer {token}"), auth.get_account_id())
     };
 
     let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
@@ -147,8 +167,8 @@ pub(crate) async fn monitor_action(
         .post(&url)
         .timeout(ARC_MONITOR_TIMEOUT)
         .json(&body)
-        .bearer_auth(token);
-    if let Some(account_id) = auth.as_ref().and_then(CodexAuth::get_account_id) {
+        .header(AUTHORIZATION, authorization_header_value);
+    if let Some(account_id) = account_id {
         request = request.header("chatgpt-account-id", account_id);
     }
 

@@ -49,7 +49,7 @@ use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
-use codex_features::Feature;
+pub use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
@@ -58,6 +58,7 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
+use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -291,6 +292,9 @@ pub struct Config {
 
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: bool,
+
+    /// Whether to inject the `<skills_instructions>` developer block.
+    pub include_skill_instructions: bool,
 
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
@@ -626,6 +630,16 @@ impl AuthManagerConfig for Config {
     fn forced_chatgpt_workspace_id(&self) -> Option<String> {
         self.forced_chatgpt_workspace_id.clone()
     }
+
+    fn chatgpt_base_url(&self) -> Option<String> {
+        Some(self.chatgpt_base_url.clone())
+    }
+
+    fn background_agent_task_auth_mode(&self) -> BackgroundAgentTaskAuthMode {
+        BackgroundAgentTaskAuthMode::from_feature_enabled(
+            self.features.enabled(Feature::UseAgentIdentity),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -854,12 +868,27 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_loader_overrides(
+        codex_home,
+        cwd,
+        cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await
+}
+
+pub async fn load_config_as_toml_with_cli_and_loader_overrides(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
-        LoaderOverrides::default(),
+        loader_overrides,
         CloudRequirementsLoader::default(),
     )
     .await?;
@@ -1250,6 +1279,37 @@ fn resolve_permission_config_syntax(
     })
 }
 
+fn apply_managed_filesystem_constraints(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    filesystem_constraints: &crate::config_loader::FilesystemConstraints,
+) {
+    for deny_read in &filesystem_constraints.deny_read {
+        let deny_entry = if deny_read.contains_glob() {
+            codex_protocol::permissions::FileSystemSandboxEntry {
+                path: codex_protocol::permissions::FileSystemPath::GlobPattern {
+                    pattern: deny_read.as_str().to_string(),
+                },
+                access: codex_protocol::permissions::FileSystemAccessMode::None,
+            }
+        } else {
+            let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
+                continue;
+            };
+            codex_protocol::permissions::FileSystemSandboxEntry {
+                path: codex_protocol::permissions::FileSystemPath::Path { path },
+                access: codex_protocol::permissions::FileSystemAccessMode::None,
+            }
+        };
+        if !file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|existing| existing == &deny_entry)
+        {
+            file_system_sandbox_policy.entries.push(deny_entry);
+        }
+    }
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -1461,6 +1521,7 @@ impl Config {
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
+            filesystem: filesystem_requirements,
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
@@ -1897,6 +1958,11 @@ impl Config {
             .include_apps_instructions
             .or(cfg.include_apps_instructions)
             .unwrap_or(true);
+        let include_skill_instructions = cfg
+            .skills
+            .as_ref()
+            .and_then(|skills| skills.include_instructions)
+            .unwrap_or(true);
         let include_environment_context = config_profile
             .include_environment_context
             .or(cfg.include_environment_context)
@@ -1970,6 +2036,34 @@ impl Config {
             &mut constrained_approval_policy,
             &mut startup_warnings,
         )?;
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            source: filesystem_requirements_source,
+        }) = filesystem_requirements.as_ref()
+            && !filesystem_requirements.deny_read.is_empty()
+        {
+            let requirement_source = filesystem_requirements_source.clone();
+            constrained_sandbox_policy
+                .value
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })
+                .map_err(std::io::Error::from)?;
+
+            if cfg!(target_os = "windows") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
+                ));
+            }
+        }
         apply_requirement_constrained_value(
             "approvals_reviewer",
             approvals_reviewer,
@@ -2023,7 +2117,7 @@ impl Config {
             main_execve_wrapper_exe.as_ref(),
         );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
-        let effective_file_system_sandbox_policy =
+        let mut effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
@@ -2033,6 +2127,16 @@ impl Config {
                     &file_system_sandbox_policy,
                 )
             };
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            ..
+        }) = filesystem_requirements.as_ref()
+        {
+            apply_managed_filesystem_constraints(
+                &mut effective_file_system_sandbox_policy,
+                filesystem_requirements,
+            );
+        }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_network_sandbox_policy =
@@ -2073,6 +2177,7 @@ impl Config {
             commit_attribution,
             include_permissions_instructions,
             include_apps_instructions,
+            include_skill_instructions,
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.

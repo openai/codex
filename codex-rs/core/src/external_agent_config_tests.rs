@@ -74,7 +74,7 @@ async fn detect_home_lists_config_skills_and_agents_md() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 external_agent_home.join("CLAUDE.md").display(),
                 codex_home.join("AGENTS.md").display()
             ),
@@ -107,7 +107,7 @@ async fn detect_repo_lists_agents_md_for_each_cwd() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -117,7 +117,7 @@ async fn detect_repo_lists_agents_md_for_each_cwd() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -194,7 +194,7 @@ async fn detect_repo_still_reports_non_plugin_items_when_home_config_is_invalid(
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}",
+                    "Migrate {} to {}",
                     repo_root.join(".claude").join("CLAUDE.md").display(),
                     repo_root.join("AGENTS.md").display(),
                 ),
@@ -292,6 +292,123 @@ async fn import_home_skips_empty_config_migration() {
         .await
         .expect("import");
 
+    assert!(!codex_home.join("config.toml").exists());
+}
+
+#[tokio::test]
+async fn import_local_plugins_returns_completed_status() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let marketplace_root = external_agent_home.join("my-marketplace");
+    let plugin_root = marketplace_root.join("plugins").join("cloudflare");
+    fs::create_dir_all(marketplace_root.join(".claude-plugin"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "enabledPlugins": {
+                "cloudflare@my-plugins": true
+            },
+            "extraKnownMarketplaces": {
+                "my-plugins": {
+                    "source": "local",
+                    "path": marketplace_root
+                }
+            }
+        }))
+        .expect("serialize settings"),
+    )
+    .expect("write settings");
+    fs::write(
+        marketplace_root
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [
+            {
+              "name": "cloudflare",
+              "source": "./plugins/cloudflare"
+            }
+          ]
+        }"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(outcome, Vec::<PendingPluginImport>::new());
+    let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
+    assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
+    assert!(config.contains("enabled = true"));
+}
+
+#[tokio::test]
+async fn import_git_plugins_returns_pending_async_status() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "owner/debug-marketplace"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["formatter".to_string()],
+                }],
+            }),
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(
+        outcome,
+        vec![PendingPluginImport {
+            cwd: None,
+            details: MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["formatter".to_string()],
+                }],
+            },
+        }]
+    );
     assert!(!codex_home.join("config.toml").exists());
 }
 
@@ -449,7 +566,7 @@ async fn detect_repo_prefers_non_empty_external_agent_agents_source() {
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join(".claude").join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -533,7 +650,7 @@ async fn detect_home_lists_enabled_plugins_from_settings() {
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 external_agent_home.join("settings.json").display()
             ),
             cwd: None,
@@ -593,7 +710,7 @@ enabled = true
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -751,7 +868,7 @@ enabled = true
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -931,7 +1048,7 @@ source = "owner/debug-marketplace"
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -1158,7 +1275,7 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 external_agent_home.join("settings.json").display()
             ),
             cwd: None,
@@ -1166,6 +1283,49 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
                 plugins: vec![PluginsMigration {
                     marketplace_name: "my-plugins".to_string(),
                     plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn detect_home_infers_claude_official_marketplace_when_missing_from_settings() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "sample@claude-plugins-official": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(external_agent_home.clone(), codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate enabled plugins from {}",
+                external_agent_home.join("settings.json").display()
+            ),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "claude-plugins-official".to_string(),
+                    plugin_names: vec!["sample".to_string()],
                 }],
             }),
         }]
@@ -1246,6 +1406,46 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
 }
 
 #[tokio::test]
+async fn import_plugins_infers_claude_official_marketplace_when_missing_from_settings() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "sample@claude-plugins-official": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(external_agent_home, codex_home)
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "claude-plugins-official".to_string(),
+                    plugin_names: vec!["sample".to_string()],
+                }],
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["claude-plugins-official".to_string()],
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: vec!["sample@claude-plugins-official".to_string()],
+        }
+    );
+}
+
+#[tokio::test]
 async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace_path() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
@@ -1309,7 +1509,7 @@ async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),

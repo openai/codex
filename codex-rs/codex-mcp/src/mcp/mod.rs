@@ -37,6 +37,7 @@ use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpRuntimeEnvironment;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 pub type McpManager = McpConnectionManager;
 
@@ -214,13 +215,24 @@ fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
     }
 }
 
-fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
+fn codex_apps_mcp_http_headers(
+    auth: Option<&CodexAuth>,
+    authorization_header_value: Option<&str>,
+) -> Option<HashMap<String, String>> {
     let mut headers = HashMap::new();
-    if let Some(token) = codex_apps_mcp_bearer_token(auth) {
+    if let Some(authorization_header_value) = authorization_header_value {
+        headers.insert(
+            "Authorization".to_string(),
+            authorization_header_value.to_string(),
+        );
+    } else if let Some(token) = codex_apps_mcp_bearer_token(auth) {
         headers.insert("Authorization".to_string(), format!("Bearer {token}"));
     }
     if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
         headers.insert("ChatGPT-Account-ID".to_string(), account_id);
+    }
+    if auth.is_some_and(CodexAuth::is_fedramp_account) {
+        headers.insert("X-OpenAI-Fedramp".to_string(), "true".to_string());
     }
     if headers.is_empty() {
         None
@@ -255,12 +267,16 @@ pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
     codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
 }
 
-fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) -> McpServerConfig {
+fn codex_apps_mcp_server_config(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    authorization_header_value: Option<&str>,
+) -> McpServerConfig {
     let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
     let http_headers = if bearer_token_env_var.is_some() {
         None
     } else {
-        codex_apps_mcp_http_headers(auth)
+        codex_apps_mcp_http_headers(auth, authorization_header_value)
     };
     let url = codex_apps_mcp_url(config);
 
@@ -288,14 +304,25 @@ fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) ->
 }
 
 pub fn with_codex_apps_mcp(
+    servers: HashMap<String, McpServerConfig>,
+    auth: Option<&CodexAuth>,
+    config: &McpConfig,
+) -> HashMap<String, McpServerConfig> {
+    with_codex_apps_mcp_with_authorization_header(
+        servers, auth, config, /*authorization_header_value*/ None,
+    )
+}
+
+pub fn with_codex_apps_mcp_with_authorization_header(
     mut servers: HashMap<String, McpServerConfig>,
     auth: Option<&CodexAuth>,
     config: &McpConfig,
+    authorization_header_value: Option<&str>,
 ) -> HashMap<String, McpServerConfig> {
     if config.apps_enabled && auth.is_some_and(CodexAuth::is_chatgpt_auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            codex_apps_mcp_server_config(config, auth),
+            codex_apps_mcp_server_config(config, auth, authorization_header_value),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -311,8 +338,18 @@ pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, McpServerConfig> {
+    effective_mcp_servers_with_authorization_header(
+        config, auth, /*authorization_header_value*/ None,
+    )
+}
+
+pub fn effective_mcp_servers_with_authorization_header(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    authorization_header_value: Option<&str>,
+) -> HashMap<String, McpServerConfig> {
     let servers = configured_mcp_servers(config);
-    with_codex_apps_mcp(servers, auth, config)
+    with_codex_apps_mcp_with_authorization_header(servers, auth, config, authorization_header_value)
 }
 
 pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
@@ -322,6 +359,7 @@ pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
 pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
+    runtime_environment: McpRuntimeEnvironment,
     server: &str,
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
@@ -339,6 +377,7 @@ pub async fn read_mcp_resource(
         String::new(),
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
@@ -362,17 +401,46 @@ pub async fn collect_mcp_snapshot(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
 ) -> McpListToolsResponseEvent {
-    collect_mcp_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full).await
+    collect_mcp_snapshot_with_detail(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        McpSnapshotDetail::Full,
+    )
+    .await
 }
 
 pub async fn collect_mcp_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
     detail: McpSnapshotDetail,
 ) -> McpListToolsResponseEvent {
-    let mcp_servers = effective_mcp_servers(config, auth);
+    collect_mcp_snapshot_with_detail_and_authorization_header(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        detail,
+        /*authorization_header_value*/ None,
+    )
+    .await
+}
+
+pub async fn collect_mcp_snapshot_with_detail_and_authorization_header(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
+    detail: McpSnapshotDetail,
+    authorization_header_value: Option<&str>,
+) -> McpListToolsResponseEvent {
+    let mcp_servers =
+        effective_mcp_servers_with_authorization_header(config, auth, authorization_header_value);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
@@ -397,6 +465,7 @@ pub async fn collect_mcp_snapshot_with_detail(
         submit_id,
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
@@ -427,18 +496,46 @@ pub async fn collect_mcp_server_status_snapshot(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
 ) -> McpServerStatusSnapshot {
-    collect_mcp_server_status_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full)
-        .await
+    collect_mcp_server_status_snapshot_with_detail(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        McpSnapshotDetail::Full,
+    )
+    .await
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
-    let mcp_servers = effective_mcp_servers(config, auth);
+    collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        detail,
+        /*authorization_header_value*/ None,
+    )
+    .await
+}
+
+pub async fn collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
+    detail: McpSnapshotDetail,
+    authorization_header_value: Option<&str>,
+) -> McpServerStatusSnapshot {
+    let mcp_servers =
+        effective_mcp_servers_with_authorization_header(config, auth, authorization_header_value);
     let tool_plugin_provenance = tool_plugin_provenance(config);
     if mcp_servers.is_empty() {
         return McpServerStatusSnapshot {
@@ -463,6 +560,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         submit_id,
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,

@@ -7,6 +7,7 @@ pub use codex_rollout::RolloutRecorder;
 pub use codex_rollout::RolloutRecorderParams;
 pub use codex_rollout::SESSIONS_SUBDIR;
 pub use codex_rollout::SessionMeta;
+pub use codex_rollout::SortDirection;
 pub use codex_rollout::ThreadItem;
 pub use codex_rollout::ThreadSortKey;
 pub use codex_rollout::ThreadsPage;

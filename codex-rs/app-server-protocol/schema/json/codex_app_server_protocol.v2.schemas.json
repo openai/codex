@@ -114,6 +114,20 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
+    "AddCreditsNudgeCreditType": {
+      "enum": [
+        "credits",
+        "usage_limit"
+      ],
+      "type": "string"
+    },
+    "AddCreditsNudgeEmailStatus": {
+      "enum": [
+        "sent",
+        "cooldown_active"
+      ],
+      "type": "string"
+    },
     "AgentMessageDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -716,7 +730,7 @@
       ]
     },
     "AutoReviewDecisionSource": {
-      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
       "enum": [
         "agent"
       ],
@@ -1161,6 +1175,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/turns/list"
+              ],
+              "title": "Thread/turns/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadTurnsListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/turns/listRequest",
+          "type": "object"
+        },
+        {
           "description": "Append raw Responses API items to the thread history without starting a user turn.",
           "properties": {
             "id": {
@@ -1231,6 +1269,30 @@
             "params"
           ],
           "title": "Marketplace/addRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/remove"
+              ],
+              "title": "Marketplace/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/removeRequest",
           "type": "object"
         },
         {
@@ -1996,6 +2058,30 @@
             "method"
           ],
           "title": "Account/rateLimits/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/sendAddCreditsNudgeEmail"
+              ],
+              "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SendAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/sendAddCreditsNudgeEmailRequest",
           "type": "object"
         },
         {
@@ -3688,6 +3774,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -4091,6 +4187,11 @@
         "items"
       ],
       "title": "ExternalAgentConfigDetectResponse",
+      "type": "object"
+    },
+    "ExternalAgentConfigImportCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ExternalAgentConfigImportCompletedNotification",
       "type": "object"
     },
     "ExternalAgentConfigImportParams": {
@@ -4941,7 +5042,7 @@
       "type": "object"
     },
     "GuardianApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
       "properties": {
         "rationale": {
           "type": [
@@ -5149,7 +5250,7 @@
       ]
     },
     "GuardianApprovalReviewStatus": {
-      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "description": "[UNSTABLE] Lifecycle state for an approval auto-review.",
       "enum": [
         "inProgress",
         "approved",
@@ -5167,7 +5268,7 @@
       "type": "string"
     },
     "GuardianRiskLevel": {
-      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "description": "[UNSTABLE] Risk level assigned by approval auto-review.",
       "enum": [
         "low",
         "medium",
@@ -5177,7 +5278,7 @@
       "type": "string"
     },
     "GuardianUserAuthorization": {
-      "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+      "description": "[UNSTABLE] Authorization level assigned by approval auto-review.",
       "enum": [
         "unknown",
         "low",
@@ -5212,6 +5313,7 @@
     "HookEventName": {
       "enum": [
         "preToolUse",
+        "permissionRequest",
         "postToolUse",
         "sessionStart",
         "userPromptSubmit",
@@ -5502,7 +5604,7 @@
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -5544,7 +5646,7 @@
     },
     "ItemGuardianApprovalReviewStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -5985,6 +6087,42 @@
         "marketplacePath",
         "message"
       ],
+      "type": "object"
+    },
+    "MarketplaceRemoveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName"
+      ],
+      "title": "MarketplaceRemoveParams",
+      "type": "object"
+    },
+    "MarketplaceRemoveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "installedRoot": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName"
+      ],
+      "title": "MarketplaceRemoveResponse",
       "type": "object"
     },
     "McpAuthStatus": {
@@ -6932,19 +7070,27 @@
     "PluginInstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "forceRemoteSync": {
-          "description": "When true, apply the remote plugin change before the local install flow.",
-          "type": "boolean"
-        },
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pluginName": {
           "type": "string"
+        },
+        "remoteMarketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginInstallParams",
@@ -7006,6 +7152,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local composer icon path, resolved from the installed plugin package."
+        },
+        "composerIconUrl": {
+          "description": "Remote composer icon URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "defaultPrompt": {
@@ -7038,6 +7192,14 @@
             {
               "type": "null"
             }
+          ],
+          "description": "Local logo path, resolved from the installed plugin package."
+        },
+        "logoUrl": {
+          "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "longDescription": {
@@ -7052,7 +7214,15 @@
             "null"
           ]
         },
+        "screenshotUrls": {
+          "description": "Remote screenshot URLs from the plugin catalog.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "screenshots": {
+          "description": "Local screenshot paths, resolved from the installed plugin package.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -7079,6 +7249,7 @@
       },
       "required": [
         "capabilities",
+        "screenshotUrls",
         "screenshots"
       ],
       "type": "object"
@@ -7095,10 +7266,6 @@
             "array",
             "null"
           ]
-        },
-        "forceRemoteSync": {
-          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
-          "type": "boolean"
         }
       },
       "title": "PluginListParams",
@@ -7126,12 +7293,6 @@
             "$ref": "#/definitions/PluginMarketplaceEntry"
           },
           "type": "array"
-        },
-        "remoteSyncError": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
@@ -7156,7 +7317,15 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Local marketplace file path when the marketplace is backed by a local file. Remote-only catalog marketplaces do not have a local path."
         },
         "plugins": {
           "items": {
@@ -7167,7 +7336,6 @@
       },
       "required": [
         "name",
-        "path",
         "plugins"
       ],
       "type": "object"
@@ -7176,14 +7344,26 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pluginName": {
           "type": "string"
+        },
+        "remoteMarketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "marketplacePath",
         "pluginName"
       ],
       "title": "PluginReadParams",
@@ -7222,6 +7402,61 @@
             "type"
           ],
           "title": "LocalPluginSource",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "refName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "git"
+              ],
+              "title": "GitPluginSourceType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "GitPluginSource",
+          "type": "object"
+        },
+        {
+          "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
+          "properties": {
+            "type": {
+              "enum": [
+                "remote"
+              ],
+              "title": "RemotePluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RemotePluginSource",
           "type": "object"
         }
       ]
@@ -7274,10 +7509,6 @@
     "PluginUninstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "forceRemoteSync": {
-          "description": "When true, apply the remote plugin change before the local uninstall flow.",
-          "type": "boolean"
-        },
         "pluginId": {
           "type": "string"
         }
@@ -7416,6 +7647,16 @@
       },
       "type": "object"
     },
+    "RateLimitReachedType": {
+      "enum": [
+        "rate_limit_reached",
+        "workspace_owner_credits_depleted",
+        "workspace_member_credits_depleted",
+        "workspace_owner_usage_limit_reached",
+        "workspace_member_usage_limit_reached"
+      ],
+      "type": "string"
+    },
     "RateLimitSnapshot": {
       "properties": {
         "credits": {
@@ -7454,6 +7695,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/RateLimitWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitReachedType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitReachedType"
             },
             {
               "type": "null"
@@ -8858,6 +9109,32 @@
       },
       "type": "object"
     },
+    "SendAddCreditsNudgeEmailParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "creditType": {
+          "$ref": "#/definitions/AddCreditsNudgeCreditType"
+        }
+      },
+      "required": [
+        "creditType"
+      ],
+      "title": "SendAddCreditsNudgeEmailParams",
+      "type": "object"
+    },
+    "SendAddCreditsNudgeEmailResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SendAddCreditsNudgeEmailResponse",
+      "type": "object"
+    },
     "ServerNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Notification sent from the server to the client.",
@@ -9509,6 +9786,26 @@
           "properties": {
             "method": {
               "enum": [
+                "externalAgentConfig/import/completed"
+              ],
+              "title": "ExternalAgentConfig/import/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ExternalAgentConfigImportCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "fs/changed"
               ],
               "title": "Fs/changedNotificationMethod",
@@ -9624,6 +9921,26 @@
             "params"
           ],
           "title": "Model/reroutedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "warning"
+              ],
+              "title": "WarningNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WarningNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WarningNotification",
           "type": "object"
         },
         {
@@ -10378,6 +10695,13 @@
       ],
       "title": "SkillsListResponse",
       "type": "object"
+    },
+    "SortDirection": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -11640,6 +11964,17 @@
             "null"
           ]
         },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional sort direction; defaults to descending (newest first)."
+        },
         "sortKey": {
           "anyOf": [
             {
@@ -11668,6 +12003,13 @@
     "ThreadListResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "backwardsCursor": {
+          "description": "Opaque cursor to pass as `cursor` when reversing `sortDirection`. This is only populated when the page contains at least one thread. Use it with the opposite `sortDirection`; for timestamp sorts it anchors at the start of the page timestamp so same-second updates are not skipped.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "data": {
           "items": {
             "$ref": "#/definitions/Thread"
@@ -12729,6 +13071,76 @@
       "title": "ThreadTokenUsageUpdatedNotification",
       "type": "object"
     },
+    "ThreadTurnsListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cursor": {
+          "description": "Opaque cursor to pass to the next call to continue after the last turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional turn page size.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional turn pagination direction; defaults to descending."
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadTurnsListParams",
+      "type": "object"
+    },
+    "ThreadTurnsListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "backwardsCursor": {
+          "description": "Opaque cursor to pass as `cursor` when reversing `sortDirection`. This is only populated when the page contains at least one turn. Use it with the opposite `sortDirection` to include the anchor turn again and catch updates to that turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Turn"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "description": "Opaque cursor to pass to the next call to continue after the last turn. if None, there are no more turns to return.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ThreadTurnsListResponse",
+      "type": "object"
+    },
     "ThreadUnarchiveParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -13417,6 +13829,27 @@
         "high"
       ],
       "type": "string"
+    },
+    "WarningNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "message": {
+          "description": "Concise warning message for the user.",
+          "type": "string"
+        },
+        "threadId": {
+          "description": "Optional thread target when the warning applies to a specific thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "WarningNotification",
+      "type": "object"
     },
     "WebSearchAction": {
       "oneOf": [

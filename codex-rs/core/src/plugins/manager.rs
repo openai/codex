@@ -22,6 +22,7 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::loader::load_plugin_skills;
 use codex_core_plugins::loader::load_plugins_from_layer_stack;
 use codex_core_plugins::loader::log_plugin_load_errors;
+use codex_core_plugins::loader::materialize_marketplace_plugin_source;
 use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;
 use codex_core_plugins::loader::refresh_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
@@ -39,6 +40,7 @@ use codex_core_plugins::marketplace::find_installable_marketplace_plugin;
 use codex_core_plugins::marketplace::find_marketplace_plugin;
 use codex_core_plugins::marketplace::list_marketplaces;
 use codex_core_plugins::marketplace::load_marketplace;
+use codex_core_plugins::marketplace::plugin_interface_with_marketplace_category;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use codex_core_plugins::marketplace_upgrade::configured_git_marketplace_names;
@@ -68,7 +70,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -188,6 +190,12 @@ pub struct PluginDetail {
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
+    pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDetailsUnavailableReason {
+    InstallRequiredForRemoteSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,7 +349,7 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
-    remote_sync_lock: Mutex<()>,
+    remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
@@ -371,7 +379,7 @@ impl PluginsManager {
             ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
-            remote_sync_lock: Mutex::new(()),
+            remote_sync_lock: Semaphore::new(/*permits*/ 1),
             restriction_product,
             analytics_events_client: RwLock::new(None),
         }
@@ -557,9 +565,7 @@ impl PluginsManager {
             self.restriction_product,
         )?;
         let plugin_id = resolved.plugin_id.as_key();
-        // This only forwards the backend mutation before the local install flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local install flow.
         codex_core_plugins::remote::enable_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
@@ -588,8 +594,12 @@ impl PluginsManager {
                 None
             };
         let store = self.store.clone();
+        let codex_home = self.codex_home.clone();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
-            let MarketplacePluginSource::Local { path: source_path } = resolved.source;
+            let materialized =
+                materialize_marketplace_plugin_source(codex_home.as_path(), &resolved.source)
+                    .map_err(PluginStoreError::Invalid)?;
+            let source_path = materialized.path;
             if let Some(plugin_version) = plugin_version {
                 store.install_with_version(source_path, resolved.plugin_id, plugin_version)
             } else {
@@ -643,11 +653,11 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         plugin_id: String,
     ) -> Result<(), PluginUninstallError> {
+        // TODO: Remove this legacy remote-sync path once remote plugins have
+        // their own manager and installed-state API.
         let plugin_id = PluginId::parse(&plugin_id)?;
         let plugin_key = plugin_id.as_key();
-        // This only forwards the backend mutation before the local uninstall flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local uninstall flow.
         codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
@@ -696,7 +706,9 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         additive_only: bool,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
-        let _remote_sync_guard = self.remote_sync_lock.lock().await;
+        let _remote_sync_guard = self.remote_sync_lock.acquire().await.map_err(|_| {
+            PluginRemoteSyncError::Config(anyhow::anyhow!("remote plugin sync semaphore closed"))
+        })?;
 
         if !config.features.enabled(Feature::Plugins) {
             return Ok(RemotePluginSyncResult::default());
@@ -754,6 +766,14 @@ impl PluginsManager {
             let plugin_key = plugin_id.as_key();
             let source_path = match plugin.source {
                 MarketplacePluginSource::Local { path } => path,
+                MarketplacePluginSource::Git { .. } => {
+                    warn!(
+                        plugin = plugin_name,
+                        marketplace = %marketplace_name,
+                        "skipping remote plugin source during remote sync"
+                    );
+                    continue;
+                }
             };
             let current_enabled = configured_plugins
                 .get(&plugin_key)
@@ -1032,9 +1052,56 @@ impl PluginsManager {
             });
         }
 
-        let source_path = match &plugin.source {
-            MarketplacePluginSource::Local { path } => path.clone(),
-        };
+        let plugin_id =
+            PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
+                match err {
+                    PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+                }
+            })?;
+        let plugin_key = plugin_id.as_key();
+        if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && !plugin.installed {
+            let description = remote_plugin_install_required_description(&plugin.source);
+            return Ok(PluginDetail {
+                id: plugin_key,
+                name: plugin.name,
+                description: Some(description),
+                source: plugin.source,
+                policy: plugin.policy,
+                interface: plugin.interface,
+                installed: plugin.installed,
+                enabled: plugin.enabled,
+                skills: Vec::new(),
+                disabled_skill_paths: HashSet::new(),
+                apps: Vec::new(),
+                mcp_server_names: Vec::new(),
+                details_unavailable_reason: Some(
+                    PluginDetailsUnavailableReason::InstallRequiredForRemoteSource,
+                ),
+            });
+        }
+
+        let source_path =
+            if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && plugin.installed {
+                self.store.active_plugin_root(&plugin_id).ok_or_else(|| {
+                    MarketplaceError::InvalidPlugin(format!(
+                        "installed plugin cache entry is missing for {plugin_key}"
+                    ))
+                })?
+            } else {
+                let codex_home = self.codex_home.clone();
+                let source = plugin.source.clone();
+                let materialized = tokio::task::spawn_blocking(move || {
+                    materialize_marketplace_plugin_source(codex_home.as_path(), &source)
+                })
+                .await
+                .map_err(|err| {
+                    MarketplaceError::InvalidPlugin(format!(
+                        "failed to materialize plugin source: {err}"
+                    ))
+                })?
+                .map_err(MarketplaceError::InvalidPlugin)?;
+                materialized.path.clone()
+            };
         if !source_path.as_path().is_dir() {
             return Err(MarketplaceError::InvalidPlugin(
                 "path does not exist or is not a directory".to_string(),
@@ -1044,6 +1111,14 @@ impl PluginsManager {
             MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
         })?;
         let description = manifest.description.clone();
+        let marketplace_category = plugin
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.category.clone());
+        let interface = plugin_interface_with_marketplace_category(
+            manifest.interface.clone(),
+            marketplace_category,
+        );
         let resolved_skills = load_plugin_skills(
             &source_path,
             &manifest.paths,
@@ -1067,13 +1142,14 @@ impl PluginsManager {
             description,
             source: plugin.source,
             policy: plugin.policy,
-            interface: plugin.interface,
+            interface,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             apps,
             mcp_server_names,
+            details_unavailable_reason: None,
         })
     }
 
@@ -1420,6 +1496,34 @@ impl PluginsManager {
         roots.dedup();
         roots
     }
+}
+
+fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
+    let source_description = match source {
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => {
+            let mut parts = vec![url.clone()];
+            if let Some(path) = path {
+                parts.push(format!("path `{path}`"));
+            }
+            if let Some(ref_name) = ref_name {
+                parts.push(format!("ref `{ref_name}`"));
+            }
+            if let Some(sha) = sha {
+                parts.push(format!("sha `{sha}`"));
+            }
+            parts.join(", ")
+        }
+        MarketplacePluginSource::Local { path } => path.as_path().display().to_string(),
+    };
+
+    format!(
+        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
+    )
 }
 
 #[derive(Debug, thiserror::Error)]

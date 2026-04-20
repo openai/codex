@@ -9,7 +9,6 @@ use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
@@ -67,7 +66,15 @@ pub struct MarketplacePlugin {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketplacePluginSource {
-    Local { path: AbsolutePathBuf },
+    Local {
+        path: AbsolutePathBuf,
+    },
+    Git {
+        url: String,
+        path: Option<String>,
+        ref_name: Option<String>,
+        sha: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,27 +393,26 @@ fn resolve_marketplace_plugin_entry(
         policy,
         category,
     } = plugin;
-    let Some(source_path) = resolve_supported_plugin_source_path(marketplace_path, &name, source)
-    else {
+    let Some(source) = resolve_supported_plugin_source(marketplace_path, &name, source) else {
         return Ok(None);
     };
 
-    let manifest = load_plugin_manifest(source_path.as_path());
-    let mut interface = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.interface.clone());
-    if let Some(category) = category {
-        // Marketplace taxonomy wins when both sources provide a category.
-        interface
-            .get_or_insert_with(PluginManifestInterface::default)
-            .category = Some(category);
-    }
+    let manifest = match &source {
+        MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
+        MarketplacePluginSource::Git { .. } => None,
+    };
+    let interface = plugin_interface_with_marketplace_category(
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.interface.clone()),
+        category,
+    );
 
     Ok(Some(ResolvedMarketplacePlugin {
         plugin_id: PluginId::new(name, marketplace_name.to_string()).map_err(|err| match err {
             PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
         })?,
-        source: MarketplacePluginSource::Local { path: source_path },
+        source,
         policy: MarketplacePluginPolicy {
             installation: policy.installation,
             authentication: policy.authentication,
@@ -417,27 +423,13 @@ fn resolve_marketplace_plugin_entry(
     }))
 }
 
-fn resolve_supported_plugin_source_path(
+fn resolve_supported_plugin_source(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
     source: RawMarketplaceManifestPluginSource,
-) -> Option<AbsolutePathBuf> {
+) -> Option<MarketplacePluginSource> {
     match source {
-        RawMarketplaceManifestPluginSource::Local { path } => {
-            match resolve_local_plugin_source_path(marketplace_path, &path) {
-                Ok(path) => Some(path),
-                Err(err) => {
-                    warn!(
-                        path = %marketplace_path.display(),
-                        plugin = plugin_name,
-                        error = %err,
-                        "skipping marketplace plugin that failed to resolve"
-                    );
-                    None
-                }
-            }
-        }
-        RawMarketplaceManifestPluginSource::Unsupported => {
+        RawMarketplaceManifestPluginSource::Unsupported(_) => {
             warn!(
                 path = %marketplace_path.display(),
                 plugin = plugin_name,
@@ -445,27 +437,85 @@ fn resolve_supported_plugin_source_path(
             );
             None
         }
+        source => match resolve_plugin_source(marketplace_path, source) {
+            Ok(source) => Some(source),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    plugin = plugin_name,
+                    error = %err,
+                    "skipping marketplace plugin that failed to resolve"
+                );
+                None
+            }
+        },
+    }
+}
+
+fn resolve_plugin_source(
+    marketplace_path: &AbsolutePathBuf,
+    source: RawMarketplaceManifestPluginSource,
+) -> Result<MarketplacePluginSource, MarketplaceError> {
+    match source {
+        RawMarketplaceManifestPluginSource::Path(path)
+        | RawMarketplaceManifestPluginSource::Object(
+            RawMarketplaceManifestPluginSourceObject::Local { path },
+        ) => Ok(MarketplacePluginSource::Local {
+            path: resolve_local_plugin_source_path(marketplace_path, &path)?,
+        }),
+        RawMarketplaceManifestPluginSource::Object(
+            RawMarketplaceManifestPluginSourceObject::Url {
+                url,
+                path,
+                ref_name,
+                sha,
+            },
+        ) => Ok(MarketplacePluginSource::Git {
+            url: normalize_git_plugin_source_url(marketplace_path, &url)?,
+            path: path
+                .as_deref()
+                .map(|path| normalize_remote_plugin_subdir(marketplace_path, path))
+                .transpose()?,
+            ref_name: normalize_optional_git_selector(&ref_name),
+            sha: normalize_optional_git_selector(&sha),
+        }),
+        RawMarketplaceManifestPluginSource::Object(
+            RawMarketplaceManifestPluginSourceObject::GitSubdir {
+                url,
+                path,
+                ref_name,
+                sha,
+            },
+        ) => Ok(MarketplacePluginSource::Git {
+            url: normalize_git_plugin_source_url(marketplace_path, &url)?,
+            path: Some(normalize_remote_plugin_subdir(marketplace_path, &path)?),
+            ref_name: normalize_optional_git_selector(&ref_name),
+            sha: normalize_optional_git_selector(&sha),
+        }),
+        RawMarketplaceManifestPluginSource::Unsupported(_) => {
+            unreachable!("unsupported plugin sources should be filtered before resolution")
+        }
     }
 }
 
 fn resolve_local_plugin_source_path(
     marketplace_path: &AbsolutePathBuf,
-    source_path: &str,
+    path: &str,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
-    let Some(source_path) = source_path.strip_prefix("./") else {
+    let Some(path) = path.strip_prefix("./") else {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
             message: "local plugin source path must start with `./`".to_string(),
         });
     };
-    if source_path.is_empty() {
+    if path.is_empty() {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
             message: "local plugin source path must not be empty".to_string(),
         });
     }
 
-    let relative_source_path = Path::new(source_path);
+    let relative_source_path = Path::new(path);
     if relative_source_path
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
@@ -479,6 +529,151 @@ fn resolve_local_plugin_source_path(
     // `marketplace.json` lives under a supported marketplace layout beneath `<root>`,
     // but local plugin paths are resolved relative to `<root>`.
     Ok(marketplace_root_dir(marketplace_path)?.join(relative_source_path))
+}
+
+fn normalize_remote_plugin_subdir(
+    marketplace_path: &AbsolutePathBuf,
+    path: &str,
+) -> Result<String, MarketplaceError> {
+    let path = path.trim();
+    let path = path.strip_prefix("./").unwrap_or(path);
+    if path.is_empty() {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "git plugin source path must not be empty".to_string(),
+        });
+    }
+    let relative_path = Path::new(path);
+    if relative_path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "git plugin source path must stay within the repository root".to_string(),
+        });
+    }
+    Ok(path.to_string())
+}
+
+fn normalize_git_plugin_source_url(
+    marketplace_path: &AbsolutePathBuf,
+    url: &str,
+) -> Result<String, MarketplaceError> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "git plugin source url must not be empty".to_string(),
+        });
+    }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Ok(normalize_github_git_url(url));
+    }
+    if url.starts_with("./")
+        || url.starts_with("../")
+        || url.starts_with(".\\")
+        || url.starts_with("..\\")
+    {
+        return normalize_relative_git_plugin_source_url(marketplace_path, url);
+    }
+    if url.starts_with("file://") || url.starts_with('/') {
+        return Ok(url.to_string());
+    }
+    if url.starts_with("ssh://") || url.starts_with("git@") && url.contains(':') {
+        return Ok(url.to_string());
+    }
+    if let Some(url) = normalize_github_shorthand_url(url) {
+        return Ok(url);
+    }
+
+    Err(MarketplaceError::InvalidMarketplaceFile {
+        path: marketplace_path.to_path_buf(),
+        message: format!("invalid git plugin source url: {url}"),
+    })
+}
+
+fn normalize_relative_git_plugin_source_url(
+    marketplace_path: &AbsolutePathBuf,
+    url: &str,
+) -> Result<String, MarketplaceError> {
+    let mut normalized = marketplace_root_dir(marketplace_path)?
+        .as_path()
+        .to_path_buf();
+    for segment in url.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                return Err(MarketplaceError::InvalidMarketplaceFile {
+                    path: marketplace_path.to_path_buf(),
+                    message: "relative git plugin source url must stay within the marketplace root"
+                        .to_string(),
+                });
+            }
+            segment => normalized.push(segment),
+        }
+    }
+    Ok(normalized.display().to_string())
+}
+
+fn normalize_optional_git_selector(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn normalize_github_git_url(url: &str) -> String {
+    if url.starts_with("https://github.com/") && !url.ends_with(".git") {
+        format!("{url}.git")
+    } else {
+        url.to_string()
+    }
+}
+
+fn normalize_github_shorthand_url(source: &str) -> Option<String> {
+    if !looks_like_github_shorthand(source) {
+        return None;
+    }
+    let mut segments = source.split('/');
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    if repo.is_empty() {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}.git"))
+}
+
+fn looks_like_github_shorthand(source: &str) -> bool {
+    let mut segments = source.split('/');
+    let owner = segments.next();
+    let repo = segments.next();
+    let extra = segments.next();
+    owner.is_some_and(is_github_shorthand_segment)
+        && repo.is_some_and(is_github_shorthand_segment)
+        && extra.is_none()
+}
+
+fn is_github_shorthand_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+pub fn plugin_interface_with_marketplace_category(
+    mut interface: Option<PluginManifestInterface>,
+    category: Option<String>,
+) -> Option<PluginManifestInterface> {
+    if let Some(category) = category {
+        // Marketplace taxonomy wins when both sources provide a category.
+        interface
+            .get_or_insert_with(PluginManifestInterface::default)
+            .category = Some(category);
+    }
+    interface
 }
 
 fn marketplace_root_dir(
@@ -533,33 +728,36 @@ struct RawMarketplaceManifestPluginPolicy {
     products: Option<Vec<Product>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
 enum RawMarketplaceManifestPluginSource {
-    Local { path: String },
-    // Mixed-source marketplaces should still contribute the local plugins we can load.
-    Unsupported,
+    Path(String),
+    Object(RawMarketplaceManifestPluginSourceObject),
+    #[allow(dead_code)]
+    Unsupported(JsonValue),
 }
 
-impl<'de> Deserialize<'de> for RawMarketplaceManifestPluginSource {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let source = JsonValue::deserialize(deserializer)?;
-        Ok(match source {
-            JsonValue::String(path) => Self::Local { path },
-            JsonValue::Object(object) => match object.get("source").and_then(JsonValue::as_str) {
-                Some("local") => match object.get("path").and_then(JsonValue::as_str) {
-                    Some(path) => Self::Local {
-                        path: path.to_string(),
-                    },
-                    None => Self::Unsupported,
-                },
-                _ => Self::Unsupported,
-            },
-            _ => Self::Unsupported,
-        })
-    }
+#[derive(Debug, Deserialize)]
+#[serde(tag = "source", rename_all = "lowercase")]
+enum RawMarketplaceManifestPluginSourceObject {
+    Local {
+        path: String,
+    },
+    Url {
+        url: String,
+        path: Option<String>,
+        #[serde(rename = "ref")]
+        ref_name: Option<String>,
+        sha: Option<String>,
+    },
+    #[serde(rename = "git-subdir")]
+    GitSubdir {
+        url: String,
+        path: String,
+        #[serde(rename = "ref")]
+        ref_name: Option<String>,
+        sha: Option<String>,
+    },
 }
 
 fn resolve_marketplace_interface(

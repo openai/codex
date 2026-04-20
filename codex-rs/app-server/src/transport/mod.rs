@@ -34,7 +34,8 @@ mod stdio;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
-pub(crate) use remote_control::start_remote_control;
+pub(crate) use remote_control::RemoteControlStartOptions;
+pub(crate) use remote_control::start_remote_control_with_options;
 pub(crate) use stdio::start_stdio_connection;
 pub(crate) use websocket::start_websocket_acceptor;
 
@@ -780,6 +781,7 @@ mod tests {
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
                                         read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
+                                        entries: None,
                                     },
                                 ),
                             },
@@ -842,6 +844,7 @@ mod tests {
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
                                         read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
+                                        entries: None,
                                     },
                                 ),
                             },

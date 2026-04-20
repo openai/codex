@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -11,8 +12,22 @@ async fn plan_implementation_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_context_usage_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_token_info(Some(make_token_info(
+        /*total_tokens*/ 90_000, /*context_window*/ 100_000,
+    )));
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("plan_implementation_popup_context_usage", popup);
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -35,8 +50,95 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     else {
         panic!("expected SubmitUserMessageWithMode, got {event:?}");
     };
-    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
+    assert_eq!(
+        text,
+        plan_implementation::PLAN_IMPLEMENTATION_CODING_MESSAGE
+    );
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let plan_markdown = "- Step 1\n- Step 2\n";
+    chat.on_plan_item_completed(plan_markdown.to_string());
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::ClearUiAndSubmitUserMessage { text } = event else {
+        panic!("expected ClearUiAndSubmitUserMessage, got {event:?}");
+    };
+    assert_eq!(
+        text,
+        "A previous agent produced the plan below to accomplish the user's task. \
+        Implement the plan in a fresh context. Treat the plan as the source of \
+        user intent, re-read files as needed, and carry the work through \
+        implementation and verification.\n\n- Step 1\n- Step 2\n"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_clear_context_requires_default_mode_and_plan() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let default_mask = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    let params = plan_implementation::selection_view_params(
+        /*default_mask*/ None,
+        Some("- Step\n"),
+        /*clear_context_usage_label*/ None,
+    );
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        /*plan_markdown*/ None,
+        /*clear_context_usage_label*/ None,
+    );
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        Some("  \n"),
+        /*clear_context_usage_label*/ None,
+    );
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        Some("- Step\n"),
+        /*clear_context_usage_label*/ None,
+    );
+    assert_eq!(params.items[1].disabled_reason, None);
+    assert!(!params.items[1].actions.is_empty());
+
+    assert_eq!(
+        params.items[1].description.as_deref(),
+        Some("Fresh thread with this plan.")
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask),
+        Some("- Step\n"),
+        Some("89% used"),
+    );
+    assert_eq!(
+        params.items[1].description.as_deref(),
+        Some("Fresh thread. Context: 89% used.")
+    );
 }
 
 #[tokio::test]
@@ -930,16 +1032,15 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         msg: EventMsg::SessionConfigured(configured),
     });
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    chat.bottom_pane.set_plugin_mentions(Some(vec![
-        crate::legacy_core::plugins::PluginCapabilitySummary {
+    chat.bottom_pane
+        .set_plugin_mentions(Some(vec![codex_plugin::PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "Sample Plugin".to_string(),
             description: None,
             has_skills: true,
             mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),
-        },
-    ]));
+        }]));
 
     chat.submit_user_message(UserMessage {
         text: "$sample".to_string(),

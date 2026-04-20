@@ -8,12 +8,12 @@ use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::memories::citations::get_thread_id_from_citations;
 use crate::memories::citations::parse_memory_citation;
+use crate::memories::citations::thread_ids_from_memory_citation;
 use crate::parse_turn_item;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
@@ -137,7 +137,12 @@ pub(crate) async fn record_completed_response_item(
             .await;
     }
     mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
-    record_stage1_output_usage_for_completed_item(turn_context, item).await;
+    let has_memory_citation =
+        record_stage1_output_usage_and_detect_memory_citation(turn_context, item).await;
+    if has_memory_citation {
+        sess.record_memory_citation_for_turn(&turn_context.sub_id)
+            .await;
+    }
 }
 
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
@@ -154,10 +159,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
+    if !turn_context.config.memories.disable_on_external_context
         || !response_item_may_include_external_context(item)
     {
         return;
@@ -170,23 +172,27 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     .await;
 }
 
-async fn record_stage1_output_usage_for_completed_item(
+async fn record_stage1_output_usage_and_detect_memory_citation(
     turn_context: &TurnContext,
     item: &ResponseItem,
-) {
+) -> bool {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
-        return;
+        return false;
     };
 
     let (_, citations) = strip_citations(&raw_text);
-    let thread_ids = get_thread_id_from_citations(citations);
+    let Some(memory_citation) = parse_memory_citation(citations) else {
+        return false;
+    };
+    let thread_ids = thread_ids_from_memory_citation(&memory_citation);
     if thread_ids.is_empty() {
-        return;
+        return true;
     }
 
     if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
+    true
 }
 
 /// Handle a completed output item from the model stream, recording it and

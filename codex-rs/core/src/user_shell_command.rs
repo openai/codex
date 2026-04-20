@@ -3,8 +3,8 @@ use std::time::Duration;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::ResponseItem;
 
-use crate::codex::TurnContext;
 use crate::contextual_user_message::USER_SHELL_COMMAND_FRAGMENT;
+use crate::session::turn_context::TurnContext;
 use crate::tools::format_exec_output_str;
 
 fn format_duration_line(duration: Duration) -> String {

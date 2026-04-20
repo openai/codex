@@ -158,11 +158,9 @@ where
         let path = match next_token.as_deref() {
             Some(token) => {
                 let encoded_token = urlencoding::encode(token);
-                format!(
-                    "/connectors/directory/list?tier=categorized&token={encoded_token}&external_logos=true"
-                )
+                format!("/connectors/directory/list?token={encoded_token}&external_logos=true")
             }
-            None => "/connectors/directory/list?tier=categorized&external_logos=true".to_string(),
+            None => "/connectors/directory/list?external_logos=true".to_string(),
         };
         let response = fetch_page(path).await?;
         apps.extend(
@@ -416,8 +414,12 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+
+    static ALL_CONNECTORS_CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     fn cache_key(id: &str) -> AllConnectorsCacheKey {
         AllConnectorsCacheKey::new(
@@ -445,6 +447,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_all_connectors_uses_shared_cache() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
         let key = cache_key("shared");
@@ -483,6 +487,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_all_connectors_merges_and_normalizes_directory_apps() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let key = cache_key("merged");
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
@@ -549,6 +555,54 @@ mod tests {
         );
         assert_eq!(connectors[1].id, "beta");
         assert_eq!(connectors[1].name, "Beta");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_directory_connectors_omits_tier_for_all_pages() -> anyhow::Result<()> {
+        let requested_paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let paths = Arc::clone(&requested_paths);
+
+        let apps = list_directory_connectors(&mut move |path| {
+            let paths = Arc::clone(&paths);
+            async move {
+                paths
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(path.clone());
+                if path == "/connectors/directory/list?external_logos=true" {
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: Some("page 2".to_string()),
+                    })
+                } else {
+                    assert_eq!(
+                        path,
+                        "/connectors/directory/list?token=page%202&external_logos=true"
+                    );
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("beta", "Beta")],
+                        next_token: None,
+                    })
+                }
+            }
+        })
+        .await?;
+
+        assert_eq!(
+            apps.iter().map(|app| app.id.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "beta"]
+        );
+        assert_eq!(
+            requested_paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            &[
+                "/connectors/directory/list?external_logos=true".to_string(),
+                "/connectors/directory/list?token=page%202&external_logos=true".to_string(),
+            ]
+        );
         Ok(())
     }
 }
