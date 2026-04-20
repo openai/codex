@@ -422,6 +422,9 @@ mod phase2 {
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+    use crate::memories::storage::sync_rollout_summaries_from_memories;
+    use crate::memories::workspace::prepare_git_repo;
     use crate::session::session::Session;
     use crate::session::tests::make_session_and_context;
     use chrono::Duration as ChronoDuration;
@@ -508,7 +511,7 @@ mod phase2 {
             }
         }
 
-        async fn seed_stage1_output(&self, source_updated_at: i64) {
+        async fn seed_stage1_output(&self, source_updated_at: i64) -> ThreadId {
             let thread_id = ThreadId::new();
             let mut metadata_builder = ThreadMetadataBuilder::new(
                 thread_id,
@@ -557,6 +560,7 @@ mod phase2 {
                     .expect("mark stage-1 success"),
                 "stage-1 success should enqueue global consolidation"
             );
+            thread_id
         }
 
         async fn shutdown_threads(&self) {
@@ -776,7 +780,7 @@ mod phase2 {
     }
 
     #[tokio::test]
-    async fn dispatch_with_empty_stage1_outputs_rebuilds_local_artifacts() {
+    async fn dispatch_with_empty_stage1_outputs_spawns_for_workspace_changes() {
         let harness = DispatchHarness::new().await;
         let root = memory_root(&harness.config.codex_home);
         let summaries_dir = rollout_summaries_dir(&root);
@@ -858,13 +862,49 @@ mod phase2 {
             .state_db
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
-            .expect("claim global job after empty consolidation success");
-        pretty_assertions::assert_eq!(next_claim, Phase2JobClaimOutcome::SkippedNotDirty);
-        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+            .expect("claim global job after empty consolidation dispatch");
+        pretty_assertions::assert_eq!(next_claim, Phase2JobClaimOutcome::SkippedRunning);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
         let thread_ids = harness.manager.list_thread_ids().await;
-        pretty_assertions::assert_eq!(thread_ids.len(), 0);
+        pretty_assertions::assert_eq!(thread_ids.len(), 1);
 
         harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_clean_workspace_preserves_selected_phase2_baseline() {
+        let harness = DispatchHarness::new().await;
+        let thread_id = harness.seed_stage1_output(Utc::now().timestamp()).await;
+        let root = memory_root(&harness.config.codex_home);
+        let selection = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection");
+        let selected = selection.selected.clone();
+
+        sync_rollout_summaries_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected rollout summaries");
+        rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected raw memories");
+        prepare_git_repo(&root)
+            .await
+            .expect("commit current memory workspace as baseline");
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let selection = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection after clean workspace success");
+        pretty_assertions::assert_eq!(selection.selected.len(), 1);
+        pretty_assertions::assert_eq!(selection.selected[0].thread_id, thread_id);
+        pretty_assertions::assert_eq!(selection.retained_thread_ids, vec![thread_id]);
+        pretty_assertions::assert_eq!(selection.removed, Vec::new());
     }
 
     #[tokio::test]
@@ -1007,14 +1047,14 @@ mod phase2 {
 
         let chronicle_resources = config
             .codex_home
-            .join("memories_extensions/chronicle/resources");
+            .join("memories/extensions/chronicle/resources");
         tokio::fs::create_dir_all(&chronicle_resources)
             .await
             .expect("create chronicle resources");
         tokio::fs::write(
             config
                 .codex_home
-                .join("memories_extensions/chronicle/instructions.md"),
+                .join("memories/extensions/chronicle/instructions.md"),
             "instructions",
         )
         .await
@@ -1039,10 +1079,23 @@ mod phase2 {
             "spawn failures should leave the job in retry backoff instead of running"
         );
         assert!(
-            tokio::fs::try_exists(&old_file)
+            !tokio::fs::try_exists(&old_file)
                 .await
-                .expect("check old extension resource"),
-            "spawn failures should not prune extension resources before retry"
+                .expect("check legacy old extension resource"),
+            "phase2 should migrate extension resources into the memory workspace before spawn"
+        );
+        let migrated_old_file = config.codex_home.join(format!(
+            "memories/extensions/chronicle/resources/{}",
+            old_file
+                .file_name()
+                .expect("old file name")
+                .to_string_lossy()
+        ));
+        assert!(
+            !tokio::fs::try_exists(&migrated_old_file)
+                .await
+                .expect("check migrated old extension resource"),
+            "old extension resources are pruned before spawn so retry sees the git deletion"
         );
     }
 }

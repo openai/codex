@@ -83,26 +83,31 @@ What it does:
 - syncs local memory artifacts under the memories root:
   - `raw_memories.md` (merged raw memories, latest first)
   - `rollout_summaries/` (one summary file per retained rollout)
+- keeps the memories root itself as a git repository, initialized under
+  `~/.codex/memories/.git`
+- keeps `phase2_workspace_diff.md` in the memories root `.gitignore`
 - prunes stale rollout summaries that are no longer retained
 - finds old resource files from memory extensions under
-  `memories_extensions/<extension>/resources/` for extension directories that
+  `memories/extensions/<extension>/resources/` for extension directories that
   have an `instructions.md`, using the memory module retention window
-- if there are no Phase 1 inputs or old extension resources, marks the job
+- removes old extension resources before the consolidation agent runs, so the
+  deletion appears in the workspace diff
+- writes `phase2_workspace_diff.md` in the memories root with the git-style diff
+  from the previous successful Phase 2 commit to the current worktree; this
+  generated file is ignored by the memories git workspace and commits
+- if the memory workspace has no git changes after artifact sync/pruning, marks the job
   successful and exits
 
 If there is input, it then:
 
 - spawns an internal consolidation sub-agent
-- builds the Phase 2 prompt with a diff of the current Phase 1 input
-  selection versus the last successful Phase 2 selection (`added`,
-  `retained`, `removed`)
-- includes old extension resource paths in the prompt diff
+- builds the Phase 2 prompt with the path to the generated workspace diff
+- points the agent at `phase2_workspace_diff.md` for the detailed diff context
 - runs it with no approvals, no network, and local write access only
 - disables collab for that agent (to prevent recursive delegation)
 - watches the agent status and heartbeats the global job lease while it runs
+- commits all memory workspace changes after the agent completes successfully
 - marks the phase-2 job success/failure in the state DB when the agent finishes
-- prunes old extension resource files after the consolidation agent completes
-  and the successful Phase 2 job is recorded
 
 Selection diff behavior:
 

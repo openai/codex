@@ -242,6 +242,7 @@ env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
