@@ -7,6 +7,8 @@ use super::mcp_tool_to_deferred_responses_api_tool;
 use super::tool_definition_to_responses_api_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolExecution;
+use crate::ToolLoadingPolicy;
 use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
@@ -16,8 +18,8 @@ use std::collections::BTreeMap;
 #[test]
 fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
     assert_eq!(
-        tool_definition_to_responses_api_tool(ToolDefinition {
-            name: "lookup_order".to_string(),
+        tool_definition_to_responses_api_tool(&ToolDefinition {
+            name: ToolName::plain("lookup_order"),
             description: "Look up an order".to_string(),
             input_schema: JsonSchema::object(
                 BTreeMap::from([(
@@ -28,7 +30,11 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(false.into())
             ),
             output_schema: Some(json!({"type": "object"})),
-            defer_loading: false,
+            loading: ToolLoadingPolicy::Eager,
+            execution: ToolExecution::Dynamic,
+            presentation: None,
+            search: None,
+            supports_parallel_tool_calls: false,
         }),
         ResponsesApiTool {
             name: "lookup_order".to_string(),

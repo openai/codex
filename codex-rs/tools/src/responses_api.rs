@@ -1,8 +1,8 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
-use crate::parse_dynamic_tool;
-use crate::parse_mcp_tool;
+use crate::dynamic_tool_to_tool_definition;
+use crate::mcp_tool_to_tool_definition;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -69,9 +69,9 @@ pub enum ResponsesApiNamespaceTool {
 pub fn dynamic_tool_to_responses_api_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(parse_dynamic_tool(
-        tool,
-    )?))
+    Ok(tool_definition_to_responses_api_tool(
+        &dynamic_tool_to_tool_definition(tool)?,
+    ))
 }
 
 pub fn mcp_tool_to_responses_api_tool(
@@ -79,7 +79,7 @@ pub fn mcp_tool_to_responses_api_tool(
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
+        &mcp_tool_to_tool_definition(tool_name, tool)?,
     ))
 }
 
@@ -88,20 +88,22 @@ pub fn mcp_tool_to_deferred_responses_api_tool(
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?
-            .renamed(tool_name.name.clone())
-            .into_deferred(),
+        &mcp_tool_to_tool_definition(tool_name, tool)?.into_deferred(),
     ))
 }
 
-pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
+/// Converts the leaf function shape of a canonical tool definition.
+///
+/// If the tool is namespaced, callers are still responsible for wrapping the
+/// returned function in a Responses API namespace tool.
+pub fn tool_definition_to_responses_api_tool(tool_definition: &ToolDefinition) -> ResponsesApiTool {
     ResponsesApiTool {
-        name: tool_definition.name,
-        description: tool_definition.description,
+        name: tool_definition.name.name.clone(),
+        description: tool_definition.description.clone(),
         strict: false,
-        defer_loading: tool_definition.defer_loading.then_some(true),
-        parameters: tool_definition.input_schema,
-        output_schema: tool_definition.output_schema,
+        defer_loading: tool_definition.defer_loading().then_some(true),
+        parameters: tool_definition.input_schema.clone(),
+        output_schema: tool_definition.output_schema.clone(),
     }
 }
 
