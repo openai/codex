@@ -636,7 +636,7 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
-            self.delete_forward_kill(1);
+            self.delete_forward_kill(/*n*/ 1);
             return;
         }
         if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
@@ -1958,7 +1958,7 @@ mod tests {
     #[test]
     fn vim_insert_and_escape() {
         let mut t = TextArea::new();
-        t.set_vim_enabled(true);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
@@ -1972,7 +1972,7 @@ mod tests {
     #[test]
     fn vim_escape_from_insert_at_start_does_not_underflow() {
         let mut t = TextArea::new();
-        t.set_vim_enabled(true);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1985,7 +1985,7 @@ mod tests {
     fn vim_escape_moves_by_grapheme_boundary() {
         let mut t = ta_with("👍👍");
         t.set_cursor(t.text().len());
-        t.set_vim_enabled(true);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1999,7 +1999,7 @@ mod tests {
         let mut t = TextArea::new();
         t.insert_str("a");
         t.insert_element("<element>");
-        t.set_vim_enabled(true);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -2012,8 +2012,8 @@ mod tests {
     fn vim_shift_i_enters_insert_at_line_start_with_shift_only_binding() {
         let mut t = ta_with("hello\nworld");
         t.vim_normal_keymap.insert_line_start = vec![key_hint::shift(KeyCode::Char('i'))];
-        t.set_cursor(9);
-        t.set_vim_enabled(true);
+        t.set_cursor(/*pos*/ 9);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE));
 
@@ -2025,8 +2025,8 @@ mod tests {
     fn vim_shift_a_enters_insert_at_line_end_with_shift_only_binding() {
         let mut t = ta_with("hello\nworld");
         t.vim_normal_keymap.append_line_end = vec![key_hint::shift(KeyCode::Char('a'))];
-        t.set_cursor(8);
-        t.set_vim_enabled(true);
+        t.set_cursor(/*pos*/ 8);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE));
 
@@ -2038,8 +2038,8 @@ mod tests {
     fn vim_shift_o_opens_line_above_with_shift_only_binding() {
         let mut t = ta_with("hello\nworld");
         t.vim_normal_keymap.open_line_above = vec![key_hint::shift(KeyCode::Char('o'))];
-        t.set_cursor(8);
-        t.set_vim_enabled(true);
+        t.set_cursor(/*pos*/ 8);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
 
@@ -2051,8 +2051,8 @@ mod tests {
     #[test]
     fn vim_delete_word() {
         let mut t = ta_with("hello world");
-        t.set_cursor(0);
-        t.set_vim_enabled(true);
+        t.set_cursor(/*pos*/ 0);
+        t.set_vim_enabled(/*enabled*/ true);
 
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
