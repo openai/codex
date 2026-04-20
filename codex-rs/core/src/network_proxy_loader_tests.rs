@@ -119,10 +119,8 @@ mode = "limited"
 [permissions.workspace.network.mitm]
 enabled = false
 
-[[permissions.workspace.network.mitm.hooks]]
+[permissions.workspace.network.mitm.hooks.lower.match]
 host = "lower.example.com"
-
-[permissions.workspace.network.mitm.hooks.match]
 methods = ["POST"]
 path_prefixes = ["/repos/openai/"]
 "#,
@@ -141,10 +139,8 @@ mode = "full"
 [permissions.workspace.network.mitm]
 enabled = true
 
-[[permissions.workspace.network.mitm.hooks]]
+[permissions.workspace.network.mitm.hooks.github_write.match]
 host = "api.github.com"
-
-[permissions.workspace.network.mitm.hooks.match]
 methods = ["PUT"]
 path_prefixes = ["/repos/openai/"]
 "#,

@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
+use codex_network_proxy::MitmHookActionsConfig;
+use codex_network_proxy::MitmHookBodyConfig;
 use codex_network_proxy::MitmHookConfig;
+use codex_network_proxy::MitmHookMatchConfig;
 use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
@@ -166,8 +169,37 @@ pub struct NetworkToml {
 #[schemars(deny_unknown_fields)]
 pub struct NetworkMitmToml {
     pub enabled: Option<bool>,
-    #[schemars(with = "Option<Vec<MitmHookConfigSchema>>")]
-    pub hooks: Option<Vec<MitmHookConfig>>,
+    pub hooks: Option<BTreeMap<String, NetworkMitmHookToml>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkMitmHookToml {
+    #[serde(rename = "match", default)]
+    pub matcher: NetworkMitmHookMatchToml,
+    #[serde(default)]
+    #[schemars(with = "MitmHookActionsConfigSchema")]
+    pub actions: MitmHookActionsConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+pub struct NetworkMitmHookMatchToml {
+    pub host: String,
+    pub methods: Vec<String>,
+    pub path_prefixes: Vec<String>,
+    pub query: BTreeMap<String, Vec<String>>,
+    pub headers: BTreeMap<String, Vec<String>>,
+    #[schemars(with = "Option<MitmHookBodyConfigSchema>")]
+    pub body: Option<MitmHookBodyConfig>,
+    pub action: Vec<NetworkMitmHookActionName>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMitmHookActionName {
+    StripRequestHeaders,
+    InjectRequestHeaders,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -175,26 +207,6 @@ pub struct NetworkMitmToml {
 enum NetworkModeSchema {
     Limited,
     Full,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(default)]
-struct MitmHookConfigSchema {
-    pub host: String,
-    #[serde(rename = "match", default)]
-    pub matcher: MitmHookMatchConfigSchema,
-    #[serde(default)]
-    pub actions: MitmHookActionsConfigSchema,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(default)]
-struct MitmHookMatchConfigSchema {
-    pub methods: Vec<String>,
-    pub path_prefixes: Vec<String>,
-    pub query: BTreeMap<String, Vec<String>>,
-    pub headers: BTreeMap<String, Vec<String>>,
-    pub body: Option<MitmHookBodyConfigSchema>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -274,7 +286,10 @@ impl NetworkToml {
                 config.network.mitm = enabled;
             }
             if let Some(hooks) = mitm.hooks.as_ref() {
-                config.network.mitm_hooks = hooks.clone();
+                config.network.mitm_hooks = hooks
+                    .values()
+                    .map(NetworkMitmHookToml::to_runtime)
+                    .collect();
             }
         }
     }
@@ -283,6 +298,43 @@ impl NetworkToml {
         let mut config = NetworkProxyConfig::default();
         self.apply_to_network_proxy_config(&mut config);
         config
+    }
+}
+
+impl NetworkMitmHookToml {
+    fn to_runtime(&self) -> MitmHookConfig {
+        MitmHookConfig {
+            host: self.matcher.host.clone(),
+            matcher: MitmHookMatchConfig {
+                methods: self.matcher.methods.clone(),
+                path_prefixes: self.matcher.path_prefixes.clone(),
+                query: self.matcher.query.clone(),
+                headers: self.matcher.headers.clone(),
+                body: self.matcher.body.clone(),
+            },
+            actions: self.selected_actions(),
+        }
+    }
+
+    fn selected_actions(&self) -> MitmHookActionsConfig {
+        if self.matcher.action.is_empty() {
+            return self.actions.clone();
+        }
+
+        MitmHookActionsConfig {
+            strip_request_headers: self
+                .matcher
+                .action
+                .contains(&NetworkMitmHookActionName::StripRequestHeaders)
+                .then(|| self.actions.strip_request_headers.clone())
+                .unwrap_or_default(),
+            inject_request_headers: self
+                .matcher
+                .action
+                .contains(&NetworkMitmHookActionName::InjectRequestHeaders)
+                .then(|| self.actions.inject_request_headers.clone())
+                .unwrap_or_default(),
+        }
     }
 }
 
