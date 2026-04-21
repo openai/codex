@@ -24,6 +24,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "device-key",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -244,6 +245,7 @@ env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
@@ -282,6 +284,7 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
+p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
@@ -429,6 +432,11 @@ ignored = [
     "codex-utils-template",
     "codex-v8-poc",
 ]
+
+[profile.dev]
+# Keep line tables/backtraces while avoiding expensive full variable debug info
+# across local dev builds.
+debug = 1
 
 [profile.dev-small]
 inherits = "dev"

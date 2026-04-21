@@ -637,3 +637,148 @@ pub(super) fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -
 
     (tools, resources, resource_templates, auth_statuses)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::PluginMarketplaceEntry;
+    use codex_protocol::mcp::Tool;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    fn test_absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    #[test]
+    fn hide_cli_only_plugin_marketplaces_removes_openai_bundled() {
+        let mut response = PluginListResponse {
+            marketplaces: vec![
+                PluginMarketplaceEntry {
+                    name: "openai-bundled".to_string(),
+                    path: Some(test_absolute_path("/marketplaces/openai-bundled")),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+                PluginMarketplaceEntry {
+                    name: "openai-curated".to_string(),
+                    path: Some(test_absolute_path("/marketplaces/openai-curated")),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+            ],
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+        };
+
+        hide_cli_only_plugin_marketplaces(&mut response);
+
+        assert_eq!(
+            response.marketplaces,
+            vec![PluginMarketplaceEntry {
+                name: "openai-curated".to_string(),
+                path: Some(test_absolute_path("/marketplaces/openai-curated")),
+                interface: None,
+                plugins: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn mcp_inventory_maps_prefix_tool_names_by_server() {
+        let statuses = vec![
+            McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::from([(
+                    "list".to_string(),
+                    Tool {
+                        description: None,
+                        name: "list".to_string(),
+                        title: None,
+                        input_schema: serde_json::json!({"type": "object"}),
+                        output_schema: None,
+                        annotations: None,
+                        icons: None,
+                        meta: None,
+                    },
+                )]),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+            McpServerStatus {
+                name: "disabled".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+        ];
+
+        let (tools, resources, resource_templates, auth_statuses) =
+            mcp_inventory_maps_from_statuses(statuses);
+        let mut resource_names = resources.keys().cloned().collect::<Vec<_>>();
+        resource_names.sort();
+        let mut template_names = resource_templates.keys().cloned().collect::<Vec<_>>();
+        template_names.sort();
+
+        assert_eq!(
+            tools.keys().cloned().collect::<Vec<_>>(),
+            vec!["mcp__docs__list".to_string()]
+        );
+        assert_eq!(resource_names, vec!["disabled", "docs"]);
+        assert_eq!(template_names, vec!["disabled", "docs"]);
+        assert_eq!(
+            auth_statuses.get("disabled"),
+            Some(&McpAuthStatus::Unsupported)
+        );
+    }
+
+    #[test]
+    fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
+        let thread_id = ThreadId::new();
+        let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
+
+        let params = build_feedback_upload_params(
+            Some(thread_id),
+            Some(rollout_path.clone()),
+            FeedbackCategory::SafetyCheck,
+            Some("needs follow-up".to_string()),
+            Some("turn-123".to_string()),
+            /*include_logs*/ true,
+        );
+
+        assert_eq!(params.classification, "safety_check");
+        assert_eq!(params.reason, Some("needs follow-up".to_string()));
+        assert_eq!(params.thread_id, Some(thread_id.to_string()));
+        assert_eq!(
+            params
+                .tags
+                .as_ref()
+                .and_then(|tags| tags.get("turn_id"))
+                .map(String::as_str),
+            Some("turn-123")
+        );
+        assert_eq!(params.include_logs, true);
+        assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
+    }
+
+    #[test]
+    fn build_feedback_upload_params_omits_rollout_path_without_logs() {
+        let params = build_feedback_upload_params(
+            /*origin_thread_id*/ None,
+            Some(PathBuf::from("/tmp/rollout.jsonl")),
+            FeedbackCategory::GoodResult,
+            /*reason*/ None,
+            /*turn_id*/ None,
+            /*include_logs*/ false,
+        );
+
+        assert_eq!(params.classification, "good_result");
+        assert_eq!(params.reason, None);
+        assert_eq!(params.thread_id, None);
+        assert_eq!(params.tags, None);
+        assert_eq!(params.include_logs, false);
+        assert_eq!(params.extra_log_files, None);
+    }
+}

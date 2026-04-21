@@ -9,14 +9,18 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
+gix = { workspace = true }
 once_cell = { workspace = true }
 regex = "1"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+similar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "process", "rt", "time"] }

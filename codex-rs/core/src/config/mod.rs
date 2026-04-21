@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConstrainedWithSource;
+use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
@@ -108,7 +109,6 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -118,8 +118,6 @@ pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
-pub use service::ConfigService;
-pub use service::ConfigServiceError;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
@@ -947,7 +945,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     Ok(cfg)
 }
 
-pub(crate) fn deserialize_config_toml_with_base(
+pub fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
@@ -957,6 +955,15 @@ pub(crate) fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Validate user-visible feature settings against managed feature requirements.
+pub fn validate_feature_requirements_for_config_toml(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<()> {
+    managed_features::validate_explicit_feature_settings_in_config_toml(cfg, feature_requirements)?;
+    managed_features::validate_feature_requirements_in_config_toml(cfg, feature_requirements)
 }
 
 fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {

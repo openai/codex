@@ -72,8 +72,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
