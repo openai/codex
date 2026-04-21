@@ -50,6 +50,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::config_manager::ConfigManager;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
@@ -390,17 +391,22 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
+        let config_manager = ConfigManager::new(
+            args.config.codex_home.to_path_buf(),
+            args.cli_overrides,
+            args.loader_overrides,
+            args.cloud_requirements,
+            args.arg0_paths.clone(),
+            args.thread_config_loader,
+        );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                config_manager,
                 environment_manager: args.environment_manager,
-                cli_overrides: args.cli_overrides,
-                loader_overrides: args.loader_overrides,
-                cloud_requirements: args.cloud_requirements,
-                thread_config_loader: args.thread_config_loader,
                 feedback: args.feedback,
                 log_db: args.log_db,
                 config_warnings: args.config_warnings,

@@ -1,11 +1,9 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader;
 use codex_config::NoopThreadConfigLoader;
+use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_features::Feature;
@@ -19,6 +17,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::config_manager::ConfigManager;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -43,6 +42,7 @@ use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
+use codex_core::config::find_codex_home;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
@@ -54,7 +54,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use toml::Value as TomlValue;
 use tracing::Level;
 use tracing::error;
 use tracing::info;
@@ -334,6 +333,30 @@ fn log_format_from_env() -> LogFormat {
     LogFormat::from_env_value(value.as_deref())
 }
 
+async fn load_startup_config(
+    config_manager: &ConfigManager,
+) -> IoResult<(Config, Vec<ConfigWarningNotification>)> {
+    let mut config_warnings = Vec::new();
+    let config = match config_manager
+        .load_latest_config(/*fallback_cwd*/ None)
+        .await
+    {
+        Ok(config) => config,
+        Err(err) => {
+            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
+            config_warnings.push(message);
+            config_manager.load_default_config().await.map_err(|e| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("error loading default config after config error: {e}"),
+                )
+            })?
+        }
+    };
+
+    Ok((config, config_warnings))
+}
+
 pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
@@ -381,10 +404,18 @@ pub async fn run_main_with_transport(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let cloud_requirements = match ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides.clone())
-        .loader_overrides(loader_overrides.clone())
-        .build()
+    let codex_home = find_codex_home()?;
+    let thread_config_loader: Arc<dyn ThreadConfigLoader> = Arc::new(NoopThreadConfigLoader);
+    let config_manager = ConfigManager::new(
+        codex_home.to_path_buf(),
+        cli_kv_overrides.clone(),
+        loader_overrides,
+        Default::default(),
+        arg0_paths.clone(),
+        thread_config_loader.clone(),
+    );
+    match config_manager
+        .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
         Ok(config) => {
@@ -407,42 +438,14 @@ pub async fn run_main_with_transport(
 
             let auth_manager =
                 AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-            cloud_requirements_loader(
-                auth_manager,
-                config.chatgpt_base_url,
-                config.codex_home.to_path_buf(),
-            )
+            config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
         }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud requirements");
             // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
-            CloudRequirementsLoader::default()
         }
     };
-    let loader_overrides_for_config_api = loader_overrides.clone();
-    let thread_config_loader = Arc::new(NoopThreadConfigLoader);
-    let mut config_warnings = Vec::new();
-    let config = match ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides.clone())
-        .loader_overrides(loader_overrides)
-        .cloud_requirements(cloud_requirements.clone())
-        .build()
-        .await
-    {
-        Ok(config) => config,
-        Err(err) => {
-            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
-            config_warnings.push(message);
-            Config::load_default_with_cli_overrides(cli_kv_overrides.clone())
-                .await
-                .map_err(|e| {
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("error loading default config after config error: {e}"),
-                    )
-                })?
-        }
-    };
+    let (config, mut config_warnings) = load_startup_config(&config_manager).await?;
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);
@@ -654,17 +657,12 @@ pub async fn run_main_with_transport(
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
-        let loader_overrides = loader_overrides_for_config_api;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            config_manager,
             environment_manager,
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements: cloud_requirements.clone(),
-            thread_config_loader,
             feedback: feedback.clone(),
             log_db,
             config_warnings,
@@ -912,7 +910,16 @@ fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTranspo
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::load_startup_config;
+    use crate::config_manager::ConfigManager;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_config::NoopThreadConfigLoader;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use toml::Value as TomlValue;
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {
@@ -930,5 +937,50 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[tokio::test]
+    async fn load_startup_config_falls_back_to_defaults_with_manager_state() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(&config_path, "model = [").expect("write invalid config");
+        let config_manager = ConfigManager::new(
+            codex_home.path().to_path_buf(),
+            vec![(
+                "model".to_string(),
+                TomlValue::String("gpt-startup-fallback-test".to_string()),
+            )],
+            LoaderOverrides::without_managed_config_for_tests(),
+            CloudRequirementsLoader::default(),
+            Arg0DispatchPaths::default(),
+            Arc::new(NoopThreadConfigLoader),
+        );
+
+        let (config, warnings) = load_startup_config(&config_manager)
+            .await
+            .expect("fallback config");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-startup-fallback-test"));
+        assert_eq!(config.codex_home.as_path(), codex_home.path());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].summary,
+            "Invalid configuration; using defaults."
+        );
+        assert!(
+            !warnings[0]
+                .details
+                .as_deref()
+                .expect("warning details")
+                .is_empty()
+        );
+        assert_eq!(
+            warnings[0].path.as_deref(),
+            Some(config_path.to_string_lossy().as_ref())
+        );
+        assert!(
+            warnings[0].range.is_some(),
+            "config parse error should include source range"
+        );
     }
 }

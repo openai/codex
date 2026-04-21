@@ -10352,7 +10352,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::RwLock;
     use tempfile::TempDir;
 
     #[test]
@@ -10628,10 +10627,9 @@ mod tests {
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
-            Arc::new(RwLock::new(Vec::new())),
-            Arc::new(RwLock::new(BTreeMap::new())),
+            Vec::new(),
             LoaderOverrides::default(),
-            Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
