@@ -14,6 +14,7 @@ use crate::api::TaskText;
 use chrono::DateTime;
 use chrono::Utc;
 
+use codex_api::AuthProvider;
 use codex_backend_client as backend;
 use codex_backend_client::CodeTaskDetailsResponseExt;
 use codex_git_utils::ApplyGitRequest;
@@ -39,6 +40,11 @@ impl HttpClient {
 
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
         self.backend = self.backend.clone().with_user_agent(ua);
+        self
+    }
+
+    pub fn with_auth_provider(mut self, auth: &dyn AuthProvider) -> Self {
+        self.backend = self.backend.clone().with_auth_provider(auth);
         self
     }
 

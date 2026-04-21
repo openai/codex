@@ -5,6 +5,7 @@ use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
+use codex_api::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
@@ -118,6 +119,7 @@ pub struct Client {
     base_url: String,
     http: reqwest::Client,
     bearer_token: Option<String>,
+    auth_headers: HeaderMap,
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     chatgpt_account_is_fedramp: bool,
@@ -146,6 +148,7 @@ impl Client {
             base_url,
             http,
             bearer_token: None,
+            auth_headers: HeaderMap::new(),
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
@@ -154,17 +157,14 @@ impl Client {
     }
 
     pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        let token = auth.get_token().map_err(anyhow::Error::from)?;
-        let mut client = Self::new(base_url)?
+        Ok(Self::new(base_url)?
             .with_user_agent(get_codex_user_agent())
-            .with_bearer_token(token);
-        if let Some(account_id) = auth.get_account_id() {
-            client = client.with_chatgpt_account_id(account_id);
-        }
-        if auth.is_fedramp_account() {
-            client = client.with_fedramp_routing_header();
-        }
-        Ok(client)
+            .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth).as_ref()))
+    }
+
+    pub fn with_auth_provider(mut self, auth: &dyn AuthProvider) -> Self {
+        auth.add_auth_headers(&mut self.auth_headers);
+        self
     }
 
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
@@ -207,6 +207,7 @@ impl Client {
                 h.insert(AUTHORIZATION, hv);
             }
         }
+        h.extend(self.auth_headers.clone());
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(acc)

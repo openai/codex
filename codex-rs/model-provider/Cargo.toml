@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait = { workspace = true }
 codex-api = { workspace = true }
+codex-agent-identity = { workspace = true }
 codex-aws-auth = { workspace = true }
 codex-client = { workspace = true }
 codex-login = { workspace = true }

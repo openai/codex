@@ -608,7 +608,7 @@ fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth, RemotePlu
     let Some(auth) = auth else {
         return Err(RemotePluginCatalogError::AuthRequired);
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         return Err(RemotePluginCatalogError::UnsupportedAuthMode);
     }
     Ok(auth)
@@ -618,16 +618,9 @@ fn authenticated_request(
     request: RequestBuilder,
     auth: &CodexAuth,
 ) -> Result<RequestBuilder, RemotePluginCatalogError> {
-    let token = auth
-        .get_token()
-        .map_err(RemotePluginCatalogError::AuthToken)?;
-    let mut request = request
+    Ok(request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .bearer_auth(token);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    Ok(request)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()))
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(

@@ -29,7 +29,7 @@ pub(super) struct RemoteControlEnrollment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlConnectionAuth {
-    pub(super) bearer_token: String,
+    pub(super) auth_headers: HeaderMap,
     pub(super) account_id: String,
 }
 
@@ -202,7 +202,7 @@ pub(super) async fn enroll_remote_control_server(
     let http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
-        .bearer_auth(&auth.bearer_token)
+        .headers(auth.auth_headers.clone())
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .json(&request);
 
@@ -445,7 +445,7 @@ mod tests {
         let err = enroll_remote_control_server(
             &remote_control_target,
             &RemoteControlConnectionAuth {
-                bearer_token: "Access Token".to_string(),
+                auth_headers: HeaderMap::new(),
                 account_id: "account_id".to_string(),
             },
         )

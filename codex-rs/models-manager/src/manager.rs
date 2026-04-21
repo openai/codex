@@ -9,7 +9,6 @@ use codex_api::ReqwestTransport;
 use codex_api::TransportError;
 use codex_api::auth_header_telemetry;
 use codex_api::map_api_error;
-use codex_app_server_protocol::AuthMode;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::AuthEnvTelemetry;
@@ -407,11 +406,13 @@ impl ModelsManager {
             return Ok(());
         }
 
-        let auth_mode = self
+        let uses_codex_backend = self
             .provider
-            .auth_manager()
-            .and_then(|auth_manager| auth_manager.auth_mode());
-        if auth_mode != Some(AuthMode::Chatgpt) && !self.provider.info().has_command_auth() {
+            .auth()
+            .await
+            .as_ref()
+            .is_some_and(CodexAuth::uses_codex_backend);
+        if !uses_codex_backend && !self.provider.info().has_command_auth() {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -536,12 +537,12 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let auth_mode = self
+        let uses_codex_backend = self
             .provider
             .auth_manager()
-            .and_then(|auth_manager| auth_manager.auth_mode());
-        let chatgpt_mode = matches!(auth_mode, Some(AuthMode::Chatgpt));
-        presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .is_some_and(|auth| auth.uses_codex_backend());
+        presets = ModelPreset::filter_by_auth(presets, uses_codex_backend);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
 

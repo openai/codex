@@ -205,24 +205,15 @@ fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
     }
 }
 
-fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
-    let token = auth.and_then(|auth| auth.get_token().ok())?;
-    let token = token.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
 fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
-    let mut headers = HashMap::new();
-    if let Some(token) = codex_apps_mcp_bearer_token(auth) {
-        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
-    }
-    if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
-        headers.insert("ChatGPT-Account-ID".to_string(), account_id);
-    }
+    let auth = auth.filter(|auth| auth.uses_codex_backend())?;
+    let headers = codex_model_provider::auth_provider_from_auth(auth).to_auth_headers();
+    let headers: HashMap<_, _> = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect();
     if headers.is_empty() {
         None
     } else {
@@ -293,7 +284,7 @@ pub fn with_codex_apps_mcp(
     auth: Option<&CodexAuth>,
     config: &McpConfig,
 ) -> HashMap<String, McpServerConfig> {
-    if config.apps_enabled && auth.is_some_and(CodexAuth::is_chatgpt_auth) {
+    if config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             codex_apps_mcp_server_config(config, auth),
