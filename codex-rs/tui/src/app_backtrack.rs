@@ -363,7 +363,7 @@ impl App {
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if let TuiEvent::Draw = &event
+        if matches!(&event, TuiEvent::Draw | TuiEvent::Resize)
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
@@ -482,8 +482,6 @@ impl App {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
-        self.chat_widget
-            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -505,8 +503,6 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
-            self.chat_widget
-                .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }

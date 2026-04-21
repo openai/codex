@@ -35,10 +35,16 @@ use ratatui::text::Span;
 /// which let us slide existing content down without redrawing it. Zellij silently
 /// drops or mishandles those sequences, so `Zellij` mode falls back to emitting
 /// newlines at the bottom of the screen and writing lines at absolute positions.
+///
+/// The preserve-viewport variants are for redraw/reflow work that is rebuilding already-emitted
+/// history. They write history above the current viewport without treating blank space below the
+/// viewport as room for new live output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertHistoryMode {
     Standard,
+    StandardPreserveViewport,
     Zellij,
+    ZellijPreserveViewport,
 }
 
 impl InsertHistoryMode {
@@ -48,6 +54,25 @@ impl InsertHistoryMode {
         } else {
             Self::Standard
         }
+    }
+
+    pub fn new_preserving_viewport(is_zellij: bool) -> Self {
+        if is_zellij {
+            Self::ZellijPreserveViewport
+        } else {
+            Self::StandardPreserveViewport
+        }
+    }
+
+    pub fn uses_zellij(self) -> bool {
+        matches!(self, Self::Zellij | Self::ZellijPreserveViewport)
+    }
+
+    pub(crate) fn preserves_viewport(self) -> bool {
+        matches!(
+            self,
+            Self::StandardPreserveViewport | Self::ZellijPreserveViewport
+        )
     }
 }
 
@@ -68,9 +93,9 @@ where
 /// In `Standard` mode this manipulates DECSTBM scroll regions to slide existing
 /// scrollback down and writes new lines into the freed space. In `Zellij` mode it
 /// emits newlines at the screen bottom to create space (since Zellij ignores scroll
-/// region escapes) and writes lines at computed absolute positions. Both modes
-/// update `terminal.viewport_area` so subsequent draw passes know where the
-/// viewport moved to.
+/// region escapes) and writes lines at computed absolute positions. The preserve-viewport variants
+/// skip the "slide existing content down" step so resize reflow can redraw history without moving
+/// the composer.
 pub fn insert_history_lines_with_mode<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
@@ -116,10 +141,18 @@ where
     }
     let wrapped_lines = wrapped_rows as u16;
 
-    if matches!(mode, InsertHistoryMode::Zellij) {
+    if mode.uses_zellij() {
         let space_below = screen_size.height.saturating_sub(area.bottom());
-        let shift_down = wrapped_lines.min(space_below);
-        let scroll_up_amount = wrapped_lines.saturating_sub(shift_down);
+        let shift_down = if mode.preserves_viewport() {
+            0
+        } else {
+            wrapped_lines.min(space_below)
+        };
+        let scroll_up_amount = if mode.preserves_viewport() {
+            0
+        } else {
+            wrapped_lines.saturating_sub(shift_down)
+        };
 
         if scroll_up_amount > 0 {
             // Scroll the entire screen up by emitting \n at the bottom
@@ -134,17 +167,27 @@ where
             should_update_area = true;
         }
 
-        let cursor_top = area.top().saturating_sub(scroll_up_amount + shift_down);
+        let zellij_start = if mode.preserves_viewport() {
+            wrapped.len().saturating_sub(area.top() as usize)
+        } else {
+            0
+        };
+        let zellij_lines = &wrapped[zellij_start..];
+        let cursor_top = if mode.preserves_viewport() {
+            area.top().saturating_sub(zellij_lines.len() as u16)
+        } else {
+            area.top().saturating_sub(scroll_up_amount + shift_down)
+        };
         queue!(writer, MoveTo(0, cursor_top))?;
 
-        for (i, line) in wrapped.iter().enumerate() {
+        for (i, line) in zellij_lines.iter().enumerate() {
             if i > 0 {
                 queue!(writer, Print("\r\n"))?;
             }
             write_history_line(writer, line, wrap_width)?;
         }
     } else {
-        let cursor_top = if area.bottom() < screen_size.height {
+        let cursor_top = if !mode.preserves_viewport() && area.bottom() < screen_size.height {
             let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
 
             let top_1based = area.top() + 1;
@@ -178,19 +221,28 @@ where
         // ││                            ││
         // │╰────────────────────────────╯│
         // └──────────────────────────────┘
-        queue!(writer, SetScrollRegion(1..area.top()))?;
+        if area.top() > 0 {
+            queue!(writer, SetScrollRegion(1..area.top()))?;
 
-        // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
-        // terminal's last_known_cursor_position, which hopefully will still be accurate after we
-        // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-        queue!(writer, MoveTo(0, cursor_top))?;
+            // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
+            // terminal's last_known_cursor_position, which hopefully will still be accurate after we
+            // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
+            queue!(writer, MoveTo(0, cursor_top))?;
 
-        for line in &wrapped {
-            queue!(writer, Print("\r\n"))?;
-            write_history_line(writer, line, wrap_width)?;
+            let scroll_bottom = area.top().saturating_sub(1);
+            let mut advance_row = cursor_top;
+            for line in &wrapped {
+                // Explicitly anchor before each line advance to avoid terminal wrap-pending drift when
+                // prior content reached the right edge.
+                queue!(writer, MoveTo(0, advance_row), Print("\n"))?;
+                if advance_row < scroll_bottom {
+                    advance_row += 1;
+                }
+                write_history_line(writer, line, wrap_width)?;
+            }
+
+            queue!(writer, ResetScrollRegion)?;
         }
-
-        queue!(writer, ResetScrollRegion)?;
     }
 
     // Restore the cursor position to where it was before we started.
@@ -820,5 +872,59 @@ mod tests {
         );
         assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
         assert_eq!(term.visible_history_rows(), 1);
+    }
+
+    #[test]
+    fn vt100_exact_width_rows_keep_stable_line_progression() {
+        let width: u16 = 10;
+        let height: u16 = 7;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let lines = vec![
+            Line::from("1234567890"),
+            Line::from("abcdefghij"),
+            Line::from("KLMNOPQRST"),
+        ];
+        insert_history_lines(&mut term, lines).expect("insert_history_lines should succeed");
+
+        let screen = term.backend().vt100().screen();
+        let mut non_empty_rows: Vec<(u16, String)> = Vec::new();
+        for row in 0..height.saturating_sub(1) {
+            let row_text = (0..width)
+                .map(|col| {
+                    screen
+                        .cell(row, col)
+                        .map(|cell| cell.contents().to_string())
+                        .unwrap_or_default()
+                })
+                .collect::<String>();
+            if !row_text.trim().is_empty() {
+                non_empty_rows.push((row, row_text));
+            }
+        }
+
+        assert_eq!(
+            non_empty_rows.len(),
+            3,
+            "expected exactly three populated rows, got {non_empty_rows:?}",
+        );
+
+        let expected = ["1234567890", "abcdefghij", "KLMNOPQRST"];
+        for (idx, (row, row_text)) in non_empty_rows.iter().enumerate() {
+            assert_eq!(
+                row_text, expected[idx],
+                "unexpected row content at y={row}: {row_text:?}",
+            );
+        }
+        for pair in non_empty_rows.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].0 + 1,
+                "expected contiguous row progression, got {non_empty_rows:?}",
+            );
+        }
     }
 }
