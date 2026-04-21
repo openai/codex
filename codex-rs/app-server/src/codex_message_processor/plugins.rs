@@ -10,7 +10,6 @@ impl CodexMessageProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams { cwds } = params;
         let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
         let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
@@ -19,6 +18,20 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if !config.features.enabled(Feature::Plugins) {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    PluginListResponse {
+                        marketplaces: Vec::new(),
+                        marketplace_load_errors: Vec::new(),
+                        featured_plugin_ids: Vec::new(),
+                    },
+                )
+                .await;
+            return;
+        }
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
         let auth = self.auth_manager.auth().await;
 
         let config_for_marketplace_listing = config.clone();
@@ -86,9 +99,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if config.features.enabled(Feature::Plugins)
-            && config.features.enabled(Feature::RemotePlugin)
-        {
+        if config.features.enabled(Feature::RemotePlugin) {
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };

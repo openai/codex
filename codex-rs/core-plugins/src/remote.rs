@@ -17,6 +17,7 @@ pub const REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Plugins";
 pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Workspace Plugins";
 
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePluginServiceConfig {
@@ -437,7 +438,7 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
     let default_prompt = interface
         .default_prompt
         .as_ref()
-        .map(|prompt| vec![prompt.clone()]);
+        .and_then(|prompt| normalize_remote_default_prompt(prompt));
     let result = PluginInterface {
         display_name,
         short_description: interface.short_description.clone(),
@@ -507,6 +508,14 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
         let value = value.trim();
         (!value.is_empty()).then(|| value.to_string())
     })
+}
+
+fn normalize_remote_default_prompt(prompt: &str) -> Option<Vec<String>> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() || prompt.chars().count() > MAX_REMOTE_DEFAULT_PROMPT_LEN {
+        return None;
+    }
+    Some(vec![prompt.to_string()])
 }
 
 async fn fetch_directory_plugins_for_scope(
