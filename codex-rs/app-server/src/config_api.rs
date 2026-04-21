@@ -143,7 +143,6 @@ impl ConfigApi {
             .loader_overrides(self.loader_overrides.clone())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
-            .requirements_hostname(codex_config::requirements_hostname())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {

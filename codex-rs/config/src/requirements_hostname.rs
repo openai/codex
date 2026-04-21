@@ -2,12 +2,20 @@
 use dns_lookup::AddrInfoHints;
 #[cfg(unix)]
 use dns_lookup::getaddrinfo;
+use std::sync::LazyLock;
 #[cfg(windows)]
 use winapi_util::sysinfo::ComputerNameKind;
 #[cfg(windows)]
 use winapi_util::sysinfo::get_computer_name;
 
+static REQUIREMENTS_HOSTNAME: LazyLock<Option<String>> =
+    LazyLock::new(compute_requirements_hostname);
+
 pub fn requirements_hostname() -> Option<String> {
+    REQUIREMENTS_HOSTNAME.clone()
+}
+
+fn compute_requirements_hostname() -> Option<String> {
     let kernel_hostname = gethostname::gethostname();
     let kernel_hostname = normalize_requirements_hostname(&kernel_hostname.to_string_lossy())?;
 
