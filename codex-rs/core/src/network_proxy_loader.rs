@@ -16,6 +16,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::overlay_network_domain_permissions;
+use codex_exec_server::LOCAL_FS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxyConfig;
@@ -46,11 +47,14 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     let cli_overrides = Vec::new();
     let overrides = LoaderOverrides::default();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         /*cwd*/ None,
         &cli_overrides,
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .context("failed to load Codex config")?;

@@ -1,5 +1,12 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CompactionImplementation;
+use crate::facts::CompactionPhase;
+use crate::facts::CompactionReason;
+use crate::facts::CompactionStatus;
+use crate::facts::CompactionStrategy;
+use crate::facts::CompactionTrigger;
+use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
@@ -15,6 +22,13 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::GuardianCommandSource;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 
@@ -39,6 +53,7 @@ pub(crate) enum TrackEventRequest {
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
@@ -147,31 +162,6 @@ pub enum GuardianReviewSessionKind {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewRiskLevel {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewUserAuthorization {
-    Unknown,
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GuardianReviewOutcome {
-    Allow,
-    Deny,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianApprovalRequestSource {
     /// Approval requested directly by the main Codex turn.
@@ -185,36 +175,21 @@ pub enum GuardianApprovalRequestSource {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuardianReviewedAction {
     Shell {
-        command: Vec<String>,
-        command_display: String,
-        cwd: String,
         sandbox_permissions: SandboxPermissions,
         additional_permissions: Option<PermissionProfile>,
-        justification: Option<String>,
     },
     UnifiedExec {
-        command: Vec<String>,
-        command_display: String,
-        cwd: String,
         sandbox_permissions: SandboxPermissions,
         additional_permissions: Option<PermissionProfile>,
-        justification: Option<String>,
         tty: bool,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
-        argv: Vec<String>,
-        cwd: String,
         additional_permissions: Option<PermissionProfile>,
     },
-    ApplyPatch {
-        cwd: String,
-        files: Vec<String>,
-    },
+    ApplyPatch {},
     NetworkAccess {
-        target: String,
-        host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
     },
@@ -227,37 +202,28 @@ pub enum GuardianReviewedAction {
     },
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GuardianCommandSource {
-    Shell,
-    UnifiedExec,
-}
-
 #[derive(Clone, Serialize)]
 pub struct GuardianReviewEventParams {
     pub thread_id: String,
     pub turn_id: String,
     pub review_id: String,
-    pub target_item_id: String,
-    pub retry_reason: Option<String>,
+    pub target_item_id: Option<String>,
     pub approval_request_source: GuardianApprovalRequestSource,
     pub reviewed_action: GuardianReviewedAction,
     pub reviewed_action_truncated: bool,
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
-    pub risk_level: Option<GuardianReviewRiskLevel>,
-    pub user_authorization: Option<GuardianReviewUserAuthorization>,
-    pub outcome: Option<GuardianReviewOutcome>,
-    pub rationale: Option<String>,
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub user_authorization: Option<GuardianUserAuthorization>,
+    pub outcome: Option<GuardianAssessmentOutcome>,
     pub guardian_thread_id: Option<String>,
     pub guardian_session_kind: Option<GuardianReviewSessionKind>,
     pub guardian_model: Option<String>,
     pub guardian_reasoning_effort: Option<String>,
     pub had_prior_review_context: Option<bool>,
     pub review_timeout_ms: u64,
-    pub tool_call_count: u64,
+    pub tool_call_count: Option<u64>,
     pub time_to_first_token_ms: Option<u64>,
     pub completion_latency_ms: Option<u64>,
     pub started_at: u64,
@@ -301,6 +267,22 @@ pub(crate) struct CodexAppUsedEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexHookRunMetadata {
+    pub(crate) thread_id: Option<String>,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) model_slug: Option<String>,
+    pub(crate) hook_name: Option<String>,
+    pub(crate) hook_source: Option<&'static str>,
+    pub(crate) status: Option<HookRunStatus>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexHookRunEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexHookRunMetadata,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
@@ -309,12 +291,12 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_source: Option<&'static str>,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
-    pub(crate) trigger: crate::facts::CompactionTrigger,
-    pub(crate) reason: crate::facts::CompactionReason,
-    pub(crate) implementation: crate::facts::CompactionImplementation,
-    pub(crate) phase: crate::facts::CompactionPhase,
-    pub(crate) strategy: crate::facts::CompactionStrategy,
-    pub(crate) status: crate::facts::CompactionStatus,
+    pub(crate) trigger: CompactionTrigger,
+    pub(crate) reason: CompactionReason,
+    pub(crate) implementation: CompactionImplementation,
+    pub(crate) phase: CompactionPhase,
+    pub(crate) strategy: CompactionStrategy,
+    pub(crate) status: CompactionStatus,
     pub(crate) error: Option<String>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
@@ -529,6 +511,44 @@ pub(crate) fn codex_plugin_used_metadata(
     }
 }
 
+pub(crate) fn codex_hook_run_metadata(
+    tracking: &TrackEventsContext,
+    hook: HookRunFact,
+) -> CodexHookRunMetadata {
+    CodexHookRunMetadata {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        model_slug: Some(tracking.model_slug.clone()),
+        hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
+        hook_source: Some(analytics_hook_source(hook.hook_source)),
+        status: Some(analytics_hook_status(hook.status)),
+    }
+}
+
+fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
+    match event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::Stop => "Stop",
+    }
+}
+
+fn analytics_hook_source(source: HookSource) -> &'static str {
+    match source {
+        HookSource::System => "system",
+        HookSource::User => "user",
+        HookSource::Project => "project",
+        HookSource::Mdm => "mdm",
+        HookSource::SessionFlags => "session_flags",
+        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
+        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::Unknown => "unknown",
+    }
+}
+
 pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
     let os_info = os_info::get();
     CodexRuntimeMetadata {
@@ -584,5 +604,13 @@ pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Opt
             parent_thread_id, ..
         } => Some(parent_thread_id.to_string()),
         _ => None,
+    }
+}
+
+fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {
+    match status {
+        // Running is unexpected here and normalized defensively.
+        HookRunStatus::Running => HookRunStatus::Failed,
+        other => other,
     }
 }

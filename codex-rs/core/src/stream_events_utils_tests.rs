@@ -2,11 +2,16 @@ use super::completed_item_defers_mailbox_delivery_to_next_turn;
 use super::handle_non_tool_response_item;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
+use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -26,6 +31,84 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
         end_turn: Some(true),
         phase,
     }
+}
+
+#[test]
+fn external_context_pollution_items_include_web_search_and_tool_search() {
+    let polluting_items = [
+        ResponseItem::WebSearchCall {
+            id: None,
+            status: Some("completed".to_string()),
+            action: None,
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "calendar"}),
+        },
+        ResponseItem::ToolSearchOutput {
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: Vec::new(),
+        },
+    ];
+
+    assert!(
+        polluting_items
+            .iter()
+            .all(response_item_may_include_external_context)
+    );
+}
+
+#[test]
+fn external_context_pollution_items_exclude_local_tool_calls() {
+    let non_polluting_items = [
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["cat".to_string(), "README.md".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "custom-1".to_string(),
+            name: "apply_patch".to_string(),
+            input: "*** Begin Patch\n*** End Patch\n".to_string(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "custom-1".to_string(),
+            name: Some("apply_patch".to_string()),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        assistant_output_text("plain assistant text"),
+    ];
+
+    assert!(
+        !non_polluting_items
+            .iter()
+            .any(response_item_may_include_external_context)
+    );
 }
 
 #[tokio::test]

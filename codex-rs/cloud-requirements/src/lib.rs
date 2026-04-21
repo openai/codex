@@ -195,11 +195,15 @@ trait RequirementsFetcher: Send + Sync {
 
 struct BackendRequirementsFetcher {
     base_url: String,
+    auth_manager: Arc<AuthManager>,
 }
 
 impl BackendRequirementsFetcher {
-    fn new(base_url: String) -> Self {
-        Self { base_url }
+    fn new(auth_manager: Arc<AuthManager>, base_url: String) -> Self {
+        Self {
+            base_url,
+            auth_manager,
+        }
     }
 }
 
@@ -209,7 +213,14 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
         &self,
         auth: &CodexAuth,
     ) -> Result<Option<String>, FetchAttemptError> {
-        let client = BackendClient::from_auth(self.base_url.clone(), auth)
+        let authorization_header_value = self
+            .auth_manager
+            .chatgpt_authorization_header_for_auth(auth)
+            .await;
+        let mut client = BackendClient::new(self.base_url.clone())
+            .map(|client| {
+                client.with_user_agent(codex_login::default_client::get_codex_user_agent())
+            })
             .inspect_err(|err| {
                 tracing::warn!(
                     error = %err,
@@ -217,6 +228,15 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
                 );
             })
             .map_err(|_| FetchAttemptError::Retryable(RetryableFailureKind::BackendClientInit))?;
+        if let Some(authorization_header_value) = authorization_header_value {
+            client = client.with_authorization_header_value(authorization_header_value);
+        }
+        if let Some(account_id) = auth.get_account_id() {
+            client = client.with_chatgpt_account_id(account_id);
+        }
+        if auth.is_fedramp_account() {
+            client = client.with_fedramp_routing_header();
+        }
 
         let response = client
             .get_config_requirements_file()
@@ -693,8 +713,11 @@ pub fn cloud_requirements_loader(
     codex_home: PathBuf,
 ) -> CloudRequirementsLoader {
     let service = CloudRequirementsService::new(
-        auth_manager,
-        Arc::new(BackendRequirementsFetcher::new(chatgpt_base_url)),
+        auth_manager.clone(),
+        Arc::new(BackendRequirementsFetcher::new(
+            auth_manager,
+            chatgpt_base_url,
+        )),
         codex_home,
         CLOUD_REQUIREMENTS_TIMEOUT,
     );
@@ -1164,6 +1187,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1172,6 +1196,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1193,6 +1218,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1201,6 +1227,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1222,6 +1249,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1230,6 +1258,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1268,6 +1297,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1276,6 +1306,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }
@@ -1350,6 +1381,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1358,6 +1390,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
@@ -1422,6 +1455,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1430,6 +1464,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
@@ -1492,6 +1527,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1500,6 +1536,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1689,6 +1726,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1697,6 +1735,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
@@ -1724,6 +1763,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1732,6 +1772,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1779,6 +1820,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1787,6 +1829,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1829,6 +1872,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1837,6 +1881,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1883,6 +1928,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1891,6 +1937,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1938,6 +1985,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1946,6 +1994,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1993,6 +2042,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2001,6 +2051,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
         let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes");
@@ -2081,6 +2132,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2089,6 +2141,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -2108,6 +2161,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2116,6 +2170,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }

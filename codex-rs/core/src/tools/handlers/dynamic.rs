@@ -1,6 +1,6 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -71,6 +71,10 @@ impl ToolHandler for DynamicToolHandler {
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "active turn checks and dynamic tool response registration must remain atomic"
+)]
 async fn request_dynamic_tool(
     session: &Session,
     turn_context: &TurnContext,

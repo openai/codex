@@ -39,7 +39,10 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsGetMetadataParams;
@@ -60,6 +63,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
+use codex_config::ThreadConfigLoader;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -163,6 +167,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
+    thread_manager: Arc<ThreadManager>,
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
@@ -231,6 +236,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -252,6 +258,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             feedback,
             log_db,
             config_warnings,
@@ -297,6 +304,7 @@ impl MessageProcessor {
             cli_overrides: cli_overrides.clone(),
             runtime_feature_enablement: runtime_feature_enablement.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            thread_config_loader,
             feedback,
             log_db,
         });
@@ -311,7 +319,7 @@ impl MessageProcessor {
             runtime_feature_enablement,
             loader_overrides,
             cloud_requirements,
-            thread_manager,
+            thread_manager.clone(),
             analytics_events_client.clone(),
         );
         let external_agent_config_api =
@@ -322,6 +330,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             codex_message_processor,
+            thread_manager: Arc::clone(&thread_manager),
             config_api,
             external_agent_config_api,
             fs_api,
@@ -725,8 +734,6 @@ impl MessageProcessor {
         session: Arc<ConnectionSessionState>,
         request_context: RequestContext,
     ) {
-        let connection_id = connection_request_id.connection_id;
-
         if !session.initialized() {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -748,6 +755,7 @@ impl MessageProcessor {
             self.outgoing.send_error(connection_request_id, error).await;
             return;
         }
+        let connection_id = connection_request_id.connection_id;
         if self.config.features.enabled(Feature::GeneralAnalytics)
             && let ClientRequest::TurnStart { request_id, .. }
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request
@@ -1132,8 +1140,65 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) {
+        let has_plugin_imports = params.migration_items.iter().any(|item| {
+            matches!(
+                item.item_type,
+                ExternalAgentConfigMigrationItemType::Plugins
+            )
+        });
         match self.external_agent_config_api.import(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(pending_plugin_imports) => {
+                if has_plugin_imports {
+                    self.handle_config_mutation().await;
+                }
+                self.outgoing
+                    .send_response(request_id, ExternalAgentConfigImportResponse {})
+                    .await;
+
+                if !has_plugin_imports {
+                    return;
+                }
+
+                if pending_plugin_imports.is_empty() {
+                    self.outgoing
+                        .send_server_notification(
+                            ServerNotification::ExternalAgentConfigImportCompleted(
+                                ExternalAgentConfigImportCompletedNotification {},
+                            ),
+                        )
+                        .await;
+                    return;
+                }
+
+                let external_agent_config_api = self.external_agent_config_api.clone();
+                let outgoing = Arc::clone(&self.outgoing);
+                let thread_manager = Arc::clone(&self.thread_manager);
+                tokio::spawn(async move {
+                    for pending_plugin_import in pending_plugin_imports {
+                        match external_agent_config_api
+                            .complete_pending_plugin_import(pending_plugin_import)
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error.message,
+                                    "external agent config plugin import failed"
+                                );
+                            }
+                        }
+                    }
+                    thread_manager.plugins_manager().clear_cache();
+                    thread_manager.skills_manager().clear_cache();
+                    outgoing
+                        .send_server_notification(
+                            ServerNotification::ExternalAgentConfigImportCompleted(
+                                ExternalAgentConfigImportCompletedNotification {},
+                            ),
+                        )
+                        .await;
+                });
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }

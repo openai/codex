@@ -44,8 +44,8 @@ struct SessionHandle {
 struct Inner {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     sessions: Mutex<HashMap<String, SessionHandle>>,
-    turn_message_tx: mpsc::UnboundedSender<TurnMessage>,
-    turn_message_rx: Arc<Mutex<mpsc::UnboundedReceiver<TurnMessage>>>,
+    turn_message_tx: async_channel::Sender<TurnMessage>,
+    turn_message_rx: async_channel::Receiver<TurnMessage>,
     next_cell_id: AtomicU64,
 }
 
@@ -55,14 +55,14 @@ pub struct CodeModeService {
 
 impl CodeModeService {
     pub fn new() -> Self {
-        let (turn_message_tx, turn_message_rx) = mpsc::unbounded_channel();
+        let (turn_message_tx, turn_message_rx) = async_channel::unbounded();
 
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 turn_message_tx,
-                turn_message_rx: Arc::new(Mutex::new(turn_message_rx)),
+                turn_message_rx,
                 next_cell_id: AtomicU64::new(1),
             }),
         }
@@ -146,16 +146,13 @@ impl CodeModeService {
     pub fn start_turn_worker(&self, host: Arc<dyn CodeModeTurnHost>) -> CodeModeTurnWorker {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
-        let turn_message_rx = Arc::clone(&self.inner.turn_message_rx);
+        let turn_message_rx = self.inner.turn_message_rx.clone();
 
         tokio::spawn(async move {
             loop {
                 let next_message = tokio::select! {
                     _ = &mut shutdown_rx => break,
-                    message = async {
-                        let mut turn_message_rx = turn_message_rx.lock().await;
-                        turn_message_rx.recv().await
-                    } => message,
+                    message = turn_message_rx.recv() => message.ok(),
                 };
                 let Some(next_message) = next_message else {
                     break;
@@ -361,7 +358,7 @@ async fn run_session_control(
                             cell_id: cell_id.clone(),
                             call_id,
                             text,
-                        });
+                        }).await;
                     }
                     RuntimeEvent::ToolCall { id, name, input } => {
                         let _ = inner.turn_message_tx.send(TurnMessage::ToolCall {
@@ -369,7 +366,7 @@ async fn run_session_control(
                             id,
                             name,
                             input,
-                        });
+                        }).await;
                     }
                     RuntimeEvent::Result {
                         stored_values,
@@ -500,12 +497,12 @@ mod tests {
     }
 
     fn test_inner() -> Arc<Inner> {
-        let (turn_message_tx, turn_message_rx) = mpsc::unbounded_channel();
+        let (turn_message_tx, turn_message_rx) = async_channel::unbounded();
         Arc::new(Inner {
             stored_values: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             turn_message_tx,
-            turn_message_rx: Arc::new(Mutex::new(turn_message_rx)),
+            turn_message_rx,
             next_cell_id: AtomicU64::new(1),
         })
     }
@@ -672,7 +669,7 @@ text(JSON.stringify(returnsUndefined));
                     },
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "https://example.com/image.jpg".to_string(),
-                        detail: None,
+                        detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
                     FunctionCallOutputContentItem::InputText {
                         text: "[true,true,true]".to_string(),

@@ -17,9 +17,12 @@ use tokio::sync::watch;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
+use crate::ExecProcessEvent;
+use crate::ExecProcessEventReceiver;
 use crate::ExecServerError;
 use crate::ProcessId;
 use crate::StartedExecProcess;
+use crate::process::ExecProcessEventLog;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecEnvPolicy;
@@ -44,6 +47,7 @@ use crate::rpc::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
+const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
@@ -59,11 +63,13 @@ struct RetainedOutputChunk {
 struct RunningProcess {
     session: ExecCommandSession,
     tty: bool,
+    pipe_stdin: bool,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
     next_seq: u64,
     exit_code: Option<i32>,
     wake_tx: watch::Sender<u64>,
+    events: ExecProcessEventLog,
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
@@ -88,6 +94,7 @@ struct LocalExecProcess {
     process_id: ProcessId,
     backend: LocalProcess,
     wake_tx: watch::Sender<u64>,
+    events: ExecProcessEventLog,
 }
 
 impl Default for LocalProcess {
@@ -137,7 +144,7 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<(ExecResponse, watch::Sender<u64>), JSONRPCErrorError> {
+    ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
         let (program, args) = params
             .argv
@@ -165,6 +172,15 @@ impl LocalProcess {
                 TerminalSize::default(),
             )
             .await
+        } else if params.pipe_stdin {
+            codex_utils_pty::spawn_pipe_process(
+                program,
+                args,
+                params.cwd.as_path(),
+                &env,
+                &params.arg0,
+            )
+            .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
@@ -188,6 +204,10 @@ impl LocalProcess {
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
+        let events = ExecProcessEventLog::new(
+            PROCESS_EVENT_CHANNEL_CAPACITY,
+            RETAINED_OUTPUT_BYTES_PER_PROCESS,
+        );
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
@@ -195,11 +215,13 @@ impl LocalProcess {
                 ProcessEntry::Running(Box::new(RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
+                    pipe_stdin: params.pipe_stdin,
                     output: VecDeque::new(),
                     retained_bytes: 0,
                     next_seq: 1,
                     exit_code: None,
                     wake_tx: wake_tx.clone(),
+                    events: events.clone(),
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
@@ -236,13 +258,13 @@ impl LocalProcess {
             output_notify,
         ));
 
-        Ok((ExecResponse { process_id }, wake_tx))
+        Ok((ExecResponse { process_id }, wake_tx, events))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params)
             .await
-            .map(|(response, _)| response)
+            .map(|(response, _, _)| response)
     }
 
     pub(crate) async fn exec_read(
@@ -339,7 +361,7 @@ impl LocalProcess {
                     status: WriteStatus::Starting,
                 });
             };
-            if !process.tty {
+            if !process.tty && !process.pipe_stdin {
                 return Ok(WriteResponse {
                     status: WriteStatus::StdinClosed,
                 });
@@ -413,7 +435,7 @@ fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolic
 #[async_trait]
 impl ExecBackend for LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
-        let (response, wake_tx) = self
+        let (response, wake_tx, events) = self
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
@@ -422,6 +444,7 @@ impl ExecBackend for LocalProcess {
                 process_id: response.process_id,
                 backend: self.clone(),
                 wake_tx,
+                events,
             }),
         })
     }
@@ -435,6 +458,10 @@ impl ExecProcess for LocalExecProcess {
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        self.events.subscribe()
     }
 
     async fn read(
@@ -537,11 +564,19 @@ async fn stream_output(
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
             }
             let _ = process.wake_tx.send(seq);
+            let output = ProcessOutputChunk {
+                seq,
+                stream,
+                chunk: chunk.into(),
+            };
+            process
+                .events
+                .publish(ExecProcessEvent::Output(output.clone()));
             ExecOutputDeltaNotification {
                 process_id: process_id.clone(),
                 seq,
                 stream,
-                chunk: chunk.into(),
+                chunk: output.chunk,
             }
         };
         output_notify.notify_waiters();
@@ -569,6 +604,9 @@ async fn watch_exit(
             process.next_seq += 1;
             process.exit_code = Some(exit_code);
             let _ = process.wake_tx.send(seq);
+            process
+                .events
+                .publish(ExecProcessEvent::Exited { seq, exit_code });
             Some(ExecExitedNotification {
                 process_id: process_id.clone(),
                 seq,
@@ -629,6 +667,7 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         let seq = process.next_seq;
         process.next_seq += 1;
         let _ = process.wake_tx.send(seq);
+        process.events.publish(ExecProcessEvent::Closed { seq });
         Some(ExecClosedNotification {
             process_id: process_id.clone(),
             seq,
@@ -667,6 +706,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            pipe_stdin: false,
             arg0: None,
         }
     }

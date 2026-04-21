@@ -18,6 +18,7 @@ codex-utils-absolute-path = { workspace = true }
 dunce = { workspace = true }
 libc = { workspace = true }
 serde_json = { workspace = true }
+regex-lite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 which = { workspace = true }

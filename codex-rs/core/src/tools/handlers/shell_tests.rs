@@ -6,9 +6,9 @@ use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 
-use crate::codex::make_session_and_context;
 use crate::exec_env::create_env;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::tests::make_session_and_context;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
@@ -225,6 +225,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-41".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
@@ -250,6 +251,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
             tool_name: codex_tools::ToolName::plain("shell_command"),

@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::MemorySummarizeInput;
 use crate::common::MemorySummarizeOutput;
 use crate::endpoint::session::EndpointSession;
@@ -12,12 +12,12 @@ use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
 
-pub struct MemoriesClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct MemoriesClient<T: HttpTransport> {
+    session: EndpointSession<T>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> MemoriesClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> MemoriesClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -67,6 +67,7 @@ struct SummarizeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthProvider;
     use crate::common::RawMemory;
     use crate::common::RawMemoryMetadata;
     use crate::provider::RetryConfig;
@@ -157,7 +158,7 @@ mod tests {
     #[test]
     fn path_is_memories_trace_summarize_for_wire_compatibility() {
         assert_eq!(
-            MemoriesClient::<DummyTransport, DummyAuth>::path(),
+            MemoriesClient::<DummyTransport>::path(),
             "memories/trace_summarize"
         );
     }
@@ -178,7 +179,7 @@ mod tests {
         let client = MemoriesClient::new(
             transport.clone(),
             provider("https://example.com/api/codex"),
-            DummyAuth,
+            Arc::new(DummyAuth),
         );
 
         let input = MemorySummarizeInput {

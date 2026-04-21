@@ -6,6 +6,28 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::slash_commands;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlashCommandDispatchSource {
+    Live,
+    Queued,
+}
+
+struct PreparedSlashCommandArgs {
+    args: String,
+    text_elements: Vec<TextElement>,
+    local_images: Vec<LocalImageAttachment>,
+    remote_image_urls: Vec<String>,
+    mention_bindings: Vec<MentionBinding>,
+    source: SlashCommandDispatchSource,
+}
+
+const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
+const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
+    "'/side' is unavailable while code review is running.";
+const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -53,7 +75,35 @@ impl ChatWidget {
         }
     }
 
+    fn request_side_conversation(
+        &mut self,
+        parent_thread_id: ThreadId,
+        user_message: Option<UserMessage>,
+    ) {
+        self.set_side_conversation_context_label(Some(SIDE_STARTING_CONTEXT_LABEL.to_string()));
+        self.request_redraw();
+        self.app_event_tx.send(AppEvent::StartSide {
+            parent_thread_id,
+            user_message,
+        });
+    }
+
+    fn request_empty_side_conversation(&mut self) {
+        let Some(parent_thread_id) = self.thread_id else {
+            self.add_error_message("'/side' is unavailable before the session starts.".to_string());
+            return;
+        };
+
+        self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -92,10 +142,10 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
                 if init_target.exists() {
                     let message = format!(
-                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                        "{DEFAULT_AGENTS_MD_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
                     self.add_info_message(message, /*hint*/ None);
                     return;
@@ -160,6 +210,9 @@ impl ChatWidget {
                     return;
                 }
                 self.open_collaboration_modes_popup();
+            }
+            SlashCommand::Side => {
+                self.request_empty_side_conversation();
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -235,13 +288,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_login::logout(
-                    &self.config.codex_home,
-                    self.config.cli_auth_credentials_store_mode,
-                ) {
-                    tracing::error!("failed to logout: {e}");
-                }
-                self.request_quit_without_confirmation();
+                self.app_event_tx.send(AppEvent::Logout);
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -312,7 +359,7 @@ impl ChatWidget {
                 self.add_app_server_stub_message("Memory maintenance");
             }
             SlashCommand::Mcp => {
-                self.add_mcp_output();
+                self.add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly);
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -376,8 +423,14 @@ impl ChatWidget {
         &mut self,
         cmd: SlashCommand,
         args: String,
-        _text_elements: Vec<TextElement>,
+        text_elements: Vec<TextElement>,
     ) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
+            return;
+        }
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
             return;
@@ -393,24 +446,84 @@ impl ChatWidget {
         }
 
         let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.dispatch_command(cmd);
+            return;
+        }
+
+        let Some((prepared_args, prepared_elements)) =
+            self.prepare_live_inline_args(args, text_elements)
+        else {
+            return;
+        };
+        self.dispatch_prepared_command_with_args(
+            cmd,
+            PreparedSlashCommandArgs {
+                args: prepared_args,
+                text_elements: prepared_elements,
+                local_images: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: Vec::new(),
+                source: SlashCommandDispatchSource::Live,
+            },
+        );
+    }
+
+    fn prepare_live_inline_args(
+        &mut self,
+        args: String,
+        text_elements: Vec<TextElement>,
+    ) -> Option<(String, Vec<TextElement>)> {
+        if self.bottom_pane.composer_text().is_empty() {
+            Some((args, text_elements))
+        } else {
+            self.bottom_pane
+                .prepare_inline_args_submission(/*record_history*/ false)
+        }
+    }
+
+    fn prepared_inline_user_message(
+        &mut self,
+        args: String,
+        text_elements: Vec<TextElement>,
+        mut local_images: Vec<LocalImageAttachment>,
+        mut remote_image_urls: Vec<String>,
+        mut mention_bindings: Vec<MentionBinding>,
+        source: SlashCommandDispatchSource,
+    ) -> UserMessage {
+        if source == SlashCommandDispatchSource::Live {
+            local_images = self
+                .bottom_pane
+                .take_recent_submission_images_with_placeholders();
+            remote_image_urls = self.take_remote_image_urls();
+            mention_bindings = self.bottom_pane.take_recent_submission_mention_bindings();
+        }
+        UserMessage {
+            text: args,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        }
+    }
+
+    fn dispatch_prepared_command_with_args(
+        &mut self,
+        cmd: SlashCommand,
+        prepared: PreparedSlashCommandArgs,
+    ) {
+        let PreparedSlashCommandArgs {
+            args,
+            text_elements,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+            source,
+        } = prepared;
+        let trimmed = args.trim();
         match cmd {
             SlashCommand::Fast => {
-                if trimmed.is_empty() {
-                    self.dispatch_command(cmd);
-                    return;
-                }
-                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
-                    args
-                } else {
-                    let Some((prepared_args, _prepared_elements)) = self
-                        .bottom_pane
-                        .prepare_inline_args_submission(/*record_history*/ false)
-                    else {
-                        return;
-                    };
-                    prepared_args
-                };
-                match prepared_args.trim().to_ascii_lowercase().as_str() {
+                match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
                     "off" => self.set_service_tier_selection(/*service_tier*/ None),
                     "status" => {
@@ -430,44 +543,34 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
+                "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
+                _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
+            },
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.ensure_thread_rename_allowed() {
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                let Some(name) = crate::legacy_core::util::normalize_thread_name(&prepared_args)
-                else {
+                let Some(name) = crate::legacy_core::util::normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
                 self.app_event_tx.set_thread_name(name);
-                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 if !self.apply_plan_slash_command() {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
+                let user_message = self.prepared_inline_user_message(
+                    args,
+                    text_elements,
                     local_images,
                     remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
-                };
+                    mention_bindings,
+                    source,
+                );
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
@@ -477,46 +580,236 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
-            SlashCommand::Review if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
+            SlashCommand::Side if !trimmed.is_empty() => {
+                let Some(parent_thread_id) = self.thread_id else {
+                    self.add_error_message(
+                        "'/side' is unavailable before the session starts.".to_string(),
+                    );
                     return;
                 };
+                let user_message = self.prepared_inline_user_message(
+                    args,
+                    text_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
+                );
+                self.request_side_conversation(parent_thread_id, Some(user_message));
+            }
+            SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(AppCommand::review(ReviewRequest {
-                    target: ReviewTarget::Custom {
-                        instructions: prepared_args,
-                    },
+                    target: ReviewTarget::Custom { instructions: args },
                     user_facing_hint: None,
                 }));
-                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Resume if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
                 self.app_event_tx
-                    .send(AppEvent::ResumeSessionByIdOrName(prepared_args));
-                self.bottom_pane.drain_pending_submission_state();
+                    .send(AppEvent::ResumeSessionByIdOrName(args));
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
                 self.app_event_tx
-                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
-                        path: prepared_args,
-                    });
-                self.bottom_pane.drain_pending_submission_state();
+                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
             }
             _ => self.dispatch_command(cmd),
         }
+        if source == SlashCommandDispatchSource::Live {
+            self.bottom_pane.drain_pending_submission_state();
+        }
+    }
+
+    pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+        let UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        } = user_message;
+        let Some((name, rest, rest_offset)) = parse_slash_name(&text) else {
+            self.submit_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            return QueueDrain::Stop;
+        };
+
+        if name.contains('/') {
+            self.submit_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            return QueueDrain::Stop;
+        }
+
+        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
+        else {
+            self.add_info_message(
+                format!(
+                    r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                ),
+                /*hint*/ None,
+            );
+            return QueueDrain::Continue;
+        };
+
+        if rest.is_empty() {
+            self.dispatch_command(cmd);
+            return self.queued_command_drain_result(cmd);
+        }
+
+        if !cmd.supports_inline_args() {
+            self.submit_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            return QueueDrain::Stop;
+        }
+
+        let args_elements = Self::slash_command_args_elements(rest, rest_offset, &text_elements);
+        self.dispatch_prepared_command_with_args(
+            cmd,
+            PreparedSlashCommandArgs {
+                args: rest.trim().to_string(),
+                text_elements: args_elements,
+                local_images,
+                remote_image_urls,
+                mention_bindings,
+                source: SlashCommandDispatchSource::Queued,
+            },
+        );
+        self.queued_command_drain_result(cmd)
+    }
+
+    fn builtin_command_flags(&self) -> slash_commands::BuiltinCommandFlags {
+        #[cfg(target_os = "windows")]
+        let allow_elevate_sandbox = {
+            let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let allow_elevate_sandbox = false;
+
+        slash_commands::BuiltinCommandFlags {
+            collaboration_modes_enabled: self.collaboration_modes_enabled(),
+            connectors_enabled: self.connectors_enabled(),
+            plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
+            fast_command_enabled: self.fast_mode_enabled(),
+            personality_command_enabled: self.config.features.enabled(Feature::Personality),
+            realtime_conversation_enabled: self.realtime_conversation_enabled(),
+            audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
+            allow_elevate_sandbox,
+            side_conversation_active: self.active_side_conversation,
+        }
+    }
+
+    fn queued_command_drain_result(&self, cmd: SlashCommand) -> QueueDrain {
+        if self.is_user_turn_pending_or_running() || !self.bottom_pane.no_modal_or_popup_active() {
+            return QueueDrain::Stop;
+        }
+        match cmd {
+            SlashCommand::Fast
+            | SlashCommand::Status
+            | SlashCommand::DebugConfig
+            | SlashCommand::Ps
+            | SlashCommand::Stop
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::Mcp
+            | SlashCommand::Apps
+            | SlashCommand::Plugins
+            | SlashCommand::Rollout
+            | SlashCommand::Copy
+            | SlashCommand::Diff
+            | SlashCommand::Rename
+            | SlashCommand::TestApproval => QueueDrain::Continue,
+            SlashCommand::Feedback
+            | SlashCommand::New
+            | SlashCommand::Clear
+            | SlashCommand::Resume
+            | SlashCommand::Fork
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Review
+            | SlashCommand::Model
+            | SlashCommand::Realtime
+            | SlashCommand::Settings
+            | SlashCommand::Personality
+            | SlashCommand::Plan
+            | SlashCommand::Collab
+            | SlashCommand::Side
+            | SlashCommand::Agent
+            | SlashCommand::MultiAgents
+            | SlashCommand::Approvals
+            | SlashCommand::Permissions
+            | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
+            | SlashCommand::Experimental
+            | SlashCommand::Memories
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Logout
+            | SlashCommand::Mention
+            | SlashCommand::Skills
+            | SlashCommand::Title
+            | SlashCommand::Statusline
+            | SlashCommand::Theme => QueueDrain::Stop,
+        }
+    }
+
+    fn slash_command_args_elements(
+        rest: &str,
+        rest_offset: usize,
+        text_elements: &[TextElement],
+    ) -> Vec<TextElement> {
+        if rest.is_empty() || text_elements.is_empty() {
+            return Vec::new();
+        }
+        text_elements
+            .iter()
+            .filter_map(|elem| {
+                if elem.byte_range.end <= rest_offset {
+                    return None;
+                }
+                let start = elem.byte_range.start.saturating_sub(rest_offset);
+                let mut end = elem.byte_range.end.saturating_sub(rest_offset);
+                if start >= rest.len() {
+                    return None;
+                }
+                end = end.min(rest.len());
+                (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
+            })
+            .collect()
+    }
+
+    fn ensure_slash_command_allowed_in_side_conversation(&mut self, cmd: SlashCommand) -> bool {
+        if !self.active_side_conversation || cmd.available_in_side_conversation() {
+            return true;
+        }
+        self.add_error_message(format!(
+            "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+            cmd.command()
+        ));
+        self.bottom_pane.drain_pending_submission_state();
+        false
+    }
+
+    fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
+        if cmd != SlashCommand::Side || !self.is_review_mode {
+            return true;
+        }
+
+        self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 }

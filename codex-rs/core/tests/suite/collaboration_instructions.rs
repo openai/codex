@@ -25,7 +25,7 @@ fn collab_mode_with_mode_and_instructions(
     CollaborationMode {
         mode,
         settings: Settings {
-            model: "gpt-5.1".to_string(),
+            model: "gpt-5.4".to_string(),
             reasoning_effort: None,
             developer_instructions: instructions.map(str::to_string),
         },

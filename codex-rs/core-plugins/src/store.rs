@@ -3,7 +3,7 @@ use crate::manifest::load_plugin_manifest;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
+use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -28,10 +28,15 @@ pub struct PluginStore {
 
 impl PluginStore {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self {
-            root: AbsolutePathBuf::try_from(codex_home.join(PLUGINS_CACHE_DIR))
-                .unwrap_or_else(|err| panic!("plugin cache root should be absolute: {err}")),
-        }
+        Self::try_new(codex_home)
+            .unwrap_or_else(|err| panic!("plugin cache root should be absolute: {err}"))
+    }
+
+    pub fn try_new(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
+        let root = AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_CACHE_DIR))
+            .map_err(|err| PluginStoreError::io("failed to resolve plugin cache root", err))?;
+
+        Ok(Self { root })
     }
 
     pub fn root(&self) -> &AbsolutePathBuf {
@@ -39,22 +44,13 @@ impl PluginStore {
     }
 
     pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(
-            self.root
-                .as_path()
-                .join(&plugin_id.marketplace_name)
-                .join(&plugin_id.plugin_name),
-        )
-        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+        self.root
+            .join(&plugin_id.marketplace_name)
+            .join(&plugin_id.plugin_name)
     }
 
     pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(
-            self.plugin_base_root(plugin_id)
-                .as_path()
-                .join(plugin_version),
-        )
-        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+        self.plugin_base_root(plugin_id).join(plugin_version)
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
@@ -114,7 +110,7 @@ impl PluginStore {
         let plugin_name = plugin_name_for_source(source_path.as_path())?;
         if plugin_name != plugin_id.plugin_name {
             return Err(PluginStoreError::Invalid(format!(
-                "plugin manifest name `{plugin_name}` does not match marketplace plugin name `{}`",
+                "plugin.json name `{plugin_name}` does not match marketplace plugin name `{}`",
                 plugin_id.plugin_name
             )));
         }
@@ -184,20 +180,8 @@ fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
 }
 
 fn plugin_manifest_for_source(source_path: &Path) -> Result<PluginManifest, PluginStoreError> {
-    let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
-    if !manifest_path.is_file() {
-        return Err(PluginStoreError::Invalid(format!(
-            "missing plugin manifest: {}",
-            manifest_path.display()
-        )));
-    }
-
-    load_plugin_manifest(source_path).ok_or_else(|| {
-        PluginStoreError::Invalid(format!(
-            "missing or invalid plugin manifest: {}",
-            manifest_path.display()
-        ))
-    })
+    load_plugin_manifest(source_path)
+        .ok_or_else(|| PluginStoreError::Invalid("missing or invalid plugin.json".to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,37 +194,26 @@ struct RawPluginManifestVersion {
 fn plugin_manifest_version_for_source(
     source_path: &Path,
 ) -> Result<Option<String>, PluginStoreError> {
-    let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
-    if !manifest_path.is_file() {
-        return Err(PluginStoreError::Invalid(format!(
-            "missing plugin manifest: {}",
-            manifest_path.display()
-        )));
-    }
+    let manifest_path = find_plugin_manifest_path(source_path)
+        .ok_or_else(|| PluginStoreError::Invalid("missing plugin.json".to_string()))?;
 
     let contents = fs::read_to_string(&manifest_path)
-        .map_err(|err| PluginStoreError::io("failed to read plugin manifest", err))?;
-    let manifest: RawPluginManifestVersion = serde_json::from_str(&contents).map_err(|err| {
-        PluginStoreError::Invalid(format!(
-            "failed to parse plugin manifest {}: {err}",
-            manifest_path.display()
-        ))
-    })?;
+        .map_err(|err| PluginStoreError::io("failed to read plugin.json", err))?;
+    let manifest: RawPluginManifestVersion = serde_json::from_str(&contents)
+        .map_err(|err| PluginStoreError::Invalid(format!("failed to parse plugin.json: {err}")))?;
     let Some(version) = manifest.version else {
         return Ok(None);
     };
     let Some(version) = version.as_str() else {
-        return Err(PluginStoreError::Invalid(format!(
-            "invalid plugin version in manifest {}: expected string",
-            manifest_path.display()
-        )));
+        return Err(PluginStoreError::Invalid(
+            "invalid plugin version in plugin.json: expected string".to_string(),
+        ));
     };
     let version = version.trim();
     if version.is_empty() {
-        return Err(PluginStoreError::Invalid(format!(
-            "invalid plugin version in manifest {}: must not be blank",
-            manifest_path.display()
-        )));
+        return Err(PluginStoreError::Invalid(
+            "invalid plugin version in plugin.json: must not be blank".to_string(),
+        ));
     }
     Ok(Some(version.to_string()))
 }

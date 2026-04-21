@@ -17,6 +17,7 @@ const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
+const REMOTE_CONTROL_FEDRAMP_HEADER: &str = "X-OpenAI-Fedramp";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,8 +30,9 @@ pub(super) struct RemoteControlEnrollment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlConnectionAuth {
-    pub(super) bearer_token: String,
+    pub(super) authorization_header_value: String,
     pub(super) account_id: String,
+    pub(super) is_fedramp_account: bool,
 }
 
 pub(super) async fn load_persisted_remote_control_enrollment(
@@ -199,12 +201,15 @@ pub(super) async fn enroll_remote_control_server(
         app_server_version: env!("CARGO_PKG_VERSION"),
     };
     let client = build_reqwest_client();
-    let http_request = client
+    let mut http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
-        .bearer_auth(&auth.bearer_token)
-        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
-        .json(&request);
+        .header("authorization", &auth.authorization_header_value)
+        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id);
+    if auth.is_fedramp_account {
+        http_request = http_request.header(REMOTE_CONTROL_FEDRAMP_HEADER, "true");
+    }
+    let http_request = http_request.json(&request);
 
     let response = http_request.send().await.map_err(|err| {
         io::Error::other(format!(
@@ -445,8 +450,9 @@ mod tests {
         let err = enroll_remote_control_server(
             &remote_control_target,
             &RemoteControlConnectionAuth {
-                bearer_token: "Access Token".to_string(),
+                authorization_header_value: "Bearer Access Token".to_string(),
                 account_id: "account_id".to_string(),
+                is_fedramp_account: false,
             },
         )
         .await

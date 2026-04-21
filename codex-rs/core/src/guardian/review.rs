@@ -11,10 +11,11 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
@@ -57,7 +58,7 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .remove(review_id)
         .filter(|rejection| !rejection.rationale.trim().is_empty())
         .unwrap_or_else(|| GuardianRejection {
-            rationale: "Guardian denied the action without a specific rationale.".to_string(),
+            rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
         });
     match rejection.source {
@@ -89,12 +90,14 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     }
 }
 
-/// Whether this turn should route `on-request` approval prompts through the
-/// guardian reviewer instead of surfacing them to the user. ARC may still
-/// block actions earlier in the flow.
+/// Whether this turn should route allowed approval prompts through the guardian
+/// reviewer instead of surfacing them to the user. ARC may still block actions
+/// earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
-    turn.approval_policy.value() == AskForApproval::OnRequest
-        && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+    matches!(
+        turn.approval_policy.value(),
+        AskForApproval::OnRequest | AskForApproval::Granular(_)
+    ) && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
 pub(crate) fn is_guardian_reviewer_source(
@@ -333,6 +336,36 @@ pub(crate) async fn review_approval_request_with_cancel(
         Some(cancel_token),
     ))
     .await
+}
+
+pub(crate) fn spawn_approval_request_review(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    cancel_token: CancellationToken,
+) -> oneshot::Receiver<ReviewDecision> {
+    let (tx, rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            let _ = tx.send(ReviewDecision::Denied);
+            return;
+        };
+        let decision = runtime.block_on(review_approval_request_with_cancel(
+            &session,
+            &turn,
+            review_id,
+            request,
+            retry_reason,
+            cancel_token,
+        ));
+        let _ = tx.send(decision);
+    });
+    rx
 }
 
 /// Runs the guardian in a locked-down reusable review session.

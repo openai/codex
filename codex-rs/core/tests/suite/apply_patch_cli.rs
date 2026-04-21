@@ -146,7 +146,7 @@ async fn apply_patch_cli_multiple_operations_integration(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     // Seed workspace state
     harness.write_file("modify.txt", "line1\nline2\n").await?;
@@ -761,7 +761,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
     harness.write_file("sub/in_sub.txt", "before\n").await?;
@@ -801,7 +801,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
     );
 
     let harness =
-        apply_patch_harness_with(|builder| builder.with_model("gpt-5.1").with_windows_cmd_shell())
+        apply_patch_harness_with(|builder| builder.with_model("gpt-5.4").with_windows_cmd_shell())
             .await?;
 
     let source_contents = "line1\nnaïve café\nline3\n";
@@ -936,6 +936,128 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_config(|config| {
+            config
+                .features
+                .enable(Feature::ApplyPatchStreamingEvents)
+                .expect("enable apply_patch streaming events");
+        })
+    })
+    .await?;
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let call_id = "apply-patch-streaming";
+    let patch = "*** Begin Patch\n*** Add File: streamed.txt\n+hello\n+world\n*** End Patch";
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "call_id": call_id,
+                        "name": "apply_patch",
+                        "input": "",
+                    }
+                }),
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "call_id": call_id,
+                    "delta": "*** Begin Patch\n",
+                }),
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "call_id": call_id,
+                    "delta": "*** Add File: streamed.txt\n+hello",
+                }),
+                json!({
+                    "type": "response.custom_tool_call_input.delta",
+                    "call_id": call_id,
+                    "delta": "\n+world\n*** End Patch",
+                }),
+                ev_apply_patch_custom_tool_call(call_id, patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "create streamed file".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: harness.cwd().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let mut updates = Vec::new();
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PatchApplyUpdated(update) => {
+            updates.push(update.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(
+        updates
+            .iter()
+            .map(|update| update.call_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![call_id, call_id]
+    );
+    assert_eq!(
+        updates
+            .first()
+            .expect("first update")
+            .changes
+            .get(&std::path::PathBuf::from("streamed.txt")),
+        Some(&codex_protocol::protocol::FileChange::Add {
+            content: "hello\n".to_string(),
+        })
+    );
+    assert_eq!(
+        updates
+            .last()
+            .expect("last update")
+            .changes
+            .get(&std::path::PathBuf::from("streamed.txt")),
+        Some(&codex_protocol::protocol::FileChange::Add {
+            content: "hello\nworld\n".to_string(),
+        })
+    );
+    assert_eq!(
+        harness.read_file_text("streamed.txt").await?,
+        "hello\nworld\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_remote!(
@@ -943,7 +1065,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
         "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
     );
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 
@@ -1028,7 +1150,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
         "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
     );
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 

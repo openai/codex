@@ -14,6 +14,7 @@ use toml_edit::value;
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
+use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
 
 pub async fn load_global_mcp_servers(
@@ -142,7 +143,7 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
                 entry["env"] = table_from_pairs(env.iter());
             }
             if !env_vars.is_empty() {
-                entry["env_vars"] = array_from_strings(env_vars);
+                entry["env_vars"] = array_from_env_vars(env_vars);
             }
             if let Some(cwd) = cwd {
                 entry["cwd"] = value(cwd.to_string_lossy().to_string());
@@ -174,6 +175,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     if !config.enabled {
         entry["enabled"] = value(false);
     }
+    if let Some(environment) = &config.experimental_environment {
+        entry["experimental_environment"] = value(environment.clone());
+    }
     if config.required {
         entry["required"] = value(true);
     }
@@ -185,6 +189,13 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
     }
     if let Some(timeout) = config.tool_timeout_sec {
         entry["tool_timeout_sec"] = value(timeout.as_secs_f64());
+    }
+    if let Some(approval_mode) = config.default_tools_approval_mode {
+        entry["default_tools_approval_mode"] = value(match approval_mode {
+            AppToolApproval::Auto => "auto",
+            AppToolApproval::Prompt => "prompt",
+            AppToolApproval::Approve => "approve",
+        });
     }
     if let Some(enabled_tools) = &config.enabled_tools
         && !enabled_tools.is_empty()
@@ -233,6 +244,24 @@ fn array_from_strings(values: &[String]) -> TomlItem {
     let mut array = toml_edit::Array::new();
     for value in values {
         array.push(value.clone());
+    }
+    TomlItem::Value(array.into())
+}
+
+fn array_from_env_vars(env_vars: &[McpServerEnvVar]) -> TomlItem {
+    let mut array = toml_edit::Array::new();
+    for env_var in env_vars {
+        match env_var {
+            McpServerEnvVar::Name(name) => array.push(name.clone()),
+            McpServerEnvVar::Config { name, source } => {
+                let mut table = toml_edit::InlineTable::new();
+                table.insert("name", name.clone().into());
+                if let Some(source) = source {
+                    table.insert("source", source.clone().into());
+                }
+                array.push(table);
+            }
+        }
     }
     TomlItem::Value(array.into())
 }

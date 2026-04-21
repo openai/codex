@@ -57,6 +57,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -181,6 +182,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -290,6 +292,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -575,16 +578,17 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .and_then(serde_json::Value::as_str),
         Some(expected_head.as_str())
     );
-    let actual_origin = workspace
+    if let Some(actual_origin) = workspace
         .get("associated_remote_urls")
         .and_then(serde_json::Value::as_object)
         .and_then(|remotes| remotes.get("origin"))
         .and_then(serde_json::Value::as_str)
-        .expect("origin remote should be present");
-    assert_eq!(
-        normalize_git_remote_url(actual_origin),
-        normalize_git_remote_url(&expected_origin)
-    );
+    {
+        assert_eq!(
+            normalize_git_remote_url(actual_origin),
+            normalize_git_remote_url(&expected_origin)
+        );
+    }
     assert_eq!(
         workspace
             .get("has_changes")

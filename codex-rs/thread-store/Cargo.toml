@@ -8,6 +8,10 @@ version.workspace = true
 name = "codex_thread_store"
 path = "src/lib.rs"
 
+[[example]]
+name = "generate-proto"
+path = "examples/generate-proto.rs"
+
 [lints]
 workspace = true
 
@@ -17,13 +21,19 @@ chrono = { workspace = true, features = ["serde"] }
 codex-git-utils = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
+codex-state = { workspace = true }
+prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
 
 [dev-dependencies]
-codex-state = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["router", "transport"] }
+tonic-prost-build = { version = "=0.14.3", default-features = false, features = ["transport"] }
 uuid = { workspace = true }

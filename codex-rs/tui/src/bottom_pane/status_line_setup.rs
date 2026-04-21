@@ -19,8 +19,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -33,6 +31,8 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the status line.
@@ -65,10 +65,6 @@ pub(crate) enum StatusLineItem {
 
     /// Percentage of context window remaining.
     ContextRemaining,
-
-    /// Percentage of context window remaining.
-    #[strum(to_string = "context-remaining-percent")]
-    ContextRemainingPercent,
 
     /// Percentage of context window used.
     ///
@@ -119,9 +115,6 @@ impl StatusLineItem {
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
-            StatusLineItem::ContextRemainingPercent => {
-                "Percentage of context window remaining (omitted when unknown)"
-            }
             StatusLineItem::ContextUsed => {
                 "Percentage of context window used (omitted when unknown)"
             }
@@ -145,36 +138,26 @@ impl StatusLineItem {
             StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
         }
     }
-}
 
-/// Runtime values used to preview the current status-line selection.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct StatusLinePreviewData {
-    values: BTreeMap<StatusLineItem, String>,
-}
-
-impl StatusLinePreviewData {
-    pub(crate) fn from_iter<I>(values: I) -> Self
-    where
-        I: IntoIterator<Item = (StatusLineItem, String)>,
-    {
-        Self {
-            values: values.into_iter().collect(),
-        }
-    }
-
-    fn line_for_items(&self, items: &[MultiSelectItem]) -> Option<Line<'static>> {
-        let preview = items
-            .iter()
-            .filter(|item| item.enabled)
-            .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-            .filter_map(|item| self.values.get(&item).cloned())
-            .collect::<Vec<_>>()
-            .join(" · ");
-        if preview.is_empty() {
-            None
-        } else {
-            Some(Line::from(preview))
+    pub(crate) fn preview_item(self) -> StatusSurfacePreviewItem {
+        match self {
+            StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
+            StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
+            StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
+            StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
+            StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
+            StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
+            StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
+            StatusLineItem::WeeklyLimit => StatusSurfacePreviewItem::WeeklyLimit,
+            StatusLineItem::CodexVersion => StatusSurfacePreviewItem::CodexVersion,
+            StatusLineItem::ContextWindowSize => StatusSurfacePreviewItem::ContextWindowSize,
+            StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
+            StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
+            StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
+            StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
+            StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
         }
     }
 }
@@ -204,7 +187,7 @@ impl StatusLineSetupView {
     /// enabled. Remaining items are appended and marked as disabled.
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
-        preview_data: StatusLinePreviewData,
+        preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
@@ -243,7 +226,15 @@ impl StatusLineSetupView {
             ])
             .items(items)
             .enable_ordering()
-            .on_preview(move |items| preview_data.line_for_items(items))
+            .on_preview(move |items| {
+                preview_data.line_for_items(
+                    items
+                        .iter()
+                        .filter(|item| item.enabled)
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                        .map(StatusLineItem::preview_item),
+                )
+            })
             .on_confirm(|ids, app_event| {
                 let items = ids
                     .iter()
@@ -298,14 +289,7 @@ impl Renderable for StatusLineSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_event_sender::AppEventSender;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    use crate::app_event::AppEvent;
 
     #[test]
     fn context_used_accepts_context_usage_legacy_id() {
@@ -321,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn context_remaining_is_separate_selectable_id() {
+    fn context_remaining_is_selectable_id() {
         assert_eq!(
             "context-remaining".parse::<StatusLineItem>(),
             Ok(StatusLineItem::ContextRemaining)
@@ -330,143 +314,5 @@ mod tests {
             StatusLineItem::ContextRemaining.to_string(),
             "context-remaining"
         );
-    }
-
-    #[test]
-    fn context_remaining_percent_is_separate_selectable_id() {
-        assert_eq!(
-            StatusLineItem::ContextRemainingPercent.to_string(),
-            "context-remaining-percent"
-        );
-        assert_eq!(
-            "context-remaining-percent".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ContextRemainingPercent)
-        );
-    }
-
-    #[test]
-    fn preview_uses_runtime_values() {
-        let preview_data = StatusLinePreviewData::from_iter([
-            (StatusLineItem::ModelName, "gpt-5".to_string()),
-            (StatusLineItem::CurrentDir, "/repo".to_string()),
-        ]);
-        let items = vec![
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::CurrentDir.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-        ];
-
-        assert_eq!(
-            preview_data.line_for_items(&items),
-            Some(Line::from("gpt-5 · /repo"))
-        );
-    }
-
-    #[test]
-    fn preview_omits_items_without_runtime_values() {
-        let preview_data =
-            StatusLinePreviewData::from_iter([(StatusLineItem::ModelName, "gpt-5".to_string())]);
-        let items = vec![
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::GitBranch.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-        ];
-
-        assert_eq!(
-            preview_data.line_for_items(&items),
-            Some(Line::from("gpt-5"))
-        );
-    }
-
-    #[test]
-    fn preview_includes_thread_title() {
-        let preview_data = StatusLinePreviewData::from_iter([
-            (StatusLineItem::ModelName, "gpt-5".to_string()),
-            (StatusLineItem::ThreadTitle, "Roadmap cleanup".to_string()),
-        ]);
-        let items = vec![
-            MultiSelectItem {
-                id: StatusLineItem::ModelName.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-            MultiSelectItem {
-                id: StatusLineItem::ThreadTitle.to_string(),
-                name: String::new(),
-                description: None,
-                enabled: true,
-            },
-        ];
-
-        assert_eq!(
-            preview_data.line_for_items(&items),
-            Some(Line::from("gpt-5 · Roadmap cleanup"))
-        );
-    }
-
-    #[test]
-    fn setup_view_snapshot_uses_runtime_preview_values() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let view = StatusLineSetupView::new(
-            Some(&[
-                StatusLineItem::ModelName.to_string(),
-                StatusLineItem::CurrentDir.to_string(),
-                StatusLineItem::GitBranch.to_string(),
-            ]),
-            StatusLinePreviewData::from_iter([
-                (StatusLineItem::ModelName, "gpt-5-codex".to_string()),
-                (StatusLineItem::CurrentDir, "~/codex-rs".to_string()),
-                (
-                    StatusLineItem::GitBranch,
-                    "jif/statusline-preview".to_string(),
-                ),
-                (StatusLineItem::WeeklyLimit, "weekly 82%".to_string()),
-            ]),
-            AppEventSender::new(tx_raw),
-        );
-
-        assert_snapshot!(render_lines(&view, /*width*/ 72));
-    }
-
-    fn render_lines(view: &StatusLineSetupView, width: u16) -> String {
-        let height = view.desired_height(width);
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        view.render(area, &mut buf);
-
-        (0..area.height)
-            .map(|row| {
-                let mut line = String::new();
-                for col in 0..area.width {
-                    let symbol = buf[(area.x + col, area.y + row)].symbol();
-                    if symbol.is_empty() {
-                        line.push(' ');
-                    } else {
-                        line.push_str(symbol);
-                    }
-                }
-                line
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }

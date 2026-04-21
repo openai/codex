@@ -1,6 +1,7 @@
-use crate::codex::PreviousTurnSettings;
-use crate::codex::TurnContext;
-use crate::environment_context::EnvironmentContext;
+use crate::context::ContextualUserFragment;
+use crate::context::EnvironmentContext;
+use crate::session::PreviousTurnSettings;
+use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -21,14 +22,14 @@ fn build_environment_update_item(
     }
 
     let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
+    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell.name().to_string());
     let next_context = EnvironmentContext::from_turn_context(next, shell);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
 
-    Some(ResponseItem::from(
-        EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
+    Some(ContextualUserFragment::into(
+        EnvironmentContext::diff_from_turn_context_item(prev, &next_context),
     ))
 }
 

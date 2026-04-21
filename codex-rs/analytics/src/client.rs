@@ -9,6 +9,8 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::HookRunFact;
+use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -191,6 +193,12 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_hook_run(&self, tracking: TrackEventsContext, hook: HookRunFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(
+            HookRunInput { tracking, hook },
+        )));
+    }
+
     pub fn track_plugin_used(&self, tracking: TrackEventsContext, plugin: PluginTelemetryMetadata) {
         if !self.queue.should_enqueue_plugin_used(&tracking, &plugin) {
             return;
@@ -289,7 +297,7 @@ impl AnalyticsEventsClient {
 }
 
 async fn send_track_events(
-    auth_manager: &AuthManager,
+    auth_manager: &Arc<AuthManager>,
     base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
@@ -302,9 +310,11 @@ async fn send_track_events(
     if !auth.is_chatgpt_auth() {
         return;
     }
-    let access_token = match auth.get_token() {
-        Ok(token) => token,
-        Err(_) => return,
+    let Some(authorization_header_value) = auth_manager
+        .chatgpt_authorization_header_for_auth(&auth)
+        .await
+    else {
+        return;
     };
     let Some(account_id) = auth.get_account_id() else {
         return;
@@ -314,15 +324,17 @@ async fn send_track_events(
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let response = create_client()
+    let mut request = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .bearer_auth(&access_token)
+        .header("authorization", authorization_header_value)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await;
+        .json(&payload);
+    if auth.is_fedramp_account() {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
+    let response = request.send().await;
 
     match response {
         Ok(response) if response.status().is_success() => {}
