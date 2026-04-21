@@ -1156,6 +1156,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             }),
         )
         .await;
@@ -1634,6 +1635,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                 last_agent_message: Some("first done".to_string()),
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             }),
         )
         .await;
@@ -1662,6 +1664,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                 last_agent_message: Some("second done".to_string()),
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             }),
         )
         .await;
