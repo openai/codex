@@ -1,14 +1,11 @@
 mod config;
-mod conversation_manager;
 mod handoff;
 mod prompt;
+mod realtime_conversation;
 mod session_config;
 mod startup_context;
 
 pub use config::RealtimeFeaturesConfig;
-pub use conversation_manager::RealtimeConversationManager;
-pub use conversation_manager::RealtimeStart;
-pub use conversation_manager::RealtimeStartOutput;
 pub use handoff::REALTIME_BACKEND_TEXT_PREFIX;
 pub use handoff::REALTIME_USER_TEXT_PREFIX;
 pub use handoff::prefix_realtime_v2_text;
@@ -16,6 +13,9 @@ pub use handoff::realtime_delegation_from_handoff;
 pub use handoff::realtime_text_from_handoff_request;
 pub use handoff::wrap_realtime_delegation_input;
 pub use prompt::prepare_realtime_backend_prompt;
+pub use realtime_conversation::RealtimeConversationManager;
+pub use realtime_conversation::RealtimeStart;
+pub use realtime_conversation::RealtimeStartOutput;
 pub use session_config::build_realtime_session_config;
 pub use session_config::default_realtime_voice;
 pub use session_config::realtime_api_key;
