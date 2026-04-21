@@ -7,6 +7,7 @@ use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolName;
+use tokio_util::sync::CancellationToken;
 
 use super::ToolCall;
 use super::ToolCallSource;
@@ -52,6 +53,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -106,6 +108,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::JsRepl,
@@ -155,6 +158,7 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,

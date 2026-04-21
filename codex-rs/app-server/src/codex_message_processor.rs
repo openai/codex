@@ -290,6 +290,7 @@ use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_server_status_snapshot_with_detail_and_authorization_header;
 use codex_mcp::discover_supported_scopes;
 use codex_mcp::effective_mcp_servers_with_authorization_header;
+use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
@@ -5922,50 +5923,115 @@ impl CodexMessageProcessor {
         params: McpResourceReadParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
-            Ok(thread) => thread,
+        let McpResourceReadParams {
+            thread_id,
+            server,
+            uri,
+        } = params;
+
+        if let Some(thread_id) = thread_id {
+            let (_, thread) = match self.load_thread(&thread_id).await {
+                Ok(thread) => thread,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            tokio::spawn(async move {
+                let result = thread.read_mcp_resource(&server, &uri).await;
+                Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
+            });
+            return;
+        }
+
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
             Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let mcp_config = config
+            .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
+            .await;
+        let auth = self.auth_manager.auth().await;
+        let runtime_environment = match self.thread_manager.environment_manager().current().await {
+            Ok(Some(environment)) => {
+                // Resource reads without a thread have no turn cwd. This fallback
+                // is used only by executor-backed stdio MCPs whose config omits `cwd`.
+                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+            }
+            Ok(None) => McpRuntimeEnvironment::new(
+                Arc::new(codex_exec_server::Environment::default()),
+                config.cwd.to_path_buf(),
+            ),
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to create environment: {err}"),
+                    data: None,
+                };
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
         tokio::spawn(async move {
-            let result = thread.read_mcp_resource(&params.server, &params.uri).await;
-            match result {
-                Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
-                    Ok(response) => {
-                        outgoing.send_response(request_id, response).await;
-                    }
-                    Err(error) => {
-                        outgoing
-                            .send_error(
-                                request_id,
-                                JSONRPCErrorError {
-                                    code: INTERNAL_ERROR_CODE,
-                                    message: format!(
-                                        "failed to deserialize MCP resource read response: {error}"
-                                    ),
-                                    data: None,
-                                },
-                            )
-                            .await;
-                    }
-                },
+            let result = match read_mcp_resource_without_thread(
+                &mcp_config,
+                auth.as_ref(),
+                runtime_environment,
+                &server,
+                &uri,
+            )
+            .await
+            {
+                Ok(result) => serde_json::to_value(result).map_err(anyhow::Error::from),
+                Err(error) => Err(error),
+            };
+            Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
+        });
+    }
+
+    async fn send_mcp_resource_read_response(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        result: anyhow::Result<serde_json::Value>,
+    ) {
+        match result {
+            Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
+                Ok(response) => {
+                    outgoing.send_response(request_id, response).await;
+                }
                 Err(error) => {
                     outgoing
                         .send_error(
                             request_id,
                             JSONRPCErrorError {
                                 code: INTERNAL_ERROR_CODE,
-                                message: format!("{error:#}"),
+                                message: format!(
+                                    "failed to deserialize MCP resource read response: {error}"
+                                ),
                                 data: None,
                             },
                         )
                         .await;
                 }
+            },
+            Err(error) => {
+                outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("{error:#}"),
+                            data: None,
+                        },
+                    )
+                    .await;
             }
-        });
+        }
     }
 
     async fn call_mcp_server_tool(
@@ -6511,6 +6577,7 @@ impl CodexMessageProcessor {
             }
         };
         let cli_overrides = self.current_cli_overrides();
+        let host_name = codex_config::host_name();
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
@@ -6539,6 +6606,7 @@ impl CodexMessageProcessor {
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
                 self.thread_config_loader.as_ref(),
+                host_name.as_deref(),
             )
             .await
             {
@@ -10595,6 +10663,7 @@ mod tests {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,

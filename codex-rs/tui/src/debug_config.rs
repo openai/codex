@@ -640,6 +640,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
@@ -843,6 +844,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,

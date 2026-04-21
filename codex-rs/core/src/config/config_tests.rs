@@ -370,6 +370,108 @@ command = "print-token"
 }
 
 #[test]
+fn rejects_provider_aws_for_custom_provider() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.custom]
+name = "Custom Provider"
+
+[model_providers.custom.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains(
+            "model_providers.custom: provider aws is only supported for `amazon-bedrock`"
+        )
+    );
+}
+
+#[test]
+fn accepts_amazon_bedrock_aws_profile_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock AWS profile override should deserialize");
+
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.aws.as_ref())
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_amazon_bedrock_aws_profile_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock AWS profile override should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+}
+
+#[tokio::test]
+async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+name = "Custom Bedrock"
+base_url = "https://bedrock.example.com/v1"
+requires_openai_auth = true
+supports_websockets = true
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock unsupported overrides should deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains(
+        "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+    ));
+}
+
+#[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"
 [tui.model_availability_nux]
@@ -2111,6 +2213,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let cfg =
@@ -2246,6 +2349,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -4755,6 +4859,7 @@ model_verbosity = "high"
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -5381,6 +5486,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
@@ -6057,6 +6163,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,

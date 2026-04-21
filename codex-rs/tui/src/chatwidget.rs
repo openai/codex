@@ -3607,6 +3607,14 @@ impl ChatWidget {
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        let permission_request_summary = |subject: &str, reason: &Option<String>| {
+            reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!("{subject}: {reason}"))
+                .unwrap_or_else(|| subject.to_string())
+        };
         let guardian_action_summary = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => Some(command.clone()),
             GuardianAssessmentAction::Execve { program, argv, .. } => {
@@ -3636,6 +3644,9 @@ impl ChatWidget {
                 let label = connector_name.as_deref().unwrap_or(server.as_str());
                 Some(format!("MCP {tool_name} on {label}"))
             }
+            GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                Some(permission_request_summary("permission request", reason))
+            }
         };
         let guardian_command = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => shlex::split(command)
@@ -3649,7 +3660,8 @@ impl ChatWidget {
             .filter(|command| !command.is_empty()),
             GuardianAssessmentAction::ApplyPatch { .. }
             | GuardianAssessmentAction::NetworkAccess { .. }
-            | GuardianAssessmentAction::McpToolCall { .. } => None,
+            | GuardianAssessmentAction::McpToolCall { .. }
+            | GuardianAssessmentAction::RequestPermissions { .. } => None,
         };
 
         if ev.status == GuardianAssessmentStatus::InProgress
@@ -3740,6 +3752,11 @@ impl ChatWidget {
                             "codex could access {target}"
                         ))
                     }
+                    GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                        history_cell::new_guardian_timed_out_action_request(
+                            permission_request_summary("codex could request permissions", reason),
+                        )
+                    }
                     GuardianAssessmentAction::Command { .. } => unreachable!(),
                     GuardianAssessmentAction::Execve { .. } => unreachable!(),
                 }
@@ -3776,6 +3793,12 @@ impl ChatWidget {
                 GuardianAssessmentAction::NetworkAccess { target, .. } => {
                     history_cell::new_guardian_denied_action_request(format!(
                         "codex to access {target}"
+                    ))
+                }
+                GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                    history_cell::new_guardian_denied_action_request(permission_request_summary(
+                        "codex to request permissions",
+                        reason,
                     ))
                 }
                 GuardianAssessmentAction::Command { .. } => unreachable!(),

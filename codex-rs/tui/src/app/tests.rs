@@ -2601,6 +2601,7 @@ async fn inactive_thread_exec_approval_preserves_context() {
         file_system: Some(AdditionalFileSystemPermissions {
             read: Some(vec![test_absolute_path("/tmp/read-only")]),
             write: Some(vec![test_absolute_path("/tmp/write")]),
+            glob_scan_max_depth: None,
             entries: None,
         }),
     });
@@ -2708,6 +2709,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                 file_system: Some(AdditionalFileSystemPermissions {
                     read: Some(vec![test_absolute_path("/tmp/read-only")]),
                     write: Some(vec![test_absolute_path("/tmp/write")]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             },
