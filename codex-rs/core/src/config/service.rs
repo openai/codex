@@ -124,13 +124,14 @@ impl ConfigService {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
+        requirements_hostname: Option<String>,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
-            requirements_hostname: None,
+            requirements_hostname,
         }
     }
 
@@ -144,11 +145,6 @@ impl ConfigService {
         }
     }
 
-    pub fn with_requirements_hostname(mut self, requirements_hostname: Option<String>) -> Self {
-        self.requirements_hostname = requirements_hostname;
-        self
-    }
-
     #[cfg(test)]
     pub(crate) fn without_managed_config_for_tests(codex_home: PathBuf) -> Self {
         Self::new(
@@ -156,6 +152,7 @@ impl ConfigService {
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
+            /* requirements_hostname */ None,
         )
     }
 

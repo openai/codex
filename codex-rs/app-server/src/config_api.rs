@@ -108,8 +108,8 @@ impl ConfigApi {
             self.current_cli_overrides(),
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
+            app_server_requirements_hostname(),
         )
-        .with_requirements_hostname(app_server_requirements_hostname())
     }
 
     fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
