@@ -222,19 +222,24 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         ),
         None,
     )
-    build_data_assignments = {
-        node.targets[0].slice.value: node.value.value
-        for node in initialize_fn.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Subscript)
-        and isinstance(node.targets[0].value, ast.Name)
-        and node.targets[0].value.id == "build_data"
-        and isinstance(node.targets[0].slice, ast.Constant)
-        and isinstance(node.targets[0].slice.value, str)
-        and isinstance(node.value, ast.Constant)
-    }
+    build_data_assignments = {}
+    for node in initialize_fn.body:
+        if (
+            not isinstance(node, ast.Assign)
+            or len(node.targets) != 1
+            or not isinstance(node.targets[0], ast.Subscript)
+            or not isinstance(node.targets[0].value, ast.Name)
+            or node.targets[0].value.id != "build_data"
+            or not isinstance(node.targets[0].slice, ast.Constant)
+            or not isinstance(node.targets[0].slice.value, str)
+        ):
+            continue
+        if isinstance(node.value, ast.Constant):
+            build_data_assignments[node.targets[0].slice.value] = node.value.value
+        elif isinstance(node.value, ast.JoinedStr):
+            build_data_assignments[node.targets[0].slice.value] = "joined-string"
 
+    assert pyproject["project"]["name"] == "openai-codex-cli-bin"
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
         "packages": ["src/codex_cli_bin"],
         "include": ["src/codex_cli_bin/bin/**"],
@@ -244,7 +249,11 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         "hooks": {"custom": {}},
     }
     assert sdist_guard is not None
-    assert build_data_assignments == {"pure_python": False, "infer_tag": True}
+    assert build_data_assignments == {
+        "pure_python": False,
+        "infer_tag": False,
+        "tag": "joined-string",
+    }
 
 
 def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) -> None:
@@ -260,7 +269,17 @@ def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) ->
 
     assert staged == tmp_path / "runtime-stage"
     assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    assert 'name = "openai-codex-cli-bin"' in (staged / "pyproject.toml").read_text()
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
+
+
+def test_normalize_codex_version_accepts_release_tags_and_pep440_versions() -> None:
+    script = _load_update_script_module()
+
+    assert script.normalize_codex_version("rust-v0.116.0-alpha.1") == "0.116.0a1"
+    assert script.normalize_codex_version("v0.116.0-beta.2") == "0.116.0b2"
+    assert script.normalize_codex_version("0.116.0rc3") == "0.116.0rc3"
+    assert script.normalize_codex_version("0.116.0") == "0.116.0"
 
 
 def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
@@ -284,13 +303,30 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
     assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
 
 
+def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "0.116.0a1",
+        fake_binary,
+        platform_tag="musllinux_1_1_x86_64",
+    )
+
+    pyproject = (staged / "pyproject.toml").read_text()
+    assert 'platform-tag = "musllinux_1_1_x86_64"' in pyproject
+
+
 def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(tmp_path / "sdk-stage", "0.2.1", "1.2.3")
 
     pyproject = (staged / "pyproject.toml").read_text()
     assert 'version = "0.2.1"' in pyproject
-    assert '"codex-cli-bin==1.2.3"' in pyproject
+    assert '"openai-codex-cli-bin==1.2.3"' in pyproject
+    assert '"codex-cli-bin==1.2.3"' not in pyproject
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
 
@@ -329,7 +365,10 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
         return tmp_path / "sdk-stage"
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path,
+        _runtime_version: str,
+        _runtime_binary: Path,
+        _platform_tag: str | None,
     ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
 
@@ -358,8 +397,10 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
             "stage-runtime",
             str(tmp_path / "runtime-stage"),
             str(fake_binary),
-            "--runtime-version",
-            "1.2.3",
+            "--codex-version",
+            "rust-v0.116.0-alpha.1",
+            "--platform-tag",
+            "musllinux_1_1_x86_64",
         ]
     )
 
@@ -372,9 +413,12 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
         raise AssertionError("sdk staging should not run for stage-runtime")
 
     def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+        _staging_dir: Path,
+        codex_version: str,
+        _runtime_binary: Path,
+        platform_tag: str | None,
     ) -> Path:
-        calls.append("stage_runtime")
+        calls.append(f"stage_runtime:{codex_version}:{platform_tag}")
         return tmp_path / "runtime-stage"
 
     def fake_current_sdk_version() -> str:
@@ -389,7 +433,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     script.run_command(args, ops)
 
-    assert calls == ["stage_runtime"]
+    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64"]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
