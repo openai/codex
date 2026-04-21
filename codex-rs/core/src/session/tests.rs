@@ -368,6 +368,80 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     );
 }
 
+#[tokio::test]
+async fn session_start_stop_clears_queued_start_input() -> anyhow::Result<()> {
+    let (mut sess, tc) = make_session_and_context().await;
+    std::fs::create_dir_all(&tc.config.codex_home)?;
+    let hook_script = tc.config.codex_home.join("block_session_start_hook.py");
+    std::fs::write(
+        &hook_script,
+        r#"import json
+import sys
+
+json.load(sys.stdin)
+print(json.dumps({"continue": False, "stopReason": "blocked for test"}))
+"#,
+    )?;
+    std::fs::write(
+        tc.config.codex_home.join("hooks.json"),
+        json!({
+            "hooks": {
+                "SessionStart": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("python3 {}", hook_script.display()),
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )?;
+    sess.services.hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(tc.config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+    let sess = Arc::new(sess);
+    let tc = Arc::new(tc);
+    let input = vec![UserInput::Text {
+        text: "prompt blocked by session start".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.state
+        .lock()
+        .await
+        .set_pending_session_start_source(Some(codex_hooks::SessionStartSource::Startup));
+    tc.lock_turn_start_transcript_inputs()
+        .push(crate::session::turn_context::TurnStartTranscriptInput { input });
+
+    assert!(
+        !crate::hook_runtime::drain_turn_start_transcript_inputs(
+            &sess,
+            &tc,
+            crate::hook_runtime::TurnStartTranscriptDrainMode::RegularTurn,
+        )
+        .await
+    );
+    assert!(tc.lock_turn_start_transcript_inputs().is_empty());
+
+    assert!(
+        crate::hook_runtime::drain_turn_start_transcript_inputs(
+            &sess,
+            &tc,
+            crate::hook_runtime::TurnStartTranscriptDrainMode::InterruptRecovery,
+        )
+        .await
+    );
+    let history = sess.clone_history().await;
+    assert!(
+        user_input_texts(history.raw_items())
+            .iter()
+            .all(|text| !text.contains("prompt blocked by session start"))
+    );
+
+    Ok(())
+}
+
 fn test_model_client_session() -> crate::client::ModelClientSession {
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
