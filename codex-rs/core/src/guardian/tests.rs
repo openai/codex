@@ -876,25 +876,7 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
 }
 
 #[test]
-fn parse_guardian_assessment_treats_nullable_allow_as_low_risk() {
-    let parsed = parse_guardian_assessment(Some(
-        r#"{"risk_level":null,"user_authorization":null,"outcome":"allow","rationale":null}"#,
-    ))
-    .expect("guardian assessment");
-
-    assert_eq!(
-        parsed,
-        GuardianAssessment {
-            risk_level: GuardianRiskLevel::Low,
-            user_authorization: GuardianUserAuthorization::Unknown,
-            outcome: GuardianAssessmentOutcome::Allow,
-            rationale: "Guardian returned a low-risk allow decision.".to_string(),
-        }
-    );
-}
-
-#[test]
-fn guardian_output_schema_uses_strict_nullable_details() {
+fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     let schema = guardian_output_schema();
 
     assert_eq!(
@@ -904,22 +886,22 @@ fn guardian_output_schema_uses_strict_nullable_details() {
             "additionalProperties": false,
             "properties": {
                 "risk_level": {
-                    "type": ["string", "null"],
-                    "enum": ["low", "medium", "high", "critical", null]
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
                 },
                 "user_authorization": {
-                    "type": ["string", "null"],
-                    "enum": ["unknown", "low", "medium", "high", null]
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
                 },
                 "outcome": {
                     "type": "string",
                     "enum": ["allow", "deny"]
                 },
                 "rationale": {
-                    "type": ["string", "null"]
+                    "type": "string"
                 }
             },
-            "required": ["risk_level", "user_authorization", "outcome", "rationale"]
+            "required": ["outcome"]
         })
     );
 }
@@ -998,7 +980,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let request_body = request.body_json();
     assert_eq!(
         request_body.pointer("/text/format/strict"),
-        Some(&serde_json::json!(true))
+        Some(&serde_json::json!(false))
     );
     assert_eq!(
         request_body.pointer("/text/format/schema"),
@@ -1007,22 +989,22 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             "additionalProperties": false,
             "properties": {
                 "risk_level": {
-                    "type": ["string", "null"],
-                    "enum": ["low", "medium", "high", "critical", null]
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
                 },
                 "user_authorization": {
-                    "type": ["string", "null"],
-                    "enum": ["unknown", "low", "medium", "high", null]
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
                 },
                 "outcome": {
                     "type": "string",
                     "enum": ["allow", "deny"]
                 },
                 "rationale": {
-                    "type": ["string", "null"]
+                    "type": "string"
                 }
             },
-            "required": ["risk_level", "user_authorization", "outcome", "rationale"]
+            "required": ["outcome"]
         }))
     );
     let mut settings = Settings::clone_current();

@@ -341,6 +341,7 @@ mod job {
             },
             personality: None,
             output_schema: Some(output_schema()),
+            output_schema_strict: true,
         };
 
         let mut client_session = session.services.model_client.new_session();
