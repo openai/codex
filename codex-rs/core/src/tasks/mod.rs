@@ -300,12 +300,6 @@ impl Session {
             }
         }
 
-        let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.tasks.is_empty());
-        let done_clone = Arc::clone(&done);
-        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
-        let ctx = Arc::clone(&turn_context);
         if task_kind == TaskKind::Regular && !input.is_empty() {
             turn_context
                 .turn_start_transcript_inputs
@@ -313,6 +307,12 @@ impl Session {
                 .await
                 .push(input.clone());
         }
+        let mut active = self.active_turn.lock().await;
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        debug_assert!(turn.tasks.is_empty());
+        let done_clone = Arc::clone(&done);
+        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
+        let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
@@ -626,11 +626,6 @@ impl Session {
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
-        if reason == TurnAbortReason::Interrupted {
-            self.cleanup_after_interrupt(&task.turn_context).await;
-            let _ = drain_turn_start_transcript_inputs(self, &task.turn_context).await;
-        }
-
         select! {
             _ = task.done.notified() => {
             },
@@ -641,12 +636,26 @@ impl Session {
 
         task.handle.abort();
 
+        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
+            let has_turn_start_transcript_input = !task
+                .turn_context
+                .turn_start_transcript_inputs
+                .lock()
+                .await
+                .is_empty();
+            if has_turn_start_transcript_input {
+                let _ = drain_turn_start_transcript_inputs(self, &task.turn_context).await;
+            }
+        }
+
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
         if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(&task.turn_context).await;
+
             let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;

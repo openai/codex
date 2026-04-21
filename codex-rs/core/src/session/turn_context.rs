@@ -72,7 +72,7 @@ pub(crate) struct TurnContext {
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
     pub(crate) turn_start_transcript_inputs: Arc<Mutex<Vec<Vec<UserInput>>>>,
-    pub(crate) transcript_serialization_lock: Arc<Mutex<()>>,
+    pub(crate) transcript_serialization_lock: Arc<Semaphore>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -448,7 +448,7 @@ impl Session {
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
             turn_start_transcript_inputs: Arc::new(Mutex::new(Vec::new())),
-            transcript_serialization_lock: Arc::new(Mutex::new(())),
+            transcript_serialization_lock: Arc::new(Semaphore::new(1)),
         }
     }
 

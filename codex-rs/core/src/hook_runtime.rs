@@ -273,8 +273,15 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> bool {
-    let _guard = turn_context.transcript_serialization_lock.lock().await;
+    let Ok(_permit) = turn_context.transcript_serialization_lock.acquire().await else {
+        return false;
+    };
     if run_pending_session_start_hooks(sess, turn_context).await {
+        turn_context
+            .turn_start_transcript_inputs
+            .lock()
+            .await
+            .clear();
         return false;
     }
 
