@@ -56,7 +56,6 @@ fn guardian_review_request_includes_patch_context() {
     let request = ApplyPatchRequest {
         environment_id: None,
         environment: local_environment(),
-        cwd: expected_cwd.clone(),
         action,
         file_paths: vec![path.clone()],
         changes: HashMap::from([(
@@ -101,7 +100,6 @@ fn file_system_sandbox_context_uses_active_attempt() {
     let req = ApplyPatchRequest {
         environment_id: None,
         environment: local_environment(),
-        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -160,7 +158,6 @@ fn file_system_sandbox_context_omits_legacy_equivalent_policy() {
     let req = ApplyPatchRequest {
         environment_id: None,
         environment: local_environment(),
-        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -204,7 +201,6 @@ fn no_sandbox_attempt_has_no_file_system_context() {
     let req = ApplyPatchRequest {
         environment_id: None,
         environment: local_environment(),
-        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),

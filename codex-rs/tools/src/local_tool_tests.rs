@@ -10,6 +10,7 @@ fn windows_shell_safety_description() -> String {
 fn shell_tool_matches_expected_spec() {
     let tool = create_shell_tool(ShellToolOptions {
         exec_permission_approvals_enabled: false,
+        multi_environment_tools: false,
     });
 
     let description = if cfg!(windows) {
@@ -229,6 +230,7 @@ fn write_stdin_tool_matches_expected_spec() {
 fn shell_tool_with_request_permission_includes_additional_permissions() {
     let tool = create_shell_tool(ShellToolOptions {
         exec_permission_approvals_enabled: true,
+        multi_environment_tools: false,
     });
 
     let mut properties = BTreeMap::from([

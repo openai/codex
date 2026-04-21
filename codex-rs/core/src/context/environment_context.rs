@@ -127,8 +127,9 @@ impl EnvironmentContext {
     }
 
     pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+        let cwd = turn_context.default_environment_cwd();
         Self::new_with_environments(
-            Some(turn_context.cwd.to_path_buf()),
+            Some(cwd.to_path_buf()),
             Self::environments_from_turn_context(turn_context),
             shell.name().to_string(),
             turn_context.current_date.clone(),
@@ -201,19 +202,21 @@ impl EnvironmentContext {
         if !turn_context.tools_config.multi_environment_tools {
             return None;
         }
-        let environments = turn_context.environments.as_ref()?;
-        if environments.is_empty() {
+        if turn_context.environments.is_empty() {
             return None;
         }
 
         Some(
-            environments
+            turn_context
+                .environments
                 .iter()
                 .enumerate()
-                .map(|(index, environment)| EnvironmentContextEnvironment {
-                    id: environment.environment_id.clone(),
-                    cwd: environment.cwd.to_path_buf(),
-                    primary: index == 0,
+                .filter_map(|(index, environment)| {
+                    Some(EnvironmentContextEnvironment {
+                        id: environment.environment_id.clone()?,
+                        cwd: environment.cwd.to_path_buf(),
+                        primary: index == 0,
+                    })
                 })
                 .collect(),
         )

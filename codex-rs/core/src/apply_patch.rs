@@ -32,10 +32,10 @@ pub(crate) struct ApplyPatchRuntimeInvocation {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
-    cwd: &codex_utils_absolute_path::AbsolutePathBuf,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    let cwd = &action.cwd;
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),

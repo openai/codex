@@ -1048,6 +1048,9 @@ impl JsReplManager {
                 joined.to_string_lossy().to_string(),
             );
         }
+        let tool_environment = turn
+            .default_environment()
+            .ok_or_else(|| "js_repl is unavailable in this session".to_string())?;
 
         let sandbox = SandboxManager::new();
         let managed_network_active = turn.network.is_some();
@@ -1064,7 +1067,7 @@ impl JsReplManager {
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.clone(),
+            cwd: tool_environment.cwd.clone(),
             env,
             additional_permissions: None,
         };
@@ -1081,7 +1084,7 @@ impl JsReplManager {
                 sandbox: sandbox_type,
                 enforce_managed_network: managed_network_active,
                 network: None,
-                sandbox_policy_cwd: &turn.cwd,
+                sandbox_policy_cwd: &tool_environment.cwd,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,

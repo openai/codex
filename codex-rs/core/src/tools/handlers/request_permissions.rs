@@ -37,8 +37,13 @@ impl ToolHandler for RequestPermissionsHandler {
             }
         };
 
+        let tool_environment = turn.default_environment().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "request_permissions is unavailable in this session".to_string(),
+            )
+        })?;
         let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, &turn.cwd)?;
+            parse_arguments_with_base_path(&arguments, &tool_environment.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;

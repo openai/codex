@@ -87,7 +87,11 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let expected_command = session
         .user_shell()
         .derive_exec_args(&command, /*use_login_shell*/ true);
-    let expected_cwd = turn_context.resolve_path(workdir.clone());
+    let tool_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve");
+    let expected_cwd =
+        turn_context.resolve_path_for_environment(&tool_environment, workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
         Some(session.conversation_id),
@@ -95,6 +99,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
 
     let params = ShellCommandToolCallParams {
         command,
+        environment_id: None,
         workdir,
         login,
         timeout_ms,
@@ -108,6 +113,7 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &params,
         &session,
         &turn_context,
+        &tool_environment,
         session.conversation_id,
         /*allow_login_shell*/ true,
     )
@@ -160,8 +166,12 @@ fn shell_command_handler_respects_explicit_login_flag() {
 #[tokio::test]
 async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     let (session, turn_context) = make_session_and_context().await;
+    let tool_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve");
     let params = ShellCommandToolCallParams {
         command: "echo hello".to_string(),
+        environment_id: None,
         workdir: None,
         login: None,
         timeout_ms: None,
@@ -175,6 +185,7 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &params,
         &session,
         &turn_context,
+        &tool_environment,
         session.conversation_id,
         /*allow_login_shell*/ false,
     )
@@ -210,6 +221,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
                 "-lc".to_string(),
                 "printf hi".to_string(),
             ],
+            environment_id: None,
             workdir: None,
             timeout_ms: None,
             sandbox_permissions: None,

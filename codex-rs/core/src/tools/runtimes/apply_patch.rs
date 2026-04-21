@@ -43,7 +43,6 @@ use std::time::Instant;
 pub struct ApplyPatchRequest {
     pub environment_id: Option<String>,
     pub environment: Arc<Environment>,
-    pub cwd: AbsolutePathBuf,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
@@ -72,7 +71,7 @@ impl ApplyPatchRuntime {
     ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.cwd.clone(),
+            cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
@@ -224,7 +223,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         req: &'a ApplyPatchRequest,
         _turn_ctx: &'a crate::session::turn_context::TurnContext,
     ) -> &'a AbsolutePathBuf {
-        &req.cwd
+        &req.action.cwd
     }
 
     async fn run(
@@ -240,7 +239,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         let mut stderr = Vec::new();
         let result = codex_apply_patch::apply_patch(
             &req.action.patch,
-            &req.cwd,
+            &req.action.cwd,
             &mut stdout,
             &mut stderr,
             fs.as_ref(),

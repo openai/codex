@@ -44,6 +44,7 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
+    pub environment_id: Option<String>,
     pub command: Vec<String>,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
@@ -93,6 +94,7 @@ pub struct ShellRuntime {
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ApprovalKey {
+    environment_id: Option<String>,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
@@ -133,6 +135,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn approval_keys(&self, req: &ShellRequest) -> Vec<Self::ApprovalKey> {
         vec![ApprovalKey {
+            environment_id: req.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
@@ -213,6 +216,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn sandbox_cwd<'a>(
+        &self,
+        req: &'a ShellRequest,
+        _turn_ctx: &'a crate::session::turn_context::TurnContext,
+    ) -> &'a AbsolutePathBuf {
+        &req.cwd
+    }
+
     fn network_approval_spec(
         &self,
         req: &ShellRequest,

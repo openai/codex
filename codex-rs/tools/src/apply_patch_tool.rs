@@ -129,7 +129,7 @@ pub fn create_apply_patch_json_tool(options: ApplyPatchToolOptions) -> ToolSpec 
         properties.insert(
             "environment_id".to_string(),
             JsonSchema::string(Some(
-                "Optional selected environment id to apply the patch in; omit to use the primary environment.".to_string(),
+                "Optional selected environment id to apply the patch in; omit to use the default environment.".to_string(),
             )),
         );
     }
