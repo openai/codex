@@ -491,7 +491,7 @@ impl Session {
     }
 
     pub(crate) async fn account_thread_goal_progress(
-        self: &Arc<Self>,
+        &self,
         turn_context: &TurnContext,
         budget_limit_steering: BudgetLimitSteering,
     ) -> anyhow::Result<()> {
