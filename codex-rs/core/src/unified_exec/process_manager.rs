@@ -169,8 +169,7 @@ struct PreparedProcessHandles {
     output_closed_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
     pause_state: Option<watch::Receiver<bool>>,
-    command: Vec<String>,
-    raw_command: String,
+    hook_command: String,
     process_id: i32,
     tty: bool,
 }
@@ -280,7 +279,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&process),
                 context,
                 &request.command,
-                request.raw_command.clone(),
+                request.hook_command.clone(),
                 cwd.clone(),
                 start,
                 request.process_id,
@@ -400,8 +399,7 @@ impl UnifiedExecProcessManager {
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(request.command.clone()),
-            raw_command: Some(request.raw_command.clone()),
+            hook_command: Some(request.hook_command.clone()),
         };
 
         Ok(response)
@@ -421,8 +419,7 @@ impl UnifiedExecProcessManager {
             output_closed_notify,
             cancellation_token,
             pause_state,
-            command: session_command,
-            raw_command,
+            hook_command,
             process_id,
             tty,
             ..
@@ -521,8 +518,7 @@ impl UnifiedExecProcessManager {
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(session_command.clone()),
-            raw_command: Some(raw_command),
+            hook_command: Some(hook_command),
         };
 
         Ok(response)
@@ -590,8 +586,7 @@ impl UnifiedExecProcessManager {
             output_closed_notify,
             cancellation_token,
             pause_state,
-            command: entry.command.clone(),
-            raw_command: entry.raw_command.clone(),
+            hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -603,7 +598,7 @@ impl UnifiedExecProcessManager {
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
         command: &[String],
-        raw_command: String,
+        hook_command: String,
         cwd: AbsolutePathBuf,
         started_at: Instant,
         process_id: i32,
@@ -615,8 +610,7 @@ impl UnifiedExecProcessManager {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            command: command.to_vec(),
-            raw_command,
+            hook_command,
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),

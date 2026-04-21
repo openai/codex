@@ -113,8 +113,7 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            command: command.clone(),
-            raw_command: cmd.to_string(),
+            hook_command: cmd.to_string(),
             tty,
             network_approval_id: None,
             session: Arc::downgrade(session),
@@ -166,8 +165,7 @@ async fn exec_command_with_tty(
         process_id: response_process_id,
         exit_code,
         original_token_count: Some(approx_token_count(&text)),
-        session_command: Some(command),
-        raw_command: Some(cmd.to_string()),
+        hook_command: Some(cmd.to_string()),
     })
 }
 

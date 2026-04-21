@@ -258,12 +258,7 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "echo three".to_string(),
-        ]),
-        raw_command: Some("echo three".to_string()),
+        hook_command: Some("echo three".to_string()),
     };
 
     assert_eq!(
@@ -290,12 +285,7 @@ fn exec_command_post_tool_use_payload_uses_output_for_interactive_completion() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "echo three".to_string(),
-        ]),
-        raw_command: Some("echo three".to_string()),
+        hook_command: Some("echo three".to_string()),
     };
 
     assert_eq!(
@@ -322,12 +312,7 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
         process_id: Some(45),
         exit_code: None,
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "echo three".to_string(),
-        ]),
-        raw_command: Some("echo three".to_string()),
+        hook_command: Some("echo three".to_string()),
     };
 
     assert_eq!(
@@ -354,12 +339,7 @@ fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_c
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "sleep 1; echo finished".to_string(),
-        ]),
-        raw_command: Some("sleep 1; echo finished".to_string()),
+        hook_command: Some("sleep 1; echo finished".to_string()),
     };
 
     assert_eq!(
@@ -386,12 +366,7 @@ fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate() 
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "sleep 2; echo alpha".to_string(),
-        ]),
-        raw_command: Some("sleep 2; echo alpha".to_string()),
+        hook_command: Some("sleep 2; echo alpha".to_string()),
     };
     let output_b = ExecCommandToolOutput {
         event_call_id: "exec-call-b".to_string(),
@@ -402,12 +377,7 @@ fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate() 
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "sleep 1; echo beta".to_string(),
-        ]),
-        raw_command: Some("sleep 1; echo beta".to_string()),
+        hook_command: Some("sleep 1; echo beta".to_string()),
     };
 
     let payloads = [

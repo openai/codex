@@ -88,7 +88,6 @@ impl UnifiedExecContext {
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
-    pub raw_command: String,
     pub hook_command: String,
     pub process_id: i32,
     pub yield_time_ms: u64,
@@ -149,8 +148,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
-    command: Vec<String>,
-    raw_command: String,
+    hook_command: String,
     tty: bool,
     network_approval_id: Option<String>,
     session: Weak<Session>,

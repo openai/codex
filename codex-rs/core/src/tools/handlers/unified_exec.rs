@@ -149,7 +149,7 @@ impl ToolHandler for UnifiedExecHandler {
             return None;
         };
 
-        let command = result.raw_command.clone()?;
+        let command = result.hook_command.clone()?;
         let tool_use_id = if result.event_call_id.is_empty() {
             call_id.to_string()
         } else {
@@ -197,12 +197,12 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let raw_command = args.cmd.clone();
+                let hook_command = args.cmd.clone();
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
-                    &raw_command,
+                    &hook_command,
                     &workdir,
                 )
                 .await;
@@ -311,19 +311,16 @@ impl ToolHandler for UnifiedExecHandler {
                         process_id: None,
                         exit_code: None,
                         original_token_count: None,
-                        session_command: None,
-                        raw_command: None,
+                        hook_command: None,
                     });
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                let session_command = command.clone();
                 match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
-                            raw_command: raw_command.clone(),
-                            hook_command: raw_command.clone(),
+                            hook_command: hook_command.clone(),
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -357,8 +354,7 @@ impl ToolHandler for UnifiedExecHandler {
                             process_id: None,
                             exit_code: Some(output.exit_code),
                             original_token_count: Some(original_token_count),
-                            session_command: Some(session_command),
-                            raw_command: Some(raw_command),
+                            hook_command: Some(hook_command),
                         }
                     }
                     Err(err) => {
