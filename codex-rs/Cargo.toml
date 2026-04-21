@@ -55,6 +55,7 @@ members = [
     "response-debug-context",
     "sandboxing",
     "stdio-to-uds",
+    "statsig",
     "otel",
     "tui",
     "tools",
@@ -162,6 +163,7 @@ codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
+codex-statsig = { path = "statsig" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
@@ -311,6 +313,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "uuid",
 ] }
 starlark = "0.13.0"
+statsig-rust = "=0.19.1"
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
