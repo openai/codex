@@ -90,12 +90,14 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     }
 }
 
-/// Whether this turn should route `on-request` approval prompts through the
-/// guardian reviewer instead of surfacing them to the user. ARC may still
-/// block actions earlier in the flow.
+/// Whether this turn should route allowed approval prompts through the guardian
+/// reviewer instead of surfacing them to the user. ARC may still block actions
+/// earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
-    turn.approval_policy.value() == AskForApproval::OnRequest
-        && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+    matches!(
+        turn.approval_policy.value(),
+        AskForApproval::OnRequest | AskForApproval::Granular(_)
+    ) && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
 pub(crate) fn is_guardian_reviewer_source(
