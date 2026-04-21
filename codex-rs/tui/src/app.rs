@@ -3457,6 +3457,7 @@ impl App {
                 approval_policy: self.config.permissions.approval_policy.value(),
                 approvals_reviewer: self.config.approvals_reviewer,
                 sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                permission_profile: self.config.permissions.permission_profile(),
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
@@ -9450,6 +9451,11 @@ guardian_approval = true
                 ThreadSessionState {
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    permission_profile:
+                        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                            &SandboxPolicy::new_workspace_write_policy(),
+                            std::path::Path::new("/tmp/agent"),
+                        ),
                     rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                     ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
                 },
@@ -9833,6 +9839,11 @@ guardian_approval = true
                 ThreadSessionState {
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    permission_profile:
+                        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                            &SandboxPolicy::new_workspace_write_policy(),
+                            std::path::Path::new("/tmp/agent"),
+                        ),
                     rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                     ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
                 },
@@ -9886,6 +9897,11 @@ guardian_approval = true
         let primary_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/main"),
+                ),
             ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
         };
 
@@ -9997,6 +10013,11 @@ guardian_approval = true
         let primary_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/main"),
+                ),
             ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
         };
 
@@ -10991,6 +11012,11 @@ guardian_approval = true
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_read_only_policy(),
+                    cwd.as_path(),
+                ),
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
