@@ -309,6 +309,7 @@ mod tests {
 
     struct TestServer {
         sources: Vec<proto::ThreadConfigSource>,
+        expected_cwd: String,
     }
 
     #[tonic::async_trait]
@@ -321,7 +322,7 @@ mod tests {
                 request.into_inner(),
                 proto::LoadThreadConfigRequest {
                     thread_id: Some("thread-1".to_string()),
-                    cwd: Some("/workspace/project".to_string()),
+                    cwd: Some(self.expected_cwd.clone()),
                 }
             );
 
@@ -333,6 +334,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_thread_config_calls_remote_service() {
+        let cwd = workspace_dir().join("project");
+        let expected_cwd = cwd.to_string_lossy().into_owned();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");
@@ -342,6 +345,7 @@ mod tests {
             Server::builder()
                 .add_service(ThreadConfigLoaderServer::new(TestServer {
                     sources: proto_sources(),
+                    expected_cwd,
                 }))
                 .serve_with_incoming_shutdown(
                     tokio_stream::wrappers::TcpListenerStream::new(listener),
@@ -356,10 +360,7 @@ mod tests {
         let loaded = loader
             .load(ThreadConfigContext {
                 thread_id: Some("thread-1".to_string()),
-                cwd: Some(
-                    AbsolutePathBuf::from_absolute_path_checked("/workspace/project")
-                        .expect("absolute cwd"),
-                ),
+                cwd: Some(cwd),
             })
             .await;
 
@@ -380,6 +381,7 @@ mod tests {
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {
+        let workspace_cwd = workspace_dir().to_string_lossy().into_owned();
         vec![
             proto::ThreadConfigSource {
                 source: Some(proto::thread_config_source::Source::Session(
@@ -397,7 +399,7 @@ mod tests {
                                 args: vec!["--json".to_string()],
                                 timeout_ms: 5_000,
                                 refresh_interval_ms: 300_000,
-                                cwd: "/workspace".to_string(),
+                                cwd: workspace_cwd,
                             }),
                             wire_api: proto::WireApi::Responses.into(),
                             query_params: Some(proto::StringMap {
@@ -466,8 +468,7 @@ mod tests {
                 args: vec!["--json".to_string()],
                 timeout_ms: NonZeroU64::new(5_000).expect("non-zero timeout"),
                 refresh_interval_ms: 300_000,
-                cwd: AbsolutePathBuf::from_absolute_path_checked("/workspace")
-                    .expect("absolute cwd"),
+                cwd: workspace_dir(),
             }),
             wire_api: WireApi::Responses,
             query_params: Some(HashMap::from([(
@@ -490,5 +491,11 @@ mod tests {
             supports_websockets: true,
             aws: None,
         }
+    }
+
+    fn workspace_dir() -> AbsolutePathBuf {
+        AbsolutePathBuf::current_dir()
+            .expect("current dir")
+            .join("workspace")
     }
 }
