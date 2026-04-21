@@ -27,10 +27,6 @@ struct CapturedEvent {
 struct Reducer<'a> {
     bundle_dir: &'a Path,
     trace: RolloutTrace,
-    // The reduced item drops provider metadata, so keep the private raw item
-    // around only while reducing. It lets full request snapshots point back to
-    // the canonical item without writing the raw item into state.json.
-    raw_conversation_items: BTreeMap<String, Value>,
     code_cell_ids_by_runtime: BTreeMap<(String, String), String>,
     agent_result_observations: BTreeMap<String, AgentResultObservation>,
     next_conversation_item_ordinal: u64,
@@ -74,7 +70,6 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<RolloutTrace> {
             String::new(),
             started_at_unix_ms,
         ),
-        raw_conversation_items: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
         agent_result_observations: BTreeMap::new(),
         next_conversation_item_ordinal: 1,
@@ -686,21 +681,33 @@ impl Reducer<'_> {
             .map(|thread| thread.conversation_item_ids.clone())
             .unwrap_or_default();
 
-        // Requests carry the full model-visible input in thread order. Reuse
-        // the known prefix, then create new items for the tail.
-        //
-        // Example: if state has [A, B] and the next request sends [A, B, C],
-        // this returns [A, B, new C] instead of minting fresh copies of A/B.
-        let mut next_existing_index = 0;
+        // Requests carry a full snapshot of model-visible input. Most items
+        // should already exist from previous responses; request snapshots are
+        // where we learn that those canonical items were consumed again. Match
+        // by reduced content instead of raw JSON because reasoning can be
+        // replayed later with only `encrypted_content` after the response
+        // payload carried readable text.
+        let mut used_existing_item_ids: Vec<String> = Vec::new();
         for item in items {
-            if let Some(item_id) = thread_item_ids.get(next_existing_index)
-                && self
-                    .raw_conversation_items
-                    .get(item_id)
-                    .is_some_and(|existing| existing == &item)
-            {
+            let normalized = normalize_conversation_item(
+                "",
+                thread_id,
+                event.wall_time_unix_ms,
+                &item,
+                Vec::new(),
+                raw_payload_id,
+            );
+            let existing_item_id = thread_item_ids.iter().find(|item_id| {
+                !used_existing_item_ids.contains(*item_id)
+                    && self
+                        .trace
+                        .conversation_items
+                        .get(*item_id)
+                        .is_some_and(|item| conversation_item_matches(item, &normalized))
+            });
+            if let Some(item_id) = existing_item_id {
                 push_unique(&mut ids, item_id);
-                next_existing_index += 1;
+                used_existing_item_ids.push(item_id.clone());
                 continue;
             }
 
@@ -713,7 +720,7 @@ impl Reducer<'_> {
                 raw_payload_id,
             );
             push_unique(&mut ids, &item_id);
-            next_existing_index = thread_item_ids.len();
+            used_existing_item_ids.push(item_id);
         }
         if let Some(thread) = self.trace.threads.get_mut(thread_id) {
             extend_unique(&mut thread.conversation_item_ids, &ids);
@@ -801,7 +808,6 @@ impl Reducer<'_> {
             raw_payload_id,
         );
         normalized.codex_turn_id = codex_turn_id.map(str::to_string);
-        self.raw_conversation_items.insert(item_id.clone(), item);
         self.trace
             .conversation_items
             .insert(item_id.clone(), normalized);
@@ -1372,8 +1378,16 @@ fn normalize_conversation_item(
         .and_then(Value::as_str)
         .or_else(|| item.get("id").and_then(Value::as_str))
         .map(str::to_string);
-    let channel = if role == ConversationRole::Assistant && kind == "message" {
-        Some(ConversationChannel::Final)
+    let channel = if kind == "reasoning" {
+        Some(ConversationChannel::Analysis)
+    } else if role == ConversationRole::Assistant && kind == "message" {
+        match item.get("phase").and_then(Value::as_str) {
+            Some("analysis") => Some(ConversationChannel::Analysis),
+            Some("commentary") => Some(ConversationChannel::Commentary),
+            Some("final_answer") => Some(ConversationChannel::Final),
+            Some("summary") => Some(ConversationChannel::Summary),
+            _ => Some(ConversationChannel::Final),
+        }
     } else {
         None
     };
@@ -1445,12 +1459,7 @@ fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> Conversatio
                 text: tool_output_text(item.get("output")),
             }],
         },
-        "reasoning" => ConversationBody {
-            parts: vec![ConversationPart::PayloadRef {
-                label: "reasoning".to_string(),
-                raw_payload_id: raw_payload_id.to_string(),
-            }],
-        },
+        "reasoning" => reasoning_body(item, raw_payload_id),
         _ => ConversationBody {
             parts: vec![ConversationPart::Json {
                 summary: kind.to_string(),
@@ -1458,6 +1467,144 @@ fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> Conversatio
             }],
         },
     }
+}
+
+fn reasoning_body(item: &Value, raw_payload_id: &str) -> ConversationBody {
+    let mut parts = Vec::new();
+    parts.extend(
+        reasoning_texts(item, "content", &["reasoning_text", "text"])
+            .into_iter()
+            .map(|text| ConversationPart::Text { text }),
+    );
+    parts.extend(
+        reasoning_texts(item, "summary", &["summary_text"])
+            .into_iter()
+            .map(|text| ConversationPart::Summary { text }),
+    );
+
+    if let Some(encrypted_content) = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .filter(|encrypted_content| !encrypted_content.is_empty())
+    {
+        // The encrypted blob is the stable model-visible identity for many
+        // reasoning items. Keep it inline rather than only behind a raw payload
+        // ref so replayed snapshots can be compared by content.
+        parts.push(ConversationPart::Encoded {
+            label: "encrypted_content".to_string(),
+            value: encrypted_content.to_string(),
+        });
+    }
+
+    if parts.is_empty() {
+        // Malformed or empty reasoning should still be represented in the
+        // conversation graph; the raw payload keeps the original bytes.
+        parts.push(ConversationPart::PayloadRef {
+            label: "reasoning".to_string(),
+            raw_payload_id: raw_payload_id.to_string(),
+        });
+    }
+
+    ConversationBody { parts }
+}
+
+fn reasoning_texts(item: &Value, key: &str, accepted_types: &[&str]) -> Vec<String> {
+    item.get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            let part_type = part.get("type").and_then(Value::as_str)?;
+            if accepted_types.contains(&part_type) {
+                part.get("text").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn conversation_item_matches(existing: &ConversationItem, incoming: &ConversationItem) -> bool {
+    let body_matches = if existing.kind == ConversationItemKind::Reasoning
+        && incoming.kind == ConversationItemKind::Reasoning
+    {
+        reasoning_body_matches(&existing.body, &incoming.body)
+    } else {
+        conversation_body_matches(&existing.body, &incoming.body)
+    };
+
+    existing.role == incoming.role
+        && existing.channel == incoming.channel
+        && existing.kind == incoming.kind
+        && body_matches
+        && existing.call_id == incoming.call_id
+}
+
+fn conversation_body_matches(left: &ConversationBody, right: &ConversationBody) -> bool {
+    left.parts.len() == right.parts.len()
+        && left
+            .parts
+            .iter()
+            .zip(&right.parts)
+            .all(|(left, right)| match (left, right) {
+                (
+                    ConversationPart::Json {
+                        summary: left_summary,
+                        raw_payload_id: _,
+                    },
+                    ConversationPart::Json {
+                        summary: right_summary,
+                        raw_payload_id: _,
+                    },
+                ) => left_summary == right_summary,
+                _ => left == right,
+            })
+}
+
+fn reasoning_body_matches(left: &ConversationBody, right: &ConversationBody) -> bool {
+    if conversation_body_matches(left, right) {
+        return true;
+    }
+
+    // Responses may return readable reasoning on completion, while later
+    // request snapshots replay only the encrypted blob. The blob is the stable
+    // model-visible identity; readable text/summary is extra evidence that must
+    // agree whenever both sides provide it.
+    let Some(left_encoded) = reasoning_encoded_part(left) else {
+        return false;
+    };
+    let Some(right_encoded) = reasoning_encoded_part(right) else {
+        return false;
+    };
+
+    let left_readable = readable_reasoning_parts(left);
+    let right_readable = readable_reasoning_parts(right);
+    left_encoded == right_encoded
+        && (left_readable.is_empty()
+            || right_readable.is_empty()
+            || left_readable == right_readable)
+}
+
+fn reasoning_encoded_part(body: &ConversationBody) -> Option<(&str, &str)> {
+    body.parts.iter().find_map(|part| {
+        if let ConversationPart::Encoded { label, value } = part {
+            Some((label.as_str(), value.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
+fn readable_reasoning_parts(body: &ConversationBody) -> Vec<&ConversationPart> {
+    body.parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part,
+                ConversationPart::Text { .. } | ConversationPart::Summary { .. }
+            )
+        })
+        .collect()
 }
 
 fn conversation_item_contains_agent_result_message(
@@ -2207,6 +2354,134 @@ mod tests {
                 "thread_item_ids": ["item:1", "item:2", "item:3"],
                 "second_request_item_ids": ["item:1", "item:2", "item:3"],
                 "tool_call_item_ids": ["item:2"],
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn captures_analysis_reasoning_and_reuses_replayed_reasoning() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        std::fs::write(
+            temp.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "trace_id": "trace-test",
+                "started_at_unix_ms": 10,
+            }))?,
+        )?;
+        std::fs::create_dir(temp.path().join("payloads"))?;
+
+        let analysis_message = json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": "analysis",
+            "content": [{ "type": "output_text", "text": "analysis note" }]
+        });
+        let reasoning_item = json!({
+            "type": "reasoning",
+            "content": [
+                { "type": "reasoning_text", "text": "raw reasoning" },
+                { "type": "text", "text": "raw text reasoning" }
+            ],
+            "summary": [{ "type": "summary_text", "text": "short summary" }],
+            "encrypted_content": "encrypted-blob"
+        });
+        let replayed_reasoning_item = json!({
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "encrypted-blob"
+        });
+
+        std::fs::write(
+            temp.path().join("payloads/request.json"),
+            serde_json::to_vec(&json!({ "input": [] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/response.json"),
+            serde_json::to_vec(&json!({ "output_items": [analysis_message, reasoning_item] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/request-2.json"),
+            serde_json::to_vec(&json!({ "input": [replayed_reasoning_item] }))?,
+        )?;
+        let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
+        for (seq, event, fields) in [
+            (1, "codex.thread.started", json!({"thread.id": "thread-1"})),
+            (
+                2,
+                "codex.turn.started",
+                json!({"thread.id": "thread-1", "turn.id": "turn-1"}),
+            ),
+            (
+                3,
+                "codex.inference.started",
+                json!({
+                    "thread.id": "thread-1",
+                    "turn.id": "turn-1",
+                    "inference.id": "inf-1",
+                    "raw_payload.request.id": "raw_payload:request",
+                    "raw_payload.request.path": "payloads/request.json",
+                    "raw_payload.request.kind": "inference_request"
+                }),
+            ),
+            (
+                4,
+                "codex.inference.completed",
+                json!({
+                    "inference.id": "inf-1",
+                    "raw_payload.response.id": "raw_payload:response",
+                    "raw_payload.response.path": "payloads/response.json",
+                    "raw_payload.response.kind": "inference_response_summary"
+                }),
+            ),
+            (
+                5,
+                "codex.turn.started",
+                json!({"thread.id": "thread-1", "turn.id": "turn-2"}),
+            ),
+            (
+                6,
+                "codex.inference.started",
+                json!({
+                    "thread.id": "thread-1",
+                    "turn.id": "turn-2",
+                    "inference.id": "inf-2",
+                    "raw_payload.request.id": "raw_payload:request-2",
+                    "raw_payload.request.path": "payloads/request-2.json",
+                    "raw_payload.request.kind": "inference_request"
+                }),
+            ),
+        ] {
+            write_event(&mut events, seq, event, fields)?;
+        }
+
+        let trace = reduce_bundle_json(temp.path())?;
+
+        // The response has the rich readable reasoning; the next request only
+        // replays the encrypted blob. Both sightings should resolve to item:2.
+        assert_eq!(
+            json!({
+                "item_count": trace["conversation_items"].as_object().unwrap().len(),
+                "analysis_channel": trace["conversation_items"]["item:1"]["channel"].clone(),
+                "reasoning_parts": trace["conversation_items"]["item:2"]["body"]["parts"].clone(),
+                "first_response_items": trace["inference_calls"]["inf-1"]["response_item_ids"].clone(),
+                "second_request_items": trace["inference_calls"]["inf-2"]["request_item_ids"].clone(),
+            }),
+            json!({
+                "item_count": 2,
+                "analysis_channel": "analysis",
+                "reasoning_parts": [
+                    { "type": "text", "text": "raw reasoning" },
+                    { "type": "text", "text": "raw text reasoning" },
+                    { "type": "summary", "text": "short summary" },
+                    {
+                        "type": "encoded",
+                        "label": "encrypted_content",
+                        "value": "encrypted-blob"
+                    }
+                ],
+                "first_response_items": ["item:1", "item:2"],
+                "second_request_items": ["item:2"],
             })
         );
         Ok(())

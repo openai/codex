@@ -7,12 +7,16 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::trace_response_item_json;
 use codex_api::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -168,4 +172,30 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+fn trace_response_item_json_preserves_reasoning_text_content() {
+    let item = ResponseItem::Reasoning {
+        id: "rs-1".to_string(),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_string(),
+        }],
+        content: Some(vec![ReasoningItemContent::Text {
+            text: "raw reasoning".to_string(),
+        }]),
+        encrypted_content: Some("encoded".to_string()),
+    };
+
+    let normal = serde_json::to_value(&item).expect("response item serializes");
+    let traced = trace_response_item_json(&item);
+
+    // Normal response-item serialization is reused when constructing future
+    // model requests, so it may intentionally omit readable reasoning. Trace
+    // serialization must represent what the server returned instead.
+    assert_eq!(normal.get("content"), None);
+    assert_eq!(
+        traced["content"],
+        json!([{ "type": "text", "text": "raw reasoning" }])
+    );
 }

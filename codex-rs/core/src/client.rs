@@ -1704,6 +1704,36 @@ fn emit_inference_failed(trace_context: &CodexTraceContext, error: &str) {
     );
 }
 
+fn trace_response_item_json(item: &ResponseItem) -> serde_json::Value {
+    let mut value = serde_json::to_value(item).unwrap_or_else(|err| {
+        json!({
+            "serialization_error": err.to_string(),
+        })
+    });
+
+    if let ResponseItem::Reasoning {
+        content: Some(content),
+        ..
+    } = item
+        && let serde_json::Value::Object(object) = &mut value
+    {
+        // The protocol serializer is also used for model request construction
+        // and intentionally omits some readable reasoning content there. Trace
+        // payloads are evidence of what the server returned, so they must keep
+        // raw reasoning text even when normal request serialization would drop it.
+        object.insert(
+            "content".to_string(),
+            serde_json::to_value(content).unwrap_or_else(|err| {
+                json!({
+                    "serialization_error": err.to_string(),
+                })
+            }),
+        );
+    }
+
+    value
+}
+
 fn map_response_stream<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
@@ -1740,12 +1770,16 @@ where
                     token_usage,
                 }) => {
                     if let Some(trace_context) = &trace_context {
+                        let output_items = items_added
+                            .iter()
+                            .map(trace_response_item_json)
+                            .collect::<Vec<_>>();
                         let payload = codex_trace::write_payload(
                             "inference_response_summary",
                             &json!({
                                 "response_id": response_id,
                                 "token_usage": token_usage.clone(),
-                                "output_items": items_added.clone(),
+                                "output_items": output_items,
                             }),
                         );
                         emit_inference_completed(trace_context, &response_id, payload.as_ref());
