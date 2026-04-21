@@ -794,7 +794,6 @@ pub(crate) fn session_loop_termination_from_handle(
     .boxed()
     .shared()
 }
-
 async fn thread_title_from_state_db(
     state_db: Option<&state_db::StateDbHandle>,
     codex_home: &AbsolutePathBuf,
