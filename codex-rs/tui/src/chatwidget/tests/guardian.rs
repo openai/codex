@@ -128,10 +128,10 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
     let action = GuardianAssessmentAction::RequestPermissions {
         reason: Some("Need write access for generated report assets.".to_string()),
         permissions: RequestPermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                write: Some(vec![test_path_buf("/tmp/reports").abs()]),
-                ..FileSystemPermissions::default()
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![test_path_buf("/tmp/reports").abs()]),
+            )),
             ..RequestPermissionProfile::default()
         },
     };
