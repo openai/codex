@@ -94,15 +94,6 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
-            if let Some(thread) = running_thread.as_ref()
-                && let Err(err) = thread
-                    .account_goal_progress_before_external_mutation()
-                    .await
-            {
-                warn!(
-                    "failed to account active goal progress before app-server goal replacement: {err}"
-                );
-            }
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
                     previous_status = goal.as_ref().map(|goal| goal.status);
@@ -148,15 +139,6 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
-            if let Some(thread) = running_thread.as_ref()
-                && let Err(err) = thread
-                    .account_goal_progress_before_external_mutation()
-                    .await
-            {
-                warn!(
-                    "failed to account active goal progress before app-server goal update: {err}"
-                );
-            }
             previous_status = match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => goal.as_ref().map(|goal| goal.status),
                 Err(err) => {
@@ -189,7 +171,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let goal_id = goal.goal_id.clone();
         let goal = api_thread_goal_from_state(goal);
         let goal_status = goal.status;
         self.outgoing
@@ -204,19 +185,10 @@ impl CodexMessageProcessor {
         if self.config.features.enabled(Feature::Goals)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
-            let goal_may_have_in_flight_turn =
-                previous_status.is_some_and(goal_status_may_have_in_flight_turn);
-            let should_continue_active_goal = replacing_goal
-                || previous_status
-                    .is_some_and(|status| status != codex_state::ThreadGoalStatus::Active);
+            let should_continue_active_goal =
+                replacing_goal || previous_status != Some(codex_state::ThreadGoalStatus::Active);
             thread
-                .apply_goal_set_runtime_effects(
-                    goal_status.to_core(),
-                    goal_id,
-                    goal_may_have_in_flight_turn,
-                    replacing_goal,
-                    should_continue_active_goal,
-                )
+                .apply_goal_set_runtime_effects(goal_status.to_core(), should_continue_active_goal)
                 .await;
         }
     }
@@ -334,25 +306,6 @@ impl CodexMessageProcessor {
 
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         let thread_state = thread_state.lock().await;
-        let goal_may_have_in_flight_turn = match state_db.get_thread_goal(thread_id).await {
-            Ok(goal) => goal
-                .as_ref()
-                .is_some_and(|goal| goal_status_may_have_in_flight_turn(goal.status)),
-            Err(err) => {
-                self.send_internal_error(request_id, format!("failed to read thread goal: {err}"))
-                    .await;
-                return;
-            }
-        };
-        if goal_may_have_in_flight_turn
-            && let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread
-                .account_goal_progress_before_external_mutation()
-                .await
-        {
-            warn!("failed to account active goal progress before app-server goal clear: {err}");
-        }
-
         let cleared = match state_db.delete_thread_goal(thread_id).await {
             Ok(cleared) => cleared,
             Err(err) => {
@@ -362,10 +315,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if cleared
-            && goal_may_have_in_flight_turn
-            && let Some(thread) = running_thread.as_ref()
-        {
+        if cleared && let Some(thread) = running_thread.as_ref() {
             thread.apply_goal_clear_runtime_effects().await;
         }
 
@@ -525,13 +475,6 @@ fn thread_goal_status_from_state(status: codex_state::ThreadGoalStatus) -> Threa
     }
 }
 
-fn goal_status_may_have_in_flight_turn(status: codex_state::ThreadGoalStatus) -> bool {
-    matches!(
-        status,
-        codex_state::ThreadGoalStatus::Active | codex_state::ThreadGoalStatus::BudgetLimited
-    )
-}
-
 pub(super) fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
     ThreadGoal {
         thread_id: goal.thread_id.to_string(),
@@ -542,26 +485,5 @@ pub(super) fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> Threa
         time_used_seconds: goal.time_used_seconds,
         created_at: goal.created_at.timestamp(),
         updated_at: goal.updated_at.timestamp(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::goal_status_may_have_in_flight_turn;
-
-    #[test]
-    fn goal_status_may_have_in_flight_turn_includes_budget_limited_wrap_up() {
-        assert!(goal_status_may_have_in_flight_turn(
-            codex_state::ThreadGoalStatus::Active
-        ));
-        assert!(goal_status_may_have_in_flight_turn(
-            codex_state::ThreadGoalStatus::BudgetLimited
-        ));
-        assert!(!goal_status_may_have_in_flight_turn(
-            codex_state::ThreadGoalStatus::Paused
-        ));
-        assert!(!goal_status_may_have_in_flight_turn(
-            codex_state::ThreadGoalStatus::Complete
-        ));
     }
 }

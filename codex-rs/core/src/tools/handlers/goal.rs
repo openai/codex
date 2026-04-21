@@ -155,6 +155,10 @@ async fn handle_update_goal(
         ));
     }
     session
+        .account_thread_goal_progress(turn_context, GoalAccountingBoundary::CompletionTool)
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    session
         .set_thread_goal(
             turn_context,
             SetGoalRequest {
@@ -163,10 +167,6 @@ async fn handle_update_goal(
                 token_budget: None,
             },
         )
-        .await
-        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    session
-        .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
     let goal = session
