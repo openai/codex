@@ -16,5 +16,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+sha2 = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
