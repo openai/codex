@@ -5,6 +5,8 @@
 //! the main event loop remains single-threaded.
 
 use super::*;
+use codex_app_server_protocol::MarketplaceAddParams;
+use codex_app_server_protocol::MarketplaceAddResponse;
 
 impl App {
     pub(super) fn fetch_mcp_inventory(
@@ -102,6 +104,28 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::PluginDetailLoaded { cwd, result });
+        });
+    }
+
+    pub(super) fn fetch_marketplace_add(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        source: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let source_for_event = source.clone();
+            let result = fetch_marketplace_add(request_handle, cwd, source)
+                .await
+                .map_err(|err| format!("Failed to add marketplace: {err}"));
+            app_event_tx.send(AppEvent::MarketplaceAddLoaded {
+                cwd: cwd_for_event,
+                source: source_for_event,
+                result,
+            });
         });
     }
 
@@ -507,6 +531,25 @@ pub(super) async fn fetch_plugin_detail(
         .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
         .wrap_err("plugin/read failed in TUI")
+}
+
+pub(super) async fn fetch_marketplace_add(
+    request_handle: AppServerRequestHandle,
+    _cwd: PathBuf,
+    source: String,
+) -> Result<MarketplaceAddResponse> {
+    let request_id = RequestId::String(format!("marketplace-add-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::MarketplaceAdd {
+            request_id,
+            params: MarketplaceAddParams {
+                source,
+                ref_name: None,
+                sparse_paths: None,
+            },
+        })
+        .await
+        .wrap_err("marketplace/add failed in TUI")
 }
 
 pub(super) async fn fetch_plugin_install(
