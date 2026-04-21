@@ -497,6 +497,7 @@ impl App {
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
+                permission_profile,
                 model,
                 effort,
                 summary,
@@ -580,6 +581,7 @@ impl App {
                             approvals_reviewer
                                 .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
+                            permission_profile.clone(),
                             model.to_string(),
                             effort,
                             *summary,
