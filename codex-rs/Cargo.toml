@@ -52,6 +52,7 @@ members = [
     "protocol",
     "realtime-webrtc",
     "rollout",
+    "rollout-trace",
     "rmcp-client",
     "responses-api-proxy",
     "response-debug-context",

@@ -2803,6 +2803,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-rollout-trace"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-sandboxing"
 version = "0.0.0"
 dependencies = [
