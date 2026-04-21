@@ -201,6 +201,26 @@ mod tests {
         AbsolutePathBuf::current_dir().expect("current dir")
     }
 
+    fn managed_hooks_for_current_platform<P: Into<std::path::PathBuf>>(
+        managed_dir: P,
+        hooks: HookEventsToml,
+    ) -> ManagedHooksRequirementsToml {
+        let managed_dir = managed_dir.into();
+        ManagedHooksRequirementsToml {
+            managed_dir: if cfg!(windows) {
+                None
+            } else {
+                Some(managed_dir.clone())
+            },
+            windows_managed_dir: if cfg!(windows) {
+                Some(managed_dir)
+            } else {
+                None
+            },
+            hooks,
+        }
+    }
+
     #[tokio::test]
     async fn requirements_managed_hooks_execute_from_managed_dir() {
         let temp = tempdir().expect("create temp dir");
@@ -225,10 +245,9 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         )
         .expect("write managed hook script");
 
-        let managed_hooks = ManagedHooksRequirementsToml {
-            managed_dir: Some(managed_dir.clone().into()),
-            windows_managed_dir: None,
-            hooks: HookEventsToml {
+        let managed_hooks = managed_hooks_for_current_platform(
+            managed_dir.clone(),
+            HookEventsToml {
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![HookHandlerConfig::Command {
@@ -240,7 +259,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 }],
                 ..Default::default()
             },
-        };
+        );
         let config_layer_stack = ConfigLayerStack::new(
             Vec::new(),
             ConfigRequirements {
@@ -307,10 +326,9 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     fn requirements_managed_hooks_warn_when_managed_dir_is_missing() {
         let temp = tempdir().expect("create temp dir");
         let missing_dir = temp.path().join("missing-managed-hooks");
-        let managed_hooks = ManagedHooksRequirementsToml {
-            managed_dir: Some(missing_dir.clone()),
-            windows_managed_dir: None,
-            hooks: HookEventsToml {
+        let managed_hooks = managed_hooks_for_current_platform(
+            missing_dir.clone(),
+            HookEventsToml {
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
                     hooks: vec![HookHandlerConfig::Command {
@@ -322,7 +340,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 }],
                 ..Default::default()
             },
-        };
+        );
         let config_layer_stack = ConfigLayerStack::new(
             Vec::new(),
             ConfigRequirements {
