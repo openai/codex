@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::SessionSource;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
@@ -19,6 +20,7 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sha2::Digest as _;
 use sha2::Sha512;
 
@@ -48,6 +50,18 @@ pub struct AgentBillOfMaterials {
 pub struct GeneratedAgentKeyMaterial {
     pub private_key_pkcs8_base64: String,
     pub public_key_ssh: String,
+}
+
+/// Claims carried by an Agent Identity JWT.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AgentIdentityJwtClaims {
+    pub agent_runtime_id: String,
+    pub agent_private_key: String,
+    pub account_id: String,
+    pub chatgpt_user_id: String,
+    pub email: String,
+    pub plan_type: AccountPlanType,
+    pub chatgpt_account_is_fedramp: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +110,10 @@ pub fn authorization_header_for_agent_task(
     };
     let serialized_assertion = serialize_agent_assertion(&envelope)?;
     Ok(format!("AgentAssertion {serialized_assertion}"))
+}
+
+pub fn decode_agent_identity_jwt(jwt: &str) -> Result<AgentIdentityJwtClaims> {
+    decode_jwt_payload(jwt).context("failed to decode agent identity JWT")
 }
 
 pub fn sign_task_registration_payload(
@@ -295,6 +313,19 @@ fn serialize_agent_assertion(envelope: &AgentAssertionEnvelope) -> Result<String
     Ok(URL_SAFE_NO_PAD.encode(payload))
 }
 
+fn decode_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T> {
+    let mut parts = jwt.split('.');
+    let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
+        _ => anyhow::bail!("invalid JWT format"),
+    };
+
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .context("JWT payload is not valid base64url")?;
+    serde_json::from_slice(&payload_bytes).context("JWT payload is not valid JSON")
+}
+
 fn curve25519_secret_key_from_signing_key(signing_key: &SigningKey) -> Curve25519SecretKey {
     let digest = Sha512::digest(signing_key.to_bytes());
     let mut secret_key = [0u8; 32];
@@ -405,10 +436,46 @@ mod tests {
     }
 
     #[test]
+    fn decode_agent_identity_jwt_reads_claims() {
+        let jwt = jwt_with_payload(serde_json::json!({
+            "agent_runtime_id": "agent-runtime-id",
+            "agent_private_key": "private-key",
+            "account_id": "account-id",
+            "chatgpt_user_id": "user-id",
+            "email": "user@example.com",
+            "plan_type": "pro",
+            "chatgpt_account_is_fedramp": false,
+        }));
+
+        let claims = decode_agent_identity_jwt(&jwt).expect("JWT should decode");
+
+        assert_eq!(
+            claims,
+            AgentIdentityJwtClaims {
+                agent_runtime_id: "agent-runtime-id".to_string(),
+                agent_private_key: "private-key".to_string(),
+                account_id: "account-id".to_string(),
+                chatgpt_user_id: "user-id".to_string(),
+                email: "user@example.com".to_string(),
+                plan_type: AccountPlanType::Pro,
+                chatgpt_account_is_fedramp: false,
+            }
+        );
+    }
+
+    #[test]
     fn normalize_chatgpt_base_url_strips_codex_before_backend_api() {
         assert_eq!(
             normalize_chatgpt_base_url("https://chatgpt.com/codex"),
             "https://chatgpt.com/backend-api"
         );
+    }
+
+    fn jwt_with_payload(payload: serde_json::Value) -> String {
+        let encode = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
+        let header_b64 = encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload_b64 = encode(&serde_json::to_vec(&payload).expect("payload should serialize"));
+        let signature_b64 = encode(b"sig");
+        format!("{header_b64}.{payload_b64}.{signature_b64}")
     }
 }
