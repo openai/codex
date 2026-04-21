@@ -1,6 +1,11 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn test_user_config_path(file_name: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("codex-test").join(file_name))
+        .expect("test user config path should be absolute")
+}
+
 #[test]
 fn origins_use_canonical_key_aliases() {
     let layer = ConfigLayerEntry::new(
@@ -35,11 +40,8 @@ no_memories_if_mcp_or_web_search = true
 
 #[test]
 fn active_user_layer_is_highest_precedence_user_layer() {
-    let base_file = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/config.toml"))
-        .expect("absolute base path");
-    let profile_file =
-        AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/work.config.toml"))
-            .expect("absolute profile path");
+    let base_file = test_user_config_path("config.toml");
+    let profile_file = test_user_config_path("work.config.toml");
     let base_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User { file: base_file },
         toml::from_str(
@@ -84,11 +86,8 @@ approval_policy = "on-failure"
 
 #[test]
 fn with_user_config_updates_matching_user_layer_without_replacing_active_profile() {
-    let base_file = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/config.toml"))
-        .expect("absolute base path");
-    let profile_file =
-        AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/work.config.toml"))
-            .expect("absolute profile path");
+    let base_file = test_user_config_path("config.toml");
+    let profile_file = test_user_config_path("work.config.toml");
     let base_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User {
             file: base_file.clone(),
