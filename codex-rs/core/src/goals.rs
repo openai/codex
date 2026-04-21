@@ -443,27 +443,6 @@ impl Session {
             .lock()
             .await
             .clear_active_goal();
-        self.clear_queued_goal_continuations_for_next_turn().await;
-    }
-
-    pub(crate) async fn clear_stale_goal_continuations_for_next_turn(&self) {
-        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
-            self.clear_queued_goal_continuations_for_next_turn().await;
-            return;
-        }
-        let active_goal = match self.get_thread_goal().await {
-            Ok(Some(goal)) => goal.status == ThreadGoalStatus::Active,
-            Ok(None) => false,
-            Err(err) => {
-                tracing::warn!(
-                    "failed to read thread goal before clearing stale continuations: {err}"
-                );
-                false
-            }
-        };
-        if !active_goal {
-            self.clear_queued_goal_continuations_for_next_turn().await;
-        }
     }
 
     async fn clear_active_goal_accounting(&self, turn_context: &TurnContext) {
@@ -672,10 +651,8 @@ impl Session {
             .pause_active_thread_goal(self.conversation_id)
             .await?
         else {
-            self.clear_queued_goal_continuations_for_next_turn().await;
             return Ok(());
         };
-        self.clear_queued_goal_continuations_for_next_turn().await;
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.thread_goal_wall_clock_accounting
@@ -766,7 +743,6 @@ impl Session {
             .lock()
             .await
             .mark_active_goal(goal_id);
-        self.clear_queued_goal_continuations_for_next_turn().await;
         self.send_event_raw(Event {
             id: uuid::Uuid::new_v4().to_string(),
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
@@ -777,15 +753,6 @@ impl Session {
         })
         .await;
         Ok(true)
-    }
-
-    pub(crate) async fn queue_goal_continuation_if_active(self: &Arc<Self>) {
-        let _continuation_guard = self.goal_continuation_lock.lock().await;
-        let Some(items) = self.goal_continuation_items_if_active().await else {
-            return;
-        };
-        self.queue_response_items_for_next_turn(items).await;
-        tracing::info!("queued active goal continuation");
     }
 
     pub(crate) async fn goal_continuation_items_if_active(
@@ -803,9 +770,7 @@ impl Session {
             return None;
         }
         if self.has_queued_response_items_for_next_turn().await {
-            tracing::debug!(
-                "skipping active goal continuation because pending next-turn input already exists"
-            );
+            tracing::debug!("skipping active goal continuation because queued input exists");
             return None;
         }
         if self.has_trigger_turn_mailbox_items().await {
@@ -977,22 +942,6 @@ fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
             text: budget_limit_prompt(goal),
         }],
     }
-}
-
-pub(crate) fn is_goal_continuation_item(item: &ResponseInputItem) -> bool {
-    const GOAL_CONTINUATION_PROMPT_PREFIX: &str = "Continue working toward the active thread goal.";
-
-    let ResponseInputItem::Message { role, content } = item else {
-        return false;
-    };
-    role == "developer"
-        && content.iter().any(|item| {
-            matches!(
-                item,
-                ContentItem::InputText { text }
-                    if text.starts_with(GOAL_CONTINUATION_PROMPT_PREFIX)
-            )
-        })
 }
 
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
