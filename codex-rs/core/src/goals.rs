@@ -76,6 +76,7 @@ impl Session {
                     codex_state::ThreadGoalUpdate {
                         status,
                         token_budget: request.token_budget,
+                        expected_goal_id: None,
                     },
                 )
                 .await?

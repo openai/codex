@@ -104,6 +104,7 @@ impl CodexMessageProcessor {
                                 codex_state::ThreadGoalUpdate {
                                     status,
                                     token_budget: params.token_budget,
+                                    expected_goal_id: None,
                                 },
                             )
                             .await
@@ -140,6 +141,7 @@ impl CodexMessageProcessor {
                     codex_state::ThreadGoalUpdate {
                         status,
                         token_budget: params.token_budget,
+                        expected_goal_id: None,
                     },
                 )
                 .await
