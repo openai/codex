@@ -744,11 +744,18 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let args_elements = Self::slash_command_args_elements(rest, rest_offset, &text_elements);
+        let trimmed_start = rest.trim_start();
+        let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
+        let trimmed_rest = trimmed_start.trim_end();
+        let args_elements = Self::slash_command_args_elements(
+            trimmed_rest,
+            rest_offset + leading_trimmed,
+            &text_elements,
+        );
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
-                args: rest.trim().to_string(),
+                args: trimmed_rest.to_string(),
                 text_elements: args_elements,
                 local_images,
                 remote_image_urls,
