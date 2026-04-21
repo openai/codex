@@ -55,8 +55,6 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
-use crate::RolloutRecorderParams;
-use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -1806,7 +1804,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 #[tokio::test]
 async fn thread_rollback_drops_last_turn_from_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let rollout_path = attach_rollout_recorder(&sess).await;
+    let rollout_path = attach_thread_persistence(&sess).await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
     let turn_1 = vec![
@@ -1870,7 +1868,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
 #[tokio::test]
 async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    attach_thread_persistence(&sess).await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
     let turn_1 = vec![user_message("turn 1 user")];
@@ -1895,7 +1893,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
 }
 
 #[tokio::test]
-async fn thread_rollback_fails_without_persisted_rollout_path() {
+async fn thread_rollback_fails_without_persisted_thread_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
@@ -1907,7 +1905,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
         error_event.message,
-        "thread rollback requires a persisted rollout path"
+        "thread rollback requires persisted thread history"
     );
     assert_eq!(
         error_event.codex_error_info,
@@ -1919,7 +1917,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
 #[tokio::test]
 async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context_from_replay() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    attach_thread_persistence(&sess).await;
 
     let first_context_item = tc.to_turn_context_item();
     let first_turn_id = first_context_item
@@ -2028,7 +2026,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
 #[tokio::test]
 async fn thread_rollback_restores_cleared_reference_context_item_after_compaction() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    attach_thread_persistence(&sess).await;
 
     let first_context_item = tc.to_turn_context_item();
     let first_turn_id = first_context_item
@@ -2130,7 +2128,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
 #[tokio::test]
 async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let rollout_path = attach_rollout_recorder(&sess).await;
+    let rollout_path = attach_thread_persistence(&sess).await;
     let turn_context_item = tc.to_turn_context_item();
 
     sess.persist_rollout_items(&[
@@ -2672,34 +2670,32 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
     }
 }
 
-async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            session.conversation_id,
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+async fn attach_thread_persistence(session: &Session) -> PathBuf {
+    session
+        .services
+        .thread_store
+        .create_thread(CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        })
+        .await
+        .expect("create thread persistence");
     session.ensure_rollout_materialized().await;
     session
         .flush_rollout()
         .await
         .expect("attached rollout should flush");
-    rollout_path
+    session
+        .services
+        .thread_store
+        .rollout_path(session.conversation_id)
+        .await
+        .expect("load rollout path")
+        .expect("thread should have rollout path")
 }
 
 fn text_block(s: &str) -> serde_json::Value {
@@ -3088,6 +3084,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
                 .expect("create environment"),
         )),
         /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+        )),
     )
     .await;
 
@@ -3209,7 +3208,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
         agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
             config.as_ref(),
@@ -3232,9 +3230,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_store: codex_thread_store::LocalThreadStore::new(
+        thread_persistence_enabled: false,
+        thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
-        ),
+        )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
@@ -3411,6 +3410,9 @@ async fn make_session_with_config_and_rx(
                 .expect("create environment"),
         )),
         /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+        )),
     )
     .await?;
 
@@ -4312,7 +4314,6 @@ where
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
         agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
             config.as_ref(),
@@ -4335,9 +4336,10 @@ where
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_store: codex_thread_store::LocalThreadStore::new(
+        thread_persistence_enabled: false,
+        thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
-        ),
+        )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
@@ -5451,27 +5453,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
     }
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&session).await;
 
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
@@ -5519,27 +5501,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
     let (session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
     turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&session).await;
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
@@ -5598,27 +5560,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     let turn_context = previous_context
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&session).await;
 
     session
         .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(

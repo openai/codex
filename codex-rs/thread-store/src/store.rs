@@ -1,6 +1,9 @@
 use std::any::Any;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use codex_rollout::StateDbHandle;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -8,11 +11,10 @@ use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
-use crate::ResumeThreadRecorderParams;
+use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
-use crate::ThreadRecorder;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 
@@ -23,20 +25,29 @@ pub trait ThreadStore: Any + Send + Sync {
     /// make sense for a concrete store implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// Creates a new thread and returns a live recorder for future appends.
-    async fn create_thread(
-        &self,
-        params: CreateThreadParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>>;
+    /// Creates a new live thread.
+    async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()>;
 
-    /// Reopens a live recorder for an existing thread.
-    async fn resume_thread_recorder(
-        &self,
-        params: ResumeThreadRecorderParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>>;
+    /// Reopens an existing thread for live appends.
+    async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
 
-    /// Appends items to a stored thread outside the live-recorder path.
+    /// Appends items to a live thread.
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()>;
+
+    /// Materializes the thread if persistence is lazy, then persists all queued items.
+    async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes all queued items and returns once they are durable/readable.
+    async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes pending items and closes the live thread writer.
+    async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Returns the local rollout path when this thread is backed by a filesystem rollout.
+    async fn rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>>;
+
+    /// Returns the local state database handle when one is available.
+    async fn state_db(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<StateDbHandle>>;
 
     /// Loads persisted history for resume, fork, rollback, and memory jobs.
     async fn load_history(
