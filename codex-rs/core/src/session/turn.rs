@@ -16,6 +16,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
@@ -241,7 +242,7 @@ pub(crate) async fn run_turn(
         turn_context.sub_id.clone(),
     );
     let SkillInjections {
-        items: skill_items,
+        items: skill_injections,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
@@ -256,6 +257,11 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+
+    let skill_items: Vec<ResponseItem> = skill_injections
+        .iter()
+        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
+        .collect();
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);

@@ -1937,7 +1937,6 @@ dependencies = [
  "codex-feedback",
  "codex-git-utils",
  "codex-hooks",
- "codex-instructions",
  "codex-login",
  "codex-mcp",
  "codex-model-provider",
@@ -2070,7 +2069,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-config",
  "codex-exec-server",
- "codex-instructions",
  "codex-login",
  "codex-otel",
  "codex-protocol",
@@ -2313,15 +2311,6 @@ dependencies = [
  "codex-utils-home-dir",
  "pretty_assertions",
  "tempfile",
-]
-
-[[package]]
-name = "codex-instructions"
-version = "0.0.0"
-dependencies = [
- "codex-protocol",
- "pretty_assertions",
- "serde",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
@@ -153,7 +154,6 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::environment_context::EnvironmentContext;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -249,9 +249,9 @@ use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
 use crate::agents_md::AgentsMdManager;
+use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::instructions::UserInstructions;
 use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
@@ -2397,7 +2397,7 @@ impl Session {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
-                .serialize_to_text(),
+                .render(),
             );
         }
         if turn_context.config.include_environment_context {
@@ -2407,9 +2407,9 @@ impl Session {
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
-                    .serialize_to_xml(),
+                    .render(),
             );
         }
 

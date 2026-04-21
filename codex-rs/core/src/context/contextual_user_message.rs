@@ -1,50 +1,47 @@
-use codex_instructions::AGENTS_MD_FRAGMENT;
-use codex_instructions::ContextualUserFragmentDefinition;
-use codex_instructions::SKILL_FRAGMENT;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
-pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
-pub(crate) const USER_SHELL_COMMAND_CLOSE_TAG: &str = "</user_shell_command>";
-pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
-pub(crate) const TURN_ABORTED_CLOSE_TAG: &str = "</turn_aborted>";
-pub(crate) const SUBAGENT_NOTIFICATION_OPEN_TAG: &str = "<subagent_notification>";
-pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notification>";
+use super::EnvironmentContext;
+use super::FragmentRegistration;
+use super::FragmentRegistrationProxy;
+use super::SkillInstructions;
+use super::SubagentNotification;
+use super::TurnAborted;
+use super::UserInstructions;
+use super::UserShellCommand;
 
-pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT: ContextualUserFragmentDefinition =
-    ContextualUserFragmentDefinition::new(
-        ENVIRONMENT_CONTEXT_OPEN_TAG,
-        ENVIRONMENT_CONTEXT_CLOSE_TAG,
-    );
-pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ContextualUserFragmentDefinition =
-    ContextualUserFragmentDefinition::new(
-        USER_SHELL_COMMAND_OPEN_TAG,
-        USER_SHELL_COMMAND_CLOSE_TAG,
-    );
-pub(crate) const TURN_ABORTED_FRAGMENT: ContextualUserFragmentDefinition =
-    ContextualUserFragmentDefinition::new(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
-pub(crate) const SUBAGENT_NOTIFICATION_FRAGMENT: ContextualUserFragmentDefinition =
-    ContextualUserFragmentDefinition::new(
-        SUBAGENT_NOTIFICATION_OPEN_TAG,
-        SUBAGENT_NOTIFICATION_CLOSE_TAG,
-    );
+static USER_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<UserInstructions> =
+    FragmentRegistrationProxy::new();
+static ENVIRONMENT_CONTEXT_REGISTRATION: FragmentRegistrationProxy<EnvironmentContext> =
+    FragmentRegistrationProxy::new();
+static SKILL_INSTRUCTIONS_REGISTRATION: FragmentRegistrationProxy<SkillInstructions> =
+    FragmentRegistrationProxy::new();
+static USER_SHELL_COMMAND_REGISTRATION: FragmentRegistrationProxy<UserShellCommand> =
+    FragmentRegistrationProxy::new();
+static TURN_ABORTED_REGISTRATION: FragmentRegistrationProxy<TurnAborted> =
+    FragmentRegistrationProxy::new();
+static SUBAGENT_NOTIFICATION_REGISTRATION: FragmentRegistrationProxy<SubagentNotification> =
+    FragmentRegistrationProxy::new();
 
-const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
-    AGENTS_MD_FRAGMENT,
-    ENVIRONMENT_CONTEXT_FRAGMENT,
-    SKILL_FRAGMENT,
-    USER_SHELL_COMMAND_FRAGMENT,
-    TURN_ABORTED_FRAGMENT,
-    SUBAGENT_NOTIFICATION_FRAGMENT,
+static CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
+    &USER_INSTRUCTIONS_REGISTRATION,
+    &ENVIRONMENT_CONTEXT_REGISTRATION,
+    &SKILL_INSTRUCTIONS_REGISTRATION,
+    &USER_SHELL_COMMAND_REGISTRATION,
+    &TURN_ABORTED_REGISTRATION,
+    &SUBAGENT_NOTIFICATION_REGISTRATION,
+];
+
+static MEMORY_EXCLUDED_CONTEXTUAL_USER_FRAGMENTS: &[&dyn FragmentRegistration] = &[
+    &USER_INSTRUCTIONS_REGISTRATION,
+    &SKILL_INSTRUCTIONS_REGISTRATION,
 ];
 
 fn is_standard_contextual_user_text(text: &str) -> bool {
     CONTEXTUAL_USER_FRAGMENTS
         .iter()
-        .any(|definition| definition.matches_text(text))
+        .any(|fragment| fragment.matches_text(text))
 }
 
 /// Returns whether a contextual user fragment should be omitted from memory
@@ -59,7 +56,9 @@ pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &Content
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    AGENTS_MD_FRAGMENT.matches_text(text) || SKILL_FRAGMENT.matches_text(text)
+    MEMORY_EXCLUDED_CONTEXTUAL_USER_FRAGMENTS
+        .iter()
+        .any(|fragment| fragment.matches_text(text))
 }
 
 pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {

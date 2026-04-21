@@ -11,6 +11,8 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::config_loader::project_trust_key;
+use crate::context::ContextualUserFragment;
+use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -6312,7 +6314,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
                 let ContentItem::InputText { text } = content_item else {
                     return false;
                 };
-                text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                TurnAborted::matches_text(text)
             })
         }),
         "expected a model-visible turn aborted marker in history after interrupt"
