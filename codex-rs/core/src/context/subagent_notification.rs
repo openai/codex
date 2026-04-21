@@ -23,10 +23,12 @@ impl ContextualUserFragment for SubagentNotification {
     const END_MARKER: &'static str = "</subagent_notification>";
 
     fn body(&self) -> String {
-        serde_json::json!({
-            "agent_path": &self.agent_reference,
-            "status": &self.status,
-        })
-        .to_string()
+        format!(
+            "\n{}",
+            serde_json::json!({
+                "agent_path": &self.agent_reference,
+                "status": &self.status,
+            })
+        )
     }
 }

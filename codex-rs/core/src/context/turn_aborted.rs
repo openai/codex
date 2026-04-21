@@ -21,6 +21,6 @@ impl ContextualUserFragment for TurnAborted {
     const END_MARKER: &'static str = "</turn_aborted>";
 
     fn body(&self) -> String {
-        self.guidance.clone()
+        format!("\n{}", self.guidance)
     }
 }

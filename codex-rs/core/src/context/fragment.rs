@@ -1,6 +1,5 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use std::borrow::Cow;
 use std::marker::PhantomData;
 
 /// Type-erased registration for a contextual user fragment.
@@ -32,14 +31,13 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// Context payload that is injected as a user-authored message fragment.
 ///
 /// Implementations own the response role, start/end markers used to recognize
-/// the fragment, and provide only the fragment body. The default helpers wrap
-/// that body and convert it into the response item shape expected by model
-/// input assembly.
+/// the fragment, and provide the fragment body appended directly after the
+/// start marker. The default helpers wrap that body and convert it into the
+/// response item shape expected by model input assembly.
 pub(crate) trait ContextualUserFragment {
     const ROLE: &'static str;
     const START_MARKER: &'static str;
     const END_MARKER: &'static str;
-    const BODY_SEPARATOR: &'static str = "\n";
 
     fn body(&self) -> String;
 
@@ -58,18 +56,12 @@ pub(crate) trait ContextualUserFragment {
         starts_with_marker && ends_with_marker
     }
 
-    fn start_marker_suffix(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
-    }
-
     fn render(&self) -> String {
         format!(
-            "{}{}{}{}\n{}",
+            "{}{}\n{}",
             Self::START_MARKER,
-            self.start_marker_suffix(),
-            Self::BODY_SEPARATOR,
             self.body(),
-            Self::END_MARKER,
+            Self::END_MARKER
         )
     }
 

@@ -200,7 +200,7 @@ impl ContextualUserFragment for EnvironmentContext {
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
             lines.push("  </subagents>".to_string());
         }
-        lines.join("\n")
+        format!("\n{}", lines.join("\n"))
     }
 }
 
