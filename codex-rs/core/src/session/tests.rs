@@ -55,6 +55,8 @@ use tracing::Span;
 use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::session::turn_context::TurnStartTranscriptInput;
+use crate::session::turn_context::TurnStartUserPromptSubmitOutcome;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -5706,6 +5708,56 @@ async fn abort_regular_task_records_prompt_before_interrupt_marker() {
         crate::tasks::interrupted_turn_history_marker(),
     ];
     assert_eq!(history.raw_items(), expected.as_slice());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn abort_regular_task_replays_context_without_replaying_prompt() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let response_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    sess.record_conversation_items(tc.as_ref(), std::slice::from_ref(&response_item))
+        .await;
+    tc.lock_turn_start_transcript_inputs()
+        .push(TurnStartTranscriptInput {
+            input,
+            user_prompt_submit_outcome: Some(TurnStartUserPromptSubmitOutcome {
+                should_stop: false,
+                additional_contexts: vec!["hook context".to_string()],
+            }),
+            user_prompt_recorded: true,
+        });
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let history = sess.clone_history().await;
+    let expected = vec![
+        response_item,
+        DeveloperInstructions::new("hook context".to_string()).into(),
+        crate::tasks::interrupted_turn_history_marker(),
+    ];
+    assert_eq!(history.raw_items(), expected.as_slice());
+    assert!(tc.lock_turn_start_transcript_inputs().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

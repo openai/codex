@@ -28,6 +28,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnStartTranscriptInput;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -302,10 +303,12 @@ impl Session {
 
         if task_kind == TaskKind::Regular && !input.is_empty() {
             turn_context
-                .turn_start_transcript_inputs
-                .lock()
-                .await
-                .push(input.clone());
+                .lock_turn_start_transcript_inputs()
+                .push(TurnStartTranscriptInput {
+                    input: input.clone(),
+                    user_prompt_submit_outcome: None,
+                    user_prompt_recorded: false,
+                });
         }
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -637,12 +640,10 @@ impl Session {
         task.handle.abort();
 
         if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
-            let has_turn_start_transcript_input = !task
-                .turn_context
-                .turn_start_transcript_inputs
-                .lock()
-                .await
-                .is_empty();
+            let has_turn_start_transcript_input = {
+                let inputs = task.turn_context.lock_turn_start_transcript_inputs();
+                !inputs.is_empty()
+            };
             if has_turn_start_transcript_input {
                 let _ = drain_turn_start_transcript_inputs(self, &task.turn_context).await;
             }

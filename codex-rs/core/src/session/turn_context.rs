@@ -24,6 +24,19 @@ impl TurnSkillsContext {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TurnStartTranscriptInput {
+    pub(crate) input: Vec<UserInput>,
+    pub(crate) user_prompt_submit_outcome: Option<TurnStartUserPromptSubmitOutcome>,
+    pub(crate) user_prompt_recorded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TurnStartUserPromptSubmitOutcome {
+    pub(crate) should_stop: bool,
+    pub(crate) additional_contexts: Vec<String>,
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -71,10 +84,18 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
-    pub(crate) turn_start_transcript_inputs: Arc<Mutex<Vec<Vec<UserInput>>>>,
+    pub(crate) turn_start_transcript_inputs: Arc<std::sync::Mutex<Vec<TurnStartTranscriptInput>>>,
     pub(crate) transcript_serialization_lock: Arc<Semaphore>,
 }
 impl TurnContext {
+    pub(crate) fn lock_turn_start_transcript_inputs(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Vec<TurnStartTranscriptInput>> {
+        self.turn_start_transcript_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info
@@ -447,7 +468,7 @@ impl Session {
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
-            turn_start_transcript_inputs: Arc::new(Mutex::new(Vec::new())),
+            turn_start_transcript_inputs: Arc::new(std::sync::Mutex::new(Vec::new())),
             transcript_serialization_lock: Arc::new(Semaphore::new(1)),
         }
     }

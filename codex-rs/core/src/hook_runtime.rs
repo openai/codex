@@ -35,6 +35,7 @@ use serde_json::Value;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnStartUserPromptSubmitOutcome;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -277,31 +278,48 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
         return false;
     };
     if run_pending_session_start_hooks(sess, turn_context).await {
-        turn_context
-            .turn_start_transcript_inputs
-            .lock()
-            .await
-            .clear();
+        turn_context.lock_turn_start_transcript_inputs().clear();
         return false;
     }
 
     loop {
-        let input = {
-            let inputs = turn_context.turn_start_transcript_inputs.lock().await;
+        let queued_input = {
+            let inputs = turn_context.lock_turn_start_transcript_inputs();
             inputs.first().cloned()
         };
-        let Some(input) = input else {
+        let Some(queued_input) = queued_input else {
             break;
         };
+        let input = queued_input.input;
 
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.into();
-        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
-            sess,
-            turn_context,
-            UserMessageItem::new(&input).message(),
-        )
-        .await;
+        let user_prompt_submit_outcome = match queued_input.user_prompt_submit_outcome {
+            Some(outcome) => outcome,
+            None => {
+                let outcome = run_user_prompt_submit_hooks(
+                    sess,
+                    turn_context,
+                    UserMessageItem::new(&input).message(),
+                )
+                .await;
+                let outcome = TurnStartUserPromptSubmitOutcome {
+                    should_stop: outcome.should_stop,
+                    additional_contexts: outcome.additional_contexts,
+                };
+                {
+                    let mut inputs = turn_context.lock_turn_start_transcript_inputs();
+                    if let Some(queued) = inputs.first_mut()
+                        && queued.input == input
+                        && queued.user_prompt_submit_outcome.is_none()
+                    {
+                        queued.user_prompt_submit_outcome = Some(outcome.clone());
+                    }
+                }
+                outcome
+            }
+        };
+
         if user_prompt_submit_outcome.should_stop {
             record_additional_contexts(
                 sess,
@@ -309,27 +327,42 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
                 user_prompt_submit_outcome.additional_contexts,
             )
             .await;
-            let mut inputs = turn_context.turn_start_transcript_inputs.lock().await;
-            if inputs.first().is_some_and(|queued| queued == &input) {
+            let mut inputs = turn_context.lock_turn_start_transcript_inputs();
+            if inputs.first().is_some_and(|queued| queued.input == input) {
                 inputs.remove(0);
             }
             return false;
         }
 
-        sess.record_user_prompt_and_emit_turn_item(
-            turn_context.as_ref(),
-            input.as_slice(),
-            response_item,
-        )
-        .await;
+        if !queued_input.user_prompt_recorded {
+            sess.record_conversation_items(
+                turn_context.as_ref(),
+                std::slice::from_ref(&response_item),
+            )
+            .await;
+            {
+                let mut inputs = turn_context.lock_turn_start_transcript_inputs();
+                if let Some(queued) = inputs.first_mut()
+                    && queued.input == input
+                {
+                    queued.user_prompt_recorded = true;
+                }
+            }
+            let turn_item = TurnItem::UserMessage(UserMessageItem::new(&input));
+            sess.emit_turn_item_started(turn_context.as_ref(), &turn_item)
+                .await;
+            sess.emit_turn_item_completed(turn_context.as_ref(), turn_item)
+                .await;
+            sess.ensure_rollout_materialized().await;
+        }
         record_additional_contexts(
             sess,
             turn_context,
             user_prompt_submit_outcome.additional_contexts,
         )
         .await;
-        let mut inputs = turn_context.turn_start_transcript_inputs.lock().await;
-        if inputs.first().is_some_and(|queued| queued == &input) {
+        let mut inputs = turn_context.lock_turn_start_transcript_inputs();
+        if inputs.first().is_some_and(|queued| queued.input == input) {
             inputs.remove(0);
         }
     }
