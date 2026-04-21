@@ -187,17 +187,16 @@ impl ToolOrchestrator {
 
         // 2) First attempt under the selected sandbox.
         let managed_network_active = turn_ctx.network.is_some();
-        let initial_sandbox =
-            match tool.sandbox_mode_for_first_attempt(req, &turn_ctx.file_system_sandbox_policy) {
-                SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
-                SandboxOverride::NoOverride => self.sandbox.select_initial(
-                    &turn_ctx.file_system_sandbox_policy,
-                    turn_ctx.network_sandbox_policy,
-                    tool.sandbox_preference(),
-                    turn_ctx.windows_sandbox_level,
-                    managed_network_active,
-                ),
-            };
+        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
+            SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
+            SandboxOverride::NoOverride => self.sandbox.select_initial(
+                &turn_ctx.file_system_sandbox_policy,
+                turn_ctx.network_sandbox_policy,
+                tool.sandbox_preference(),
+                turn_ctx.windows_sandbox_level,
+                managed_network_active,
+            ),
+        };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
