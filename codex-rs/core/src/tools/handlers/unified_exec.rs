@@ -322,7 +322,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
-                            raw_command,
+                            raw_command: raw_command.clone(),
                             hook_command: raw_command.clone(),
                             process_id,
                             yield_time_ms,
@@ -358,6 +358,7 @@ impl ToolHandler for UnifiedExecHandler {
                             exit_code: Some(output.exit_code),
                             original_token_count: Some(original_token_count),
                             session_command: Some(session_command),
+                            raw_command: Some(raw_command),
                         }
                     }
                     Err(err) => {
