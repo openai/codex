@@ -17,7 +17,6 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
-pub use api_bridge::auth_provider_from_auth;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
 pub use auth::AuthManager;
