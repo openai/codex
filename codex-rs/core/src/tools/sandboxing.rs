@@ -143,6 +143,8 @@ pub(crate) struct PermissionRequestPayload {
 pub(crate) enum ExecApprovalRequirement {
     /// No approval required for this tool call.
     Skip {
+        /// Whether at least one concrete execpolicy rule matched this command.
+        execpolicy_matched: bool,
         /// The first attempt should skip sandboxing (e.g., when explicitly
         /// greenlit by policy).
         bypass_sandbox: bool,
@@ -152,13 +154,19 @@ pub(crate) enum ExecApprovalRequirement {
     },
     /// Approval required for this tool call.
     NeedsApproval {
+        /// Whether at least one concrete execpolicy rule matched this command.
+        execpolicy_matched: bool,
         reason: Option<String>,
         /// Proposed execpolicy amendment to skip future approvals for similar commands
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     /// Execution forbidden for this tool call.
-    Forbidden { reason: String },
+    Forbidden {
+        /// Whether at least one concrete execpolicy rule matched this command.
+        execpolicy_matched: bool,
+        reason: String,
+    },
 }
 
 impl ExecApprovalRequirement {
@@ -173,6 +181,20 @@ impl ExecApprovalRequirement {
                 ..
             } => Some(prefix),
             _ => None,
+        }
+    }
+
+    pub fn execpolicy_matched(&self) -> bool {
+        match self {
+            Self::Skip {
+                execpolicy_matched, ..
+            }
+            | Self::NeedsApproval {
+                execpolicy_matched, ..
+            }
+            | Self::Forbidden {
+                execpolicy_matched, ..
+            } => *execpolicy_matched,
         }
     }
 }
@@ -205,15 +227,18 @@ pub(crate) fn default_exec_approval_requirement(
         )
     {
         ExecApprovalRequirement::Forbidden {
+            execpolicy_matched: false,
             reason: "approval policy disallowed sandbox approval prompt".to_string(),
         }
     } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
+            execpolicy_matched: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
     } else {
         ExecApprovalRequirement::Skip {
+            execpolicy_matched: false,
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         }

@@ -50,6 +50,7 @@ pub(crate) async fn apply_patch(
             action,
             auto_approved: !user_explicitly_approved,
             exec_approval_requirement: ExecApprovalRequirement::Skip {
+                execpolicy_matched: false,
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
@@ -62,6 +63,7 @@ pub(crate) async fn apply_patch(
                 action,
                 auto_approved: false,
                 exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+                    execpolicy_matched: false,
                     reason: None,
                     proposed_execpolicy_amendment: None,
                 },

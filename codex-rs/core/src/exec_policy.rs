@@ -267,6 +267,7 @@ impl ExecPolicyManager {
             &exec_policy_fallback,
             &match_options,
         );
+        let execpolicy_matched = evaluation.matched_rules.iter().any(is_policy_match);
 
         let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
             prefix_rule.as_ref(),
@@ -279,6 +280,7 @@ impl ExecPolicyManager {
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
+                execpolicy_matched,
                 reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
@@ -287,9 +289,11 @@ impl ExecPolicyManager {
                 });
                 match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
                     Some(reason) => ExecApprovalRequirement::Forbidden {
+                        execpolicy_matched,
                         reason: reason.to_string(),
                     },
                     None => ExecApprovalRequirement::NeedsApproval {
+                        execpolicy_matched,
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
                             if auto_amendment_allowed {
@@ -304,6 +308,7 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
+                execpolicy_matched,
                 // Bypass sandbox only when every parsed command segment is
                 // explicitly allowed by execpolicy.
                 bypass_sandbox: commands.iter().all(|command| {

@@ -124,6 +124,7 @@ impl ToolOrchestrator {
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &turn_ctx.file_system_sandbox_policy)
         });
+        let execpolicy_matched = requirement.execpolicy_matched();
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 otel.tool_decision(
@@ -131,9 +132,10 @@ impl ToolOrchestrator {
                     otel_ci,
                     &ReviewDecision::Approved,
                     ToolDecisionSource::Config,
+                    Some(execpolicy_matched),
                 );
             }
-            ExecApprovalRequirement::Forbidden { reason } => {
+            ExecApprovalRequirement::Forbidden { reason, .. } => {
                 return Err(ToolError::Rejected(reason));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
@@ -154,6 +156,7 @@ impl ToolOrchestrator {
                     tool_ctx,
                     use_guardian,
                     &otel,
+                    Some(execpolicy_matched),
                 )
                 .await?;
 
@@ -387,6 +390,7 @@ impl ToolOrchestrator {
         tool_ctx: &ToolCtx,
         use_guardian: bool,
         otel: &codex_otel::SessionTelemetry,
+        execpolicy_matched: Option<bool>,
     ) -> Result<ReviewDecision, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
@@ -407,6 +411,7 @@ impl ToolOrchestrator {
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
+                        execpolicy_matched,
                     );
                     return Ok(decision);
                 }
@@ -417,6 +422,7 @@ impl ToolOrchestrator {
                         &tool_ctx.call_id,
                         &decision,
                         ToolDecisionSource::Config,
+                        execpolicy_matched,
                     );
                     return Err(ToolError::Rejected(message));
                 }
@@ -435,6 +441,7 @@ impl ToolOrchestrator {
             &tool_ctx.call_id,
             &decision,
             otel_source,
+            execpolicy_matched,
         );
         Ok(decision)
     }

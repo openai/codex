@@ -15,6 +15,7 @@ fn external_sandbox_skips_exec_approval_on_request() {
             &FileSystemSandboxPolicy::from(&sandbox_policy),
         ),
         ExecApprovalRequirement::Skip {
+            execpolicy_matched: false,
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         }
@@ -30,6 +31,7 @@ fn restricted_sandbox_requires_exec_approval_on_request() {
             &FileSystemSandboxPolicy::from(&sandbox_policy)
         ),
         ExecApprovalRequirement::NeedsApproval {
+            execpolicy_matched: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -53,6 +55,7 @@ fn default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disabl
     assert_eq!(
         requirement,
         ExecApprovalRequirement::Forbidden {
+            execpolicy_matched: false,
             reason: "approval policy disallowed sandbox approval prompt".to_string(),
         }
     );
@@ -75,6 +78,7 @@ fn default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_a
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            execpolicy_matched: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -87,6 +91,7 @@ fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_ski
         sandbox_override_for_first_attempt(
             SandboxPermissions::WithAdditionalPermissions,
             &ExecApprovalRequirement::Skip {
+                execpolicy_matched: false,
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
             },
@@ -101,6 +106,7 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
         sandbox_override_for_first_attempt(
             SandboxPermissions::RequireEscalated,
             &ExecApprovalRequirement::Skip {
+                execpolicy_matched: false,
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },

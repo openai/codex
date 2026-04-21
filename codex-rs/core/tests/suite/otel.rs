@@ -1040,10 +1040,12 @@ fn tool_decision_assertion<'a>(
     call_id: &'a str,
     expected_decision: &'a str,
     expected_source: &'a str,
+    expected_execpolicy_matched: &'a str,
 ) -> impl Fn(&[&str]) -> Result<(), String> + 'a {
     let call_id = call_id.to_string();
     let expected_decision = expected_decision.to_string();
     let expected_source = expected_source.to_string();
+    let expected_execpolicy_matched = expected_execpolicy_matched.to_string();
 
     move |lines: &[&str]| {
         let line = lines
@@ -1062,6 +1064,11 @@ fn tool_decision_assertion<'a>(
         }
         if !lower.contains(&format!("source={expected_source}")) {
             return Err(format!("unexpected source for {expected_source}"));
+        }
+        if !lower.contains(&format!("execpolicy_matched={expected_execpolicy_matched}")) {
+            return Err(format!(
+                "unexpected execpolicy_matched for {call_id}: expected {expected_execpolicy_matched}"
+            ));
         }
 
         Ok(())
@@ -1122,6 +1129,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         "auto_config_call",
         "approved",
         "config",
+        "false",
     ));
 }
 
@@ -1189,6 +1197,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         "user_approved_call",
         "approved",
         "user",
+        "false",
     ));
 }
 
@@ -1256,6 +1265,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         "user_approved_session_call",
         "approvedforsession",
         "user",
+        "false",
     ));
 }
 
@@ -1323,6 +1333,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         "sandbox_retry_call",
         "approved",
         "user",
+        "false",
     ));
 }
 
@@ -1390,6 +1401,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         "user_denied_call",
         "denied",
         "user",
+        "false",
     ));
 }
 
@@ -1457,6 +1469,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         "sandbox_session_call",
         "approvedforsession",
         "user",
+        "false",
     ));
 }
 
@@ -1525,5 +1538,6 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         "sandbox_deny_call",
         "denied",
         "user",
+        "false",
     ));
 }
