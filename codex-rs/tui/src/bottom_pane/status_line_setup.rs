@@ -375,7 +375,7 @@ mod tests {
     fn parse_status_line_items_accepts_title_only_variants() {
         let items = ["status", "task-progress"]
             .into_iter()
-            .map(|id| id.parse::<StatusLineItem>())
+            .map(str::parse::<StatusLineItem>)
             .collect::<Result<Vec<_>, _>>();
         assert_eq!(
             items,
