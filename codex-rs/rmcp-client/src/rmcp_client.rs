@@ -451,7 +451,6 @@ where
         StreamableHttpError::MissingSessionIdInResponse => {
             StreamableHttpError::MissingSessionIdInResponse
         }
-        #[cfg(feature = "auth")]
         StreamableHttpError::Auth(error) => StreamableHttpError::Auth(error),
         StreamableHttpError::AuthRequired(error) => StreamableHttpError::AuthRequired(error),
     }
