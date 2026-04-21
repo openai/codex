@@ -213,6 +213,7 @@ use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCre
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::ThreadConfigLoader;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
@@ -479,6 +480,7 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    thread_config_loader: Arc<dyn ThreadConfigLoader>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
@@ -639,6 +641,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     pub(crate) runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
 }
@@ -726,6 +729,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            thread_config_loader,
             feedback,
             log_db,
         } = args;
@@ -740,6 +744,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            thread_config_loader,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
@@ -2433,12 +2438,14 @@ impl CodexMessageProcessor {
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let thread_config_loader = Arc::clone(&self.thread_config_loader);
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
                 cli_overrides,
                 runtime_feature_enablement,
                 cloud_requirements,
+                thread_config_loader,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
@@ -2515,6 +2522,7 @@ impl CodexMessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         runtime_feature_enablement: BTreeMap<String, bool>,
         cloud_requirements: CloudRequirementsLoader,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -2532,6 +2540,7 @@ impl CodexMessageProcessor {
             &cli_overrides,
             config_overrides.clone(),
             typesafe_overrides.clone(),
+            Arc::clone(&thread_config_loader),
             &cloud_requirements,
             &listener_task_context.codex_home,
             &runtime_feature_enablement,
@@ -2613,6 +2622,7 @@ impl CodexMessageProcessor {
                 cli_overrides_for_reload,
                 config_overrides,
                 typesafe_overrides,
+                thread_config_loader,
                 &cloud_requirements,
                 &listener_task_context.codex_home,
                 &runtime_feature_enablement,
@@ -5212,62 +5222,62 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: GetConversationSummaryParams,
     ) {
-        if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
-            && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
-        {
-            let response = GetConversationSummaryResponse { summary };
-            self.outgoing.send_response(request_id, response).await;
-            return;
-        }
-
-        let path = match params {
-            GetConversationSummaryParams::RolloutPath { rollout_path } => {
-                if rollout_path.is_relative() {
-                    self.config.codex_home.join(&rollout_path).to_path_buf()
-                } else {
-                    rollout_path
-                }
-            }
-            GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &conversation_id.to_string(),
-                )
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let read_result = match params {
+            GetConversationSummaryParams::ThreadId { conversation_id } => self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: conversation_id,
+                    include_archived: true,
+                    include_history: false,
+                })
                 .await
-                {
-                    Ok(Some(p)) => p,
-                    _ => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "no rollout found for conversation id {conversation_id}"
-                            ),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request_id, error).await;
-                        return;
-                    }
-                }
+                .map_err(|err| conversation_summary_thread_id_read_error(conversation_id, err)),
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                let Some(local_thread_store) = self
+                    .thread_store
+                    .as_any()
+                    .downcast_ref::<LocalThreadStore>()
+                else {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message:
+                            "rollout path queries are only supported with the local thread store"
+                                .to_string(),
+                        data: None,
+                    };
+                    return self.outgoing.send_error(request_id, error).await;
+                };
+
+                local_thread_store
+                    .read_thread_by_rollout_path(
+                        rollout_path.clone(),
+                        /*include_archived*/ true,
+                        /*include_history*/ false,
+                    )
+                    .await
+                    .map_err(|err| conversation_summary_rollout_path_read_error(&rollout_path, err))
             }
         };
 
-        let fallback_provider = self.config.model_provider_id.as_str();
-        match read_summary_from_rollout(&path, fallback_provider).await {
-            Ok(summary) => {
+        match read_result {
+            Ok(stored_thread) => {
+                let Some(summary) = summary_from_stored_thread(stored_thread, fallback_provider)
+                else {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message:
+                            "failed to load conversation summary: thread is missing rollout path"
+                                .to_string(),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                };
                 let response = GetConversationSummaryResponse { summary };
                 self.outgoing.send_response(request_id, response).await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!(
-                        "failed to load conversation summary from {}: {}",
-                        path.display(),
-                        err
-                    ),
-                    data: None,
-                };
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -6528,6 +6538,7 @@ impl CodexMessageProcessor {
                 &cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
+                self.thread_config_loader.as_ref(),
             )
             .await
             {
@@ -9452,6 +9463,7 @@ async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
+    thread_config_loader: Arc<dyn ThreadConfigLoader>,
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
     runtime_feature_enablement: &BTreeMap<String, bool>,
@@ -9472,6 +9484,7 @@ async fn derive_config_from_params(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
+        .thread_config_loader(thread_config_loader)
         .build()
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
@@ -9628,6 +9641,61 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
         err => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("failed to list threads: {err}"),
+            data: None,
+        },
+    }
+}
+
+fn conversation_summary_thread_id_read_error(
+    conversation_id: ThreadId,
+    err: ThreadStoreError,
+) -> JSONRPCErrorError {
+    let no_rollout_message = format!("no rollout found for thread id {conversation_id}");
+    match err {
+        ThreadStoreError::InvalidRequest { message } if message == no_rollout_message => {
+            conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::ThreadNotFound { thread_id } if thread_id == conversation_id => {
+            conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        },
+        err => JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to load conversation summary for {conversation_id}: {err}"),
+            data: None,
+        },
+    }
+}
+
+fn conversation_summary_not_found_error(conversation_id: ThreadId) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: format!("no rollout found for conversation id {conversation_id}"),
+        data: None,
+    }
+}
+
+fn conversation_summary_rollout_path_read_error(
+    path: &Path,
+    err: ThreadStoreError,
+) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        },
+        err => JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!(
+                "failed to load conversation summary from {}: {}",
+                path.display(),
+                err
+            ),
             data: None,
         },
     }
@@ -10347,6 +10415,11 @@ mod tests {
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_config::SessionThreadConfig;
+    use codex_config::StaticThreadConfigLoader;
+    use codex_config::ThreadConfigSource;
+    use codex_model_provider_info::ModelProviderInfo;
+    use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
@@ -10359,6 +10432,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
@@ -10509,6 +10583,65 @@ mod tests {
                 "detail": "failed to load your workspace-managed config",
             }))
         );
+    }
+
+    #[tokio::test]
+    async fn derive_config_from_params_uses_session_thread_config_model_provider() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let session_provider = ModelProviderInfo {
+            name: "session".to_string(),
+            base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: true,
+        };
+        let config = derive_config_from_params(
+            &[],
+            Some(HashMap::from([
+                ("model_provider".to_string(), json!("request")),
+                ("features.plugins".to_string(), json!(true)),
+                (
+                    "model_providers.session".to_string(),
+                    json!({
+                        "name": "request",
+                        "base_url": "http://127.0.0.1:9999/api/codex",
+                        "wire_api": "responses",
+                    }),
+                ),
+            ])),
+            ConfigOverrides::default(),
+            Arc::new(StaticThreadConfigLoader::new(vec![
+                ThreadConfigSource::Session(SessionThreadConfig {
+                    model_provider: Some("session".to_string()),
+                    model_providers: HashMap::from([(
+                        "session".to_string(),
+                        session_provider.clone(),
+                    )]),
+                    features: BTreeMap::from([("plugins".to_string(), false)]),
+                }),
+            ])),
+            &CloudRequirementsLoader::default(),
+            temp_dir.path(),
+            &BTreeMap::new(),
+        )
+        .await?;
+
+        assert_eq!(config.model_provider_id, "session");
+        assert_eq!(config.model_provider, session_provider);
+        assert!(!config.features.enabled(Feature::Plugins));
+        Ok(())
     }
 
     #[test]
