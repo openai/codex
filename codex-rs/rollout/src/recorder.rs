@@ -214,6 +214,18 @@ fn sanitize_rollout_item_for_persistence(
     }
 }
 
+#[derive(Clone, Copy)]
+enum ThreadListArchiveFilter {
+    Active,
+    Archived,
+}
+
+#[derive(Clone, Copy)]
+enum ThreadListRepairMode {
+    ScanAndRepair,
+    StateDbOnly,
+}
+
 impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     #[allow(clippy::too_many_arguments)]
@@ -239,8 +251,8 @@ impl RolloutRecorder {
             model_providers,
             cwd_filters,
             default_provider,
-            /*archived*/ false,
-            /*use_state_db_only*/ false,
+            ThreadListArchiveFilter::Active,
+            ThreadListRepairMode::ScanAndRepair,
             search_term,
         )
         .await
@@ -269,8 +281,8 @@ impl RolloutRecorder {
             model_providers,
             cwd_filters,
             default_provider,
-            /*archived*/ false,
-            /*use_state_db_only*/ true,
+            ThreadListArchiveFilter::Active,
+            ThreadListRepairMode::StateDbOnly,
             search_term,
         )
         .await
@@ -300,8 +312,8 @@ impl RolloutRecorder {
             model_providers,
             cwd_filters,
             default_provider,
-            /*archived*/ true,
-            /*use_state_db_only*/ false,
+            ThreadListArchiveFilter::Archived,
+            ThreadListRepairMode::ScanAndRepair,
             search_term,
         )
         .await
@@ -330,8 +342,8 @@ impl RolloutRecorder {
             model_providers,
             cwd_filters,
             default_provider,
-            /*archived*/ true,
-            /*use_state_db_only*/ true,
+            ThreadListArchiveFilter::Archived,
+            ThreadListRepairMode::StateDbOnly,
             search_term,
         )
         .await
@@ -348,17 +360,21 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
-        archived: bool,
-        use_state_db_only: bool,
+        archive_filter: ThreadListArchiveFilter,
+        repair_mode: ThreadListRepairMode,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
+        let archived = match archive_filter {
+            ThreadListArchiveFilter::Active => false,
+            ThreadListArchiveFilter::Archived => true,
+        };
         if cwd_filters.is_some_and(<[std::path::PathBuf]>::is_empty) {
             return Ok(ThreadsPage::default());
         }
 
-        if use_state_db_only {
+        if matches!(repair_mode, ThreadListRepairMode::StateDbOnly) {
             return Ok(state_db::list_threads_db(
                 state_db_ctx.as_deref(),
                 codex_home,
@@ -467,7 +483,36 @@ impl RolloutRecorder {
         )
         .await;
         if let Some(db_page) = db_page {
-            if search_term.is_some() {
+            if search_term.is_some() && (!db_page.items.is_empty() || cursor.is_some()) {
+                for item in &db_page.items {
+                    state_db::reconcile_rollout(
+                        state_db_ctx.as_deref(),
+                        item.rollout_path.as_path(),
+                        default_provider,
+                        /*builder*/ None,
+                        &[],
+                        Some(archived),
+                        /*new_thread_memory_mode*/ None,
+                    )
+                    .await;
+                }
+                if let Some(repaired_db_page) = state_db::list_threads_db(
+                    state_db_ctx.as_deref(),
+                    codex_home,
+                    page_size,
+                    cursor,
+                    sort_key,
+                    sort_direction,
+                    allowed_sources,
+                    model_providers,
+                    cwd_filters,
+                    archived,
+                    search_term,
+                )
+                .await
+                {
+                    return Ok(repaired_db_page.into());
+                }
                 return Ok(db_page.into());
             }
             if listing_has_metadata_filters {

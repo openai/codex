@@ -394,7 +394,7 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    cwd: Option<Vec<PathBuf>>,
+    cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
 }
@@ -3708,8 +3708,8 @@ impl CodexMessageProcessor {
             use_state_db_only,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filters(cwd) {
-            Ok(cwd) => cwd,
+        let cwd_filters = match normalize_thread_list_cwd_filters(cwd) {
+            Ok(cwd_filters) => cwd_filters,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -3735,7 +3735,7 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd,
+                    cwd_filters,
                     search_term,
                     use_state_db_only,
                 },
@@ -5192,7 +5192,7 @@ impl CodexMessageProcessor {
             model_providers,
             source_kinds,
             archived,
-            cwd,
+            cwd_filters,
             search_term,
             use_state_db_only,
         } = filters;
@@ -5231,7 +5231,7 @@ impl CodexMessageProcessor {
                     sort_direction: store_sort_direction,
                     allowed_sources: allowed_sources.to_vec(),
                     model_providers: model_provider_filter.clone(),
-                    cwd_filters: cwd.clone(),
+                    cwd_filters: cwd_filters.clone(),
                     archived,
                     search_term: search_term.clone(),
                     use_state_db_only,
@@ -5239,21 +5239,16 @@ impl CodexMessageProcessor {
                 .await
                 .map_err(thread_store_list_error)?;
 
-            let mut candidate_summaries = Vec::with_capacity(page.items.len());
+            let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
                 let Some(summary) = summary_from_stored_thread(it, fallback_provider.as_str())
                 else {
                     continue;
                 };
-                candidate_summaries.push(summary);
-            }
-
-            let mut filtered = Vec::with_capacity(candidate_summaries.len());
-            for summary in candidate_summaries {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd.as_ref().is_none_or(|expected_cwds| {
+                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
                         expected_cwds.iter().any(|expected_cwd| {
                             path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
                         })
@@ -5268,25 +5263,22 @@ impl CodexMessageProcessor {
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
-            let next_cursor_value = page.next_cursor.clone();
-            next_cursor = next_cursor_value.clone();
+            next_cursor = page.next_cursor;
             if remaining == 0 {
                 break;
             }
 
-            match next_cursor_value {
-                Some(cursor_val) if remaining > 0 => {
-                    // Break if our pagination would reuse the same cursor again; this avoids
-                    // an infinite loop when filtering drops everything on the page.
-                    if last_cursor.as_ref() == Some(&cursor_val) {
-                        next_cursor = None;
-                        break;
-                    }
-                    last_cursor = Some(cursor_val.clone());
-                    cursor_obj = Some(cursor_val);
-                }
-                _ => break,
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            // Break if our pagination would reuse the same cursor again; this avoids
+            // an infinite loop when filtering drops everything on the page.
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
             }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
         }
 
         Ok((items, next_cursor))
@@ -8746,7 +8738,10 @@ fn normalize_thread_list_cwd_filters(
         return Ok(None);
     };
 
-    let cwds = cwd.into_vec();
+    let cwds = match cwd {
+        ThreadListCwdFilter::One(cwd) => vec![cwd],
+        ThreadListCwdFilter::Many(cwds) => cwds,
+    };
     let mut normalized_cwds = Vec::with_capacity(cwds.len());
     for cwd in cwds {
         let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())

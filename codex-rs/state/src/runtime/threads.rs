@@ -1050,10 +1050,11 @@ pub(super) fn push_thread_filters<'a>(
         }
         separated.push_unseparated(")");
     }
-    if let Some(cwd_filters) = cwd_filters {
-        if cwd_filters.is_empty() {
+    match cwd_filters {
+        Some([]) => {
             builder.push(" AND 1 = 0");
-        } else {
+        }
+        Some(cwd_filters) => {
             builder.push(" AND threads.cwd IN (");
             let mut separated = builder.separated(", ");
             for cwd in cwd_filters {
@@ -1061,6 +1062,7 @@ pub(super) fn push_thread_filters<'a>(
             }
             separated.push_unseparated(")");
         }
+        None => {}
     }
     if let Some(search_term) = search_term {
         builder.push(" AND instr(threads.title, ");
@@ -1297,7 +1299,6 @@ mod tests {
         let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
         assert_eq!(ids, vec![second_id, first_id]);
 
-        let empty_cwd_filters = Vec::<PathBuf>::new();
         let page = runtime
             .list_threads(
                 /*page_size*/ 10,
@@ -1305,7 +1306,7 @@ mod tests {
                     archived_only: false,
                     allowed_sources: &[],
                     model_providers: None,
-                    cwd_filters: Some(empty_cwd_filters.as_slice()),
+                    cwd_filters: Some(&[]),
                     anchor: None,
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,

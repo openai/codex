@@ -3613,15 +3613,6 @@ pub enum ThreadListCwdFilter {
     Many(Vec<String>),
 }
 
-impl ThreadListCwdFilter {
-    pub fn into_vec(self) -> Vec<String> {
-        match self {
-            ThreadListCwdFilter::One(cwd) => vec![cwd],
-            ThreadListCwdFilter::Many(cwds) => cwds,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]

@@ -534,8 +534,7 @@ async fn traverse_directories_for_paths_updated(
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
-    let mut candidates = candidates;
+    let mut candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
     candidates.sort_by_key(|candidate| {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         (Reverse(ts), Reverse(candidate.id))
@@ -653,8 +652,7 @@ async fn traverse_flat_paths_updated(
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let candidates = collect_flat_files_by_updated_at(&root, &mut scanned_files).await?;
-    let mut candidates = candidates;
+    let mut candidates = collect_flat_files_by_updated_at(&root, &mut scanned_files).await?;
     candidates.sort_by_key(|candidate| {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         (Reverse(ts), Reverse(candidate.id))

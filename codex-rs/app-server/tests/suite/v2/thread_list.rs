@@ -660,6 +660,129 @@ sqlite = true
 }
 
 #[tokio::test]
+async fn thread_list_state_db_only_returns_sqlite_without_jsonl_repair() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+suppress_unstable_features_warning = true
+
+[features]
+sqlite = true
+"#,
+    )?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "state db only should not see this before repair",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let repaired_response = to_response::<ThreadListResponse>(resp)?;
+    let ids: Vec<_> = repaired_response
+        .data
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![thread_id.as_str()]);
+
+    let thread_uuid = ThreadId::from_string(&thread_id)?;
+    let stale_cwd = codex_home.path().join("stale-cwd");
+    let mut metadata = state_db
+        .get_thread(thread_uuid)
+        .await?
+        .expect("thread should be repaired into sqlite");
+    metadata.cwd = stale_cwd.clone();
+    state_db.upsert_thread(&metadata).await?;
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: Some(ThreadListCwdFilter::One(
+                stale_cwd.to_string_lossy().into_owned(),
+            )),
+            use_state_db_only: true,
+            search_term: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let state_db_only_response = to_response::<ThreadListResponse>(resp)?;
+    let ids: Vec<_> = state_db_only_response
+        .data
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect();
+    assert_eq!(ids, vec![thread_id.as_str()]);
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: Some(ThreadListCwdFilter::One(
+                stale_cwd.to_string_lossy().into_owned(),
+            )),
+            use_state_db_only: false,
+            search_term: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let scanned_response = to_response::<ThreadListResponse>(resp)?;
+    assert_eq!(scanned_response.data.len(), 0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
