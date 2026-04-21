@@ -262,7 +262,6 @@ pub enum ResponsesWsRequest {
 pub fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
-    output_schema_strict: bool,
 ) -> Option<TextControls> {
     if verbosity.is_none() && output_schema.is_none() {
         return None;
@@ -272,7 +271,7 @@ pub fn create_text_param_for_request(
         verbosity: verbosity.map(std::convert::Into::into),
         format: output_schema.as_ref().map(|schema| TextFormat {
             r#type: TextFormatType::JsonSchema,
-            strict: output_schema_strict,
+            strict: true,
             schema: schema.clone(),
             name: "codex_output_schema".to_string(),
         }),

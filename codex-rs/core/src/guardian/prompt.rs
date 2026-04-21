@@ -551,22 +551,22 @@ pub(crate) fn guardian_output_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "risk_level": {
-                "type": "string",
-                "enum": ["low", "medium", "high", "critical"]
+                "type": ["string", "null"],
+                "enum": ["low", "medium", "high", "critical", null]
             },
             "user_authorization": {
-                "type": "string",
-                "enum": ["unknown", "low", "medium", "high"]
+                "type": ["string", "null"],
+                "enum": ["unknown", "low", "medium", "high", null]
             },
             "outcome": {
                 "type": "string",
                 "enum": ["allow", "deny"]
             },
             "rationale": {
-                "type": "string"
+                "type": ["string", "null"]
             }
         },
-        "required": ["outcome"]
+        "required": ["risk_level", "user_authorization", "outcome", "rationale"]
     })
 }
 
@@ -575,14 +575,14 @@ pub(crate) fn guardian_output_schema() -> Value {
 fn guardian_output_contract_prompt() -> &'static str {
     r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON.
 
-For low-risk actions, give the final answer directly: {"outcome":"allow"}.
+For low-risk actions, use null for optional details: {"risk_level":null,"user_authorization":null,"outcome":"allow","rationale":null}.
 
 For anything else, use this JSON schema:
 {
-  "risk_level": "low" | "medium" | "high" | "critical",
-  "user_authorization": "unknown" | "low" | "medium" | "high",
+  "risk_level": "low" | "medium" | "high" | "critical" | null,
+  "user_authorization": "unknown" | "low" | "medium" | "high" | null,
   "outcome": "allow" | "deny",
-  "rationale": string
+  "rationale": string | null
 }"#
 }
 

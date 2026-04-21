@@ -23,7 +23,7 @@ pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
@@ -42,23 +42,6 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
-
-    /// Whether the Responses API should strictly validate `output_schema`.
-    pub output_schema_strict: bool,
-}
-
-impl Default for Prompt {
-    fn default() -> Self {
-        Self {
-            input: Vec::new(),
-            tools: Vec::new(),
-            parallel_tool_calls: false,
-            base_instructions: BaseInstructions::default(),
-            personality: None,
-            output_schema: None,
-            output_schema_strict: true,
-        }
-    }
 }
 
 impl Prompt {
