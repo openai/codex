@@ -3,12 +3,17 @@ use crate::events::AppServerRpcTransport;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
 use crate::events::CodexAppUsedEventRequest;
+use crate::events::CodexCommandExecutionEventParams;
+use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolItemEventBase;
 use crate::events::CodexTurnEventRequest;
+use crate::events::CommandExecutionFamily;
+use crate::events::CommandExecutionSourceKind;
 use crate::events::GuardianApprovalRequestSource;
 use crate::events::GuardianReviewDecision;
 use crate::events::GuardianReviewEventParams;
@@ -17,6 +22,8 @@ use crate::events::GuardianReviewTerminalStatus;
 use crate::events::GuardianReviewedAction;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolItemFinalApprovalOutcome;
+use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_hook_run_metadata;
@@ -415,7 +422,7 @@ async fn ingest_rejected_turn_steer(
     .await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -475,7 +482,7 @@ async fn ingest_turn_prerequisites(
         ingest_initialize(reducer, out).await;
         reducer
             .ingest(
-                AnalyticsFact::Response {
+                AnalyticsFact::ClientResponse {
                     connection_id: 7,
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
@@ -489,7 +496,7 @@ async fn ingest_turn_prerequisites(
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
@@ -499,7 +506,7 @@ async fn ingest_turn_prerequisites(
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
             },
@@ -844,6 +851,152 @@ fn thread_initialized_event_serializes_expected_shape() {
     );
 }
 
+#[test]
+fn command_execution_event_serializes_expected_shape() {
+    let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
+        event_type: "codex_command_execution_event",
+        event_params: CodexCommandExecutionEventParams {
+            base: CodexToolItemEventBase {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id: "codex_tui".to_string(),
+                    client_name: Some("codex-tui".to_string()),
+                    client_version: Some("1.2.3".to_string()),
+                    rpc_transport: AppServerRpcTransport::Websocket,
+                    experimental_api_enabled: Some(true),
+                },
+                runtime: CodexRuntimeMetadata {
+                    codex_rs_version: "0.99.0".to_string(),
+                    runtime_os: "macos".to_string(),
+                    runtime_os_version: "15.3.1".to_string(),
+                    runtime_arch: "aarch64".to_string(),
+                },
+                thread_source: Some("user"),
+                subagent_source: None,
+                parent_thread_id: None,
+                tool_name: "shell".to_string(),
+                started_at: 123,
+                completed_at: Some(125),
+                duration_ms: Some(2000),
+                execution_started: true,
+                review_count: 0,
+                guardian_review_count: 0,
+                user_review_count: 0,
+                final_approval_outcome: ToolItemFinalApprovalOutcome::NotNeeded,
+                terminal_status: ToolItemTerminalStatus::Completed,
+                failure_kind: None,
+                requested_additional_permissions: false,
+                requested_network_access: false,
+                retry_count: 0,
+            },
+            command_execution_source: CommandExecutionSourceKind::Agent,
+            command_execution_family: CommandExecutionFamily::Shell,
+            exit_code: Some(0),
+            command_action_count: Some(1),
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize command execution event");
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_command_execution_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "item_id": "item-1",
+                "app_server_client": {
+                    "product_client_id": "codex_tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.2.3",
+                    "rpc_transport": "websocket",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.99.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "tool_name": "shell",
+                "started_at": 123,
+                "completed_at": 125,
+                "duration_ms": 2000,
+                "execution_started": true,
+                "review_count": 0,
+                "guardian_review_count": 0,
+                "user_review_count": 0,
+                "final_approval_outcome": "not_needed",
+                "terminal_status": "completed",
+                "failure_kind": null,
+                "requested_additional_permissions": false,
+                "requested_network_access": false,
+                "retry_count": 0,
+                "command_execution_source": "agent",
+                "command_execution_family": "shell",
+                "exit_code": 0,
+                "command_action_count": 1
+            }
+        })
+    );
+}
+
+#[test]
+fn command_execution_event_allows_null_thread_denormalization() {
+    let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
+        event_type: "codex_command_execution_event",
+        event_params: CodexCommandExecutionEventParams {
+            base: CodexToolItemEventBase {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                app_server_client: CodexAppServerClientMetadata {
+                    product_client_id: "codex_tui".to_string(),
+                    client_name: Some("codex-tui".to_string()),
+                    client_version: Some("1.2.3".to_string()),
+                    rpc_transport: AppServerRpcTransport::Websocket,
+                    experimental_api_enabled: Some(true),
+                },
+                runtime: CodexRuntimeMetadata {
+                    codex_rs_version: "0.99.0".to_string(),
+                    runtime_os: "macos".to_string(),
+                    runtime_os_version: "15.3.1".to_string(),
+                    runtime_arch: "aarch64".to_string(),
+                },
+                thread_source: None,
+                subagent_source: None,
+                parent_thread_id: None,
+                tool_name: "shell".to_string(),
+                started_at: 123,
+                completed_at: Some(125),
+                duration_ms: Some(2000),
+                execution_started: true,
+                review_count: 0,
+                guardian_review_count: 0,
+                user_review_count: 0,
+                final_approval_outcome: ToolItemFinalApprovalOutcome::NotNeeded,
+                terminal_status: ToolItemTerminalStatus::Completed,
+                failure_kind: None,
+                requested_additional_permissions: false,
+                requested_network_access: false,
+                retry_count: 0,
+            },
+            command_execution_source: CommandExecutionSourceKind::Agent,
+            command_execution_family: CommandExecutionFamily::Shell,
+            exit_code: Some(0),
+            command_action_count: Some(0),
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize command execution event");
+    assert_eq!(payload["event_params"]["thread_source"], json!(null));
+}
+
 #[tokio::test]
 async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
     let mut reducer = AnalyticsReducer::default();
@@ -851,7 +1004,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
@@ -895,7 +1048,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
@@ -975,7 +1128,7 @@ async fn compaction_event_ingests_custom_fact() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_resume_response_with_source(
                     "thread-1",
@@ -1086,7 +1239,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-guardian",
@@ -1856,7 +2009,7 @@ async fn accepted_turn_steer_emits_expected_event() {
     .await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -1868,7 +2021,7 @@ async fn accepted_turn_steer_emits_expected_event() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
             },
@@ -2010,7 +2163,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
     ingest_initialize(&mut reducer, &mut out).await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
@@ -2034,7 +2187,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
     // failed turn/start request and attach request-scoped connection metadata.
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
             },
@@ -2151,7 +2304,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -2163,7 +2316,7 @@ async fn accepted_steers_increment_turn_steer_count() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
             },
@@ -2173,7 +2326,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(5),
                 request: Box::new(sample_turn_steer_request(
@@ -2197,7 +2350,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(6),
                 request: Box::new(sample_turn_steer_request(
@@ -2209,7 +2362,7 @@ async fn accepted_steers_increment_turn_steer_count() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 6)),
             },
