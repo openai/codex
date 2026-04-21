@@ -163,10 +163,8 @@ impl AwsAuthError {
         match self {
             AwsAuthError::Credentials(error) => matches!(
                 error,
-                aws_credential_types::provider::error::CredentialsError::CredentialsNotLoaded(_)
-                    | aws_credential_types::provider::error::CredentialsError::ProviderTimedOut(_)
+                aws_credential_types::provider::error::CredentialsError::ProviderTimedOut(_)
                     | aws_credential_types::provider::error::CredentialsError::ProviderError(_)
-                    | aws_credential_types::provider::error::CredentialsError::Unhandled(_)
             ),
             AwsAuthError::EmptyService
             | AwsAuthError::MissingCredentialsProvider
@@ -267,7 +265,14 @@ mod tests {
     fn deterministic_aws_auth_errors_are_not_retryable() {
         assert!(!AwsAuthError::EmptyService.is_retryable());
         assert!(
+            !AwsAuthError::Credentials(CredentialsError::not_loaded_no_source()).is_retryable()
+        );
+        assert!(
             !AwsAuthError::Credentials(CredentialsError::invalid_configuration("bad profile"))
+                .is_retryable()
+        );
+        assert!(
+            !AwsAuthError::Credentials(CredentialsError::unhandled("unexpected response"))
                 .is_retryable()
         );
     }

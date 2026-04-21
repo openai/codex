@@ -41,14 +41,14 @@ impl ReqwestTransport {
         }
     }
 
-    fn build(&self, mut req: Request) -> Result<CodexRequestBuilder, TransportError> {
-        req.prepare_body_for_send().map_err(TransportError::Build)?;
+    fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
+        let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
 
         let Request {
             method,
             url,
-            headers,
-            body,
+            headers: _,
+            body: _,
             compression: _,
             timeout,
         } = req;
@@ -62,16 +62,9 @@ impl ReqwestTransport {
             builder = builder.timeout(timeout);
         }
 
-        match body {
-            Some(RequestBody::Raw(raw_body)) => {
-                builder = builder.headers(headers).body(raw_body);
-            }
-            Some(RequestBody::Json(body)) => {
-                builder = builder.headers(headers).json(&body);
-            }
-            None => {
-                builder = builder.headers(headers);
-            }
+        builder = builder.headers(prepared.headers);
+        if let Some(body) = prepared.body {
+            builder = builder.body(body);
         }
         Ok(builder)
     }

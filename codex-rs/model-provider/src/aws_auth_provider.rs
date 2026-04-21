@@ -5,6 +5,8 @@ use codex_aws_auth::AwsAuthContext;
 use codex_aws_auth::AwsAuthError;
 use codex_aws_auth::AwsRequestToSign;
 use codex_client::Request;
+use codex_client::RequestBody;
+use codex_client::RequestCompression;
 use http::HeaderMap;
 use http::HeaderValue;
 use tokio::sync::OnceCell;
@@ -72,20 +74,22 @@ impl AuthProvider for AwsSigV4AuthProvider {
 
     async fn apply_auth(&self, mut request: Request) -> Result<Request, AuthError> {
         remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
-        let body = request.prepare_body_for_send().map_err(AuthError::Build)?;
+        let prepared = request.prepare_body_for_send().map_err(AuthError::Build)?;
         let context = self.context().await?;
         let signed = context
             .sign(AwsRequestToSign {
                 method: request.method.clone(),
                 url: request.url.clone(),
-                headers: request.headers.clone(),
-                body,
+                headers: prepared.headers.clone(),
+                body: prepared.body_bytes(),
             })
             .await
             .map_err(aws_auth_error_to_auth_error)?;
 
         request.url = signed.url;
         request.headers = signed.headers;
+        request.body = prepared.body.map(RequestBody::Raw);
+        request.compression = RequestCompression::None;
         Ok(request)
     }
 }
