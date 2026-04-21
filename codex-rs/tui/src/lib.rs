@@ -426,9 +426,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
-        Arc::new(EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-        )),
+        Arc::new(EnvironmentManager::default_for_tests()),
     )
     .await
 }
@@ -731,13 +729,12 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
+    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
+        ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?),
-        ..EnvironmentManagerArgs::default()
-    }));
+        )?,
+    )));
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -1777,9 +1774,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-            )),
+            Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
     }
@@ -1939,8 +1934,7 @@ mod tests {
             websocket_url: "ws://127.0.0.1:1234/".to_string(),
             auth_token: None,
         };
-        let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -1954,8 +1948,7 @@ mod tests {
     {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
-        let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
@@ -1975,8 +1968,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let missing = temp_dir.path().join("missing");
         let target = AppServerTarget::Embedded;
-        let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
             .expect_err("missing embedded cwd should fail");
@@ -1997,7 +1989,10 @@ mod tests {
         let environment_manager =
             EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs {
                 exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-                local_runtime_paths: None,
+                local_runtime_paths: ExecServerRuntimePaths::new(
+                    std::env::current_exe().expect("current exe"),
+                    /*codex_linux_sandbox_exe*/ None,
+                )?,
             });
 
         let config_cwd =
@@ -2125,9 +2120,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-            )),
+            Arc::new(EnvironmentManager::default_for_tests()),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
         .await;

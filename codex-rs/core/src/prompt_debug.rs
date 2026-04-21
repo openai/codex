@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -30,6 +31,11 @@ pub async fn build_prompt_input(
     let auth_manager =
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
 
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
@@ -39,7 +45,9 @@ pub async fn build_prompt_input(
                 .features
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
-        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::default())),
+        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
+            local_runtime_paths,
+        ))),
         /*analytics_events_client*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;

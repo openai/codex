@@ -250,7 +250,7 @@ impl Session {
                 turn_context
                     .environment
                     .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
                 turn_context.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),

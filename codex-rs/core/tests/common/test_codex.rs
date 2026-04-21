@@ -76,7 +76,8 @@ impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
-        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None)?;
+        let environment =
+            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
             cwd,
@@ -115,7 +116,8 @@ pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
-            let environment = codex_exec_server::Environment::create(Some(websocket_url))?;
+            let environment =
+                codex_exec_server::Environment::create_for_tests(Some(websocket_url))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -363,7 +365,10 @@ impl TestCodexBuilder {
         let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs {
                 exec_server_url,
-                local_runtime_paths: None,
+                local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
+                    std::env::current_exe()?,
+                    /*codex_linux_sandbox_exe*/ None,
+                )?,
             },
         ));
         let file_system = test_env.environment().get_filesystem();

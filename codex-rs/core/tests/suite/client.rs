@@ -1103,9 +1103,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
                 .features
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager

@@ -362,13 +362,12 @@ pub async fn run_main_with_transport(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
+    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
+        ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?),
-        ..EnvironmentManagerArgs::default()
-    }));
+        )?,
+    )));
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);

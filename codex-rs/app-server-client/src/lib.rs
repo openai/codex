@@ -970,9 +970,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-            )),
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -1975,7 +1973,11 @@ mod tests {
         let config = Arc::new(build_test_config().await);
         let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-            local_runtime_paths: None,
+            local_runtime_paths: ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("runtime paths"),
         }));
 
         let runtime_args = InProcessClientStartArgs {

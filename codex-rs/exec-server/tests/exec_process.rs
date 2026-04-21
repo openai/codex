@@ -49,13 +49,13 @@ enum ProcessEventSnapshot {
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
     if use_remote {
         let server = exec_server().await?;
-        let environment = Environment::create(Some(server.websocket_url().to_string()))?;
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
             server: Some(server),
         })
     } else {
-        let environment = Environment::create(/*exec_server_url*/ None)?;
+        let environment = Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
             server: None,

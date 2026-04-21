@@ -327,7 +327,12 @@ impl MessageProcessor {
         );
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
-        let fs_api = FsApi::default();
+        let fs_api = FsApi::new(
+            thread_manager
+                .environment_manager()
+                .local_environment()
+                .get_filesystem(),
+        );
         let fs_watch_manager = FsWatchManager::new(outgoing.clone());
 
         Self {

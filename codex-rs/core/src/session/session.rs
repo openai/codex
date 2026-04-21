@@ -793,7 +793,7 @@ impl Session {
                 sess.services
                     .environment_manager
                     .default_environment()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                    .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
                 session_configuration.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),
