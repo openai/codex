@@ -3074,7 +3074,7 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
-    /// Optional sticky environment selections for this thread.
+    /// Optional sticky environments for this thread.
     ///
     /// Omitted uses EnvironmentManager default behavior. Empty disables
     /// environment access for turns that do not provide a turn override.
@@ -4669,9 +4669,9 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
-    /// Optional turn-scoped environment selections.
+    /// Optional turn-scoped environments.
     ///
-    /// Omitted uses the thread sticky environment selections. Empty disables
+    /// Omitted uses the thread sticky environments. Empty disables
     /// environment access for this turn. Non-empty selects the first
     /// environment as the current turn environment for this turn.
     #[experimental("turn/start.environments")]

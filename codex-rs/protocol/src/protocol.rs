@@ -431,7 +431,7 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
@@ -498,7 +498,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
 
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
     },
@@ -568,7 +568,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
 
-        /// Updated sticky environment selections for future turns.
+        /// Updated sticky environments for future turns.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
     },
