@@ -144,7 +144,6 @@ use sha2::Sha512;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Semaphore;
-use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use wiremock::Mock;
@@ -5669,49 +5668,14 @@ impl SessionTask for NeverEndingTask {
             cancellation_token.cancelled().await;
             return None;
         }
-        loop {
-            sleep(Duration::from_secs(60)).await;
-        }
+        std::future::pending::<Option<String>>().await
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
-async fn abort_regular_task_emits_turn_aborted_only() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    // Interrupts persist a model-visible `<turn_aborted>` marker into history, but there is no
-    // separate client-visible event for that marker (only `EventMsg::TurnAborted`).
-    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("timeout waiting for event")
-        .expect("event");
-    match evt.msg {
-        EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
-        other => panic!("unexpected event: {other:?}"),
-    }
-    // No extra events should be emitted after an abort.
-    assert!(rx.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn abort_gracefully_emits_turn_aborted_only() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+async fn abort_regular_task_records_prompt_before_interrupt_marker() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -5728,18 +5692,20 @@ async fn abort_gracefully_emits_turn_aborted_only() {
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-    // Even if tasks handle cancellation gracefully, interrupts still result in `TurnAborted`
-    // being the only client-visible signal.
-    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("timeout waiting for event")
-        .expect("event");
-    match evt.msg {
-        EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
-        other => panic!("unexpected event: {other:?}"),
-    }
-    // No extra events should be emitted after an abort.
-    assert!(rx.try_recv().is_err());
+    let history = sess.clone_history().await;
+    let expected = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        crate::tasks::interrupted_turn_history_marker(),
+    ];
+    assert_eq!(history.raw_items(), expected.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

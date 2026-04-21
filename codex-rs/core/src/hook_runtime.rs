@@ -17,6 +17,7 @@ use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -266,6 +267,67 @@ pub(crate) async fn inspect_pending_input(
             response_item,
         }))
     }
+}
+
+pub(crate) async fn drain_turn_start_transcript_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> bool {
+    let _guard = turn_context.transcript_serialization_lock.lock().await;
+    if run_pending_session_start_hooks(sess, turn_context).await {
+        return false;
+    }
+
+    loop {
+        let input = {
+            let inputs = turn_context.turn_start_transcript_inputs.lock().await;
+            inputs.first().cloned()
+        };
+        let Some(input) = input else {
+            break;
+        };
+
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.into();
+        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+            sess,
+            turn_context,
+            UserMessageItem::new(&input).message(),
+        )
+        .await;
+        if user_prompt_submit_outcome.should_stop {
+            record_additional_contexts(
+                sess,
+                turn_context,
+                user_prompt_submit_outcome.additional_contexts,
+            )
+            .await;
+            let mut inputs = turn_context.turn_start_transcript_inputs.lock().await;
+            if inputs.first().is_some_and(|queued| queued == &input) {
+                inputs.remove(0);
+            }
+            return false;
+        }
+
+        sess.record_user_prompt_and_emit_turn_item(
+            turn_context.as_ref(),
+            input.as_slice(),
+            response_item,
+        )
+        .await;
+        record_additional_contexts(
+            sess,
+            turn_context,
+            user_prompt_submit_outcome.additional_contexts,
+        )
+        .await;
+        let mut inputs = turn_context.turn_start_transcript_inputs.lock().await;
+        if inputs.first().is_some_and(|queued| queued == &input) {
+            inputs.remove(0);
+        }
+    }
+
+    true
 }
 
 pub(crate) async fn record_pending_input(

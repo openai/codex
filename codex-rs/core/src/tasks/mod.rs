@@ -22,6 +22,7 @@ use tracing::warn;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::drain_turn_start_transcript_inputs;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -305,6 +306,13 @@ impl Session {
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
+        if task_kind == TaskKind::Regular && !input.is_empty() {
+            turn_context
+                .turn_start_transcript_inputs
+                .lock()
+                .await
+                .push(input.clone());
+        }
         let task_for_run = Arc::clone(&task);
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
@@ -618,6 +626,11 @@ impl Session {
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
+        if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(&task.turn_context).await;
+            let _ = drain_turn_start_transcript_inputs(self, &task.turn_context).await;
+        }
+
         select! {
             _ = task.done.notified() => {
             },
@@ -634,8 +647,6 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted {
-            self.cleanup_after_interrupt(&task.turn_context).await;
-
             let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
