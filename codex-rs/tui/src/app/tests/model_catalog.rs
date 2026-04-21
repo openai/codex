@@ -7,6 +7,32 @@ fn all_model_presets() -> Vec<ModelPreset> {
     crate::legacy_core::test_support::all_model_presets().clone()
 }
 
+fn first_visible_model_with_upgrade(presets: &[ModelPreset]) -> (String, String) {
+    presets
+        .iter()
+        .find_map(|preset| {
+            let upgrade = preset.upgrade.as_ref()?;
+            presets
+                .iter()
+                .any(|candidate| candidate.model == upgrade.id && candidate.show_in_picker)
+                .then(|| (preset.model.clone(), upgrade.id.clone()))
+        })
+        .expect("preset with visible upgrade target present")
+}
+
+fn first_two_visible_models(presets: &[ModelPreset]) -> (String, String) {
+    let visible_models: Vec<String> = presets
+        .iter()
+        .filter(|preset| preset.show_in_picker)
+        .map(|preset| preset.model.clone())
+        .collect();
+    assert!(
+        visible_models.len() >= 2,
+        "at least two visible models are required for availability nux tests"
+    );
+    (visible_models[0].clone(), visible_models[1].clone())
+}
+
 fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
     ModelAvailabilityNuxConfig {
         shown_count: shown_count
@@ -37,39 +63,36 @@ fn model_migration_copy_to_plain_text(copy: &crate::model_migration::ModelMigrat
 
 #[tokio::test]
 async fn model_migration_prompt_only_shows_for_deprecated_models() {
+    let presets = all_model_presets();
+    let (current_model, target_model) = first_visible_model_with_upgrade(&presets);
     let seen = BTreeMap::new();
     assert!(should_show_model_migration_prompt(
-        "gpt-5.2",
-        "gpt-5.4",
+        &current_model,
+        &target_model,
         &seen,
-        &all_model_presets()
-    ));
-    assert!(should_show_model_migration_prompt(
-        "gpt-5.3-codex",
-        "gpt-5.4",
-        &seen,
-        &all_model_presets()
+        &presets
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.3-codex",
-        "gpt-5.3-codex",
+        &target_model,
+        &target_model,
         &seen,
-        &all_model_presets()
+        &presets
     ));
 }
 
 #[test]
 fn select_model_availability_nux_picks_only_eligible_model() {
     let mut presets = all_model_presets();
+    let (target_model, _) = first_two_visible_models(&presets);
     presets.iter_mut().for_each(|preset| {
         preset.availability_nux = None;
     });
     let target = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4")
+        .find(|preset| preset.model == target_model)
         .expect("target preset present");
     target.availability_nux = Some(ModelAvailabilityNux {
-        message: "gpt-5.4 is available".to_string(),
+        message: format!("{} is available", target.model),
     });
 
     let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
@@ -77,8 +100,8 @@ fn select_model_availability_nux_picks_only_eligible_model() {
     assert_eq!(
         selected,
         Some(StartupTooltipOverride {
-            model_slug: "gpt-5.4".to_string(),
-            message: "gpt-5.4 is available".to_string(),
+            model_slug: target_model.clone(),
+            message: format!("{target_model} is available"),
         })
     );
 }
@@ -86,34 +109,35 @@ fn select_model_availability_nux_picks_only_eligible_model() {
 #[test]
 fn select_model_availability_nux_skips_missing_and_exhausted_models() {
     let mut presets = all_model_presets();
+    let (first_model, second_model) = first_two_visible_models(&presets);
     presets.iter_mut().for_each(|preset| {
         preset.availability_nux = None;
     });
-    let gpt_5 = presets
+    let first = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4")
-        .expect("gpt-5.4 preset present");
-    gpt_5.availability_nux = Some(ModelAvailabilityNux {
-        message: "gpt-5.4 is available".to_string(),
+        .find(|preset| preset.model == first_model)
+        .expect("first preset present");
+    first.availability_nux = Some(ModelAvailabilityNux {
+        message: format!("{} is available", first.model),
     });
-    let gpt_5_2 = presets
+    let second = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4-mini")
-        .expect("gpt-5.4-mini preset present");
-    gpt_5_2.availability_nux = Some(ModelAvailabilityNux {
-        message: "gpt-5.4-mini is available".to_string(),
+        .find(|preset| preset.model == second_model)
+        .expect("second preset present");
+    second.availability_nux = Some(ModelAvailabilityNux {
+        message: format!("{} is available", second.model),
     });
 
     let selected = select_model_availability_nux(
         &presets,
-        &model_availability_nux_config(&[("gpt-5.4", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+        &model_availability_nux_config(&[(&first_model, MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
     );
 
     assert_eq!(
         selected,
         Some(StartupTooltipOverride {
-            model_slug: "gpt-5.4-mini".to_string(),
-            message: "gpt-5.4-mini is available".to_string(),
+            model_slug: second_model.clone(),
+            message: format!("{second_model} is available"),
         })
     );
 }
@@ -121,22 +145,23 @@ fn select_model_availability_nux_skips_missing_and_exhausted_models() {
 #[test]
 fn select_model_availability_nux_uses_existing_model_order_as_priority() {
     let mut presets = all_model_presets();
+    let (higher_priority_model, lower_priority_model) = first_two_visible_models(&presets);
     presets.iter_mut().for_each(|preset| {
         preset.availability_nux = None;
     });
-    let first = presets
+    let lower_priority = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4-mini")
-        .expect("gpt-5.4-mini preset present");
-    first.availability_nux = Some(ModelAvailabilityNux {
-        message: "first".to_string(),
+        .find(|preset| preset.model == lower_priority_model)
+        .expect("lower-priority preset present");
+    lower_priority.availability_nux = Some(ModelAvailabilityNux {
+        message: "lower-priority".to_string(),
     });
-    let second = presets
+    let higher_priority = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4")
-        .expect("gpt-5.4 preset present");
-    second.availability_nux = Some(ModelAvailabilityNux {
-        message: "second".to_string(),
+        .find(|preset| preset.model == higher_priority_model)
+        .expect("higher-priority preset present");
+    higher_priority.availability_nux = Some(ModelAvailabilityNux {
+        message: "higher-priority".to_string(),
     });
 
     let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
@@ -144,8 +169,8 @@ fn select_model_availability_nux_uses_existing_model_order_as_priority() {
     assert_eq!(
         selected,
         Some(StartupTooltipOverride {
-            model_slug: "gpt-5.4".to_string(),
-            message: "second".to_string(),
+            model_slug: higher_priority_model.clone(),
+            message: "higher-priority".to_string(),
         })
     );
 }
@@ -153,20 +178,21 @@ fn select_model_availability_nux_uses_existing_model_order_as_priority() {
 #[test]
 fn select_model_availability_nux_returns_none_when_all_models_are_exhausted() {
     let mut presets = all_model_presets();
+    let (target_model, _) = first_two_visible_models(&presets);
     presets.iter_mut().for_each(|preset| {
         preset.availability_nux = None;
     });
     let target = presets
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4")
+        .find(|preset| preset.model == target_model)
         .expect("target preset present");
     target.availability_nux = Some(ModelAvailabilityNux {
-        message: "gpt-5.4 is available".to_string(),
+        message: format!("{} is available", target.model),
     });
 
     let selected = select_model_availability_nux(
         &presets,
-        &model_availability_nux_config(&[("gpt-5.4", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
+        &model_availability_nux_config(&[(&target_model, MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
     );
 
     assert_eq!(selected, None);
@@ -174,39 +200,47 @@ fn select_model_availability_nux_returns_none_when_all_models_are_exhausted() {
 
 #[tokio::test]
 async fn model_migration_prompt_respects_hide_flag_and_self_target() {
+    let presets = all_model_presets();
+    let (current_model, target_model) = first_visible_model_with_upgrade(&presets);
     let mut seen = BTreeMap::new();
-    seen.insert("gpt-5.2".to_string(), "gpt-5.4".to_string());
+    seen.insert(current_model.clone(), target_model.clone());
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.2",
-        "gpt-5.4",
+        &current_model,
+        &target_model,
         &seen,
-        &all_model_presets()
+        &presets
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.4",
-        "gpt-5.4",
+        &target_model,
+        &target_model,
         &seen,
-        &all_model_presets()
+        &presets
     ));
 }
 
 #[tokio::test]
 async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
     let mut available = all_model_presets();
+    let (current_model, target_model) = first_visible_model_with_upgrade(&available);
     let mut current = available
         .iter()
-        .find(|preset| preset.model == "gpt-5.2")
+        .find(|preset| preset.model == current_model)
         .cloned()
         .expect("preset present");
+    let migration_config_key = current
+        .upgrade
+        .as_ref()
+        .map(|upgrade| upgrade.migration_config_key.clone())
+        .unwrap_or_else(|| HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string());
     current.upgrade = Some(ModelUpgrade {
         id: "missing-target".to_string(),
         reasoning_effort_mapping: None,
-        migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
+        migration_config_key,
         model_link: None,
         upgrade_copy: None,
         migration_markdown: None,
     });
-    available.retain(|preset| preset.model != "gpt-5.2");
+    available.retain(|preset| preset.model != current_model);
     available.push(current.clone());
 
     assert!(!should_show_model_migration_prompt(
@@ -221,17 +255,17 @@ async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
     let mut with_hidden_target = all_model_presets();
     let target = with_hidden_target
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4")
+        .find(|preset| preset.model == target_model)
         .expect("target preset present");
     target.show_in_picker = false;
 
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.2",
-        "gpt-5.4",
+        &current_model,
+        &target_model,
         &BTreeMap::new(),
         &with_hidden_target,
     ));
-    assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.4").is_none());
+    assert!(target_preset_for_upgrade(&with_hidden_target, &target_model).is_none());
 }
 
 #[tokio::test]
@@ -244,15 +278,16 @@ async fn model_migration_prompt_shows_for_hidden_model() {
         .expect("config");
 
     let mut available_models = all_model_presets();
+    let (current_model, _) = first_visible_model_with_upgrade(&available_models);
     let current = available_models
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.3-codex")
-        .expect("gpt-5.3-codex preset present");
+        .find(|preset| preset.model == current_model)
+        .expect("migration source preset present");
     current.show_in_picker = false;
     let current = current.clone();
     assert!(
         !current.show_in_picker,
-        "expected gpt-5.3-codex to be hidden from picker for this test"
+        "expected migration source model to be hidden from picker for this test"
     );
 
     let upgrade = current.upgrade.as_ref().expect("upgrade configured");
