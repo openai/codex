@@ -710,7 +710,9 @@ async fn run_review_on_session(
                     params.request.clone(),
                 )
                 .await?;
-                (prompt_items.items, Some(prompt_items.transcript_cursor))
+                let initial_transcript_cursor =
+                    (!prompt_items.has_pending_tool_call).then_some(prompt_items.transcript_cursor);
+                (prompt_items.items, initial_transcript_cursor)
             } else {
                 sync_parent_transcript_to_session(review_session, params.parent_session.as_ref())
                     .await?;
@@ -788,6 +790,9 @@ async fn sync_parent_transcript_to_session(
             super::prompt::GuardianPromptMode::Delta { cursor }
         });
     let prompt_items = build_guardian_transcript_sync_items(parent_session, prompt_mode).await;
+    if prompt_items.has_pending_tool_call {
+        return Ok(false);
+    }
     if Some(prompt_items.transcript_cursor) == last_synced_transcript_cursor {
         return Ok(false);
     }

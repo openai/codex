@@ -625,6 +625,45 @@ fn collect_guardian_transcript_entries_excludes_dangling_tool_calls() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn build_guardian_transcript_items_flags_pending_tool_calls() -> anyhow::Result<()> {
+    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    session
+        .record_into_history(
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "read_file".to_string(),
+                    namespace: None,
+                    arguments: "{\"path\":\"README.md\"}".to_string(),
+                    call_id: "pending-call".to_string(),
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "read_file".to_string(),
+                    namespace: None,
+                    arguments: "{\"path\":\"Cargo.toml\"}".to_string(),
+                    call_id: "completed-call".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "completed-call".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                        "workspace manifest".to_string(),
+                    ),
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let prompt = build_guardian_transcript_sync_items(&session, GuardianPromptMode::Full).await;
+
+    assert!(prompt.has_pending_tool_call);
+    assert_eq!(prompt.transcript_cursor.transcript_entry_count, 2);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn build_guardian_approval_request_items_are_skinny() -> anyhow::Result<()> {
     let (session, _) = crate::session::tests::make_session_and_context().await;

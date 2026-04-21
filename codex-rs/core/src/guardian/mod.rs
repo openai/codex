@@ -83,6 +83,8 @@ use prompt::build_guardian_approval_request_items;
 #[cfg(test)]
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
+use prompt::build_guardian_transcript_sync_items;
+#[cfg(test)]
 use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]
 use prompt::guardian_output_schema;
