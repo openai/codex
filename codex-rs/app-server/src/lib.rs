@@ -70,6 +70,7 @@ mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
+mod config;
 mod config_api;
 mod dynamic_tools;
 mod error_code;
