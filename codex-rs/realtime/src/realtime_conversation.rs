@@ -1,5 +1,6 @@
-use crate::config::RealtimeFeaturesConfig;
-use crate::prompt::prepare_realtime_backend_prompt;
+use crate::handoff::REALTIME_BACKEND_TEXT_PREFIX;
+use crate::handoff::REALTIME_USER_TEXT_PREFIX;
+use crate::handoff::prefix_realtime_v2_text;
 use anyhow::Context;
 use async_channel::Receiver;
 use async_channel::RecvError;
@@ -11,25 +12,11 @@ use codex_api::ApiError;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
-use codex_api::RealtimeSessionConfig;
-use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketEvents;
 use codex_api::RealtimeWebsocketWriter;
 use codex_api::map_api_error;
-use codex_config::config_toml::RealtimeWsMode;
-use codex_config::config_toml::RealtimeWsVersion;
-use codex_login::CodexAuth;
-use codex_login::read_openai_api_key_from_env;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::protocol::RealtimeHandoffRequested;
-use codex_protocol::protocol::RealtimeOutputModality;
-use codex_protocol::protocol::RealtimeVoice;
-use codex_protocol::protocol::RealtimeVoicesList;
-use http::HeaderMap;
-use http::HeaderValue;
-use http::header::AUTHORIZATION;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -44,9 +31,6 @@ const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
-pub const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
-pub const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
-pub const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
 const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
@@ -203,194 +187,10 @@ pub struct RealtimeStartOutput {
     pub sdp: Option<String>,
 }
 
-pub fn build_realtime_session_config(
-    config: &RealtimeFeaturesConfig,
-    prompt: Option<Option<String>>,
-    session_id: Option<String>,
-    output_modality: RealtimeOutputModality,
-    voice: Option<RealtimeVoice>,
-    startup_context: String,
-) -> CodexResult<RealtimeSessionConfig> {
-    let prompt = prepare_realtime_backend_prompt(prompt, config.websocket_backend_prompt.clone());
-    let startup_context = config
-        .websocket_startup_context
-        .clone()
-        .unwrap_or(startup_context);
-    let prompt = match (prompt.is_empty(), startup_context.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => startup_context,
-        (false, true) => prompt,
-        (false, false) => format!("{prompt}\n\n{startup_context}"),
-    };
-    let model = Some(
-        config
-            .websocket_model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_REALTIME_MODEL.to_string()),
-    );
-    let event_parser = match config.session.version {
-        RealtimeWsVersion::V1 => RealtimeEventParser::V1,
-        RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
-    };
-    if config.session.version == RealtimeWsVersion::V1
-        && matches!(output_modality, RealtimeOutputModality::Text)
-    {
-        return Err(CodexErr::InvalidRequest(
-            "text realtime output modality requires realtime v2".to_string(),
-        ));
+impl Default for RealtimeConversationManager {
+    fn default() -> Self {
+        Self::new()
     }
-    let session_mode = match config.session.session_type {
-        RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
-        RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
-    };
-    let voice = voice
-        .or(config.session.voice)
-        .unwrap_or_else(|| default_realtime_voice(config.session.version));
-    validate_realtime_voice(config.session.version, voice)?;
-    Ok(RealtimeSessionConfig {
-        instructions: prompt,
-        model,
-        session_id: Some(session_id.unwrap_or_default()),
-        event_parser,
-        session_mode,
-        output_modality,
-        voice,
-    })
-}
-
-pub fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
-    let voices = RealtimeVoicesList::builtin();
-    match version {
-        RealtimeWsVersion::V1 => voices.default_v1,
-        RealtimeWsVersion::V2 => voices.default_v2,
-    }
-}
-
-pub fn prefix_realtime_v2_text(text: String, prefix: &str) -> String {
-    if text.is_empty() || text.starts_with(prefix) {
-        return text;
-    }
-    format!("{prefix}{text}")
-}
-
-pub fn validate_realtime_voice(
-    version: RealtimeWsVersion,
-    voice: RealtimeVoice,
-) -> CodexResult<()> {
-    let voices = RealtimeVoicesList::builtin();
-    let allowed = match version {
-        RealtimeWsVersion::V1 => &voices.v1,
-        RealtimeWsVersion::V2 => &voices.v2,
-    };
-    if allowed.contains(&voice) {
-        return Ok(());
-    }
-
-    let version = match version {
-        RealtimeWsVersion::V1 => "v1",
-        RealtimeWsVersion::V2 => "v2",
-    };
-    let allowed = allowed
-        .iter()
-        .map(|voice| voice.wire_name())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(CodexErr::InvalidRequest(format!(
-        "realtime voice `{}` is not supported for {version}; supported voices: {allowed}",
-        voice.wire_name()
-    )))
-}
-
-fn realtime_transcript_delta_from_handoff(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    let active_transcript = handoff
-        .active_transcript
-        .iter()
-        .map(|entry| format!("{role}: {text}", role = entry.role, text = entry.text))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!active_transcript.is_empty()).then_some(active_transcript)
-}
-
-pub fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    (!handoff.input_transcript.is_empty())
-        .then_some(handoff.input_transcript.clone())
-        .or_else(|| realtime_transcript_delta_from_handoff(handoff))
-}
-
-pub fn realtime_delegation_from_handoff(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    let input = realtime_text_from_handoff_request(handoff)?;
-    Some(wrap_realtime_delegation_input(
-        &input,
-        realtime_transcript_delta_from_handoff(handoff).as_deref(),
-    ))
-}
-
-pub fn wrap_realtime_delegation_input(input: &str, transcript_delta: Option<&str>) -> String {
-    let input = escape_xml_text(input);
-    if let Some(transcript_delta) = transcript_delta.filter(|text| !text.is_empty()) {
-        let transcript_delta = escape_xml_text(transcript_delta);
-        return format!(
-            "<realtime_delegation>\n  <input>{input}</input>\n  <transcript_delta>{transcript_delta}</transcript_delta>\n</realtime_delegation>"
-        );
-    }
-
-    format!("<realtime_delegation>\n  <input>{input}</input>\n</realtime_delegation>")
-}
-
-fn escape_xml_text(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-pub fn realtime_api_key(
-    auth: Option<&CodexAuth>,
-    provider: &ModelProviderInfo,
-) -> CodexResult<String> {
-    if let Some(api_key) = provider.api_key()? {
-        return Ok(api_key);
-    }
-
-    if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
-    }
-
-    if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
-        return Ok(api_key.to_string());
-    }
-
-    if provider.is_openai()
-        && let Some(api_key) = read_openai_api_key_from_env()
-    {
-        return Ok(api_key);
-    }
-
-    Err(CodexErr::InvalidRequest(
-        "realtime conversation requires API key auth".to_string(),
-    ))
-}
-
-pub fn realtime_request_headers(
-    session_id: Option<&str>,
-    api_key: Option<&str>,
-) -> CodexResult<Option<HeaderMap>> {
-    let mut headers = HeaderMap::new();
-
-    if let Some(session_id) = session_id
-        && let Ok(session_id) = HeaderValue::from_str(session_id)
-    {
-        headers.insert("x-session-id", session_id);
-    }
-
-    if let Some(api_key) = api_key {
-        let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-            CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
-        })?;
-        headers.insert(AUTHORIZATION, auth_value);
-    }
-
-    Ok(Some(headers))
 }
 
 impl RealtimeConversationManager {
@@ -1034,3 +834,7 @@ fn decoded_samples_per_channel(frame: &RealtimeAudioFrame) -> Option<u32> {
     let samples = bytes.len().checked_div(2)?.checked_div(channels)?;
     u32::try_from(samples).ok()
 }
+
+#[cfg(test)]
+#[path = "realtime_conversation_tests.rs"]
+mod tests;

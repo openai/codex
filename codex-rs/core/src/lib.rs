@@ -11,7 +11,6 @@ mod apps;
 mod arc_monitor;
 mod client;
 mod client_common;
-#[path = "realtime_adapter.rs"]
 mod realtime;
 pub(crate) mod session;
 pub use session::SteerInputError;

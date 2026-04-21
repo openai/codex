@@ -48,10 +48,6 @@ pub(crate) use codex_realtime::prefix_realtime_v2_text;
 use codex_realtime::realtime_api_key;
 use codex_realtime::realtime_delegation_from_handoff;
 use codex_realtime::realtime_request_headers;
-#[cfg(test)]
-use codex_realtime::realtime_text_from_handoff_request;
-#[cfg(test)]
-use codex_realtime::wrap_realtime_delegation_input;
 
 const MAX_RECENT_THREADS: usize = 40;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
@@ -527,10 +523,6 @@ async fn send_realtime_conversation_closed(
     })
     .await;
 }
-
-#[cfg(test)]
-#[path = "realtime_conversation_tests.rs"]
-mod conversation_tests;
 
 #[cfg(test)]
 #[path = "realtime_context_tests.rs"]
