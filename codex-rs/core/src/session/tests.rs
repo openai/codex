@@ -6601,6 +6601,7 @@ async fn create_goal_tool_rejects_existing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal-1".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -6619,6 +6620,7 @@ async fn create_goal_tool_rejects_existing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "create-goal-2".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -6663,6 +6665,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -6681,6 +6684,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "pause-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),
@@ -6723,6 +6727,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -6741,6 +6746,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "complete-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),
