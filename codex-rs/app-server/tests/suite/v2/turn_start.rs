@@ -1969,8 +1969,11 @@ async fn run_environment_selection_case(
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
-    let started: TurnStartedNotification =
-        serde_json::from_value(started_notification.params.expect("turn/started params"))?;
+    let started: TurnStartedNotification = serde_json::from_value(
+        started_notification
+            .params
+            .ok_or_else(|| anyhow::anyhow!("turn/started notification should include params"))?,
+    )?;
     assert_eq!(started.turn.id, turn.id, "{}", case.name);
 
     let completed_notification = timeout(
@@ -1978,11 +1981,10 @@ async fn run_environment_selection_case(
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    let completed: TurnCompletedNotification = serde_json::from_value(
-        completed_notification
-            .params
-            .expect("turn/completed params"),
-    )?;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(completed_notification.params.ok_or_else(|| {
+            anyhow::anyhow!("turn/completed notification should include params")
+        })?)?;
     assert_eq!(completed.turn.id, turn.id, "{}", case.name);
     assert_eq!(
         completed.turn.status,
