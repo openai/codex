@@ -42,6 +42,7 @@ pub(super) async fn load_config_layers_internal(
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
     let LoaderOverrides {
+        user_config_path: _,
         managed_config_path,
         managed_preferences_base64,
         ..
@@ -49,6 +50,7 @@ pub(super) async fn load_config_layers_internal(
 
     #[cfg(not(target_os = "macos"))]
     let LoaderOverrides {
+        user_config_path: _,
         managed_config_path,
         ..
     } = overrides;

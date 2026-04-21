@@ -3348,6 +3348,24 @@ async fn set_model_updates_defaults() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn profile_v2_config_path_accepts_only_plain_names() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    assert_eq!(
+        resolve_profile_v2_config_path(codex_home.path(), "work")?,
+        codex_home.path().join("work.config.toml")
+    );
+
+    for invalid in ["", ".", "..", "nested/work", "nested\\work", "work.toml"] {
+        assert!(
+            resolve_profile_v2_config_path(codex_home.path(), invalid).is_err(),
+            "{invalid:?} should be rejected"
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;

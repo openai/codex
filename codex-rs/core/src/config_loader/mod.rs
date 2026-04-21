@@ -110,6 +110,7 @@ pub(crate) async fn first_layer_config_error_from_entries(
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
 /// - user      `${CODEX_HOME}/config.toml`
+/// - profile   `${CODEX_HOME}/<name>.config.toml`, when selected
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
 /// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
 /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
@@ -134,6 +135,7 @@ pub async fn load_config_layers_state(
     thread_config_loader: &dyn ThreadConfigLoader,
     host_name: Option<&str>,
 ) -> io::Result<ConfigLayerStack> {
+    let profile_user_config_path = overrides.user_config_path.clone();
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
@@ -219,29 +221,19 @@ pub async fn load_config_layers_state(
         .await?;
     layers.push(system_layer);
 
-    // Add a layer for $CODEX_HOME/config.toml so folder-derived resources such
-    // as rules/ can still be discovered. When user config is ignored, preserve
-    // the layer metadata without reading config.toml.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    let user_layer = if ignore_user_config {
-        ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-            },
-            TomlValue::Table(toml::map::Map::new()),
-        )
-    } else {
-        load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
-            ConfigLayerEntry::new(
-                ConfigLayerSource::User {
-                    file: user_file.clone(),
-                },
-                config_toml,
-            )
-        })
-        .await?
+    // Add the base user config layer. When profile-v2 is selected, add the
+    // profile config as a second user layer on top so the profile only needs to
+    // contain overrides.
+    let base_user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
+    layers.push(load_user_config_layer(fs, &base_user_file, ignore_user_config).await?);
+
+    let active_user_file = match profile_user_config_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => base_user_file.clone(),
     };
-    layers.push(user_layer);
+    if active_user_file != base_user_file {
+        layers.push(load_user_config_layer(fs, &active_user_file, ignore_user_config).await?);
+    }
 
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
@@ -271,7 +263,7 @@ pub async fn load_config_layers_state(
             &cwd,
             &project_root_markers,
             codex_home,
-            &user_file,
+            &active_user_file,
         )
         .await
         {
@@ -361,6 +353,31 @@ pub async fn load_config_layers_state(
         config_requirements_toml.into_toml(),
     )?
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+}
+
+async fn load_user_config_layer(
+    fs: &dyn ExecutorFileSystem,
+    user_file: &AbsolutePathBuf,
+    ignore_user_config: bool,
+) -> io::Result<ConfigLayerEntry> {
+    if ignore_user_config {
+        return Ok(ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        ));
+    }
+
+    load_config_toml_for_required_layer(fs, user_file, |config_toml| {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            config_toml,
+        )
+    })
+    .await
 }
 
 fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
