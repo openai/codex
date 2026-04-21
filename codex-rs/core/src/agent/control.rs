@@ -116,7 +116,6 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,
-        RolloutItem::SessionState(_) => false,
         // A forked child gets its own runtime config, including spawned-agent
         // instructions, so it must establish a fresh context diff baseline.
         RolloutItem::TurnContext(_) => false,

@@ -173,7 +173,6 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-mod agent_task_lifecycle;
 mod handlers;
 mod mcp;
 mod review;
@@ -1000,10 +999,7 @@ impl Session {
                     .ensure_registered_identity()
                     .await
                 {
-                    Ok(Some(_)) => {
-                        sess.maybe_prewarm_agent_task_registration().await;
-                        return;
-                    }
+                    Ok(Some(_)) => return,
                     Ok(None) => {
                         drop(sess);
                         if auth_state_rx.changed().await.is_err() {
@@ -1032,6 +1028,90 @@ impl Session {
             }),
         })
         .await;
+    }
+
+    async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
+        let agent_task = {
+            let state = self.state.lock().await;
+            state.agent_task()
+        }?;
+
+        if self
+            .services
+            .agent_identity_manager
+            .task_matches_current_binding(&agent_task)
+            .await
+        {
+            debug!(
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "reusing cached agent task"
+            );
+            return Some(agent_task);
+        }
+
+        debug!(
+            agent_runtime_id = %agent_task.agent_runtime_id,
+            task_id = %agent_task.task_id,
+            "discarding cached agent task because auth binding changed"
+        );
+        let mut state = self.state.lock().await;
+        if state.agent_task().as_ref() == Some(&agent_task) {
+            state.clear_agent_task();
+        }
+        None
+    }
+
+    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
+        if let Some(agent_task) = self.cached_agent_task_for_current_binding().await {
+            return Ok(Some(agent_task));
+        }
+
+        for _ in 0..2 {
+            let Some(agent_task) = self.services.agent_identity_manager.register_task().await?
+            else {
+                return Ok(None);
+            };
+
+            if !self
+                .services
+                .agent_identity_manager
+                .task_matches_current_binding(&agent_task)
+                .await
+            {
+                debug!(
+                    agent_runtime_id = %agent_task.agent_runtime_id,
+                    task_id = %agent_task.task_id,
+                    "discarding newly registered agent task because auth binding changed"
+                );
+                continue;
+            }
+
+            {
+                let mut state = self.state.lock().await;
+                if let Some(existing_agent_task) = state.agent_task() {
+                    if existing_agent_task.has_same_binding(&agent_task) {
+                        return Ok(Some(existing_agent_task));
+                    }
+                    debug!(
+                        agent_runtime_id = %existing_agent_task.agent_runtime_id,
+                        task_id = %existing_agent_task.task_id,
+                        "replacing cached agent task because auth binding changed"
+                    );
+                }
+                state.set_agent_task(agent_task.clone());
+            }
+
+            info!(
+                thread_id = %self.conversation_id,
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "registered agent task for thread"
+            );
+            return Ok(Some(agent_task));
+        }
+
+        Ok(None)
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1181,7 +1261,6 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                self.restore_persisted_agent_task(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
