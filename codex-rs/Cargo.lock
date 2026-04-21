@@ -1947,6 +1947,7 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
+ "codex-realtime",
  "codex-response-debug-context",
  "codex-rmcp-client",
  "codex-rollout",
@@ -2675,6 +2676,33 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "codex-realtime"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "chrono",
+ "codex-api",
+ "codex-config",
+ "codex-exec-server",
+ "codex-git-utils",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "codex-thread-store",
+ "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "whoami",
 ]
 
 [[package]]
