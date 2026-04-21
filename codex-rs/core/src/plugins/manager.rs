@@ -76,7 +76,6 @@ use tracing::info;
 use tracing::warn;
 
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
-pub const OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME: &str = "OpenAI Curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const FEATURED_PLUGIN_IDS_CACHE_TTL: std::time::Duration =
@@ -975,13 +974,7 @@ impl PluginsManager {
                 (!plugins.is_empty()).then_some(ConfiguredMarketplace {
                     name: marketplace.name,
                     path: marketplace.path,
-                    interface: if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
-                        Some(MarketplaceInterface {
-                            display_name: Some(OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()),
-                        })
-                    } else {
-                        marketplace.interface
-                    },
+                    interface: marketplace.interface,
                     plugins,
                 })
             })

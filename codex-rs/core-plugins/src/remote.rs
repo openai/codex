@@ -325,7 +325,7 @@ pub async fn fetch_remote_marketplaces(
                 .to_ascii_lowercase()
                 .cmp(&remote_plugin_display_name(right).to_ascii_lowercase())
                 .then_with(|| {
-                    remote_plugin_display_name(left).cmp(&remote_plugin_display_name(right))
+                    remote_plugin_display_name(left).cmp(remote_plugin_display_name(right))
                 })
                 .then_with(|| left.id.cmp(&right.id))
         });

@@ -283,6 +283,33 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
 }
 
 #[tokio::test]
+async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_remote_plugin_catalog_config(codex_home.path(), "https://example.invalid/backend-api/")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            plugin_name: "linear/../../oops".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("invalid remote plugin id"));
+    assert!(err.error.message.contains("invalid plugin name"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_read_returns_canonical_openai_curated_marketplace_name() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
