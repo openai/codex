@@ -397,6 +397,20 @@ impl CodexAuth {
         })
     }
 
+    pub fn is_workspace_account(&self) -> bool {
+        matches!(
+            self.account_plan_type(),
+            Some(
+                AccountPlanType::Team
+                    | AccountPlanType::SelfServeBusinessUsageBased
+                    | AccountPlanType::Business
+                    | AccountPlanType::EnterpriseCbpUsageBased
+                    | AccountPlanType::Enterprise
+                    | AccountPlanType::Edu
+            )
+        )
+    }
+
     /// Returns `None` if token-backed ChatGPT auth is unavailable.
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
         let state = match self {

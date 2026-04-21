@@ -169,13 +169,7 @@ fn verify_cache_signature(payload_bytes: &[u8], signature: &str) -> bool {
 }
 
 fn auth_identity(auth: &CodexAuth) -> (Option<String>, Option<String>) {
-    let token_data = auth.get_token_data().ok();
-    let chatgpt_user_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.id_token.chatgpt_user_id.as_deref())
-        .map(str::to_owned);
-    let account_id = auth.get_account_id();
-    (chatgpt_user_id, account_id)
+    (auth.get_chatgpt_user_id(), auth.get_account_id())
 }
 
 fn cache_payload_bytes(payload: &CloudRequirementsCacheSignedPayload) -> Option<Vec<u8>> {
@@ -331,7 +325,7 @@ impl CloudRequirementsService {
         let Some(plan_type) = auth.account_plan_type() else {
             return Ok(None);
         };
-        if !auth.is_chatgpt_auth()
+        if !auth.uses_codex_backend()
             || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
         {
             return Ok(None);
@@ -551,7 +545,7 @@ impl CloudRequirementsService {
         let Some(plan_type) = auth.account_plan_type() else {
             return false;
         };
-        if !auth.is_chatgpt_auth()
+        if !auth.uses_codex_backend()
             || !(plan_type.is_business_like() || matches!(plan_type, PlanType::Enterprise))
         {
             return false;

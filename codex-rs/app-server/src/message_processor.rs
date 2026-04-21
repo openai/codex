@@ -1078,7 +1078,7 @@ impl MessageProcessor {
         let auth = self.auth_manager.auth().await;
         if !config.features.apps_enabled_for_auth(
             auth.as_ref()
-                .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+                .is_some_and(codex_login::CodexAuth::uses_codex_backend),
         ) {
             return;
         }
