@@ -750,7 +750,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 }
 
 #[tokio::test]
-async fn resumed_thread_activates_paused_goal_and_starts_continuation() -> anyhow::Result<()> {
+async fn resumed_thread_activates_paused_goal_and_defers_continuation() -> anyhow::Result<()> {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -817,10 +817,9 @@ async fn resumed_thread_activates_paused_goal_and_starts_continuation() -> anyho
         .await?
         .expect("goal should still exist after resume");
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
-    assert!(
-        resumed.thread.codex.session.has_active_turn().await,
-        "resuming a paused goal should continue the active goal"
-    );
+    assert!(!resumed.thread.codex.session.has_active_turn().await);
+    resumed.thread.continue_active_goal_if_idle().await;
+    assert!(resumed.thread.codex.session.has_active_turn().await);
 
     resumed.thread.shutdown_and_wait().await?;
     Ok(())
