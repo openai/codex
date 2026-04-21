@@ -7,6 +7,7 @@ pub use codex_rollout::RolloutRecorder;
 pub use codex_rollout::RolloutRecorderParams;
 pub use codex_rollout::SESSIONS_SUBDIR;
 pub use codex_rollout::SessionMeta;
+pub use codex_rollout::SortDirection;
 pub use codex_rollout::ThreadItem;
 pub use codex_rollout::ThreadSortKey;
 pub use codex_rollout::ThreadsPage;
@@ -46,11 +47,7 @@ impl codex_rollout::RolloutConfigView for Config {
 }
 
 pub(crate) mod list {
-    pub use codex_rollout::ThreadListConfig;
-    pub use codex_rollout::ThreadListLayout;
-    pub use codex_rollout::ThreadSortKey;
     pub use codex_rollout::find_thread_path_by_id_str;
-    pub use codex_rollout::get_threads_in_root;
 }
 
 pub(crate) mod metadata {

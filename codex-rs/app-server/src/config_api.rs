@@ -1,3 +1,5 @@
+use crate::config_manager::ConfigManager;
+use crate::config_manager_service::ConfigManagerError;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use async_trait::async_trait;
@@ -22,31 +24,23 @@ use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config::ConfigService;
-use codex_core::config::ConfigServiceError;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::HookEventsToml;
 use codex_core::config_loader::HookHandlerConfig as CoreHookHandlerConfig;
-use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ManagedHooksRequirementsToml;
 use codex_core::config_loader::MatcherGroup as CoreMatcherGroup;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::plugins::PluginId;
-use codex_core::plugins::collect_plugin_enabled_candidates;
-use codex_core::plugins::installed_plugin_telemetry_metadata;
+use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
+use codex_core_plugins::toggles::collect_plugin_enabled_candidates;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::RwLock;
-use toml::Value as TomlValue;
 use tracing::warn;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
@@ -79,85 +73,36 @@ impl UserConfigReloader for ThreadManager {
 
 #[derive(Clone)]
 pub(crate) struct ConfigApi {
-    codex_home: PathBuf,
-    cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
-    loader_overrides: LoaderOverrides,
-    cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    config_manager: ConfigManager,
     user_config_reloader: Arc<dyn UserConfigReloader>,
     analytics_events_client: AnalyticsEventsClient,
 }
 
 impl ConfigApi {
     pub(crate) fn new(
-        codex_home: PathBuf,
-        cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-        runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
-        loader_overrides: LoaderOverrides,
-        cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+        config_manager: ConfigManager,
         user_config_reloader: Arc<dyn UserConfigReloader>,
         analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
-            codex_home,
-            cli_overrides,
-            runtime_feature_enablement,
-            loader_overrides,
-            cloud_requirements,
+            config_manager,
             user_config_reloader,
             analytics_events_client,
         }
-    }
-
-    fn config_service(&self) -> ConfigService {
-        ConfigService::new(
-            self.codex_home.clone(),
-            self.current_cli_overrides(),
-            self.loader_overrides.clone(),
-            self.current_cloud_requirements(),
-        )
-    }
-
-    fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
-        self.cli_overrides
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
-    fn current_runtime_feature_enablement(&self) -> BTreeMap<String, bool> {
-        self.runtime_feature_enablement
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
-    fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
-        self.cloud_requirements
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
     }
 
     pub(crate) async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
-        let mut config = codex_core::config::ConfigBuilder::default()
-            .codex_home(self.codex_home.clone())
-            .cli_overrides(self.current_cli_overrides())
-            .loader_overrides(self.loader_overrides.clone())
-            .fallback_cwd(fallback_cwd)
-            .cloud_requirements(self.current_cloud_requirements())
-            .build()
+        self.config_manager
+            .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to resolve feature override precedence: {err}"),
                 data: None,
-            })?;
-        apply_runtime_feature_enablement(&mut config, &self.current_runtime_feature_enablement());
-        Ok(config)
+            })
     }
 
     pub(crate) async fn read(
@@ -165,11 +110,7 @@ impl ConfigApi {
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
         let fallback_cwd = params.cwd.as_ref().map(PathBuf::from);
-        let mut response = self
-            .config_service()
-            .read(params)
-            .await
-            .map_err(map_error)?;
+        let mut response = self.config_manager.read(params).await.map_err(map_error)?;
         let config = self.load_latest_config(fallback_cwd).await?;
         for feature_key in SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT {
             let Some(feature) = feature_for_key(feature_key) else {
@@ -197,7 +138,7 @@ impl ConfigApi {
         &self,
     ) -> Result<ConfigRequirementsReadResponse, JSONRPCErrorError> {
         let requirements = self
-            .config_service()
+            .config_manager
             .read_requirements()
             .await
             .map_err(map_error)?
@@ -213,11 +154,11 @@ impl ConfigApi {
         let pending_changes =
             collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
         let response = self
-            .config_service()
+            .config_manager
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes);
+        self.emit_plugin_toggle_events(pending_changes).await;
         Ok(response)
     }
 
@@ -233,11 +174,11 @@ impl ConfigApi {
                 .map(|edit| (&edit.key_path, &edit.value)),
         );
         let response = self
-            .config_service()
+            .config_manager
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes);
+        self.emit_plugin_toggle_events(pending_changes).await;
         if reload_user_config {
             self.user_config_reloader.reload_user_config().await;
         }
@@ -284,21 +225,17 @@ impl ConfigApi {
             return Ok(ExperimentalFeatureEnablementSetResponse { enablement });
         }
 
-        {
-            let mut runtime_feature_enablement =
-                self.runtime_feature_enablement
-                    .write()
-                    .map_err(|_| JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: "failed to update feature enablement".to_string(),
-                        data: None,
-                    })?;
-            runtime_feature_enablement.extend(
+        self.config_manager
+            .extend_runtime_feature_enablement(
                 enablement
                     .iter()
                     .map(|(name, enabled)| (name.clone(), *enabled)),
-            );
-        }
+            )
+            .map_err(|_| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: "failed to update feature enablement".to_string(),
+                data: None,
+            })?;
 
         self.load_latest_config(/*fallback_cwd*/ None).await?;
         self.user_config_reloader.reload_user_config().await;
@@ -306,61 +243,22 @@ impl ConfigApi {
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
 
-    fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
+    async fn emit_plugin_toggle_events(
+        &self,
+        pending_changes: std::collections::BTreeMap<String, bool>,
+    ) {
         for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
                 continue;
             };
             let metadata =
-                installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id);
+                installed_plugin_telemetry_metadata(self.config_manager.codex_home(), &plugin_id)
+                    .await;
             if enabled {
                 self.analytics_events_client.track_plugin_enabled(metadata);
             } else {
                 self.analytics_events_client.track_plugin_disabled(metadata);
             }
-        }
-    }
-}
-
-pub(crate) fn protected_feature_keys(
-    config_layer_stack: &codex_core::config_loader::ConfigLayerStack,
-) -> BTreeSet<String> {
-    let mut protected_features = config_layer_stack
-        .effective_config()
-        .get("features")
-        .and_then(toml::Value::as_table)
-        .map(|features| features.keys().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default();
-
-    if let Some(feature_requirements) = config_layer_stack
-        .requirements_toml()
-        .feature_requirements
-        .as_ref()
-    {
-        protected_features.extend(feature_requirements.entries.keys().cloned());
-    }
-
-    protected_features
-}
-
-pub(crate) fn apply_runtime_feature_enablement(
-    config: &mut Config,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
-) {
-    let protected_features = protected_feature_keys(&config.config_layer_stack);
-    for (name, enabled) in runtime_feature_enablement {
-        if protected_features.contains(name) {
-            continue;
-        }
-        let Some(feature) = feature_for_key(name) else {
-            continue;
-        };
-        if let Err(err) = config.features.set_enabled(feature, *enabled) {
-            warn!(
-                feature = name,
-                error = %err,
-                "failed to apply runtime feature enablement"
-            );
         }
     }
 }
@@ -414,6 +312,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
     } = hooks;
     let HookEventsToml {
         pre_tool_use,
+        permission_request,
         post_tool_use,
         session_start,
         user_prompt_submit,
@@ -424,6 +323,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         managed_dir,
         windows_managed_dir,
         pre_tool_use: map_hook_matcher_groups_to_api(pre_tool_use),
+        permission_request: map_hook_matcher_groups_to_api(permission_request),
         post_tool_use: map_hook_matcher_groups_to_api(post_tool_use),
         session_start: map_hook_matcher_groups_to_api(session_start),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
@@ -520,7 +420,6 @@ fn map_network_requirements_to_api(
                 .collect()
         }),
         managed_allowed_domains_only: network.managed_allowed_domains_only,
-        danger_full_access_denylist_only: network.danger_full_access_denylist_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -563,7 +462,7 @@ fn map_network_unix_socket_permission_to_api(
     }
 }
 
-fn map_error(err: ConfigServiceError) -> JSONRPCErrorError {
+fn map_error(err: ConfigManagerError) -> JSONRPCErrorError {
     if let Some(code) = err.write_error_code() {
         return config_write_error(code, err.to_string());
     }
@@ -588,7 +487,11 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_manager::apply_runtime_feature_enablement;
     use codex_analytics::AnalyticsEventsClient;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
     use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
@@ -601,9 +504,11 @@ mod tests {
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
+    use toml::Value as TomlValue;
 
     #[derive(Default)]
     struct RecordingUserConfigReloader {
@@ -632,6 +537,7 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
@@ -682,7 +588,6 @@ mod tests {
                     ]),
                 }),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/proxy.sock".to_string(),
@@ -691,6 +596,7 @@ mod tests {
                 }),
                 allow_local_binding: Some(true),
             }),
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -738,6 +644,7 @@ mod tests {
                         status_message: Some("checking".to_string()),
                     }],
                 }],
+                permission_request: Vec::new(),
                 post_tool_use: Vec::new(),
                 session_start: Vec::new(),
                 user_prompt_submit: Vec::new(),
@@ -762,7 +669,6 @@ mod tests {
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -781,6 +687,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
@@ -798,7 +705,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/ignored.sock".to_string(),
@@ -807,6 +713,7 @@ mod tests {
                 }),
                 allow_local_binding: None,
             }),
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -822,7 +729,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -841,6 +747,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
@@ -850,6 +757,7 @@ mod tests {
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -934,11 +842,14 @@ mod tests {
         );
         let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
         let config_api = ConfigApi::new(
-            codex_home.path().to_path_buf(),
-            Arc::new(RwLock::new(Vec::new())),
-            Arc::new(RwLock::new(BTreeMap::new())),
-            LoaderOverrides::default(),
-            Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            ConfigManager::new(
+                codex_home.path().to_path_buf(),
+                Vec::new(),
+                LoaderOverrides::default(),
+                CloudRequirementsLoader::default(),
+                Arg0DispatchPaths::default(),
+                Arc::new(codex_config::NoopThreadConfigLoader),
+            ),
             reloader.clone(),
             AnalyticsEventsClient::new(
                 auth_manager,

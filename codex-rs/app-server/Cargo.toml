@@ -34,6 +34,8 @@ codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
+codex-device-key = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
@@ -54,6 +56,7 @@ codex-rmcp-client = { workspace = true }
 codex-rollout = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
+codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
@@ -70,8 +73,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -95,6 +100,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 core_test_support = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

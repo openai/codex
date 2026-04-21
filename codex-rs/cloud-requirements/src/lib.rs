@@ -1164,6 +1164,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1172,6 +1173,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1193,6 +1195,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1201,6 +1204,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1222,6 +1226,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1230,6 +1235,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -1268,6 +1274,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1276,6 +1283,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }
@@ -1350,6 +1358,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1358,6 +1367,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
@@ -1422,6 +1432,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1430,6 +1441,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
@@ -1492,6 +1504,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1500,6 +1513,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1689,6 +1703,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1697,6 +1712,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
@@ -1724,6 +1740,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1732,6 +1749,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1779,6 +1797,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1787,6 +1806,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1829,6 +1849,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1837,6 +1858,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1883,6 +1905,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1891,6 +1914,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1938,6 +1962,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -1946,6 +1971,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1993,6 +2019,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2001,6 +2028,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
         let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes");
@@ -2081,6 +2109,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2089,6 +2118,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -2108,6 +2138,7 @@ enabled = false
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
@@ -2116,6 +2147,7 @@ enabled = false
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }

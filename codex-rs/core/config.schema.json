@@ -335,10 +335,16 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apply_patch_streaming_events": {
+              "type": "boolean"
+            },
             "apps": {
               "type": "boolean"
             },
             "child_agents_md": {
+              "type": "boolean"
+            },
+            "chronicle": {
               "type": "boolean"
             },
             "code_mode": {
@@ -387,6 +393,9 @@
               "type": "boolean"
             },
             "experimental_windows_sandbox": {
+              "type": "boolean"
+            },
+            "external_migration": {
               "type": "boolean"
             },
             "fast_mode": {
@@ -485,10 +494,16 @@
             "steer": {
               "type": "boolean"
             },
+            "telepathy": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
             "tool_search": {
+              "type": "boolean"
+            },
+            "tool_search_always_defer_mcp_tools": {
               "type": "boolean"
             },
             "tool_suggest": {
@@ -497,13 +512,13 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "unavailable_dummy_tools": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
             "unified_exec": {
-              "type": "boolean"
-            },
-            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -519,6 +534,12 @@
               "type": "boolean"
             },
             "web_search_request": {
+              "type": "boolean"
+            },
+            "workspace_dependencies": {
+              "type": "boolean"
+            },
+            "workspace_owner_usage_nudge": {
               "type": "boolean"
             }
           },
@@ -621,6 +642,39 @@
       },
       "type": "object"
     },
+    "ExternalConfigMigrationPrompts": {
+      "additionalProperties": false,
+      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
+      "properties": {
+        "home": {
+          "description": "Tracks whether home-level external config migration prompts are hidden.",
+          "type": "boolean"
+        },
+        "home_last_prompted_at": {
+          "description": "Tracks the last time the home-level external config migration prompt was shown.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "project_last_prompted_at": {
+          "additionalProperties": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Tracks the last time a project-level external config migration prompt was shown.",
+          "type": "object"
+        },
+        "projects": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {},
+          "description": "Tracks which project paths have opted out of external config migration prompts.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -664,6 +718,14 @@
       ]
     },
     "FilesystemPermissionsToml": {
+      "properties": {
+        "glob_scan_max_depth": {
+          "description": "Optional maximum depth for expanding unreadable glob patterns on platforms that snapshot glob matches before sandbox startup.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -769,6 +831,13 @@
     },
     "HookEventsToml": {
       "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
           "default": [],
           "items": {
@@ -874,6 +943,11 @@
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
+        "last_revision": {
+          "default": null,
+          "description": "Git revision Codex last successfully activated for this marketplace.",
+          "type": "string"
+        },
         "last_updated": {
           "default": null,
           "description": "Last time Codex successfully added or refreshed this marketplace.",
@@ -911,7 +985,8 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "git"
+        "git",
+        "local"
       ],
       "type": "string"
     },
@@ -930,6 +1005,28 @@
         }
       },
       "type": "object"
+    },
+    "McpServerEnvVar": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "McpServerToolConfig": {
       "additionalProperties": false,
@@ -954,6 +1051,10 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "disable_on_external_context": {
+          "description": "When `true`, external context sources mark the thread `memory_mode` as `\"polluted\"`.",
+          "type": "boolean"
+        },
         "extract_model": {
           "description": "Model used for thread summarisation.",
           "type": "string"
@@ -965,7 +1066,8 @@
         "max_raw_memories_for_consolidation": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 4096.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_rollout_age_days": {
@@ -976,7 +1078,8 @@
         "max_rollouts_per_startup": {
           "description": "Maximum number of rollout candidates processed per pass.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 128.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_unused_days": {
@@ -988,10 +1091,6 @@
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
           "type": "integer"
-        },
-        "no_memories_if_mcp_or_web_search": {
-          "description": "When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `\"polluted\"`.",
-          "type": "boolean"
         },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
@@ -1052,6 +1151,17 @@
       ],
       "type": "object"
     },
+    "ModelProviderAwsAuthInfo": {
+      "additionalProperties": false,
+      "description": "AWS SigV4 auth configuration for a model provider.",
+      "properties": {
+        "profile": {
+          "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
@@ -1063,6 +1173,14 @@
             }
           ],
           "description": "Command-backed bearer-token configuration for this provider."
+        },
+        "aws": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderAwsAuthInfo"
+            }
+          ],
+          "description": "AWS SigV4 auth configuration for this provider."
         },
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
@@ -1095,6 +1213,7 @@
           "type": "object"
         },
         "name": {
+          "default": "",
           "description": "Friendly display name.",
           "type": "string"
         },
@@ -1149,9 +1268,6 @@
           "description": "Which wire protocol this provider expects."
         }
       },
-      "required": [
-        "name"
-      ],
       "type": "object"
     },
     "MultiAgentV2ConfigToml": {
@@ -1242,8 +1358,22 @@
       "type": "object"
     },
     "Notice": {
-      "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
+      "additionalProperties": false,
       "properties": {
+        "external_config_migration_prompts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExternalConfigMigrationPrompts"
+            }
+          ],
+          "default": {
+            "home": null,
+            "home_last_prompted_at": null,
+            "project_last_prompted_at": {},
+            "projects": {}
+          },
+          "description": "Tracks scopes where external config migration prompts should be suppressed."
+        },
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
           "type": "boolean"
@@ -1566,6 +1696,14 @@
           "default": null,
           "type": "string"
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "default": null
+        },
         "disabled_tools": {
           "default": null,
           "items": {
@@ -1601,9 +1739,13 @@
         "env_vars": {
           "default": null,
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/McpServerEnvVar"
           },
           "type": "array"
+        },
+        "experimental_environment": {
+          "default": null,
+          "type": "string"
         },
         "http_headers": {
           "additionalProperties": {
@@ -1641,6 +1783,10 @@
           "default": null,
           "format": "double",
           "type": "number"
+        },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
         },
         "tool_timeout_sec": {
           "default": null,
@@ -1903,6 +2049,10 @@
             "$ref": "#/definitions/SkillConfig"
           },
           "type": "array"
+        },
+        "include_instructions": {
+          "description": "Whether turns receive the automatic skills instructions block.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2290,6 +2440,10 @@
       "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
+    "experimental_thread_store_endpoint": {
+      "description": "Experimental / do not use. When set, app-server uses a remote thread store at this endpoint instead of the local filesystem/SQLite store.",
+      "type": "string"
+    },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
     },
@@ -2304,10 +2458,16 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apply_patch_streaming_events": {
+          "type": "boolean"
+        },
         "apps": {
           "type": "boolean"
         },
         "child_agents_md": {
+          "type": "boolean"
+        },
+        "chronicle": {
           "type": "boolean"
         },
         "code_mode": {
@@ -2356,6 +2516,9 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "external_migration": {
           "type": "boolean"
         },
         "fast_mode": {
@@ -2454,10 +2617,16 @@
         "steer": {
           "type": "boolean"
         },
+        "telepathy": {
+          "type": "boolean"
+        },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
         "tool_search": {
+          "type": "boolean"
+        },
+        "tool_search_always_defer_mcp_tools": {
           "type": "boolean"
         },
         "tool_suggest": {
@@ -2466,13 +2635,13 @@
         "tui_app_server": {
           "type": "boolean"
         },
+        "unavailable_dummy_tools": {
+          "type": "boolean"
+        },
         "undo": {
           "type": "boolean"
         },
         "unified_exec": {
-          "type": "boolean"
-        },
-        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {
@@ -2488,6 +2657,12 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workspace_dependencies": {
+          "type": "boolean"
+        },
+        "workspace_owner_usage_nudge": {
           "type": "boolean"
         }
       },

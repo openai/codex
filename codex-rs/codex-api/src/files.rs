@@ -96,7 +96,7 @@ pub fn openai_file_uri(file_id: &str) -> String {
 
 pub async fn upload_local_file(
     base_url: &str,
-    auth: &impl AuthProvider,
+    auth: &dyn AuthProvider,
     path: &Path,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
@@ -252,21 +252,18 @@ pub async fn upload_local_file(
 }
 
 fn authorized_request(
-    auth: &impl AuthProvider,
+    auth: &dyn AuthProvider,
     method: reqwest::Method,
     url: &str,
 ) -> reqwest::RequestBuilder {
+    let mut headers = http::HeaderMap::new();
+    auth.add_auth_headers(&mut headers);
+
     let client = build_reqwest_client();
-    let mut request = client
+    client
         .request(method, url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT);
-    if let Some(token) = auth.bearer_token() {
-        request = request.bearer_auth(token);
-    }
-    if let Some(account_id) = auth.account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    request
+        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+        .headers(headers)
 }
 
 fn build_reqwest_client() -> reqwest::Client {
@@ -279,8 +276,8 @@ fn build_reqwest_client() -> reqwest::Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CoreAuthProvider;
     use pretty_assertions::assert_eq;
+    use reqwest::header::HeaderValue;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -294,8 +291,21 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    fn chatgpt_auth() -> CoreAuthProvider {
-        CoreAuthProvider::for_test(Some("token"), Some("account_id"))
+    #[derive(Clone, Copy)]
+    struct ChatGptTestAuth;
+
+    impl AuthProvider for ChatGptTestAuth {
+        fn add_auth_headers(&self, headers: &mut reqwest::header::HeaderMap) {
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer token"),
+            );
+            headers.insert("ChatGPT-Account-ID", HeaderValue::from_static("account_id"));
+        }
+    }
+
+    fn chatgpt_auth() -> ChatGptTestAuth {
+        ChatGptTestAuth
     }
 
     fn base_url_for(server: &MockServer) -> String {

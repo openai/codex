@@ -14,6 +14,7 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
+use std::sync::Arc;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -24,9 +25,7 @@ use wiremock::matchers::path;
 struct DummyAuth;
 
 impl AuthProvider for DummyAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 fn provider(base_url: &str) -> Provider {
@@ -90,6 +89,7 @@ async fn models_client_hits_models_endpoint() {
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: Some(272_000),
+            max_context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
@@ -110,7 +110,7 @@ async fn models_client_hits_models_endpoint() {
         .await;
 
     let transport = ReqwestTransport::new(reqwest::Client::new());
-    let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
+    let client = ModelsClient::new(transport, provider(&base_url), Arc::new(DummyAuth));
 
     let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())

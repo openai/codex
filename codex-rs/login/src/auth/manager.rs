@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use tokio::sync::Mutex as AsyncMutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use tokio::sync::Semaphore;
 
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
@@ -20,6 +22,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
+use super::revoke::revoke_auth_tokens;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
@@ -83,7 +86,10 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
+static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -291,6 +297,12 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.account_id)
     }
 
+    /// Returns false if `is_chatgpt_auth()` is false or the token omits the FedRAMP claim.
+    pub fn is_fedramp_account(&self) -> bool {
+        self.get_current_token_data()
+            .is_some_and(|t| t.id_token.is_fedramp_account())
+    }
+
     /// Returns `None` if `is_chatgpt_auth()` is false.
     pub fn get_account_email(&self) -> Option<String> {
         self.get_current_token_data().and_then(|t| t.id_token.email)
@@ -371,7 +383,11 @@ impl CodexAuth {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
         };
-        let storage = create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File);
+        let dummy_auth_id = NEXT_DUMMY_AUTH_ID.fetch_add(1, Ordering::Relaxed);
+        let storage = create_auth_storage(
+            PathBuf::from(format!("dummy-chatgpt-auth-{dummy_auth_id}")),
+            AuthCredentialsStoreMode::Ephemeral,
+        );
         Self::Chatgpt(ChatgptAuth { state, storage })
     }
 
@@ -426,6 +442,19 @@ pub fn logout(
 ) -> std::io::Result<bool> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     storage.delete()
+}
+
+pub async fn logout_with_revoke(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    AuthManager::new(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        auth_credentials_store_mode,
+    )
+    .logout_with_revoke()
+    .await
 }
 
 /// Writes an `auth.json` that contains only the API key.
@@ -1105,7 +1134,7 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
-    refresh_lock: AsyncMutex<()>,
+    refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
 }
 
@@ -1171,7 +1200,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         }
     }
@@ -1189,7 +1218,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
     }
@@ -1206,7 +1235,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
         })
     }
@@ -1221,7 +1250,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -1480,7 +1509,12 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1512,7 +1546,12 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         self.refresh_token_from_authority_impl().await
     }
 
@@ -1559,6 +1598,19 @@ impl AuthManager {
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(removed)
+    }
+
+    pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
+        let auth_dot_json = self
+            .auth_cached()
+            .and_then(|auth| auth.get_current_auth_json());
+        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+            tracing::warn!("failed to revoke auth tokens during logout: {err}");
+        }
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        // Always reload to clear any cached auth (even if file absent).
+        self.reload();
+        Ok(result)
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {

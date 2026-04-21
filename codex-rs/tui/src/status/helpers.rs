@@ -5,8 +5,8 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_protocol::account::PlanType;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
-use std::path::PathBuf;
 use unicode_width::UnicodeWidthStr;
 
 fn normalize_agents_display_path(path: &Path) -> String {
@@ -33,10 +33,11 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
-pub(crate) fn compose_agents_summary(config: &Config, paths: &[PathBuf]) -> String {
+pub(crate) fn compose_agents_summary(config: &Config, paths: &[AbsolutePathBuf]) -> String {
     let mut rels: Vec<String> = Vec::new();
 
     for p in paths {
+        let p = p.as_path();
         let file_name = p
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
@@ -184,9 +185,10 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::legacy_core::DEFAULT_PROJECT_DOC_FILENAME;
-    use crate::legacy_core::LOCAL_PROJECT_DOC_FILENAME;
+    use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
+    use crate::legacy_core::LOCAL_AGENTS_MD_FILENAME;
     use crate::legacy_core::config::ConfigBuilder;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -225,11 +227,11 @@ mod tests {
     async fn compose_agents_summary_includes_global_agents_path() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            compose_agents_summary(&config, std::slice::from_ref(&global_agents_path)),
+            compose_agents_summary(&config, &[global_agents_path.abs()]),
             format_directory_display(&global_agents_path, /*max_width*/ None)
         );
     }
@@ -238,11 +240,11 @@ mod tests {
     async fn compose_agents_summary_names_global_agents_override() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+        let override_path = codex_home.path().join(LOCAL_AGENTS_MD_FILENAME);
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            compose_agents_summary(&config, std::slice::from_ref(&override_path)),
+            compose_agents_summary(&config, &[override_path.abs()]),
             format_directory_display(&override_path, /*max_width*/ None)
         );
     }
@@ -251,13 +253,16 @@ mod tests {
     async fn compose_agents_summary_orders_global_before_project_agents() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
-        let project_agents_path = cwd.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+        let global_agents_path = codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME);
+        let project_agents_path = cwd.path().join(DEFAULT_AGENTS_MD_FILENAME);
         let config = test_config(&codex_home, &cwd).await;
 
         let summary = compose_agents_summary(
             &config,
-            &[global_agents_path.clone(), project_agents_path.clone()],
+            &[
+                global_agents_path.clone().abs(),
+                project_agents_path.clone().abs(),
+            ],
         );
         let mut paths = summary.split(", ");
         assert_eq!(
@@ -265,7 +270,7 @@ mod tests {
             Some(format_directory_display(&global_agents_path, /*max_width*/ None).as_str())
         );
         let project_path = paths.next().expect("project agents path");
-        assert!(project_path.ends_with(DEFAULT_PROJECT_DOC_FILENAME));
+        assert!(project_path.ends_with(DEFAULT_AGENTS_MD_FILENAME));
         assert_eq!(paths.next(), None);
     }
 }

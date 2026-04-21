@@ -16,10 +16,15 @@ pub struct AgentPath(String);
 
 impl AgentPath {
     pub const ROOT: &str = "/root";
+    pub const MORPHEUS: &str = "/morpheus";
     const ROOT_SEGMENT: &str = "root";
 
     pub fn root() -> Self {
         Self(Self::ROOT.to_string())
+    }
+
+    pub fn morpheus() -> Self {
+        Self(Self::MORPHEUS.to_string())
     }
 
     pub fn from_string(path: String) -> Result<Self, String> {
@@ -142,15 +147,19 @@ fn validate_agent_name(agent_name: &str) -> Result<(), String> {
 }
 
 fn validate_absolute_path(path: &str) -> Result<(), String> {
+    if path == AgentPath::MORPHEUS {
+        return Ok(());
+    }
+
     let Some(stripped) = path.strip_prefix('/') else {
-        return Err("absolute agent paths must start with `/root`".to_string());
+        return Err("absolute agent paths must start with `/root` or be `/morpheus`".to_string());
     };
     let mut segments = stripped.split('/');
     let Some(root) = segments.next() else {
         return Err("absolute agent path must not be empty".to_string());
     };
     if root != AgentPath::ROOT_SEGMENT {
-        return Err("absolute agent paths must start with `/root`".to_string());
+        return Err("absolute agent paths must start with `/root` or be `/morpheus`".to_string());
     }
     if stripped.ends_with('/') {
         return Err("absolute agent path must not end with `/`".to_string());
@@ -185,6 +194,14 @@ mod tests {
     }
 
     #[test]
+    fn morpheus_has_expected_name() {
+        let morpheus = AgentPath::morpheus();
+        assert_eq!(morpheus.as_str(), AgentPath::MORPHEUS);
+        assert_eq!(morpheus.name(), "morpheus");
+        assert!(!morpheus.is_root());
+    }
+
+    #[test]
     fn join_builds_child_paths() {
         let root = AgentPath::root();
         let child = root.join("researcher").expect("child path");
@@ -213,7 +230,7 @@ mod tests {
         );
         assert_eq!(
             AgentPath::try_from("/not-root"),
-            Err("absolute agent paths must start with `/root`".to_string())
+            Err("absolute agent paths must start with `/root` or be `/morpheus`".to_string())
         );
         assert_eq!(
             AgentPath::root().resolve("../sibling"),

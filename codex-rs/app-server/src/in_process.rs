@@ -50,6 +50,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::config_manager::ConfigManager;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
@@ -62,6 +63,7 @@ use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
+use crate::transport::ConnectionOrigin;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
 use codex_analytics::AppServerRpcTransport;
@@ -75,6 +77,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -82,6 +85,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
+pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -115,8 +119,12 @@ pub struct InProcessStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
+    /// Loader used to fetch typed thread config sources before a thread starts.
+    pub thread_config_loader: Arc<dyn ThreadConfigLoader>,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
+    /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
+    pub log_db: Option<LogDbLayer>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -384,26 +392,32 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
+        let config_manager = ConfigManager::new(
+            args.config.codex_home.to_path_buf(),
+            args.cli_overrides,
+            args.loader_overrides,
+            args.cloud_requirements,
+            args.arg0_paths.clone(),
+            args.thread_config_loader,
+        );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let processor = MessageProcessor::new(MessageProcessorArgs {
+            let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                config_manager,
                 environment_manager: args.environment_manager,
-                cli_overrides: args.cli_overrides,
-                loader_overrides: args.loader_overrides,
-                cloud_requirements: args.cloud_requirements,
                 feedback: args.feedback,
-                log_db: None,
+                log_db: args.log_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
-            });
+            }));
             let mut thread_created_rx = processor.thread_created_receiver();
-            let mut session = ConnectionSessionState::default();
+            let session = Arc::new(ConnectionSessionState::new(ConnectionOrigin::InProcess));
             let mut listen_for_threads = true;
 
             loop {
@@ -411,28 +425,33 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     command = processor_rx.recv() => {
                         match command {
                             Some(ProcessorCommand::Request(request)) => {
-                                let was_initialized = session.initialized;
+                                let was_initialized = session.initialized();
                                 processor
                                     .process_client_request(
                                         IN_PROCESS_CONNECTION_ID,
                                         *request,
-                                        &mut session,
+                                        Arc::clone(&session),
                                         &outbound_initialized,
                                     )
                                     .await;
+                                let opted_out_notification_methods_snapshot =
+                                    session.opted_out_notification_methods();
+                                let experimental_api_enabled =
+                                    session.experimental_api_enabled();
+                                let is_initialized = session.initialized();
                                 if let Ok(mut opted_out_notification_methods) =
                                     outbound_opted_out_notification_methods.write()
                                 {
                                     *opted_out_notification_methods =
-                                        session.opted_out_notification_methods.clone();
+                                        opted_out_notification_methods_snapshot;
                                 } else {
                                     warn!("failed to update outbound opted-out notifications");
                                 }
                                 outbound_experimental_api_enabled.store(
-                                    session.experimental_api_enabled,
+                                    experimental_api_enabled,
                                     Ordering::Release,
                                 );
-                                if !was_initialized && session.initialized {
+                                if !was_initialized && is_initialized {
                                     processor.send_initialize_notifications().await;
                                 }
                             }
@@ -447,7 +466,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let connection_ids = if session.initialized {
+                                let connection_ids = if session.initialized() {
                                     vec![IN_PROCESS_CONNECTION_ID]
                                 } else {
                                     Vec::<ConnectionId>::new()
@@ -695,6 +714,11 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::DeviceKeyPublicParams;
+    use codex_app_server_protocol::DeviceKeySignParams;
+    use codex_app_server_protocol::DeviceKeySignPayload;
+    use codex_app_server_protocol::RemoteControlClientConnectionAudience;
+    use codex_app_server_protocol::RemoteControlClientEnrollmentAudience;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -708,6 +732,7 @@ mod tests {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
             Err(_) => Config::load_default_with_cli_overrides(Vec::new())
+                .await
                 .expect("default config should load"),
         }
     }
@@ -722,7 +747,9 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
+            thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             config_warnings: Vec::new(),
             session_source,
@@ -759,6 +786,87 @@ mod tests {
 
         let _parsed: ConfigRequirementsReadResponse =
             serde_json::from_value(response).expect("response should match v2 schema");
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn in_process_allows_device_key_requests_to_reach_device_key_api() {
+        let client = start_test_client(SessionSource::Cli).await;
+        const MALFORMED_KEY_ID_MESSAGE: &str = concat!(
+            "invalid device key payload: keyId must be dk_hse_, dk_tpm_, or dk_osn_ ",
+            "followed by unpadded base64url-encoded 32 bytes"
+        );
+        let requests = [
+            (
+                ClientRequest::DeviceKeyPublic {
+                    request_id: RequestId::Integer(11),
+                    params: DeviceKeyPublicParams {
+                        key_id: String::new(),
+                    },
+                },
+                MALFORMED_KEY_ID_MESSAGE,
+            ),
+            (
+                ClientRequest::DeviceKeySign {
+                    request_id: RequestId::Integer(12),
+                    params: DeviceKeySignParams {
+                        key_id: String::new(),
+                        payload: DeviceKeySignPayload::RemoteControlClientConnection {
+                            nonce: "nonce-123".to_string(),
+                            audience:
+                                RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
+                            session_id: "wssess_123".to_string(),
+                            target_origin: "https://chatgpt.com".to_string(),
+                            target_path: "/api/codex/remote/control/client".to_string(),
+                            account_user_id: "acct_123".to_string(),
+                            client_id: "cli_123".to_string(),
+                            token_expires_at: 4_102_444_800,
+                            token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+                                .to_string(),
+                            scopes: vec!["remote_control_controller_websocket".to_string()],
+                        },
+                    },
+                },
+                MALFORMED_KEY_ID_MESSAGE,
+            ),
+            (
+                ClientRequest::DeviceKeySign {
+                    request_id: RequestId::Integer(13),
+                    params: DeviceKeySignParams {
+                        key_id: String::new(),
+                        payload: DeviceKeySignPayload::RemoteControlClientEnrollment {
+                            nonce: "nonce-123".to_string(),
+                            audience:
+                                RemoteControlClientEnrollmentAudience::RemoteControlClientEnrollment,
+                            challenge_id: "rch_123".to_string(),
+                            target_origin: "https://chatgpt.com".to_string(),
+                            target_path: "/wham/remote/control/client/enroll".to_string(),
+                            account_user_id: "acct_123".to_string(),
+                            client_id: "cli_123".to_string(),
+                            device_identity_sha256_base64url:
+                                "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU".to_string(),
+                            challenge_expires_at: 4_102_444_800,
+                        },
+                    },
+                },
+                MALFORMED_KEY_ID_MESSAGE,
+            ),
+        ];
+
+        for (request, expected_message) in requests {
+            let error = client
+                .request(request)
+                .await
+                .expect("request transport should work")
+                .expect_err("request should be rejected");
+
+            assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
+            assert_eq!(error.message, expected_message);
+        }
+
         client
             .shutdown()
             .await

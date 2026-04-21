@@ -16,6 +16,8 @@ pub struct HooksFile {
 pub struct HookEventsToml {
     #[serde(rename = "PreToolUse", default)]
     pub pre_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PermissionRequest", default)]
+    pub permission_request: Vec<MatcherGroup>,
     #[serde(rename = "PostToolUse", default)]
     pub post_tool_use: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
@@ -29,6 +31,7 @@ pub struct HookEventsToml {
 impl HookEventsToml {
     pub fn is_empty(&self) -> bool {
         self.pre_tool_use.is_empty()
+            && self.permission_request.is_empty()
             && self.post_tool_use.is_empty()
             && self.session_start.is_empty()
             && self.user_prompt_submit.is_empty()
@@ -38,6 +41,7 @@ impl HookEventsToml {
     pub fn handler_count(&self) -> usize {
         [
             &self.pre_tool_use,
+            &self.permission_request,
             &self.post_tool_use,
             &self.session_start,
             &self.user_prompt_submit,
@@ -49,9 +53,10 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 5] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 6] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
+            (HookEventName::PermissionRequest, self.permission_request),
             (HookEventName::PostToolUse, self.post_tool_use),
             (HookEventName::SessionStart, self.session_start),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),

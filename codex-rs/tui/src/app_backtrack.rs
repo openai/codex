@@ -482,6 +482,8 @@ impl App {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
+        self.chat_widget
+            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -503,6 +505,8 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
+            self.chat_widget
+                .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }

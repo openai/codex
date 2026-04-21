@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::filter_non_codex_apps_mcp_tools_only;
@@ -32,7 +33,13 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
-    if !tools_config.search_tool || deferred_tools.len() < DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD {
+    let should_defer = tools_config.search_tool
+        && (config
+            .features
+            .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
+            || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+
+    if !should_defer {
         return McpToolExposure {
             direct_tools: deferred_tools,
             deferred_tools: None,
@@ -41,9 +48,13 @@ pub(crate) fn build_mcp_tool_exposure(
 
     let direct_tools =
         filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
+    for direct_tool_name in direct_tools.keys() {
+        deferred_tools.remove(direct_tool_name);
+    }
+
     McpToolExposure {
         direct_tools,
-        deferred_tools: Some(deferred_tools),
+        deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }
 
@@ -71,3 +82,7 @@ fn filter_codex_apps_mcp_tools(
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "mcp_tool_exposure_test.rs"]
+mod tests;

@@ -7,6 +7,7 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -131,7 +132,6 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn pending_steer_compare_key_from_item(
         item: &codex_protocol::items::UserMessageItem,
     ) -> PendingSteerCompareKey {
@@ -236,6 +236,7 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: None,
                 session_id: None,
                 transport,
@@ -327,7 +328,9 @@ impl ChatWidget {
             }
             RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::InputTranscriptDelta(_) => {}
+            RealtimeEvent::InputTranscriptDone(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
+            RealtimeEvent::OutputTranscriptDone(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
             RealtimeEvent::ResponseCreated(_) => {}
             RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
@@ -335,6 +338,7 @@ impl ChatWidget {
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
+            RealtimeEvent::NoopRequested(_) => {}
             RealtimeEvent::Error(message) => {
                 self.fail_realtime_conversation(format!("Realtime voice error: {message}"));
             }

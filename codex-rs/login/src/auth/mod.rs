@@ -5,6 +5,7 @@ mod util;
 
 mod external_bearer;
 mod manager;
+mod revoke;
 
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;

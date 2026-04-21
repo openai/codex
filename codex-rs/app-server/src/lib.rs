@@ -1,10 +1,9 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::NoopThreadConfigLoader;
+use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_features::Feature;
@@ -18,6 +17,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::config_manager::ConfigManager;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -41,6 +41,7 @@ use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
+use codex_core::config::find_codex_home;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
@@ -52,7 +53,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use toml::Value as TomlValue;
 use tracing::Level;
 use tracing::error;
 use tracing::info;
@@ -68,7 +68,11 @@ mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
+mod config;
 mod config_api;
+mod config_manager;
+mod config_manager_service;
+mod device_key_api;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
@@ -280,21 +284,16 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ true,
     ) {
-        if !matches!(layer.name, ConfigLayerSource::Project { .. })
-            || layer.disabled_reason.is_none()
-        {
+        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
-        }
-        if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
-            disabled_folders.push((
-                dot_codex_folder.as_path().display().to_string(),
-                layer
-                    .disabled_reason
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "config.toml is disabled.".to_string()),
-            ));
-        }
+        };
+        let Some(disabled_reason) = &layer.disabled_reason else {
+            continue;
+        };
+        disabled_folders.push((
+            dot_codex_folder.as_path().display().to_string(),
+            disabled_reason.clone(),
+        ));
     }
 
     if disabled_folders.is_empty() {
@@ -302,8 +301,8 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     }
 
     let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
+        "Project-local config, hooks, and exec policies are disabled in the following folders ",
+        "until the project is trusted, but skills still load.\n",
     )
     .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
@@ -381,10 +380,18 @@ pub async fn run_main_with_transport(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let cloud_requirements = match ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides.clone())
-        .loader_overrides(loader_overrides.clone())
-        .build()
+    let codex_home = find_codex_home()?;
+    let thread_config_loader: Arc<dyn ThreadConfigLoader> = Arc::new(NoopThreadConfigLoader);
+    let config_manager = ConfigManager::new(
+        codex_home.to_path_buf(),
+        cli_kv_overrides.clone(),
+        loader_overrides,
+        Default::default(),
+        arg0_paths.clone(),
+        thread_config_loader.clone(),
+    );
+    match config_manager
+        .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
         Ok(config) => {
@@ -407,32 +414,23 @@ pub async fn run_main_with_transport(
 
             let auth_manager =
                 AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-            cloud_requirements_loader(
-                auth_manager,
-                config.chatgpt_base_url,
-                config.codex_home.to_path_buf(),
-            )
+            config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
         }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud requirements");
             // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
-            CloudRequirementsLoader::default()
         }
     };
-    let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
-    let config = match ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides.clone())
-        .loader_overrides(loader_overrides)
-        .cloud_requirements(cloud_requirements.clone())
-        .build()
+    let config = match config_manager
+        .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
         Ok(config) => config,
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
+            config_manager.load_default_config().await.map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidData,
                     format!("error loading default config after config error: {e}"),
@@ -650,16 +648,12 @@ pub async fn run_main_with_transport(
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
-        let loader_overrides = loader_overrides_for_config_api;
-        let processor = MessageProcessor::new(MessageProcessorArgs {
+        let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            config_manager,
             environment_manager,
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
             log_db,
             config_warnings,
@@ -667,7 +661,7 @@ pub async fn run_main_with_transport(
             auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
             remote_control_handle: Some(remote_control_handle),
-        });
+        }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
@@ -711,6 +705,7 @@ pub async fn run_main_with_transport(
                         match event {
                             TransportEvent::ConnectionOpened {
                                 connection_id,
+                                origin,
                                 writer,
                                 disconnect_sender,
                             } => {
@@ -740,6 +735,7 @@ pub async fn run_main_with_transport(
                                 connections.insert(
                                     connection_id,
                                     ConnectionState::new(
+                                        origin,
                                         outbound_initialized,
                                         outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
@@ -769,23 +765,28 @@ pub async fn run_main_with_transport(
                                             warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
-                                        let was_initialized = connection_state.session.initialized;
+                                        let was_initialized =
+                                            connection_state.session.initialized();
                                         processor
                                             .process_request(
                                                 connection_id,
                                                 request,
                                                 transport,
-                                                &mut connection_state.session,
+                                                Arc::clone(&connection_state.session),
                                             )
                                             .await;
+                                        let opted_out_notification_methods_snapshot = connection_state
+                                            .session
+                                            .opted_out_notification_methods();
+                                        let experimental_api_enabled =
+                                            connection_state.session.experimental_api_enabled();
+                                        let is_initialized = connection_state.session.initialized();
                                         if let Ok(mut opted_out_notification_methods) = connection_state
                                             .outbound_opted_out_notification_methods
                                             .write()
                                         {
-                                            *opted_out_notification_methods = connection_state
-                                                .session
-                                                .opted_out_notification_methods
-                                                .clone();
+                                            *opted_out_notification_methods =
+                                                opted_out_notification_methods_snapshot;
                                         } else {
                                             warn!(
                                                 "failed to update outbound opted-out notifications"
@@ -794,10 +795,10 @@ pub async fn run_main_with_transport(
                                         connection_state
                                             .outbound_experimental_api_enabled
                                             .store(
-                                                connection_state.session.experimental_api_enabled,
+                                                experimental_api_enabled,
                                                 std::sync::atomic::Ordering::Release,
                                             );
-                                        if !was_initialized && connection_state.session.initialized {
+                                        if !was_initialized && is_initialized {
                                             processor
                                                 .send_initialize_notifications_to_connection(
                                                     connection_id,
@@ -837,12 +838,12 @@ pub async fn run_main_with_transport(
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let initialized_connection_ids: Vec<ConnectionId> = connections
-                                    .iter()
-                                    .filter_map(|(connection_id, connection_state)| {
-                                        connection_state.session.initialized.then_some(*connection_id)
-                                    })
-                                    .collect();
+                                let mut initialized_connection_ids = Vec::new();
+                                for (connection_id, connection_state) in &connections {
+                                    if connection_state.session.initialized() {
+                                        initialized_connection_ids.push(*connection_id);
+                                    }
+                                }
                                 processor
                                     .try_attach_thread_listener(
                                         thread_id,

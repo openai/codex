@@ -16,7 +16,7 @@
 //!   confirmation, shortcut help, or queue hints.
 //! - "contextual footer" means the footer is free to show ambient context instead of an
 //!   instruction. In that state, the footer may render the configured status line, the active
-//!   agent label, or both combined.
+//!   agent label, side-conversation state, or some combination of those.
 //!
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
@@ -483,6 +483,14 @@ pub(crate) fn mode_indicator_line(
     indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
 }
 
+pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
+    if let Some(rest) = label.strip_prefix("Side ") {
+        Line::from(vec!["Side".magenta().bold(), format!(" {rest}").magenta()])
+    } else {
+        Line::from(label.to_string()).magenta()
+    }
+}
+
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
     if area.is_empty() {
         return None;
@@ -767,6 +775,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
     let mut change_mode = Line::from("");
+    let mut reasoning_down = Line::from("");
+    let mut reasoning_up = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -783,6 +793,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
+                ShortcutId::ReasoningDown => reasoning_down = text,
+                ShortcutId::ReasoningUp => reasoning_up = text,
             }
         }
     }
@@ -798,6 +810,8 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         edit_previous,
         history_search,
         quit,
+        reasoning_down,
+        reasoning_up,
     ];
     if change_mode.width() > 0 {
         ordered.push(change_mode);
@@ -883,6 +897,8 @@ enum ShortcutId {
     Quit,
     ShowTranscript,
     ChangeMode,
+    ReasoningDown,
+    ReasoningUp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1073,6 +1089,24 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to change mode",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ReasoningDown,
+        bindings: &[ShortcutBinding {
+            key: key_hint::alt(KeyCode::Char(',')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " reasoning down",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ReasoningUp,
+        bindings: &[ShortcutBinding {
+            key: key_hint::alt(KeyCode::Char('.')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " reasoning up",
     },
 ];
 

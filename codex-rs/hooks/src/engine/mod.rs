@@ -4,11 +4,13 @@ pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
 
-use std::path::PathBuf;
-
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::events::permission_request::PermissionRequestOutcome;
+use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
@@ -34,7 +36,8 @@ pub(crate) struct ConfiguredHandler {
     pub command: String,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
-    pub source_path: PathBuf,
+    pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
     pub display_order: i64,
 }
 
@@ -51,6 +54,7 @@ impl ConfiguredHandler {
     fn event_name_label(&self) -> &'static str {
         match self.event_name {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
+            codex_protocol::protocol::HookEventName::PermissionRequest => "permission-request",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
@@ -104,6 +108,13 @@ impl ClaudeHooksEngine {
         crate::events::pre_tool_use::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_permission_request(
+        &self,
+        request: &PermissionRequestRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::permission_request::preview(&self.handlers, request)
+    }
+
     pub(crate) fn preview_post_tool_use(
         &self,
         request: &PostToolUseRequest,
@@ -121,6 +132,13 @@ impl ClaudeHooksEngine {
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
         crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) async fn run_permission_request(
+        &self,
+        request: PermissionRequestRequest,
+    ) -> PermissionRequestOutcome {
+        crate::events::permission_request::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_post_tool_use(
@@ -156,7 +174,6 @@ impl ClaudeHooksEngine {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
 
     use codex_config::AbsolutePathBuf;
     use codex_config::ConfigLayerEntry;
@@ -180,15 +197,20 @@ mod tests {
     use super::CommandShell;
     use crate::events::pre_tool_use::PreToolUseRequest;
 
+    fn cwd() -> AbsolutePathBuf {
+        AbsolutePathBuf::current_dir().expect("current dir")
+    }
+
     #[tokio::test]
     async fn requirements_managed_hooks_execute_from_managed_dir() {
         let temp = tempdir().expect("create temp dir");
-        let managed_dir = temp.path().join("managed-hooks");
-        fs::create_dir_all(&managed_dir).expect("create managed hooks dir");
+        let managed_dir =
+            AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("absolute path");
+        fs::create_dir_all(managed_dir.as_path()).expect("create managed hooks dir");
         let script_path = managed_dir.join("pre_tool_use.py");
         let log_path = managed_dir.join("pre_tool_use_log.jsonl");
         fs::write(
-            &script_path,
+            script_path.as_path(),
             format!(
                 r#"import json
 from pathlib import Path
@@ -204,7 +226,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         .expect("write managed hook script");
 
         let managed_hooks = ManagedHooksRequirementsToml {
-            managed_dir: Some(managed_dir.clone()),
+            managed_dir: Some(managed_dir.clone().into()),
             windows_managed_dir: None,
             hooks: HookEventsToml {
                 pre_tool_use: vec![MatcherGroup {
@@ -247,10 +269,11 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         assert!(engine.warnings().is_empty());
         assert_eq!(engine.handlers.len(), 1);
         assert!(engine.handlers[0].is_managed);
+        let cwd = cwd();
         let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: cwd.clone(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
@@ -265,7 +288,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             .run_pre_tool_use(PreToolUseRequest {
                 session_id: ThreadId::new(),
                 turn_id: "turn-1".to_string(),
-                cwd: PathBuf::from("/tmp"),
+                cwd,
                 transcript_path: None,
                 model: "gpt-test".to_string(),
                 permission_mode: "default".to_string(),
@@ -330,12 +353,13 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 && warning.contains("does not exist")
                 && warning.contains(&missing_dir.display().to_string())
         }));
+        let cwd = cwd();
         assert!(
             engine
                 .preview_pre_tool_use(&PreToolUseRequest {
                     session_id: ThreadId::new(),
                     turn_id: "turn-1".to_string(),
-                    cwd: PathBuf::from("/tmp"),
+                    cwd,
                     transcript_path: None,
                     model: "gpt-test".to_string(),
                     permission_mode: "default".to_string(),
@@ -352,9 +376,10 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         let temp = tempdir().expect("create temp dir");
         let config_path = AbsolutePathBuf::try_from(temp.path().join("config.toml"))
             .expect("absolute config path");
-        let hooks_json_path = temp.path().join("hooks.json");
+        let hooks_json_path =
+            AbsolutePathBuf::try_from(temp.path().join("hooks.json")).expect("absolute hooks path");
         fs::write(
-            &hooks_json_path,
+            hooks_json_path.as_path(),
             r#"{
               "hooks": {
                 "PreToolUse": [
@@ -436,10 +461,11 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 && warning.contains(&config_path.display().to_string())
         }));
 
+        let cwd = cwd();
         let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd,
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
@@ -450,6 +476,6 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         assert_eq!(preview.len(), 2);
         assert!(engine.handlers.iter().all(|handler| !handler.is_managed));
         assert_eq!(preview[0].source_path, hooks_json_path);
-        assert_eq!(preview[1].source_path, config_path.as_path());
+        assert_eq!(preview[1].source_path, config_path);
     }
 }

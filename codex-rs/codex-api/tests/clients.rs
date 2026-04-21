@@ -91,9 +91,7 @@ impl HttpTransport for RecordingTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 #[derive(Clone)]
@@ -112,12 +110,14 @@ impl StaticAuth {
 }
 
 impl AuthProvider for StaticAuth {
-    fn bearer_token(&self) -> Option<String> {
-        Some(self.token.clone())
-    }
-
-    fn account_id(&self) -> Option<String> {
-        Some(self.account_id.clone())
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let token = &self.token;
+        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Ok(header) = HeaderValue::from_str(&self.account_id) {
+            headers.insert("ChatGPT-Account-ID", header);
+        }
     }
 }
 
@@ -200,7 +200,7 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 async fn responses_client_uses_responses_path() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
@@ -221,7 +221,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 async fn streaming_client_adds_auth_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let auth = StaticAuth::new("secret-token", "acct-1");
+    let auth = Arc::new(StaticAuth::new("secret-token", "acct-1"));
     let client = ResponsesClient::new(transport, provider("openai"), auth);
 
     let body = serde_json::json!({ "model": "gpt-test" });
@@ -281,7 +281,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         text: None,
         client_metadata: None,
     };
-    let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
+    let client = ResponsesClient::new(transport.clone(), provider, Arc::new(NoAuth));
 
     let _stream = client
         .stream_request(
@@ -300,7 +300,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("azure"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("azure"), Arc::new(NoAuth));
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),

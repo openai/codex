@@ -1,11 +1,17 @@
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -16,25 +22,166 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchArgs;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::Hunk;
+use codex_apply_patch::parse_patch_streaming;
 use codex_exec_server::ExecutorFileSystem;
+use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::PatchApplyUpdatedEvent;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::BTreeSet;
-use std::sync::Arc;
+
+const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct ApplyPatchHandler;
+
+#[derive(Default)]
+struct ApplyPatchArgumentDiffConsumer {
+    input: String,
+    last_progress: Option<Vec<Hunk>>,
+    last_sent_at: Option<Instant>,
+    pending: Option<PatchApplyUpdatedEvent>,
+}
+
+impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
+    fn consume_diff(
+        &mut self,
+        turn: &TurnContext,
+        call_id: String,
+        diff: &str,
+    ) -> Option<EventMsg> {
+        if !turn.features.enabled(Feature::ApplyPatchStreamingEvents) {
+            return None;
+        }
+
+        self.push_delta(call_id, diff)
+            .map(EventMsg::PatchApplyUpdated)
+    }
+
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        self.flush_update_on_complete()
+            .map(EventMsg::PatchApplyUpdated)
+    }
+}
+
+impl ApplyPatchArgumentDiffConsumer {
+    fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
+        self.input.push_str(delta);
+
+        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
+        if hunks.is_empty() {
+            return None;
+        }
+        if self.last_progress.as_ref() == Some(&hunks) {
+            return None;
+        }
+
+        let changes = convert_apply_patch_hunks_to_protocol(&hunks);
+        self.last_progress = Some(hunks);
+        let event = PatchApplyUpdatedEvent { call_id, changes };
+        let now = Instant::now();
+        match self.last_sent_at {
+            Some(last_sent_at)
+                if now.duration_since(last_sent_at) < APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL =>
+            {
+                self.pending = Some(event);
+                None
+            }
+            Some(_) | None => {
+                self.pending = None;
+                self.last_sent_at = Some(now);
+                Some(event)
+            }
+        }
+    }
+
+    fn flush_update_on_complete(&mut self) -> Option<PatchApplyUpdatedEvent> {
+        let event = self.pending.take();
+        if event.is_some() {
+            self.last_sent_at = Some(Instant::now());
+        }
+        event
+    }
+}
+
+fn convert_apply_patch_hunks_to_protocol(hunks: &[Hunk]) -> HashMap<PathBuf, FileChange> {
+    hunks
+        .iter()
+        .map(|hunk| {
+            let path = hunk_source_path(hunk).to_path_buf();
+            let change = match hunk {
+                Hunk::AddFile { contents, .. } => FileChange::Add {
+                    content: contents.clone(),
+                },
+                Hunk::DeleteFile { .. } => FileChange::Delete {
+                    content: String::new(),
+                },
+                Hunk::UpdateFile {
+                    chunks, move_path, ..
+                } => FileChange::Update {
+                    unified_diff: format_update_chunks_for_progress(chunks),
+                    move_path: move_path.clone(),
+                },
+            };
+            (path, change)
+        })
+        .collect()
+}
+
+fn hunk_source_path(hunk: &Hunk) -> &Path {
+    match hunk {
+        Hunk::AddFile { path, .. } | Hunk::DeleteFile { path } | Hunk::UpdateFile { path, .. } => {
+            path
+        }
+    }
+}
+
+fn format_update_chunks_for_progress(chunks: &[codex_apply_patch::UpdateFileChunk]) -> String {
+    let mut unified_diff = String::new();
+    for chunk in chunks {
+        match &chunk.change_context {
+            Some(context) => {
+                unified_diff.push_str("@@ ");
+                unified_diff.push_str(context);
+                unified_diff.push('\n');
+            }
+            None => {
+                unified_diff.push_str("@@");
+                unified_diff.push('\n');
+            }
+        }
+        for line in &chunk.old_lines {
+            unified_diff.push('-');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        for line in &chunk.new_lines {
+            unified_diff.push('+');
+            unified_diff.push_str(line);
+            unified_diff.push('\n');
+        }
+        if chunk.is_end_of_file {
+            unified_diff.push_str("*** End of File");
+            unified_diff.push('\n');
+        }
+    }
+    unified_diff
+}
 
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
@@ -82,10 +229,10 @@ fn write_permissions_for_paths(
         .ok()?;
 
     let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(write_paths),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(write_paths),
+        )),
         ..Default::default()
     })?;
 
@@ -112,6 +259,7 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        turn.cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
     )
@@ -140,6 +288,10 @@ impl ToolHandler for ApplyPatchHandler {
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -197,7 +349,7 @@ impl ToolHandler for ApplyPatchHandler {
                         let content = item?;
                         Ok(ApplyPatchToolOutput::from_text(content))
                     }
-                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                    InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
@@ -218,7 +370,6 @@ impl ToolHandler for ApplyPatchHandler {
                                 .additional_permissions,
                             permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
-                            timeout_ms: None,
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
@@ -275,7 +426,6 @@ pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &AbsolutePathBuf,
     fs: &dyn ExecutorFileSystem,
-    timeout_ms: Option<u64>,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
@@ -308,7 +458,7 @@ pub(crate) async fn intercept_apply_patch(
                     let content = item?;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
-                InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
@@ -328,7 +478,6 @@ pub(crate) async fn intercept_apply_patch(
                             .additional_permissions,
                         permissions_preapproved: effective_additional_permissions
                             .permissions_preapproved,
-                        timeout_ms,
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();

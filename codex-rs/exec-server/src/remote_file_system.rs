@@ -115,6 +115,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
         Ok(FileMetadata {
             is_directory: response.is_directory,
             is_file: response.is_file,
+            is_symlink: response.is_symlink,
             created_at_ms: response.created_at_ms,
             modified_at_ms: response.modified_at_ms,
         })
@@ -194,9 +195,46 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
             io::Error::new(io::ErrorKind::InvalidInput, message)
         }
         ExecServerError::Server { message, .. } => io::Error::other(message),
-        ExecServerError::Closed => {
+        ExecServerError::Closed | ExecServerError::Disconnected(_) => {
             io::Error::new(io::ErrorKind::BrokenPipe, "exec-server transport closed")
         }
         _ => io::Error::other(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn transport_errors_map_to_broken_pipe() {
+        let errors = [
+            ExecServerError::Closed,
+            ExecServerError::Disconnected("exec-server transport disconnected".to_string()),
+        ];
+
+        let mapped_errors = errors
+            .into_iter()
+            .map(|error| {
+                let error = map_remote_error(error);
+                (error.kind(), error.to_string())
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            mapped_errors,
+            vec![
+                (
+                    io::ErrorKind::BrokenPipe,
+                    "exec-server transport closed".to_string()
+                ),
+                (
+                    io::ErrorKind::BrokenPipe,
+                    "exec-server transport closed".to_string()
+                ),
+            ]
+        );
     }
 }

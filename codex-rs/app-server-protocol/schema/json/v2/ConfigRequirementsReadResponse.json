@@ -206,6 +206,12 @@
     },
     "ManagedHooksRequirements": {
       "properties": {
+        "PermissionRequest": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -250,6 +256,7 @@
         }
       },
       "required": [
+        "PermissionRequest",
         "PostToolUse",
         "PreToolUse",
         "SessionStart",
@@ -296,12 +303,6 @@
           },
           "type": [
             "array",
-            "null"
-          ]
-        },
-        "dangerFullAccessDenylistOnly": {
-          "type": [
-            "boolean",
             "null"
           ]
         },
