@@ -49,6 +49,16 @@ impl HttpResponseBodyStream {
 
         let Some(delta) = self.rx.recv().await else {
             self.finish().await;
+            if let Some(error) = self
+                .inner
+                .take_http_body_stream_failure(&self.request_id)
+                .await
+            {
+                return Err(ExecServerError::Protocol(format!(
+                    "http response stream `{}` failed: {error}",
+                    self.request_id
+                )));
+            }
             return Ok(None);
         };
         if delta.seq != self.next_seq {
@@ -179,7 +189,7 @@ impl Inner {
         let params: HttpRequestBodyDeltaNotification = from_value(params.unwrap_or(Value::Null))?;
         // Unknown request ids are ignored intentionally: a stream may have already
         // reached EOF and released its route.
-        if let Some(route) = self
+        if let Some(tx) = self
             .http_body_streams
             .load()
             .get(&params.request_id)
@@ -187,7 +197,7 @@ impl Inner {
         {
             let request_id = params.request_id.clone();
             let terminal_delta = params.done || params.error.is_some();
-            match route.try_send(params) {
+            match tx.try_send(params) {
                 Ok(()) => {
                     if terminal_delta {
                         self.remove_http_body_stream(&request_id).await;
@@ -198,6 +208,11 @@ impl Inner {
                     debug!("http response stream receiver dropped before body delta delivery");
                 }
                 Err(TrySendError::Full(_)) => {
+                    self.record_http_body_stream_failure(
+                        &request_id,
+                        "body delta channel filled before delivery".to_string(),
+                    )
+                    .await;
                     self.remove_http_body_stream(&request_id).await;
                     debug!(
                         "closing http response stream `{request_id}` after body delta backpressure"
@@ -248,8 +263,15 @@ impl Inner {
             )));
         }
         let mut next_streams = streams.as_ref().clone();
-        next_streams.insert(request_id, tx);
+        next_streams.insert(request_id.clone(), tx);
         self.http_body_streams.store(Arc::new(next_streams));
+        let failures = self.http_body_stream_failures.load();
+        if failures.contains_key(&request_id) {
+            let mut next_failures = failures.as_ref().clone();
+            next_failures.remove(&request_id);
+            self.http_body_stream_failures
+                .store(Arc::new(next_failures));
+        }
         Ok(())
     }
 
@@ -266,6 +288,27 @@ impl Inner {
         next_streams.remove(request_id);
         self.http_body_streams.store(Arc::new(next_streams));
         stream
+    }
+
+    async fn record_http_body_stream_failure(&self, request_id: &str, message: String) {
+        let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
+        let failures = self.http_body_stream_failures.load();
+        let mut next_failures = failures.as_ref().clone();
+        next_failures.insert(request_id.to_string(), message);
+        self.http_body_stream_failures
+            .store(Arc::new(next_failures));
+    }
+
+    async fn take_http_body_stream_failure(&self, request_id: &str) -> Option<String> {
+        let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
+        let failures = self.http_body_stream_failures.load();
+        let error = failures.get(request_id).cloned();
+        error.as_ref()?;
+        let mut next_failures = failures.as_ref().clone();
+        next_failures.remove(request_id);
+        self.http_body_stream_failures
+            .store(Arc::new(next_failures));
+        error
     }
 }
 
