@@ -51,7 +51,12 @@ impl HttpResponseBodyStream {
         }
 
         let Some(delta) = self.rx.recv().await else {
-            if let Some(error) = self.take_failure() {
+            if let Some(error) = self
+                .failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
                 self.finish().await;
                 return Err(ExecServerError::Protocol(format!(
                     "http response stream `{}` failed: {error}",
@@ -95,14 +100,6 @@ impl HttpResponseBodyStream {
         }
         self.closed = true;
         self.inner.remove_http_body_stream(&self.request_id).await;
-    }
-
-    /// Takes a deferred stream failure set by notification routing.
-    fn take_failure(&self) -> Option<String> {
-        self.failure
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
     }
 }
 
@@ -170,7 +167,7 @@ impl ExecServerClient {
     ) -> Result<HttpRequestResponse, ExecServerError> {
         params.stream_response = false;
         params.request_id = None;
-        self.call_http_request(&params).await
+        self.call(HTTP_REQUEST_METHOD, &params).await
     }
 
     /// Performs an executor-side HTTP request and returns a body stream.
@@ -198,7 +195,7 @@ impl ExecServerClient {
             request_id: request_id.clone(),
             active: true,
         };
-        let response = match self.call_http_request(&params).await {
+        let response = match self.call(HTTP_REQUEST_METHOD, &params).await {
             Ok(response) => response,
             Err(error) => {
                 self.inner.remove_http_body_stream(&request_id).await;
@@ -220,14 +217,6 @@ impl ExecServerClient {
             },
         ))
     }
-
-    /// Sends an executor HTTP request after the caller has chosen buffering or streaming.
-    async fn call_http_request(
-        &self,
-        params: &HttpRequestParams,
-    ) -> Result<HttpRequestResponse, ExecServerError> {
-        self.call(HTTP_REQUEST_METHOD, params).await
-    }
 }
 
 impl Inner {
@@ -239,7 +228,12 @@ impl Inner {
         let params: HttpRequestBodyDeltaNotification = from_value(params.unwrap_or(Value::Null))?;
         // Unknown request ids are ignored intentionally: a stream may have already
         // reached EOF and released its route.
-        if let Some(route) = self.get_http_body_stream(&params.request_id) {
+        if let Some(route) = self
+            .http_body_streams
+            .load()
+            .get(&params.request_id)
+            .cloned()
+        {
             let request_id = params.request_id.clone();
             let terminal_delta = params.done || params.error.is_some();
             match route.try_send(params) {
@@ -305,11 +299,6 @@ impl Inner {
         next_streams.insert(request_id, route);
         self.http_body_streams.store(Arc::new(next_streams));
         Ok(())
-    }
-
-    /// Looks up the route for a streamed HTTP response body notification.
-    fn get_http_body_stream(&self, request_id: &str) -> Option<HttpBodyStreamRoute> {
-        self.http_body_streams.load().get(request_id).cloned()
     }
 
     /// Removes a request id after EOF, terminal error, or request failure.
