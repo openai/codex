@@ -5,13 +5,17 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_exec_server::ConfiguredEnvironmentManagerArgs;
+use codex_exec_server::ConfiguredEnvironmentSpec;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::RemoteExecServerTransport;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::process::process_is_alive;
@@ -334,6 +338,108 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     assert_eq!(
         fs::read_to_string(harness.path("uexec_apply.txt"))?,
         "hello from unified exec\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_environment_id_targets_non_primary_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let codex_exe = codex_utils_cargo_bin::cargo_bin("codex")
+        .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex-exec"))?;
+    let mut builder = test_codex()
+        .with_environment_manager_config(ConfiguredEnvironmentManagerArgs {
+            default_environment: Some("local".to_string()),
+            environments: vec![ConfiguredEnvironmentSpec {
+                id: "remote".to_string(),
+                transport: RemoteExecServerTransport::Command {
+                    command: format!("{codex_exe:?} exec-server --listen stdio://"),
+                },
+            }],
+            local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
+                codex_exe, /*codex_linux_sandbox_exe*/ None,
+            )?,
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow unified exec");
+            config
+                .features
+                .enable(Feature::MultiEnvironmentTools)
+                .expect("test config should allow multi-environment tools");
+        });
+    let test = builder.build(&server).await?;
+    let selected_local_cwd = create_workspace_directory(&test, "selected-local").await?;
+    let primary_remote_cwd = test.config.cwd.join("primary-remote");
+    tokio::fs::create_dir_all(&primary_remote_cwd).await?;
+
+    let call_id = "uexec-env-local";
+    let args = json!({
+        "cmd": "pwd",
+        "environment_id": "local",
+        "yield_time_ms": 5_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_environments(
+        "print the selected local cwd",
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: "remote".to_string(),
+                cwd: primary_remote_cwd,
+            },
+            TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_local_cwd.clone().try_into()?,
+            },
+        ]),
+    )
+    .await?;
+
+    let bodies = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let request_text = serde_json::to_string(&bodies)?;
+    assert!(
+        request_text.contains("<environments>"),
+        "environment list should be visible to the model: {request_text}"
+    );
+    assert!(
+        request_text.contains("id=\\\"local\\\""),
+        "local environment id should be visible to the model: {request_text}"
+    );
+    assert!(
+        request_text.contains("\"environment_id\""),
+        "exec_command schema should expose environment_id when gated: {request_text}"
+    );
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing exec_command environment-id output");
+    assert_eq!(
+        output.output.trim(),
+        selected_local_cwd.display().to_string()
     );
 
     Ok(())

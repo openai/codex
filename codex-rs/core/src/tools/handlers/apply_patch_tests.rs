@@ -108,6 +108,31 @@ fn diff_consumer_sends_next_update_after_buffer_interval() {
     );
 }
 
+#[test]
+fn split_freeform_apply_patch_environment_extracts_environment_header() {
+    let input =
+        "*** Environment: local\n*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\n"
+            .to_string();
+
+    let (patch, environment_id) =
+        split_freeform_apply_patch_environment(input).expect("header should parse");
+
+    assert_eq!(environment_id.as_deref(), Some("local"));
+    assert_eq!(
+        patch,
+        "*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\n"
+    );
+}
+
+#[test]
+fn merge_apply_patch_environment_ids_rejects_mismatch() {
+    let err =
+        merge_apply_patch_environment_ids(Some("local".to_string()), Some("remote".to_string()))
+            .expect_err("mismatched environment ids should fail");
+
+    assert!(err.to_string().contains("environment id mismatch"));
+}
+
 #[tokio::test]
 async fn approval_keys_include_move_destination() {
     let tmp = TempDir::new().expect("tmp");

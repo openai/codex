@@ -198,6 +198,16 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
+pub struct StartThreadWithToolsOptions {
+    pub config: Config,
+    pub initial_history: InitialHistory,
+    pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    pub persist_extended_history: bool,
+    pub metrics_service_name: Option<String>,
+    pub parent_trace: Option<W3cTraceContext>,
+    pub environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
+}
+
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
@@ -494,35 +504,34 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_with_tools_and_service_name(
-            config,
-            InitialHistory::New,
-            dynamic_tools,
-            persist_extended_history,
-            /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
-        ))
+        Box::pin(
+            self.start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+                config,
+                initial_history: InitialHistory::New,
+                dynamic_tools,
+                persist_extended_history,
+                metrics_service_name: None,
+                parent_trace: None,
+                environment_selections: None,
+            }),
+        )
         .await
     }
 
     pub async fn start_thread_with_tools_and_service_name(
         &self,
-        config: Config,
-        initial_history: InitialHistory,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        persist_extended_history: bool,
-        metrics_service_name: Option<String>,
-        parent_trace: Option<W3cTraceContext>,
+        options: StartThreadWithToolsOptions,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
-            config,
-            initial_history,
+            options.config,
+            options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
-            dynamic_tools,
-            persist_extended_history,
-            metrics_service_name,
-            parent_trace,
+            options.dynamic_tools,
+            options.persist_extended_history,
+            options.metrics_service_name,
+            options.parent_trace,
+            options.environment_selections,
             /*user_shell_override*/ None,
         ))
         .await
@@ -563,6 +572,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -582,6 +592,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -604,6 +615,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -712,6 +724,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -813,6 +826,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -840,6 +854,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -868,6 +883,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -885,6 +901,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -899,6 +916,7 @@ impl ThreadManagerState {
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
+            environment_selections,
             user_shell_override,
         ))
         .await
@@ -918,6 +936,7 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let environment = self.environment_manager.default_environment();
@@ -955,6 +974,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             user_shell_override,
             parent_trace,
+            environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
         })
         .await?;

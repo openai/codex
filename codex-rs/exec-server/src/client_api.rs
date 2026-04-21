@@ -8,12 +8,28 @@ pub struct ExecServerClientConnectOptions {
     pub resume_session_id: Option<String>,
 }
 
+/// Transport used to connect to a remote exec-server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteExecServerTransport {
+    WebSocket { url: String },
+    Command { command: String },
+}
+
 /// WebSocket connection arguments for a remote exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteExecServerConnectArgs {
     pub websocket_url: String,
     pub client_name: String,
     pub connect_timeout: Duration,
+    pub initialize_timeout: Duration,
+    pub resume_session_id: Option<String>,
+}
+
+/// Command-spawn connection arguments for a remote exec-server over stdio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandExecServerConnectArgs {
+    pub command: String,
+    pub client_name: String,
     pub initialize_timeout: Duration,
     pub resume_session_id: Option<String>,
 }

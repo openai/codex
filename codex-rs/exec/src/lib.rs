@@ -498,9 +498,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         log_db: None,
-        environment_manager: std::sync::Arc::new(EnvironmentManager::new(
-            EnvironmentManagerArgs::from_env(local_runtime_paths),
-        )),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::try_new(
+            config.environment_manager_args(
+                EnvironmentManagerArgs::from_env(local_runtime_paths.clone()).exec_server_url,
+                local_runtime_paths,
+            )?,
+        )?),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
