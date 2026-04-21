@@ -6269,26 +6269,23 @@ impl CodexMessageProcessor {
         );
         let cached_all_connectors = all_connectors.clone();
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
         let accessible_config = config.clone();
-        let accessible_tx = tx.clone();
-        tokio::spawn(async move {
+        let mut accessible_task = tokio::spawn(async move {
             let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
                 &accessible_config,
                 force_refetch,
             )
             .await
             .map_err(|err| format!("failed to load accessible apps: {err}"));
-            let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
+            AppListLoadResult::Accessible(result)
         });
 
         let all_config = config.clone();
-        tokio::spawn(async move {
+        let mut directory_task = tokio::spawn(async move {
             let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
                 .await
                 .map_err(|err| format!("failed to list apps: {err}"));
-            let _ = tx.send(AppListLoadResult::Directory(result));
+            AppListLoadResult::Directory(result)
         });
 
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
@@ -6316,18 +6313,37 @@ impl CodexMessageProcessor {
         }
 
         loop {
-            let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
-                Ok(Some(result)) => result,
-                Ok(None) => {
+            let result = match tokio::time::timeout_at(app_list_deadline, async {
+                tokio::select! {
+                    result = &mut accessible_task, if !accessible_loaded => result,
+                    result = &mut directory_task, if !all_loaded => result,
+                }
+            })
+            .await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(err)) => {
+                    if !accessible_loaded {
+                        accessible_task.abort();
+                    }
+                    if !all_loaded {
+                        directory_task.abort();
+                    }
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
-                        message: "failed to load app lists".to_string(),
+                        message: format!("failed to load app lists: {err}"),
                         data: None,
                     };
                     outgoing.send_error(request_id, error).await;
                     return;
                 }
                 Err(_) => {
+                    if !accessible_loaded {
+                        accessible_task.abort();
+                    }
+                    if !all_loaded {
+                        directory_task.abort();
+                    }
                     let timeout_seconds = APP_LIST_LOAD_TIMEOUT.as_secs();
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
@@ -6347,6 +6363,9 @@ impl CodexMessageProcessor {
                     accessible_loaded = true;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
+                    if !all_loaded {
+                        directory_task.abort();
+                    }
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: err,
@@ -6360,6 +6379,9 @@ impl CodexMessageProcessor {
                     all_loaded = true;
                 }
                 AppListLoadResult::Directory(Err(err)) => {
+                    if !accessible_loaded {
+                        accessible_task.abort();
+                    }
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: err,

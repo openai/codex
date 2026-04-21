@@ -53,6 +53,7 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -63,6 +64,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+[features]
+connectors = false
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -879,8 +887,13 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) =
-        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -916,6 +929,11 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     assert!(initial_next_cursor.is_none());
     assert_eq!(initial_data.len(), 1);
     assert!(initial_data.iter().all(|app| app.is_accessible));
+    timeout(
+        DEFAULT_TIMEOUT,
+        server_control.wait_for_tools_list_finished(),
+    )
+    .await?;
 
     write_chatgpt_auth(
         codex_home.path(),
@@ -925,6 +943,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
+    server_control.set_tools(Vec::new());
 
     let refetch_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -940,6 +959,12 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     )
     .await??;
     assert!(refetch_error.error.message.contains("failed to"));
+
+    timeout(
+        DEFAULT_TIMEOUT,
+        server_control.wait_for_tools_list_finished(),
+    )
+    .await?;
 
     let cached_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -1335,11 +1360,20 @@ struct AppsServerState {
 struct AppListMcpServer {
     tools: Arc<StdMutex<Vec<Tool>>>,
     tools_delay: Duration,
+    tools_list_finished: Arc<Notify>,
 }
 
 impl AppListMcpServer {
-    fn new(tools: Arc<StdMutex<Vec<Tool>>>, tools_delay: Duration) -> Self {
-        Self { tools, tools_delay }
+    fn new(
+        tools: Arc<StdMutex<Vec<Tool>>>,
+        tools_delay: Duration,
+        tools_list_finished: Arc<Notify>,
+    ) -> Self {
+        Self {
+            tools,
+            tools_delay,
+            tools_list_finished,
+        }
     }
 }
 
@@ -1347,6 +1381,7 @@ impl AppListMcpServer {
 struct AppsServerControl {
     response: Arc<StdMutex<serde_json::Value>>,
     tools: Arc<StdMutex<Vec<Tool>>>,
+    tools_list_finished: Arc<Notify>,
 }
 
 impl AppsServerControl {
@@ -1364,6 +1399,18 @@ impl AppsServerControl {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *tools_guard = tools;
+    }
+
+    async fn wait_for_tools_list_finished(&self) {
+        self.tools_list_finished.notified().await;
+    }
+}
+
+struct NotifyOnDrop(Arc<Notify>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_one();
     }
 }
 
@@ -1383,7 +1430,9 @@ impl ServerHandler for AppListMcpServer {
     {
         let tools = self.tools.clone();
         let tools_delay = self.tools_delay;
+        let tools_list_finished = self.tools_list_finished.clone();
         async move {
+            let _notify_finished = NotifyOnDrop(tools_list_finished);
             if tools_delay > Duration::ZERO {
                 tokio::time::sleep(tools_delay).await;
             }
@@ -1422,6 +1471,7 @@ async fn start_apps_server_with_delays_and_control(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
+    let tools_list_finished = Arc::new(Notify::new());
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
@@ -1432,6 +1482,7 @@ async fn start_apps_server_with_delays_and_control(
     let server_control = AppsServerControl {
         response,
         tools: tools.clone(),
+        tools_list_finished: tools_list_finished.clone(),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1440,7 +1491,14 @@ async fn start_apps_server_with_delays_and_control(
     let mcp_service = StreamableHttpService::new(
         {
             let tools = tools.clone();
-            move || Ok(AppListMcpServer::new(tools.clone(), tools_delay))
+            let tools_list_finished = tools_list_finished.clone();
+            move || {
+                Ok(AppListMcpServer::new(
+                    tools.clone(),
+                    tools_delay,
+                    tools_list_finished.clone(),
+                ))
+            }
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
