@@ -2840,9 +2840,16 @@ pub struct CommandExecParams {
     /// Optional sandbox policy for this command.
     ///
     /// Uses the same shape as thread/turn execution sandbox configuration and
-    /// defaults to the user's configured policy when omitted.
+    /// defaults to the user's configured policy when omitted. Cannot be
+    /// combined with `permissionProfile`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional full permissions profile for this command.
+    ///
+    /// Defaults to the user's configured permissions when omitted. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
 }
 
 /// Final buffered result for `command/exec`.
@@ -7654,6 +7661,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             }
         );
     }
@@ -7674,6 +7682,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7688,6 +7697,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
                 "outputBytesCap": null,
             })
         );
@@ -7713,6 +7723,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7729,6 +7740,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7757,6 +7769,7 @@ mod tests {
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7775,6 +7788,7 @@ mod tests {
                 },
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7844,6 +7858,7 @@ mod tests {
                 cols: 120,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7862,6 +7877,7 @@ mod tests {
                     "cols": 120,
                 },
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
