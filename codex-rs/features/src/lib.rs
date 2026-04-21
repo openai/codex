@@ -740,7 +740,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::CodexHooks,
-        key: "hooks",
+        key: "codex_hooks",
         stage: Stage::Experimental {
             name: "Hooks",
             menu_description: "Run deterministic scripts during the Codex lifecycle",

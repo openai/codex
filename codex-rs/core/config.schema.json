@@ -404,9 +404,6 @@
             "guardian_approval": {
               "type": "boolean"
             },
-            "hooks": {
-              "type": "boolean"
-            },
             "image_detail_original": {
               "type": "boolean"
             },
@@ -2373,9 +2370,6 @@
           "type": "boolean"
         },
         "guardian_approval": {
-          "type": "boolean"
-        },
-        "hooks": {
           "type": "boolean"
         },
         "image_detail_original": {

@@ -10,10 +10,6 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
-        legacy_key: "codex_hooks",
-        feature: Feature::CodexHooks,
-    },
-    Alias {
         legacy_key: "connectors",
         feature: Feature::Apps,
     },
