@@ -161,6 +161,7 @@ fn model_provider_from_proto(
             .auth
             .map(model_provider_auth_from_proto)
             .transpose()?,
+        aws: None,
         wire_api,
         query_params: provider.query_params.map(|map| map.values),
         http_headers: provider.http_headers.map(|map| map.values),
@@ -187,6 +188,7 @@ fn model_provider_to_proto(
         env_key_instructions,
         experimental_bearer_token,
         auth,
+        aws: _,
         wire_api,
         query_params,
         http_headers,
@@ -347,7 +349,10 @@ mod tests {
         let loaded = loader
             .load(ThreadConfigContext {
                 thread_id: Some("thread-1".to_string()),
-                cwd: Some("/workspace/project".into()),
+                cwd: Some(
+                    AbsolutePathBuf::from_absolute_path_checked("/workspace/project")
+                        .expect("absolute cwd"),
+                ),
             })
             .await;
 
@@ -476,6 +481,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
+            aws: None,
         }
     }
 }
