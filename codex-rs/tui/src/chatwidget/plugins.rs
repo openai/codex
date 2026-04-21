@@ -442,15 +442,15 @@ impl ChatWidget {
                     )),
                 );
             }
-            Err(err) => {
+            Err(_) => {
                 self.plugins_active_tab_id = Some(ADD_MARKETPLACE_TAB_ID.to_string());
-                let params = self.marketplace_add_error_popup_params(&err);
+                let params = self.marketplace_add_error_popup_params();
                 if !self
                     .bottom_pane
                     .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
                 {
                     self.bottom_pane
-                        .show_selection_view(self.marketplace_add_error_popup_params(&err));
+                        .show_selection_view(self.marketplace_add_error_popup_params());
                 }
             }
         }
@@ -854,7 +854,7 @@ impl ChatWidget {
         }
     }
 
-    fn marketplace_add_error_popup_params(&self, err: &str) -> SelectionViewParams {
+    fn marketplace_add_error_popup_params(&self) -> SelectionViewParams {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from("Failed to add marketplace.".dim()));
@@ -862,7 +862,9 @@ impl ChatWidget {
         let mut items = vec![
             SelectionItem {
                 name: "Marketplace add failed".to_string(),
-                description: Some(err.to_string()),
+                description: Some(
+                    "Failed to add marketplace from the provided source.".to_string(),
+                ),
                 is_disabled: true,
                 ..Default::default()
             },
