@@ -311,11 +311,14 @@ fn local_time_context() -> (String, String) {
 
 impl Session {
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
-    pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
+    pub(crate) fn build_per_turn_config(
+        session_configuration: &SessionConfiguration,
+        cwd: AbsolutePathBuf,
+    ) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
         let mut per_turn_config = (*config).clone();
-        per_turn_config.cwd = session_configuration.cwd.clone();
+        per_turn_config.cwd = cwd;
         per_turn_config.model_reasoning_effort =
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
@@ -463,7 +466,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
-    ) -> ConstraintResult<Arc<TurnContext>> {
+    ) -> CodexResult<Arc<TurnContext>> {
         let turn_environments = match self.resolve_turn_environments(environment_selections) {
             Ok(turn_environments) => turn_environments,
             Err(err) => {
@@ -509,15 +512,16 @@ impl Session {
         ) = match update_result {
             Ok(update) => update,
             Err(err) => {
+                let message = err.to_string();
                 self.send_event_raw(Event {
                     id: sub_id.clone(),
                     msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
+                        message: message.clone(),
                         codex_error_info: Some(CodexErrorInfo::BadRequest),
                     }),
                 })
                 .await;
-                return Err(err);
+                return Err(CodexErr::InvalidRequest(message));
             }
         };
 
@@ -546,7 +550,7 @@ impl Session {
     fn resolve_turn_environments(
         &self,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
-    ) -> ConstraintResult<Option<Vec<TurnEnvironment>>> {
+    ) -> CodexResult<Option<Vec<TurnEnvironment>>> {
         let Some(environment_selections) = environment_selections else {
             return Ok(None);
         };
@@ -557,11 +561,11 @@ impl Session {
                 .services
                 .environment_manager
                 .get_environment(&environment_selection.environment_id)
-                .ok_or_else(|| codex_config::ConstraintError::InvalidValue {
-                    field_name: "environments.environment_id",
-                    candidate: environment_selection.environment_id.clone(),
-                    allowed: "configured environment ids".to_string(),
-                    requirement_source: codex_config::RequirementSource::Unknown,
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "unknown turn environment id `{}`",
+                        environment_selection.environment_id
+                    ))
                 })?;
             let cwd = environment_selection.cwd;
             turn_environments.push(TurnEnvironment {
@@ -581,7 +585,20 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         turn_environments: Option<Vec<TurnEnvironment>>,
     ) -> Arc<TurnContext> {
-        let mut per_turn_config = Self::build_per_turn_config(&session_configuration);
+        // `None` means use the thread's default environment. `Some([])` is an
+        // explicit no-environment turn, so do not fall back in that case.
+        let primary_turn_environment = turn_environments
+            .as_ref()
+            .and_then(|turn_environments| turn_environments.first());
+        let environment = match primary_turn_environment {
+            Some(turn_environment) => Some(Arc::clone(&turn_environment.environment)),
+            None if turn_environments.is_some() => None,
+            None => self.services.environment_manager.default_environment(),
+        };
+        let cwd = primary_turn_environment
+            .map(|turn_environment| turn_environment.cwd.clone())
+            .unwrap_or_else(|| session_configuration.cwd.clone());
+        let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -597,21 +614,6 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
-        let environment = match turn_environments.as_ref() {
-            Some(turn_environments) => turn_environments
-                .first()
-                .map(|turn_environment| Arc::clone(&turn_environment.environment)),
-            None => self.services.environment_manager.default_environment(),
-        };
-        let cwd = turn_environments
-            .as_ref()
-            .and_then(|turn_environments| {
-                turn_environments
-                    .first()
-                    .map(|turn_environment| turn_environment.cwd.clone())
-            })
-            .unwrap_or_else(|| session_configuration.cwd.clone());
-        per_turn_config.cwd = cwd.clone();
         let plugin_outcome = self
             .services
             .plugins_manager
