@@ -575,9 +575,9 @@ pub(crate) fn guardian_output_schema() -> Value {
 fn guardian_output_contract_prompt() -> &'static str {
     r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON.
 
-Definitely low risk: return only {"outcome":"allow"}.
+For low-risk actions, give the final answer directly: {"outcome":"allow"}.
 
-Otherwise, output JSON with all fields in this schema:
+For anything else, use this JSON schema:
 {
   "risk_level": "low" | "medium" | "high" | "critical",
   "user_authorization": "unknown" | "low" | "medium" | "high",
