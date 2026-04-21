@@ -11,6 +11,8 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::config_loader::project_trust_key;
+use crate::context::ContextualUserFragment;
+use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -38,6 +40,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -86,7 +89,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -3439,6 +3441,41 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
 }
 
 #[tokio::test]
+async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let originating_active_turn = ActiveTurn::default();
+    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
+    *session.active_turn.lock().await = Some(originating_active_turn);
+
+    let current_active_turn = ActiveTurn::default();
+    let current_turn_state = Arc::clone(&current_active_turn.turn_state);
+    *session.active_turn.lock().await = Some(current_active_turn);
+
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(codex_protocol::models::NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    session
+        .record_granted_request_permissions_for_turn(
+            &codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: requested_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
+            },
+            Some(&originating_turn_state),
+        )
+        .await;
+
+    assert_eq!(
+        originating_turn_state.lock().await.granted_permissions(),
+        Some(requested_permissions.into())
+    );
+    assert_eq!(current_turn_state.lock().await.granted_permissions(), None);
+    assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
 async fn request_permissions_emits_event_when_granular_policy_allows_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
@@ -3474,7 +3511,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         async move {
             session
                 .request_permissions(
-                    turn_context.as_ref(),
+                    &turn_context,
                     call_id,
                     codex_protocol::request_permissions::RequestPermissionsArgs {
                         reason: Some("need network".to_string()),
@@ -3485,6 +3522,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
                             ..RequestPermissionProfile::default()
                         },
                     },
+                    CancellationToken::new(),
                 )
                 .await
         }
@@ -3498,6 +3536,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         panic!("expected request_permissions event");
     };
     assert_eq!(request.call_id, call_id);
+    assert_eq!(request.cwd, Some(turn_context.cwd.clone()));
 
     session
         .notify_request_permissions_response(&request.call_id, expected_response.clone())
@@ -3509,6 +3548,101 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         .expect("request_permissions join error");
 
     assert_eq!(response, Some(expected_response));
+}
+
+#[tokio::test]
+async fn request_permissions_response_materializes_session_cwd_grants_before_recording() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }))
+        .expect("test setup should allow updating approval policy");
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "call-1".to_string();
+    let requested_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    let handle = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let call_id = call_id.clone();
+        let requested_permissions = requested_permissions.clone();
+        async move {
+            session
+                .request_permissions(
+                    &turn_context,
+                    call_id,
+                    codex_protocol::request_permissions::RequestPermissionsArgs {
+                        reason: Some("need cwd write".to_string()),
+                        permissions: requested_permissions,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+
+    let request_event = tokio::time::timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("request_permissions event timed out")
+        .expect("request_permissions event missing");
+    let EventMsg::RequestPermissions(request) = request_event.msg else {
+        panic!("expected request_permissions event");
+    };
+    let request_cwd = request.cwd.clone().expect("request cwd");
+
+    session
+        .notify_request_permissions_response(
+            &request.call_id,
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: request.permissions,
+                scope: PermissionGrantScope::Session,
+            },
+        )
+        .await;
+
+    let expected_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![request_cwd]),
+        )),
+        ..Default::default()
+    };
+    let expected_response = codex_protocol::request_permissions::RequestPermissionsResponse {
+        permissions: expected_permissions.clone(),
+        scope: PermissionGrantScope::Session,
+    };
+
+    let response = tokio::time::timeout(StdDuration::from_secs(1), handle)
+        .await
+        .expect("request_permissions future timed out")
+        .expect("request_permissions join error");
+
+    assert_eq!(response, Some(expected_response));
+    assert_eq!(
+        session.granted_session_permissions().await,
+        Some(expected_permissions.into())
+    );
 }
 
 #[tokio::test]
@@ -3532,7 +3666,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
     let call_id = "call-1".to_string();
     let response = session
         .request_permissions(
-            turn_context.as_ref(),
+            &turn_context,
             call_id,
             codex_protocol::request_permissions::RequestPermissionsArgs {
                 reason: Some("need network".to_string()),
@@ -3543,6 +3677,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
                     ..RequestPermissionProfile::default()
                 },
             },
+            CancellationToken::new(),
         )
         .await;
 
@@ -4987,7 +5122,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
-    let rendered = render_skills_section(
+    let rendered = build_available_skills(
         &[SkillMetadata {
             name: "repo-skill".to_string(),
             description: "desc".to_string(),
@@ -5108,12 +5243,12 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let image_output_dir = image_output_path
         .parent()
         .expect("generated image path should have a parent");
-    let image_message: ResponseItem = DeveloperInstructions::new(format!(
-        "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-        image_output_dir.display(),
-        image_output_path.display(),
-    ))
-    .into();
+    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
+        crate::context::ImageGenerationInstructions::new(
+            image_output_dir.display(),
+            image_output_path.display(),
+        ),
+    );
     assert_eq!(history.raw_items(), &[image_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
@@ -6312,7 +6447,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
                 let ContentItem::InputText { text } = content_item else {
                     return false;
                 };
-                text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                TurnAborted::matches_text(text)
             })
         }),
         "expected a model-visible turn aborted marker in history after interrupt"
@@ -6320,6 +6455,10 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let tools = {
@@ -6360,6 +6499,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session),
             Arc::clone(&turn_context),
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -6405,7 +6545,9 @@ async fn sample_rollout(
             .as_ref()
             .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
     {
-        let msg = DeveloperInstructions::personality_spec_message(personality_message).into();
+        let msg = crate::context::ContextualUserFragment::into(
+            crate::context::PersonalitySpecInstructions::new(personality_message),
+        );
         let insert_at = initial_context
             .iter()
             .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
@@ -6602,6 +6744,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
@@ -6680,6 +6823,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),

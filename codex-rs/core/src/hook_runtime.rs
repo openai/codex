@@ -17,7 +17,6 @@ use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -31,6 +30,8 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
+use crate::context::ContextualUserFragment;
+use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -340,7 +341,8 @@ pub(crate) async fn record_additional_contexts(
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
     additional_contexts
         .into_iter()
-        .map(|additional_context| DeveloperInstructions::new(additional_context).into())
+        .map(HookAdditionalContext::new)
+        .map(ContextualUserFragment::into)
         .collect()
 }
 

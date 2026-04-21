@@ -177,6 +177,11 @@ fn run_realtime_conversation_test_in_subprocess(
         .arg("--exact")
         .arg(test_name)
         .env(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR, "1");
+    // The child talks to a loopback websocket server; parent proxy settings can
+    // route that connection away from the test server in Bazel environments.
+    for &key in codex_network_proxy::PROXY_ENV_KEYS {
+        command.env_remove(key);
+    }
     match openai_api_key {
         Some(openai_api_key) => {
             command.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
@@ -2656,7 +2661,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_keeps_transcript_history_after_each_handoff() -> Result<()> {
+async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2768,9 +2773,9 @@ async fn inbound_handoff_request_keeps_transcript_history_after_each_handoff() -
 
     let second_user_texts = requests[1].message_input_texts("user");
     assert!(second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: second question</transcript_delta>\n</realtime_delegation>"));
     assert!(!second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first questionsecond question</transcript_delta>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())

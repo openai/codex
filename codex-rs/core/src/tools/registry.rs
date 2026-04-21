@@ -239,6 +239,10 @@ impl ToolRegistry {
     //     }
     // }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "tool dispatch must keep active-turn accounting atomic"
+    )]
     pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,

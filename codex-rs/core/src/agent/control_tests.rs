@@ -5,7 +5,8 @@ use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::context::ContextualUserFragment;
+use crate::context::SubagentNotification;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -127,7 +128,7 @@ fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
         }
         content.iter().any(|content_item| match content_item {
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                text.contains(SUBAGENT_NOTIFICATION_OPEN_TAG)
+                SubagentNotification::matches_text(text)
             }
             ContentItem::InputImage { .. } => false,
         })

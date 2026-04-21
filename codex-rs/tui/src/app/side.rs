@@ -97,6 +97,57 @@ impl SideParentStatus {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn side_boundary_prompt_marks_inherited_history_reference_only() {
+        let item = App::side_boundary_prompt_item();
+        let ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected hidden side boundary prompt to be a user message");
+        };
+        assert_eq!(role, "user");
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected hidden side boundary prompt text");
+        };
+        assert!(text.contains("Side conversation boundary."));
+        assert!(text.contains("Everything before this boundary is inherited history"));
+        assert!(text.contains("It is not your current task."));
+        assert!(text.contains("Only messages submitted after this boundary are active"));
+        assert!(text.contains("Do not continue, execute, or complete"));
+        assert!(text.contains("separate from the main thread"));
+        assert!(
+            text.contains("External tools may be available according to this thread's current")
+        );
+        assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
+        assert!(text.contains("Do not modify files"));
+    }
+
+    #[test]
+    fn side_start_error_message_explains_missing_first_prompt() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
+        );
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
+        );
+    }
+
+    #[test]
+    fn side_start_error_message_uses_generic_start_wording() {
+        let err = color_eyre::eyre::eyre!("transport disconnected");
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "Failed to start side conversation: transport disconnected"
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SideParentStatusChange {
     Set(SideParentStatus),

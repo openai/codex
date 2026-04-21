@@ -132,6 +132,7 @@ struct KernelState {
 struct ExecContext {
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
     tracker: SharedTurnDiffTracker,
 }
 
@@ -836,10 +837,27 @@ impl JsReplManager {
         }
     }
 
+    #[cfg(test)]
     pub async fn execute(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        tracker: SharedTurnDiffTracker,
+        args: JsReplArgs,
+    ) -> Result<JsExecResult, FunctionCallError> {
+        self.execute_with_cancellation(session, turn, CancellationToken::new(), tracker, args)
+            .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl kernel initialization must be serialized with kernel state"
+    )]
+    pub async fn execute_with_cancellation(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         args: JsReplArgs,
     ) -> Result<JsExecResult, FunctionCallError> {
@@ -892,6 +910,7 @@ impl JsReplManager {
                 ExecContext {
                     session: Arc::clone(&session),
                     turn: Arc::clone(&turn),
+                    cancellation_token,
                     tracker,
                 },
             );
@@ -1072,7 +1091,11 @@ impl JsReplManager {
                     .windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+                    request,
+                    options,
+                    turn.cwd.clone(),
+                )
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
@@ -1162,6 +1185,10 @@ impl JsReplManager {
         Ok(kernel_path)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl stdin writes must be serialized per kernel"
+    )]
     async fn write_message(
         stdin: &Arc<Mutex<ChildStdin>>,
         msg: &HostToKernel,
@@ -1209,6 +1236,10 @@ impl JsReplManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl child shutdown must serialize process inspection and termination"
+    )]
     async fn kill_kernel_child(child: &Arc<Mutex<Child>>, reason: &'static str) {
         let mut guard = child.lock().await;
         let pid = guard.id();
@@ -1532,6 +1563,10 @@ impl JsReplManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "nested js_repl tool routing reads through the session-owned manager guard"
+    )]
     async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();
@@ -1588,7 +1623,11 @@ impl JsReplManager {
                         ResponsesApiNamespaceTool::Function(tool) => {
                             let tool_name =
                                 ToolName::namespaced(namespace.name.clone(), tool.name.clone());
-                            (tool_name.display() == req.tool_name).then_some(tool_name)
+                            let code_mode_name =
+                                codex_tools::code_mode_name_for_tool_name(&tool_name);
+                            (code_mode_name == req.tool_name
+                                || tool_name.display() == req.tool_name)
+                                .then_some(tool_name)
                         }
                     })
                 }
@@ -1640,12 +1679,14 @@ impl JsReplManager {
 
         let session = Arc::clone(&exec.session);
         let turn = Arc::clone(&exec.turn);
+        let cancellation_token = exec.cancellation_token.clone();
         let tracker = Arc::clone(&exec.tracker);
 
         match router
             .dispatch_tool_call_with_code_mode_result(
                 session,
                 turn,
+                cancellation_token,
                 tracker,
                 call,
                 crate::tools::router::ToolCallSource::JsRepl,

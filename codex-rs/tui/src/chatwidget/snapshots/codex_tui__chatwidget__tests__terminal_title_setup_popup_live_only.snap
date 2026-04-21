@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: terminal_title_popup_snapshot(&mut chat)
+---
+  Configure Terminal Title
+  Select which items to display in the terminal title.
+
+  Type to search
+  >
+› [x] project        Project name (falls back to current directory name)
+  [x] thread         Current thread title (omitted until available)
+  [x] git-branch     Current Git branch (omitted when unavailable)
+  [x] task-progress  Latest task progress from update_plan (omitted until available)
+  [ ] app-name       Codex app name
+  [ ] spinner        Animated task spinner (omitted while idle or when animations are off)
+  [ ] status         Compact session status text (Ready, Working, Thinking)
+  [ ] model          Current model name
+
+  preview-live-root | Live preview thread | feature/live-preview-branch | Tasks 2/5
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

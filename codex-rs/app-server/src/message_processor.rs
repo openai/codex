@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::config_manager::ConfigManager;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -63,6 +64,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
+use codex_config::ThreadConfigLoader;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -235,6 +237,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -256,6 +259,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             feedback,
             log_db,
             config_warnings,
@@ -291,6 +295,15 @@ impl MessageProcessor {
         let cli_overrides = Arc::new(RwLock::new(cli_overrides));
         let runtime_feature_enablement = Arc::new(RwLock::new(BTreeMap::new()));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
+        let config_manager = ConfigManager::new(
+            config.codex_home.to_path_buf(),
+            cli_overrides,
+            runtime_feature_enablement,
+            loader_overrides,
+            cloud_requirements,
+            arg0_paths.clone(),
+            thread_config_loader,
+        );
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
@@ -298,9 +311,7 @@ impl MessageProcessor {
             analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
-            cli_overrides: cli_overrides.clone(),
-            runtime_feature_enablement: runtime_feature_enablement.clone(),
-            cloud_requirements: cloud_requirements.clone(),
+            config_manager: config_manager.clone(),
             feedback,
             log_db,
         });
@@ -310,11 +321,7 @@ impl MessageProcessor {
             .plugins_manager()
             .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
-            config.codex_home.to_path_buf(),
-            cli_overrides,
-            runtime_feature_enablement,
-            loader_overrides,
-            cloud_requirements,
+            config_manager,
             thread_manager.clone(),
             analytics_events_client.clone(),
         );
