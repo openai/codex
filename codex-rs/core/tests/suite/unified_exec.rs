@@ -5,7 +5,10 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_exec_server::ConfiguredEnvironmentManagerArgs;
+use codex_exec_server::ConfiguredEnvironmentSpec;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::RemoteExecServerTransport;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -347,8 +350,19 @@ async fn unified_exec_environment_id_targets_non_primary_environment() -> Result
     skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
+    let codex_exe = codex_utils_cargo_bin::cargo_bin("codex")
+        .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex-exec"))?;
     let mut builder = test_codex()
-        .with_exec_server_url("ws://127.0.0.1:9")
+        .with_environment_manager_config(ConfiguredEnvironmentManagerArgs {
+            default_environment: Some("local".to_string()),
+            environments: vec![ConfiguredEnvironmentSpec {
+                id: "remote".to_string(),
+                transport: RemoteExecServerTransport::Command {
+                    command: format!("{codex_exe:?} exec-server --listen stdio://"),
+                },
+            }],
+            local_runtime_paths: None,
+        })
         .with_config(|config| {
             config
                 .features
@@ -362,6 +376,7 @@ async fn unified_exec_environment_id_targets_non_primary_environment() -> Result
     let test = builder.build(&server).await?;
     let selected_local_cwd = create_workspace_directory(&test, "selected-local").await?;
     let primary_remote_cwd = test.config.cwd.join("primary-remote");
+    tokio::fs::create_dir_all(&primary_remote_cwd).await?;
 
     let call_id = "uexec-env-local";
     let args = json!({
