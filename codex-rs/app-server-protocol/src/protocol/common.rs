@@ -1448,6 +1448,12 @@ mod tests {
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
+                permission_profile:
+                    codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                        &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                        std::path::Path::new("/tmp"),
+                    )
+                    .into(),
                 reasoning_effort: None,
             },
         };
@@ -1489,6 +1495,24 @@ mod tests {
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
+                    },
+                    "permissionProfile": {
+                        "network": {
+                            "enabled": true,
+                        },
+                        "fileSystem": {
+                            "entries": [
+                                {
+                                    "path": {
+                                        "type": "special",
+                                        "value": {
+                                            "kind": "root",
+                                        },
+                                    },
+                                    "access": "write",
+                                },
+                            ],
+                        },
                     },
                     "reasoningEffort": null
                 }
