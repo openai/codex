@@ -43,7 +43,8 @@ pub(crate) enum TerminalTitleItem {
     CurrentDir,
     /// Animated task spinner while active.
     Spinner,
-    /// Compact runtime status text.
+    /// Compact runtime run-state text.
+    #[strum(to_string = "run-state", serialize = "status")]
     Status,
     /// Current thread title (if available).
     #[strum(to_string = "thread-title", serialize = "thread")]
@@ -89,7 +90,9 @@ impl TerminalTitleItem {
             TerminalTitleItem::Spinner => {
                 "Animated task spinner (omitted while idle or when animations are off)"
             }
-            TerminalTitleItem::Status => "Compact session status text (Ready, Working, Thinking)",
+            TerminalTitleItem::Status => {
+                "Compact session run-state text (Ready, Working, Thinking)"
+            }
             TerminalTitleItem::Thread => "Current thread title (omitted when unavailable)",
             TerminalTitleItem::GitBranch => "Current Git branch (omitted when unavailable)",
             TerminalTitleItem::ContextRemaining => {
@@ -367,7 +370,7 @@ mod tests {
         let selected = [
             "project-name".to_string(),
             "spinner".to_string(),
-            "status".to_string(),
+            "run-state".to_string(),
             "thread-title".to_string(),
         ];
         let view =
@@ -381,7 +384,7 @@ mod tests {
     #[test]
     fn parse_terminal_title_items_preserves_order() {
         let items = parse_terminal_title_items(
-            ["project-name", "spinner", "status", "thread-title"].into_iter(),
+            ["project-name", "spinner", "run-state", "thread-title"].into_iter(),
         );
         assert_eq!(
             items,
@@ -436,6 +439,19 @@ mod tests {
         assert_eq!(
             "model-name".parse::<TerminalTitleItem>(),
             Ok(TerminalTitleItem::Model)
+        );
+    }
+
+    #[test]
+    fn run_state_is_canonical_and_accepts_status_legacy_id() {
+        assert_eq!(TerminalTitleItem::Status.to_string(), "run-state");
+        assert_eq!(
+            "run-state".parse::<TerminalTitleItem>(),
+            Ok(TerminalTitleItem::Status)
+        );
+        assert_eq!(
+            "status".parse::<TerminalTitleItem>(),
+            Ok(TerminalTitleItem::Status)
         );
     }
 

@@ -69,7 +69,8 @@ pub(crate) enum StatusLineItem {
     /// Current git branch name (if in a repository).
     GitBranch,
 
-    /// Compact runtime status text.
+    /// Compact runtime run-state text.
+    #[strum(to_string = "run-state", serialize = "status")]
     Status,
 
     /// Percentage of context window remaining.
@@ -124,7 +125,7 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            StatusLineItem::Status => "Compact session status text (Ready, Working, Thinking)",
+            StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -372,8 +373,21 @@ mod tests {
     }
 
     #[test]
+    fn run_state_is_canonical_and_accepts_status_legacy_id() {
+        assert_eq!(StatusLineItem::Status.to_string(), "run-state");
+        assert_eq!(
+            "run-state".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+        assert_eq!(
+            "status".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+    }
+
+    #[test]
     fn parse_status_line_items_accepts_title_only_variants() {
-        let items = ["status", "task-progress"]
+        let items = ["run-state", "task-progress"]
             .into_iter()
             .map(str::parse::<StatusLineItem>)
             .collect::<Result<Vec<_>, _>>();

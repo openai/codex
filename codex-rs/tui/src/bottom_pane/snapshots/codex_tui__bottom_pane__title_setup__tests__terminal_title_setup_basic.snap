@@ -10,7 +10,7 @@ expression: "render_lines(&view, 84)"
   >                                                                                 
 › [x] project-name       Project name (falls back to current directory name)        
   [x] spinner            Animated task spinner (omitted while idle or when animat…  
-  [x] status             Compact session status text (Ready, Working, Thinking)     
+  [x] run-state          Compact session run-state text (Ready, Working, Thinking)  
   [x] thread-title       Current thread title (omitted when unavailable)            
   [ ] app-name           Codex app name                                             
   [ ] current-dir        Current working directory                                  
