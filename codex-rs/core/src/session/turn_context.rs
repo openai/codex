@@ -27,14 +27,6 @@ impl TurnSkillsContext {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TurnStartTranscriptInput {
     pub(crate) input: Vec<UserInput>,
-    pub(crate) user_prompt_submit_outcome: Option<TurnStartUserPromptSubmitOutcome>,
-    pub(crate) user_prompt_recorded: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TurnStartUserPromptSubmitOutcome {
-    pub(crate) should_stop: bool,
-    pub(crate) additional_contexts: Vec<String>,
 }
 
 /// The context needed for a single turn of the thread.

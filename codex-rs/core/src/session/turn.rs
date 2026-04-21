@@ -18,6 +18,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::TurnStartTranscriptDrainMode;
 use crate::hook_runtime::drain_turn_start_transcript_inputs;
 use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
@@ -37,7 +38,6 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
-use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -156,9 +156,6 @@ pub(crate) async fn run_turn(
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
-
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .await;
 
     let loaded_plugins = sess
         .services
@@ -284,7 +281,13 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    if !drain_turn_start_transcript_inputs(&sess, &turn_context).await {
+    if !drain_turn_start_transcript_inputs(
+        &sess,
+        &turn_context,
+        TurnStartTranscriptDrainMode::RegularTurn,
+    )
+    .await
+    {
         return None;
     }
     sess.services
@@ -297,16 +300,6 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    if !input.is_empty() {
-        // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review/undo) cannot suppress future
-        // model/realtime injections.
-        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
-            realtime_active: Some(turn_context.realtime_active),
-        }))
-        .await;
-    }
     let agent_task = match sess.ensure_agent_task_registered().await {
         Ok(agent_task) => agent_task,
         Err(error) => {

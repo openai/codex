@@ -55,8 +55,6 @@ use tracing::Span;
 use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
-use crate::session::turn_context::TurnStartTranscriptInput;
-use crate::session::turn_context::TurnStartUserPromptSubmitOutcome;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -307,12 +305,23 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         ),
     )
     .await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        crate::tasks::RegularTask::new(),
-    )
-    .await;
+    let input = vec![UserInput::Text {
+        text: "hello before prewarm".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let mut expected_history = sess.build_initial_context(tc.as_ref()).await;
+    expected_history.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello before prewarm".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+    expected_history.push(crate::tasks::interrupted_turn_history_marker());
+    sess.spawn_task(Arc::clone(&tc), input, crate::tasks::RegularTask::new())
+        .await;
 
     let first = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
         .await
@@ -325,23 +334,38 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-    let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+    let (turn_id, reason, completed_at, duration_ms) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let event = rx.recv().await.expect("channel open");
+                if let EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id,
+                    reason,
+                    completed_at,
+                    duration_ms,
+                }) = event.msg
+                {
+                    return (turn_id, reason, completed_at, duration_ms);
+                }
+            }
+        })
         .await
-        .expect("expected turn aborted event")
-        .expect("channel open");
-    let EventMsg::TurnAborted(TurnAbortedEvent {
-        turn_id,
-        reason,
-        completed_at,
-        duration_ms,
-    }) = second.msg
-    else {
-        panic!("expected turn aborted event");
-    };
+        .expect("expected turn aborted event");
     assert_eq!(turn_id, Some(tc.sub_id.clone()));
     assert_eq!(reason, TurnAbortReason::Interrupted);
     assert!(completed_at.is_some());
     assert!(duration_ms.is_some());
+
+    let history = sess.clone_history().await;
+    assert_eq!(history.raw_items(), expected_history.as_slice());
+    assert!(tc.lock_turn_start_transcript_inputs().is_empty());
+    assert_eq!(
+        sess.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: tc.model_info.slug.clone(),
+            realtime_active: Some(tc.realtime_active),
+        })
+    );
 }
 
 fn test_model_client_session() -> crate::client::ModelClientSession {
@@ -5676,12 +5700,23 @@ impl SessionTask for NeverEndingTask {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
-async fn abort_regular_task_records_prompt_before_interrupt_marker() {
+async fn abort_regular_task_records_context_prompt_before_interrupt_marker() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
     }];
+    let mut expected = sess.build_initial_context(tc.as_ref()).await;
+    expected.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+    expected.push(crate::tasks::interrupted_turn_history_marker());
     sess.spawn_task(
         Arc::clone(&tc),
         input,
@@ -5695,69 +5730,15 @@ async fn abort_regular_task_records_prompt_before_interrupt_marker() {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     let history = sess.clone_history().await;
-    let expected = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hello".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
-        crate::tasks::interrupted_turn_history_marker(),
-    ];
-    assert_eq!(history.raw_items(), expected.as_slice());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_log::test]
-async fn abort_regular_task_replays_context_without_replaying_prompt() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }];
-    let response_item = ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    };
-    sess.record_conversation_items(tc.as_ref(), std::slice::from_ref(&response_item))
-        .await;
-    tc.lock_turn_start_transcript_inputs()
-        .push(TurnStartTranscriptInput {
-            input,
-            user_prompt_submit_outcome: Some(TurnStartUserPromptSubmitOutcome {
-                should_stop: false,
-                additional_contexts: vec!["hook context".to_string()],
-            }),
-            user_prompt_recorded: true,
-        });
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    let history = sess.clone_history().await;
-    let expected = vec![
-        response_item,
-        DeveloperInstructions::new("hook context".to_string()).into(),
-        crate::tasks::interrupted_turn_history_marker(),
-    ];
     assert_eq!(history.raw_items(), expected.as_slice());
     assert!(tc.lock_turn_start_transcript_inputs().is_empty());
+    assert_eq!(
+        sess.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: tc.model_info.slug.clone(),
+            realtime_active: Some(tc.realtime_active),
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

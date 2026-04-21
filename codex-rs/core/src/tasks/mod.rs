@@ -22,6 +22,7 @@ use tracing::warn;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::TurnStartTranscriptDrainMode;
 use crate::hook_runtime::drain_turn_start_transcript_inputs;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -306,8 +307,6 @@ impl Session {
                 .lock_turn_start_transcript_inputs()
                 .push(TurnStartTranscriptInput {
                     input: input.clone(),
-                    user_prompt_submit_outcome: None,
-                    user_prompt_recorded: false,
                 });
         }
         let mut active = self.active_turn.lock().await;
@@ -629,6 +628,24 @@ impl Session {
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
+        // The startup prompt queue is serialized by the regular turn itself. If an interrupt
+        // lands while that serialization is in progress, wait for the shared drain to finish
+        // before force-aborting the task so history cannot be left half-written.
+        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
+            let has_turn_start_transcript_input = {
+                let inputs = task.turn_context.lock_turn_start_transcript_inputs();
+                !inputs.is_empty()
+            };
+            if has_turn_start_transcript_input {
+                let _ = drain_turn_start_transcript_inputs(
+                    self,
+                    &task.turn_context,
+                    TurnStartTranscriptDrainMode::InterruptRecovery,
+                )
+                .await;
+            }
+        }
+
         select! {
             _ = task.done.notified() => {
             },
@@ -638,16 +655,6 @@ impl Session {
         }
 
         task.handle.abort();
-
-        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
-            let has_turn_start_transcript_input = {
-                let inputs = task.turn_context.lock_turn_start_transcript_inputs();
-                !inputs.is_empty()
-            };
-            if has_turn_start_transcript_input {
-                let _ = drain_turn_start_transcript_inputs(self, &task.turn_context).await;
-            }
-        }
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task

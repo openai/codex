@@ -33,9 +33,9 @@ use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
 use crate::event_mapping::parse_turn_item;
+use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnStartUserPromptSubmitOutcome;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -57,6 +57,11 @@ pub(crate) enum PendingInputRecord {
     ConversationItem {
         response_item: ResponseItem,
     },
+}
+
+pub(crate) enum TurnStartTranscriptDrainMode {
+    RegularTurn,
+    InterruptRecovery,
 }
 
 struct ContextInjectingHookOutcome {
@@ -273,52 +278,45 @@ pub(crate) async fn inspect_pending_input(
 pub(crate) async fn drain_turn_start_transcript_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    mode: TurnStartTranscriptDrainMode,
 ) -> bool {
     let Ok(_permit) = turn_context.transcript_serialization_lock.acquire().await else {
         return false;
     };
+
+    let has_queued_start_input = !turn_context.lock_turn_start_transcript_inputs().is_empty();
+    if !has_queued_start_input && matches!(mode, TurnStartTranscriptDrainMode::InterruptRecovery) {
+        return true;
+    }
+
+    // Keep the normal turn-start ordering in one serialized region: context first,
+    // then the user prompt, then hook-provided context and previous-turn settings.
+    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
+
     if run_pending_session_start_hooks(sess, turn_context).await {
         turn_context.lock_turn_start_transcript_inputs().clear();
         return false;
     }
 
+    let mut recorded_start_input = false;
     loop {
-        let queued_input = {
+        let input = {
             let inputs = turn_context.lock_turn_start_transcript_inputs();
-            inputs.first().cloned()
+            inputs.first().map(|queued| queued.input.clone())
         };
-        let Some(queued_input) = queued_input else {
+        let Some(input) = input else {
             break;
         };
-        let input = queued_input.input;
 
         let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         let response_item: ResponseItem = initial_input_for_turn.into();
-        let user_prompt_submit_outcome = match queued_input.user_prompt_submit_outcome {
-            Some(outcome) => outcome,
-            None => {
-                let outcome = run_user_prompt_submit_hooks(
-                    sess,
-                    turn_context,
-                    UserMessageItem::new(&input).message(),
-                )
-                .await;
-                let outcome = TurnStartUserPromptSubmitOutcome {
-                    should_stop: outcome.should_stop,
-                    additional_contexts: outcome.additional_contexts,
-                };
-                {
-                    let mut inputs = turn_context.lock_turn_start_transcript_inputs();
-                    if let Some(queued) = inputs.first_mut()
-                        && queued.input == input
-                        && queued.user_prompt_submit_outcome.is_none()
-                    {
-                        queued.user_prompt_submit_outcome = Some(outcome.clone());
-                    }
-                }
-                outcome
-            }
-        };
+        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+            sess,
+            turn_context,
+            UserMessageItem::new(&input).message(),
+        )
+        .await;
 
         if user_prompt_submit_outcome.should_stop {
             record_additional_contexts(
@@ -334,27 +332,12 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
             return false;
         }
 
-        if !queued_input.user_prompt_recorded {
-            sess.record_conversation_items(
-                turn_context.as_ref(),
-                std::slice::from_ref(&response_item),
-            )
-            .await;
-            {
-                let mut inputs = turn_context.lock_turn_start_transcript_inputs();
-                if let Some(queued) = inputs.first_mut()
-                    && queued.input == input
-                {
-                    queued.user_prompt_recorded = true;
-                }
-            }
-            let turn_item = TurnItem::UserMessage(UserMessageItem::new(&input));
-            sess.emit_turn_item_started(turn_context.as_ref(), &turn_item)
-                .await;
-            sess.emit_turn_item_completed(turn_context.as_ref(), turn_item)
-                .await;
-            sess.ensure_rollout_materialized().await;
-        }
+        sess.record_user_prompt_and_emit_turn_item(
+            turn_context.as_ref(),
+            input.as_slice(),
+            response_item,
+        )
+        .await;
         record_additional_contexts(
             sess,
             turn_context,
@@ -365,6 +348,15 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
         if inputs.first().is_some_and(|queued| queued.input == input) {
             inputs.remove(0);
         }
+        recorded_start_input = true;
+    }
+
+    if recorded_start_input {
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
     }
 
     true
