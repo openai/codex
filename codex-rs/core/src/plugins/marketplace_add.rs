@@ -56,7 +56,7 @@ pub async fn add_marketplace(
         .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
 }
 
-pub(crate) fn is_local_marketplace_source(
+pub fn is_local_marketplace_source(
     source: &str,
     explicit_ref: Option<String>,
 ) -> Result<bool, MarketplaceAddError> {
