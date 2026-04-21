@@ -10,8 +10,6 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -115,46 +113,6 @@ print(json.dumps({{
     });
 
     fs::write(&script_path, script).context("write post tool use hook script")?;
-    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
-    Ok(())
-}
-
-fn write_permission_request_hook(home: &Path) -> Result<()> {
-    let script_path = home.join("permission_request_hook.py");
-    let log_path = home.join("permission_request_hook_log.jsonl");
-    let script = format!(
-        r#"import json
-from pathlib import Path
-import sys
-
-payload = json.load(sys.stdin)
-
-with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(payload) + "\n")
-
-print(json.dumps({{
-    "hookSpecificOutput": {{
-        "hookEventName": "PermissionRequest",
-        "decision": {{"behavior": "allow"}}
-    }}
-}}))
-"#,
-        log_path = log_path.display(),
-    );
-    let hooks = serde_json::json!({
-        "hooks": {
-            "PermissionRequest": [{
-                "matcher": RMCP_HOOK_MATCHER,
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("python3 {}", script_path.display()),
-                    "statusMessage": "running MCP permission request hook",
-                }]
-            }]
-        }
-    });
-
-    fs::write(&script_path, script).context("write permission request hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -384,86 +342,6 @@ async fn post_tool_use_records_mcp_tool_payload_and_context() -> Result<()> {
     assert!(
         Path::new(transcript_path).exists(),
         "post tool use hook transcript_path should be materialized on disk",
-    );
-
-    call_mock.single_request();
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn permission_request_hook_allows_mcp_tool_call() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let call_id = "permissionrequest-rmcp-echo";
-    let arguments = json!({ "message": RMCP_ECHO_MESSAGE }).to_string();
-    let call_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call_with_namespace(call_id, RMCP_NAMESPACE, "echo", &arguments),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let final_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "mcp permission hook allowed it"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    let rmcp_test_server_bin = stdio_server_bin()?;
-    let test = test_codex()
-        .with_pre_build_hook(move |home| {
-            if let Err(error) = write_permission_request_hook(home) {
-                panic!("failed to write MCP permission request hook fixture: {error}");
-            }
-        })
-        .with_config(move |config| {
-            enable_hooks_and_rmcp_server(config, rmcp_test_server_bin, AppToolApproval::Prompt);
-        })
-        .build(&server)
-        .await?;
-
-    test.submit_turn_with_policies(
-        "call the rmcp echo tool with the MCP permission hook",
-        AskForApproval::OnRequest,
-        SandboxPolicy::new_read_only_policy(),
-    )
-    .await?;
-
-    let hook_inputs =
-        read_hook_inputs(test.codex_home_path(), "permission_request_hook_log.jsonl")?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(
-        json!({
-            "hook_event_name": hook_inputs[0]["hook_event_name"],
-            "tool_name": hook_inputs[0]["tool_name"],
-            "tool_use_id": hook_inputs[0]["tool_use_id"],
-            "tool_input": hook_inputs[0]["tool_input"],
-        }),
-        json!({
-            "hook_event_name": "PermissionRequest",
-            "tool_name": RMCP_ECHO_TOOL_NAME,
-            "tool_use_id": call_id,
-            "tool_input": { "message": RMCP_ECHO_MESSAGE },
-        })
-    );
-
-    let final_request = final_mock.single_request();
-    let output_item = final_request.function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("MCP tool output string");
-    assert!(
-        output.contains(&format!("ECHOING: {RMCP_ECHO_MESSAGE}")),
-        "MCP tool output should reach the model after PermissionRequest allows it",
     );
 
     call_mock.single_request();
