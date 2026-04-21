@@ -362,8 +362,7 @@ async fn unified_exec_environment_id_targets_non_primary_environment() -> Result
                 },
             }],
             local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
-                codex_exe,
-                /*codex_linux_sandbox_exe*/ None,
+                codex_exe, /*codex_linux_sandbox_exe*/ None,
             )?,
         })
         .with_config(|config| {

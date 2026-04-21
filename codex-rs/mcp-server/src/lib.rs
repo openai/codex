@@ -79,7 +79,9 @@ pub async fn run_main(
         })?;
     let exec_server_url = EnvironmentManagerArgs::from_env(runtime_paths.clone()).exec_server_url;
     let environment_manager = Arc::new(
-        EnvironmentManager::try_new(config.environment_manager_args(exec_server_url, runtime_paths)?)
+        EnvironmentManager::try_new(
+            config.environment_manager_args(exec_server_url, runtime_paths)?,
+        )
         .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?,
     );
     set_default_client_residency_requirement(config.enforce_residency.value());
