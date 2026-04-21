@@ -51,28 +51,16 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
 #[cfg(test)]
 mod tests {
-    use codex_aws_auth::region_from_bedrock_bearer_token;
     use pretty_assertions::assert_eq;
 
     use super::*;
 
-    fn bedrock_token_for_region(region: &str) -> String {
-        let encoded = match region {
-            "eu-central-1" => {
-                "YmVkcm9jay5hbWF6b25hd3MuY29tLz9BY3Rpb249Q2FsbFdpdGhCZWFyZXJUb2tlbiZYLUFtei1DcmVkZW50aWFsPUFLSURFWEFNUExFJTJGMjAyNjA0MjAlMkZldS1jZW50cmFsLTElMkZiZWRyb2NrJTJGYXdzNF9yZXF1ZXN0JlZlcnNpb249MQ=="
-            }
-            _ => panic!("test token fixture missing for {region}"),
-        };
-        format!("bedrock-api-key-{encoded}")
-    }
-
     #[test]
-    fn api_provider_for_bedrock_bearer_token_uses_token_region_endpoint() {
-        let token = bedrock_token_for_region("eu-central-1");
-        let region = region_from_bedrock_bearer_token(&token).expect("bearer token should resolve");
+    fn api_provider_for_bedrock_bearer_token_uses_configured_region_endpoint() {
+        let region = "eu-central-1";
         let mut api_provider_info =
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        api_provider_info.base_url = Some(base_url(&region).expect("supported region"));
+        api_provider_info.base_url = Some(base_url(region).expect("supported region"));
         let api_provider = api_provider_info
             .to_api_provider(/*auth_mode*/ None)
             .expect("api provider should build");

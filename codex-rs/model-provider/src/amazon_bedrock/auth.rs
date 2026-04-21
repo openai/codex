@@ -7,7 +7,6 @@ use codex_aws_auth::AwsAuthConfig;
 use codex_aws_auth::AwsAuthContext;
 use codex_aws_auth::AwsAuthError;
 use codex_aws_auth::AwsRequestToSign;
-use codex_aws_auth::region_from_bedrock_bearer_token;
 use codex_client::Request;
 use codex_client::RequestBody;
 use codex_client::RequestCompression;
@@ -20,6 +19,7 @@ use tokio::sync::OnceCell;
 use crate::BearerAuthProvider;
 
 use super::mantle::aws_auth_config;
+use super::mantle::region_from_config;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const LEGACY_SESSION_ID_HEADER: &str = "session_id";
@@ -37,8 +37,7 @@ enum BedrockAuthMethod {
 
 async fn resolve_auth_method(aws: &ModelProviderAwsAuthInfo) -> Result<BedrockAuthMethod> {
     if let Some(token) = bearer_token_from_env() {
-        let region =
-            region_from_bedrock_bearer_token(&token).map_err(aws_auth_error_to_codex_error)?;
+        let region = bearer_token_region_from_config(aws)?;
         return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
     }
 
@@ -76,6 +75,16 @@ fn bearer_token_from_env() -> Option<String> {
         .ok()
         .map(|token| token.trim().to_string())
         .filter(|token| !token.is_empty())
+}
+
+fn bearer_token_region_from_config(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+    region_from_config(aws).ok_or_else(|| {
+        CodexErr::Fatal(
+            "Amazon Bedrock bearer token auth requires \
+`model_providers.amazon-bedrock.aws.region`"
+                .to_string(),
+        )
+    })
 }
 
 fn aws_auth_error_to_codex_error(error: AwsAuthError) -> CodexErr {
@@ -156,20 +165,14 @@ mod tests {
 
     use super::*;
 
-    fn bedrock_token_for_region(region: &str) -> String {
-        let encoded = match region {
-            "us-west-2" => {
-                "YmVkcm9jay5hbWF6b25hd3MuY29tLz9BY3Rpb249Q2FsbFdpdGhCZWFyZXJUb2tlbiZYLUFtei1DcmVkZW50aWFsPUFLSURFWEFNUExFJTJGMjAyNjA0MjAlMkZ1cy13ZXN0LTIlMkZiZWRyb2NrJTJGYXdzNF9yZXF1ZXN0JlZlcnNpb249MQ=="
-            }
-            _ => panic!("test token fixture missing for {region}"),
-        };
-        format!("bedrock-api-key-{encoded}")
-    }
-
     #[test]
-    fn bedrock_bearer_auth_uses_token_region_and_header() {
-        let token = bedrock_token_for_region("us-west-2");
-        let region = region_from_bedrock_bearer_token(&token).expect("bearer token should resolve");
+    fn bedrock_bearer_auth_uses_configured_region_and_header() {
+        let token = "bedrock-api-key-test".to_string();
+        let region = bearer_token_region_from_config(&ModelProviderAwsAuthInfo {
+            profile: None,
+            region: Some(" us-west-2 ".to_string()),
+        })
+        .expect("configured region should resolve");
         let provider = BearerAuthProvider {
             token: Some(token),
             account_id: None,
@@ -185,6 +188,21 @@ mod tests {
                 .get(http::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.starts_with("Bearer bedrock-api-key-"))
+        );
+    }
+
+    #[test]
+    fn bedrock_bearer_auth_rejects_missing_configured_region() {
+        let err = bearer_token_region_from_config(&ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+        })
+        .expect_err("missing region should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "Fatal error: Amazon Bedrock bearer token auth requires \
+`model_providers.amazon-bedrock.aws.region`"
         );
     }
 

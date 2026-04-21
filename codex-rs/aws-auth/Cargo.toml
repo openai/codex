@@ -17,11 +17,9 @@ aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sigv4 = { workspace = true }
 aws-types = { workspace = true }
-base64 = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 thiserror = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

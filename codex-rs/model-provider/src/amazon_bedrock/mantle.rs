@@ -22,8 +22,17 @@ const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
 pub(super) fn aws_auth_config(aws: &ModelProviderAwsAuthInfo) -> AwsAuthConfig {
     AwsAuthConfig {
         profile: aws.profile.clone(),
+        region: region_from_config(aws),
         service: BEDROCK_MANTLE_SERVICE_NAME.to_string(),
     }
+}
+
+pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<String> {
+    aws.region
+        .as_deref()
+        .map(str::trim)
+        .filter(|region| !region.is_empty())
+        .map(str::to_string)
 }
 
 pub(super) fn base_url(region: &str) -> Result<String> {
@@ -65,9 +74,26 @@ mod tests {
         assert_eq!(
             aws_auth_config(&ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
+                region: None,
             }),
             AwsAuthConfig {
                 profile: Some("codex-bedrock".to_string()),
+                region: None,
+                service: "bedrock-mantle".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn aws_auth_config_uses_configured_region() {
+        assert_eq!(
+            aws_auth_config(&ModelProviderAwsAuthInfo {
+                profile: None,
+                region: Some(" us-west-2 ".to_string()),
+            }),
+            AwsAuthConfig {
+                profile: None,
+                region: Some("us-west-2".to_string()),
                 service: "bedrock-mantle".to_string(),
             }
         );

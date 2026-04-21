@@ -1,6 +1,7 @@
 use aws_config::BehaviorVersion;
 use aws_config::SdkConfig;
 use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_types::region::Region;
 
 use crate::AwsAuthConfig;
 use crate::AwsAuthError;
@@ -13,6 +14,9 @@ pub(crate) async fn load_sdk_config(config: &AwsAuthConfig) -> Result<SdkConfig,
     let mut loader = aws_config::defaults(BehaviorVersion::latest());
     if let Some(profile) = config.profile.as_ref() {
         loader = loader.profile_name(profile);
+    }
+    if let Some(region) = config.region.as_ref() {
+        loader = loader.region(Region::new(region.clone()));
     }
 
     Ok(loader.load().await)

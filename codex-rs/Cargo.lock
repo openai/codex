@@ -2002,13 +2002,11 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-types",
- "base64 0.22.1",
  "bytes",
  "http 1.4.0",
  "pretty_assertions",
  "thiserror 2.0.18",
  "tokio",
- "url",
 ]
 
 [[package]]

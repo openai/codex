@@ -5,18 +5,16 @@ use std::time::SystemTime;
 
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::provider::SharedCredentialsProvider;
-use base64::Engine;
-use base64::engine::general_purpose;
 use bytes::Bytes;
 use http::HeaderMap;
 use http::Method;
 use thiserror::Error;
-use url::Url;
 
 /// AWS auth configuration used to resolve credentials and sign requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AwsAuthConfig {
     pub profile: Option<String>,
+    pub region: Option<String>,
     pub service: String,
 }
 
@@ -45,8 +43,6 @@ pub enum AwsAuthError {
     MissingCredentialsProvider,
     #[error("AWS SDK config did not resolve a region")]
     MissingRegion,
-    #[error("Amazon Bedrock bearer token is invalid: {0}")]
-    InvalidBedrockBearerToken(String),
     #[error("failed to load AWS credentials: {0}")]
     Credentials(#[from] aws_credential_types::provider::error::CredentialsError),
     #[error("request URL is not a valid URI: {0}")]
@@ -115,48 +111,6 @@ impl AwsAuthContext {
     }
 }
 
-/// Extracts the AWS region embedded in an Amazon Bedrock short-term bearer token.
-pub fn region_from_bedrock_bearer_token(token: &str) -> Result<String, AwsAuthError> {
-    const PREFIX: &str = "bedrock-api-key-";
-
-    let token_body = token
-        .trim()
-        .strip_prefix(PREFIX)
-        .ok_or_else(|| invalid_bedrock_bearer_token("missing bedrock-api-key prefix"))?;
-    let encoded_token = token_body
-        .split_once("&Version=")
-        .map_or(token_body, |(encoded, _)| encoded);
-    let decoded = general_purpose::STANDARD
-        .decode(encoded_token)
-        .map_err(|_| invalid_bedrock_bearer_token("base64 payload could not be decoded"))?;
-    let decoded = String::from_utf8(decoded)
-        .map_err(|_| invalid_bedrock_bearer_token("decoded payload is not UTF-8"))?;
-    let decoded_url = if decoded.starts_with("http://") || decoded.starts_with("https://") {
-        decoded
-    } else {
-        format!("https://{decoded}")
-    };
-    let url = Url::parse(&decoded_url)
-        .map_err(|_| invalid_bedrock_bearer_token("decoded payload is not a URL"))?;
-    let credential = url
-        .query_pairs()
-        .find_map(|(key, value)| (key == "X-Amz-Credential").then_some(value.into_owned()))
-        .ok_or_else(|| invalid_bedrock_bearer_token("missing X-Amz-Credential"))?;
-    let mut parts = credential.split('/');
-    let _access_key = parts.next();
-    let _date = parts.next();
-    let region = parts
-        .next()
-        .filter(|region| !region.trim().is_empty())
-        .ok_or_else(|| invalid_bedrock_bearer_token("credential scope is missing region"))?;
-
-    Ok(region.to_string())
-}
-
-fn invalid_bedrock_bearer_token(message: &'static str) -> AwsAuthError {
-    AwsAuthError::InvalidBedrockBearerToken(message.to_string())
-}
-
 impl AwsAuthError {
     /// Returns whether retrying the outbound request can reasonably recover from this auth error.
     pub fn is_retryable(&self) -> bool {
@@ -169,7 +123,6 @@ impl AwsAuthError {
             AwsAuthError::EmptyService
             | AwsAuthError::MissingCredentialsProvider
             | AwsAuthError::MissingRegion
-            | AwsAuthError::InvalidBedrockBearerToken(_)
             | AwsAuthError::InvalidUri(_)
             | AwsAuthError::BuildHttpRequest(_)
             | AwsAuthError::InvalidHeaderValue(_)
@@ -297,50 +250,12 @@ mod tests {
     async fn load_rejects_empty_service_name() {
         let err = AwsAuthContext::load(AwsAuthConfig {
             profile: None,
+            region: None,
             service: "   ".to_string(),
         })
         .await
         .expect_err("empty service should be rejected");
 
         assert_eq!(err.to_string(), "AWS service name must not be empty");
-    }
-
-    #[test]
-    fn region_from_bedrock_bearer_token_reads_sigv4_credential_scope() {
-        let decoded = "bedrock.amazonaws.com/?Action=CallWithBearerToken&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20260420%2Fus-west-2%2Fbedrock%2Faws4_request&Version=1";
-        let encoded = general_purpose::STANDARD.encode(decoded);
-        let token = format!("bedrock-api-key-{encoded}");
-
-        assert_eq!(
-            region_from_bedrock_bearer_token(&token).expect("token region should parse"),
-            "us-west-2"
-        );
-    }
-
-    #[test]
-    fn region_from_bedrock_bearer_token_accepts_unencoded_version_suffix() {
-        let decoded = "bedrock.amazonaws.com/?Action=CallWithBearerToken&X-Amz-Credential=AKIDEXAMPLE%2F20260420%2Feu-west-1%2Fbedrock%2Faws4_request";
-        let encoded = general_purpose::STANDARD.encode(decoded);
-        let token = format!("bedrock-api-key-{encoded}&Version=1");
-
-        assert_eq!(
-            region_from_bedrock_bearer_token(&token).expect("token region should parse"),
-            "eu-west-1"
-        );
-    }
-
-    #[test]
-    fn region_from_bedrock_bearer_token_rejects_missing_credential_scope() {
-        let decoded = "bedrock.amazonaws.com/?Action=CallWithBearerToken";
-        let encoded = general_purpose::STANDARD.encode(decoded);
-        let token = format!("bedrock-api-key-{encoded}");
-
-        let err = region_from_bedrock_bearer_token(&token)
-            .expect_err("missing credential scope should fail");
-
-        assert_eq!(
-            err.to_string(),
-            "Amazon Bedrock bearer token is invalid: missing X-Amz-Credential"
-        );
     }
 }
