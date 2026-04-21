@@ -160,6 +160,7 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -1511,6 +1512,40 @@ fn emit_collab_trace_event(
         target.thread.id = %target_thread_id,
         target.agent.nickname = %target_agent_nickname.unwrap_or(""),
         target.agent.role = %target_agent_role.unwrap_or(""),
+    );
+}
+
+fn emit_agent_result_trace_event(
+    child_thread_id: ThreadId,
+    child_turn_id: &str,
+    parent_thread_id: ThreadId,
+    child_agent_path: &str,
+    message: &str,
+    status: &AgentStatus,
+) {
+    // The parent notification is not inferable from wait-tool output: a wait can
+    // time out, return several children, or be absent entirely. Emit the result
+    // edge where the control plane still knows the exact child turn that ended
+    // and the exact parent thread that received the notification.
+    let payload = codex_trace::write_payload(
+        "agent_result",
+        &json!({
+            "child_agent_path": child_agent_path,
+            "message": message,
+            "status": status,
+        }),
+    );
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.collab.agent_result.observed",
+        child.thread.id = %child_thread_id,
+        child.turn.id = %child_turn_id,
+        parent.thread.id = %parent_thread_id,
+        message = %message,
+        raw_payload.agent_result.id = %payload.as_ref().map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
+        raw_payload.agent_result.path = %payload.as_ref().map(|payload| payload.path.as_str()).unwrap_or(""),
+        raw_payload.agent_result.kind = %payload.as_ref().map(|payload| payload.kind.as_str()).unwrap_or(""),
     );
 }
 
@@ -3177,14 +3212,20 @@ impl Session {
             return;
         }
 
-        self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
-            .await;
+        self.forward_child_completion_to_parent(
+            *parent_thread_id,
+            &turn_context.sub_id,
+            child_agent_path,
+            status,
+        )
+        .await;
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
     async fn forward_child_completion_to_parent(
         &self,
         parent_thread_id: ThreadId,
+        child_turn_id: &str,
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
     ) {
@@ -3197,6 +3238,14 @@ impl Session {
         };
 
         let message = format_subagent_notification_message(child_agent_path.as_str(), &status);
+        emit_agent_result_trace_event(
+            self.conversation_id,
+            child_turn_id,
+            parent_thread_id,
+            child_agent_path.as_str(),
+            &message,
+            &status,
+        );
         let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,

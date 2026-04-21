@@ -32,8 +32,18 @@ struct Reducer<'a> {
     // the canonical item without writing the raw item into state.json.
     raw_conversation_items: BTreeMap<String, Value>,
     code_cell_ids_by_runtime: BTreeMap<(String, String), String>,
+    agent_result_observations: BTreeMap<String, AgentResultObservation>,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
+}
+
+#[derive(Debug, Clone)]
+struct AgentResultObservation {
+    child_thread_id: String,
+    child_turn_id: String,
+    parent_thread_id: String,
+    message: String,
+    observed_at_unix_ms: i64,
 }
 
 pub fn reduce_bundle_to_path(bundle_dir: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
@@ -66,6 +76,7 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<RolloutTrace> {
         ),
         raw_conversation_items: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
+        agent_result_observations: BTreeMap::new(),
         next_conversation_item_ordinal: 1,
         next_terminal_operation_ordinal: 1,
     };
@@ -85,6 +96,7 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<RolloutTrace> {
     reducer.link_code_cells_to_conversation_items();
     reducer.drop_redundant_code_cell_tool_calls();
     reducer.sync_terminal_model_observations();
+    reducer.resolve_agent_result_edges();
     reducer.attach_tool_payloads_to_interaction_edges();
     if reducer.trace.started_at_unix_ms == 0 {
         reducer.trace.started_at_unix_ms = reducer
@@ -113,6 +125,7 @@ impl Reducer<'_> {
         self.insert_payload_ref(&event, "response");
         self.insert_payload_ref(&event, "invocation");
         self.insert_payload_ref(&event, "result");
+        self.insert_payload_ref(&event, "agent_result");
 
         match event_name(&event).unwrap_or_default() {
             "codex.thread.started" | "thread_started" => self.thread_started(&event),
@@ -133,8 +146,7 @@ impl Reducer<'_> {
                 self.tool_to_thread_edge_started(&event, "send_message");
             }
             "codex.collab.message.ended" => self.tool_to_thread_edge_ended(&event, "send_message"),
-            "codex.collab.wait.started" => self.agent_result_edge_started(&event),
-            "codex.collab.wait.ended" => self.agent_result_edge_ended(&event),
+            "codex.collab.agent_result.observed" => self.agent_result_observed(&event),
             "codex.collab.close.started" => self.tool_to_thread_edge_started(&event, "close_agent"),
             "codex.collab.close.ended" => self.tool_to_thread_edge_ended(&event, "close_agent"),
             _ => {}
@@ -535,46 +547,46 @@ impl Reducer<'_> {
         self.apply_target_agent_metadata(event, completed_spawn_edge_id.as_deref());
     }
 
-    fn agent_result_edge_started(&mut self, event: &CapturedEvent) {
-        let (Some(tool_call_id), Some(target_thread_id)) = (
-            normalized_tool_call_id(event),
-            trace_field_str(event, "target.thread", "id").filter(|thread_id| !thread_id.is_empty()),
+    fn agent_result_observed(&mut self, event: &CapturedEvent) {
+        let (Some(child_thread_id), Some(child_turn_id), Some(parent_thread_id)) = (
+            trace_field_str(event, "child.thread", "id").filter(|id| !id.is_empty()),
+            trace_field_str(event, "child.turn", "id").filter(|id| !id.is_empty()),
+            trace_field_str(event, "parent.thread", "id").filter(|id| !id.is_empty()),
         ) else {
             return;
         };
-        let edge_id = agent_result_edge_id(&tool_call_id, target_thread_id);
+        let edge_id =
+            agent_result_observed_edge_id(child_thread_id, child_turn_id, parent_thread_id);
         self.upsert_interaction_edge(
-            edge_id,
+            edge_id.clone(),
             InteractionEdgeKind::AgentResult,
             TraceAnchor::Thread {
-                thread_id: target_thread_id.to_string(),
+                thread_id: child_thread_id.to_string(),
             },
-            Some(TraceAnchor::ToolCall { tool_call_id }),
+            Some(TraceAnchor::Thread {
+                thread_id: parent_thread_id.to_string(),
+            }),
             event,
         );
-    }
-
-    fn agent_result_edge_ended(&mut self, event: &CapturedEvent) {
-        self.agent_result_edge_started(event);
-        let Some(tool_call_id) = normalized_tool_call_id(event) else {
-            return;
-        };
-        if let Some(target_thread_id) =
-            trace_field_str(event, "target.thread", "id").filter(|thread_id| !thread_id.is_empty())
-        {
-            let edge_id = agent_result_edge_id(&tool_call_id, target_thread_id);
-            if let Some(edge) = self.trace.interaction_edges.get_mut(&edge_id) {
-                edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
-            }
-        } else {
-            let edge_prefix = format!("edge:agent_result:{tool_call_id}:");
-            for (edge_id, edge) in &mut self.trace.interaction_edges {
-                if edge_id.starts_with(&edge_prefix) {
-                    edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
-                }
+        if let Some(edge) = self.trace.interaction_edges.get_mut(&edge_id) {
+            // This event is emitted at the exact control-plane handoff, so the
+            // edge is an observed instant unless later instrumentation gives us
+            // a wider lifecycle.
+            edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
+            if let Some(raw_payload_id) = raw_payload_field_str(event, "agent_result", "id") {
+                push_unique(&mut edge.carried_raw_payload_ids, raw_payload_id);
             }
         }
-        self.apply_target_agent_metadata(event, None);
+        self.agent_result_observations.insert(
+            edge_id,
+            AgentResultObservation {
+                child_thread_id: child_thread_id.to_string(),
+                child_turn_id: child_turn_id.to_string(),
+                parent_thread_id: parent_thread_id.to_string(),
+                message: field_str(event, "message").unwrap_or("").to_string(),
+                observed_at_unix_ms: event.wall_time_unix_ms,
+            },
+        );
     }
 
     fn upsert_interaction_edge(
@@ -687,6 +699,7 @@ impl Reducer<'_> {
                 event.wall_time_unix_ms,
                 item,
                 None,
+                trace_field_str(event, "turn", "id"),
                 raw_payload_id,
             );
             push_unique(&mut ids, &item_id);
@@ -708,6 +721,7 @@ impl Reducer<'_> {
             return Ok((None, Vec::new(), None));
         };
         let thread_id = Some(inference.thread_id.clone());
+        let codex_turn_id = inference.codex_turn_id.clone();
         let Some(payload) = self.payload_by_id(raw_payload_id)? else {
             return Ok((thread_id, Vec::new(), None));
         };
@@ -725,6 +739,7 @@ impl Reducer<'_> {
                 event.wall_time_unix_ms,
                 items,
                 producer,
+                Some(&codex_turn_id),
                 raw_payload_id,
             )
         });
@@ -737,6 +752,7 @@ impl Reducer<'_> {
         first_seen_at_unix_ms: i64,
         items: Vec<Value>,
         producer: Option<ProducerRef>,
+        codex_turn_id: Option<&str>,
         raw_payload_id: &str,
     ) -> Vec<String> {
         let mut ids = Vec::new();
@@ -746,6 +762,7 @@ impl Reducer<'_> {
                 first_seen_at_unix_ms,
                 item,
                 producer.clone(),
+                codex_turn_id,
                 raw_payload_id,
             );
             ids.push(item_id);
@@ -759,12 +776,13 @@ impl Reducer<'_> {
         first_seen_at_unix_ms: i64,
         item: Value,
         producer: Option<ProducerRef>,
+        codex_turn_id: Option<&str>,
         raw_payload_id: &str,
     ) -> String {
         let item_id = format!("item:{}", self.next_conversation_item_ordinal);
         self.next_conversation_item_ordinal += 1;
         let produced_by = producer.into_iter().collect::<Vec<_>>();
-        let normalized = normalize_conversation_item(
+        let mut normalized = normalize_conversation_item(
             &item_id,
             thread_id,
             first_seen_at_unix_ms,
@@ -772,6 +790,7 @@ impl Reducer<'_> {
             produced_by,
             raw_payload_id,
         );
+        normalized.codex_turn_id = codex_turn_id.map(str::to_string);
         self.raw_conversation_items.insert(item_id.clone(), item);
         self.trace
             .conversation_items
@@ -1151,6 +1170,126 @@ impl Reducer<'_> {
         }
     }
 
+    fn resolve_agent_result_edges(&mut self) {
+        // The producer emits agent results at the control-plane handoff. The
+        // parent-visible mailbox item usually appears later, when a request
+        // snapshot includes it, so final anchoring has to run after replay.
+        let observations = self
+            .agent_result_observations
+            .iter()
+            .map(|(edge_id, observation)| (edge_id.clone(), observation.clone()))
+            .collect::<Vec<_>>();
+        for (edge_id, observation) in observations {
+            let source_item_id = self.latest_assistant_message_for_turn(
+                &observation.child_thread_id,
+                &observation.child_turn_id,
+            );
+            let target_item_id = self.agent_result_notification_item(
+                &observation.parent_thread_id,
+                &observation.message,
+                observation.observed_at_unix_ms,
+            );
+
+            if let Some(edge) = self.trace.interaction_edges.get_mut(&edge_id) {
+                edge.source = source_item_id
+                    .as_ref()
+                    .map(|item_id| TraceAnchor::ConversationItem {
+                        item_id: item_id.clone(),
+                    })
+                    .unwrap_or_else(|| TraceAnchor::Thread {
+                        thread_id: observation.child_thread_id.clone(),
+                    });
+                edge.target = target_item_id
+                    .as_ref()
+                    .map(|item_id| TraceAnchor::ConversationItem {
+                        item_id: item_id.clone(),
+                    })
+                    .unwrap_or_else(|| TraceAnchor::Thread {
+                        thread_id: observation.parent_thread_id.clone(),
+                    });
+                if let Some(item_id) = source_item_id.as_deref() {
+                    push_unique(&mut edge.carried_item_ids, item_id);
+                }
+                if let Some(item_id) = target_item_id.as_deref() {
+                    push_unique(&mut edge.carried_item_ids, item_id);
+                }
+            }
+
+            if let Some(item_id) = target_item_id {
+                self.add_conversation_item_producer(
+                    &item_id,
+                    ProducerRef::InteractionEdge { edge_id },
+                );
+            }
+        }
+    }
+
+    fn latest_assistant_message_for_turn(
+        &self,
+        thread_id: &str,
+        codex_turn_id: &str,
+    ) -> Option<String> {
+        self.trace
+            .conversation_items
+            .values()
+            .filter(|item| {
+                item.thread_id == thread_id
+                    && item.codex_turn_id.as_deref() == Some(codex_turn_id)
+                    && item.role == ConversationRole::Assistant
+                    && item.kind == ConversationItemKind::Message
+            })
+            .max_by_key(|item| {
+                (
+                    item.first_seen_at_unix_ms,
+                    conversation_item_ordinal(&item.item_id),
+                )
+            })
+            .map(|item| item.item_id.clone())
+    }
+
+    fn agent_result_notification_item(
+        &self,
+        parent_thread_id: &str,
+        message: &str,
+        observed_at_unix_ms: i64,
+    ) -> Option<String> {
+        if message.is_empty() {
+            return None;
+        }
+        let matching_items = self
+            .trace
+            .conversation_items
+            .values()
+            .filter(|item| {
+                item.thread_id == parent_thread_id
+                    && conversation_item_contains_agent_result_message(item, message)
+            })
+            .collect::<Vec<_>>();
+
+        matching_items
+            .iter()
+            .copied()
+            .filter(|item| item.first_seen_at_unix_ms >= observed_at_unix_ms)
+            .min_by_key(|item| {
+                (
+                    item.first_seen_at_unix_ms,
+                    conversation_item_ordinal(&item.item_id),
+                )
+            })
+            .or_else(|| {
+                // Partial traces can contain the parent request without the
+                // exact producer event ordering. Keep the edge useful, but only
+                // after the ordered match above fails.
+                matching_items.iter().copied().max_by_key(|item| {
+                    (
+                        item.first_seen_at_unix_ms,
+                        conversation_item_ordinal(&item.item_id),
+                    )
+                })
+            })
+            .map(|item| item.item_id.clone())
+    }
+
     fn add_conversation_item_producer(&mut self, item_id: &str, producer: ProducerRef) {
         let Some(item) = self.trace.conversation_items.get_mut(item_id) else {
             return;
@@ -1309,6 +1448,39 @@ fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> Conversatio
             }],
         },
     }
+}
+
+fn conversation_item_contains_agent_result_message(
+    item: &ConversationItem,
+    expected_message: &str,
+) -> bool {
+    item.body.parts.iter().any(|part| {
+        let ConversationPart::Text { text } = part else {
+            return false;
+        };
+        if text == expected_message {
+            return true;
+        }
+        // MultiAgentV2 delivers the notification as an InterAgentCommunication
+        // JSON message. Avoid depending on the protocol crate here; the reducer
+        // only needs the stable `content` field to identify the parent item.
+        serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .is_some_and(|content| content == expected_message)
+    })
+}
+
+fn conversation_item_ordinal(item_id: &str) -> u64 {
+    item_id
+        .strip_prefix("item:")
+        .and_then(|ordinal| ordinal.parse::<u64>().ok())
+        .unwrap_or(0)
 }
 
 fn reduced_code_cell_id(model_visible_call_id: &str) -> String {
@@ -1685,8 +1857,12 @@ fn interaction_edge_kind(kind: &str) -> InteractionEdgeKind {
     }
 }
 
-fn agent_result_edge_id(tool_call_id: &str, thread_id: &str) -> String {
-    format!("edge:agent_result:{tool_call_id}:{thread_id}")
+fn agent_result_observed_edge_id(
+    child_thread_id: &str,
+    child_turn_id: &str,
+    parent_thread_id: &str,
+) -> String {
+    format!("edge:agent_result:{child_thread_id}:{child_turn_id}:{parent_thread_id}")
 }
 
 fn thread_anchor(thread_id: &str) -> Option<TraceAnchor> {
@@ -2036,6 +2212,51 @@ mod tests {
                 "started_at_unix_ms": 10,
             }))?,
         )?;
+        std::fs::create_dir(temp.path().join("payloads"))?;
+        let child_message = "finished counting files";
+        let result_message = "<subagent_notification>\n\
+{\"agent_path\":\"/root/worker\",\"status\":{\"completed\":\"finished counting files\"}}\n\
+</subagent_notification>";
+        let parent_notification = json!({
+            "author": "/root/worker",
+            "recipient": "/root",
+            "other_recipients": [],
+            "content": result_message,
+            "trigger_turn": false,
+        })
+        .to_string();
+        std::fs::write(
+            temp.path().join("payloads/child-request.json"),
+            serde_json::to_vec(&json!({ "input": [] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/child-response.json"),
+            serde_json::to_vec(&json!({
+                "output_items": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": child_message }]
+                }]
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/parent-request.json"),
+            serde_json::to_vec(&json!({
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": parent_notification }]
+                }]
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/agent-result.json"),
+            serde_json::to_vec(&json!({
+                "child_agent_path": "/root/worker",
+                "message": result_message,
+                "status": { "completed": child_message }
+            }))?,
+        )?;
         let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
         write_event(
             &mut events,
@@ -2154,6 +2375,76 @@ mod tests {
                 "raw_payload.result.kind": "tool_result"
             }),
         )?;
+        write_event(
+            &mut events,
+            12,
+            "codex.turn.started",
+            json!({"thread.id": "thread-child", "turn.id": "turn-child"}),
+        )?;
+        write_event(
+            &mut events,
+            13,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-child",
+                "turn.id": "turn-child",
+                "inference.id": "inf-child",
+                "raw_payload.request.id": "raw_payload:child-request",
+                "raw_payload.request.path": "payloads/child-request.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            14,
+            "codex.inference.completed",
+            json!({
+                "inference.id": "inf-child",
+                "raw_payload.response.id": "raw_payload:child-response",
+                "raw_payload.response.path": "payloads/child-response.json",
+                "raw_payload.response.kind": "inference_response_summary"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            15,
+            "codex.turn.ended",
+            json!({
+                "thread.id": "thread-child",
+                "turn.id": "turn-child",
+                "status": "completed"
+            }),
+        )?;
+        // The result edge comes from the explicit control-plane observation,
+        // not from wait-tool timing. This mirrors PR 17982 and avoids guessing
+        // which child completed when a parent waits on "any" or many children.
+        write_event(
+            &mut events,
+            16,
+            "codex.collab.agent_result.observed",
+            json!({
+                "child.thread.id": "thread-child",
+                "child.turn.id": "turn-child",
+                "parent.thread.id": "thread-parent",
+                "message": result_message,
+                "raw_payload.agent_result.id": "raw_payload:agent-result",
+                "raw_payload.agent_result.path": "payloads/agent-result.json",
+                "raw_payload.agent_result.kind": "agent_result"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            17,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-parent",
+                "turn.id": "turn-parent",
+                "inference.id": "inf-parent-after-result",
+                "raw_payload.request.id": "raw_payload:parent-request",
+                "raw_payload.request.path": "payloads/parent-request.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
 
         let trace = reduce_bundle_json(temp.path())?;
 
@@ -2190,20 +2481,23 @@ mod tests {
             json!("worker")
         );
         assert_eq!(
-            trace["interaction_edges"]["edge:agent_result:tool:call-wait:thread-child"],
+            trace["interaction_edges"]["edge:agent_result:thread-child:turn-child:thread-parent"],
             json!({
-                "edge_id": "edge:agent_result:tool:call-wait:thread-child",
+                "edge_id": "edge:agent_result:thread-child:turn-child:thread-parent",
                 "kind": "agent_result",
-                "source": { "type": "thread", "thread_id": "thread-child" },
-                "target": { "type": "tool_call", "tool_call_id": "tool:call-wait" },
+                "source": { "type": "conversation_item", "item_id": "item:1" },
+                "target": { "type": "conversation_item", "item_id": "item:2" },
                 "started_at_unix_ms": 1776420000000i64,
                 "ended_at_unix_ms": 1776420000000i64,
-                "carried_item_ids": [],
+                "carried_item_ids": ["item:1", "item:2"],
                 "carried_raw_payload_ids": [
-                    "raw_payload:wait-invocation",
-                    "raw_payload:wait-result"
+                    "raw_payload:agent-result"
                 ],
             })
+        );
+        assert_eq!(
+            trace["interaction_edges"]["edge:agent_result:tool:call-wait:thread-child"],
+            json!(null)
         );
         Ok(())
     }
