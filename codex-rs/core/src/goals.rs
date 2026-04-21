@@ -23,7 +23,6 @@ use codex_utils_template::Template;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
@@ -55,10 +54,9 @@ static BUDGET_LIMIT_PROMPT_TEMPLATE: LazyLock<Template> =
     );
 
 #[derive(Clone, Copy)]
-pub(crate) enum GoalAccountingBoundary {
-    Tool,
-    CompletionTool,
-    Turn,
+pub(crate) enum BudgetLimitSteering {
+    Allowed,
+    Suppressed,
 }
 
 #[derive(Debug)]
@@ -167,15 +165,8 @@ impl GoalWallClockAccountingSnapshot {
         i64::try_from(last.elapsed().as_secs()).unwrap_or(i64::MAX)
     }
 
-    fn mark_accounted(&mut self, time_delta_seconds: i64) {
-        if time_delta_seconds > 0 {
-            let advance =
-                Duration::from_secs(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
-            self.last_accounted_at = self
-                .last_accounted_at
-                .checked_add(advance)
-                .unwrap_or_else(Instant::now);
-        }
+    fn mark_accounted(&mut self) {
+        self.reset_baseline();
     }
 
     fn reset_baseline(&mut self) {
@@ -208,19 +199,10 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(None);
         };
-        let accounted_goal = if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
-            None
-        } else {
-            self.account_thread_goal_wall_clock_usage(
-                &state_db,
-                codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
-            )
-            .await?
-        };
-        let goal = accounted_goal.or(state_db
+        let goal = state_db
             .get_thread_goal(self.conversation_id)
             .await?
-            .map(protocol_goal_from_state));
+            .map(protocol_goal_from_state);
         if goal.is_some() {
             self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         }
@@ -511,7 +493,7 @@ impl Session {
     pub(crate) async fn account_thread_goal_progress(
         self: &Arc<Self>,
         turn_context: &TurnContext,
-        boundary: GoalAccountingBoundary,
+        budget_limit_steering: BudgetLimitSteering,
     ) -> anyhow::Result<()> {
         if !self.enabled(Feature::Goals) {
             return Ok(());
@@ -549,7 +531,7 @@ impl Session {
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
                 turn_accounting.mark_accounted(current_token_usage);
-                wall_clock_accounting.mark_accounted(time_delta_seconds);
+                wall_clock_accounting.mark_accounted();
                 if goal.status != codex_state::ThreadGoalStatus::Active {
                     turn_accounting.clear_active_goal();
                     wall_clock_accounting.clear_active_goal();
@@ -563,8 +545,9 @@ impl Session {
                 return Ok(());
             }
         };
-        let should_steer_budget_limit = matches!(boundary, GoalAccountingBoundary::Tool)
-            && goal.status == codex_state::ThreadGoalStatus::BudgetLimited;
+        let should_steer_budget_limit =
+            matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
+                && goal.status == codex_state::ThreadGoalStatus::BudgetLimited;
         let goal = protocol_goal_from_state(goal);
         drop(wall_clock_accounting);
         drop(turn_accounting);
@@ -610,7 +593,7 @@ impl Session {
             .await?
         {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
-                wall_clock_accounting.mark_accounted(time_delta_seconds);
+                wall_clock_accounting.mark_accounted();
                 let goal = protocol_goal_from_state(goal);
                 *self.thread_goal_cache.lock().await = Some(goal.clone());
                 Ok(Some(goal))
@@ -996,7 +979,6 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::GoalWallClockAccountingState;
     use super::budget_limit_prompt;
     use super::continuation_prompt;
     use super::should_ignore_goal_for_mode;
@@ -1004,8 +986,6 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
-    use std::time::Duration;
-    use std::time::Instant;
 
     #[test]
     fn goal_continuation_is_ignored_only_in_plan_mode() {
@@ -1056,28 +1036,5 @@ mod tests {
         assert!(prompt.contains("Tokens used: 10100"));
         assert!(prompt.to_lowercase().contains("wrap up this turn soon"));
         assert!(!prompt.contains("status \"paused\""));
-    }
-
-    #[tokio::test]
-    async fn goal_accounting_preserves_fractional_seconds_between_boundaries() {
-        let accounting = GoalWallClockAccountingState::new();
-        {
-            let mut accounting = accounting.lock().await;
-            accounting.last_accounted_at = Instant::now() - Duration::from_millis(2500);
-        }
-
-        let delta = accounting.lock().await.time_delta_since_last_accounting();
-        assert_eq!(2, delta);
-
-        accounting.lock().await.mark_accounted(delta);
-        let elapsed = accounting.lock().await.last_accounted_at.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(400),
-            "expected subsecond remainder to be preserved, got {elapsed:?}"
-        );
-        assert!(
-            elapsed < Duration::from_millis(1500),
-            "expected only subsecond-ish remainder after accounting, got {elapsed:?}"
-        );
     }
 }

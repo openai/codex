@@ -20,7 +20,7 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::context::ContextualUserFragment;
-use crate::goals::GoalAccountingBoundary;
+use crate::goals::BudgetLimitSteering;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -489,7 +489,10 @@ impl Session {
 
         if let Some((turn_context, _)) = active_tasks.first()
             && let Err(err) = self
-                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+                .account_thread_goal_progress(
+                    turn_context.as_ref(),
+                    BudgetLimitSteering::Suppressed,
+                )
                 .await
         {
             warn!("failed to account thread goal progress after abort: {err}");
@@ -688,7 +691,10 @@ impl Session {
 
         if turn_completed
             && let Err(err) = self
-                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+                .account_thread_goal_progress(
+                    turn_context.as_ref(),
+                    BudgetLimitSteering::Suppressed,
+                )
                 .await
         {
             warn!("failed to account thread goal progress at turn end: {err}");

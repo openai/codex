@@ -5,8 +5,8 @@
 //! the existing goal complete.
 
 use crate::function_tool::FunctionCallError;
+use crate::goals::BudgetLimitSteering;
 use crate::goals::CreateGoalRequest;
-use crate::goals::GoalAccountingBoundary;
 use crate::goals::SetGoalRequest;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -155,7 +155,7 @@ async fn handle_update_goal(
         ));
     }
     session
-        .account_thread_goal_progress(turn_context, GoalAccountingBoundary::CompletionTool)
+        .account_thread_goal_progress(turn_context, BudgetLimitSteering::Suppressed)
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
     session
