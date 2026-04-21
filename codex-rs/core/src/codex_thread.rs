@@ -23,14 +23,12 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -58,26 +56,6 @@ pub struct CodexThread {
     _watch_registration: WatchRegistration,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GoalActiveContinuation {
-    StartIfIdle,
-    Preserve,
-    Restart,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StoppedGoalTransition {
-    NewlyStopped,
-    AlreadyStopped,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GoalSetRuntimeEffect {
-    Active(GoalActiveContinuation),
-    BudgetLimited,
-    Stopped(StoppedGoalTransition),
-}
-
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
@@ -102,10 +80,10 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
-    pub async fn continue_active_goal_if_idle(&self) {
+    async fn continue_active_goal_if_idle(&self) {
         self.codex
             .session
-            .maybe_start_turn_for_active_goal_continuation()
+            .maybe_start_turn_for_pending_work_or_goal_continuation()
             .await;
     }
 
@@ -114,55 +92,37 @@ impl CodexThread {
             .session
             .activate_paused_thread_goal_after_resume()
             .await?;
+        self.continue_active_goal_if_idle().await;
         Ok(())
     }
 
-    pub async fn apply_goal_set_runtime_effects(&self, effect: GoalSetRuntimeEffect) {
-        match effect {
-            GoalSetRuntimeEffect::Active(GoalActiveContinuation::Restart) => {
+    pub async fn prepare_external_goal_mutation(&self) {
+        if let Err(err) = self
+            .codex
+            .session
+            .account_thread_goal_before_external_mutation()
+            .await
+        {
+            tracing::warn!(
+                "failed to account thread goal progress before external mutation: {err}"
+            );
+        }
+    }
+
+    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+        match status {
+            codex_state::ThreadGoalStatus::Active => {
                 self.codex
                     .session
-                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                    .await;
+                    .reset_thread_goal_continuation_suppression();
                 self.codex
                     .session
-                    .clear_stopped_thread_goal_runtime_state()
-                    .await;
-                self.codex
-                    .session
-                    .maybe_start_turn_for_active_goal_continuation()
-                    .await;
-            }
-            GoalSetRuntimeEffect::Active(GoalActiveContinuation::StartIfIdle) => {
-                self.codex
-                    .session
-                    .goal_continuation_suppressed
-                    .store(false, Ordering::SeqCst);
-                self.codex
-                    .session
-                    .maybe_start_turn_for_active_goal_continuation()
+                    .maybe_start_turn_for_pending_work_or_goal_continuation()
                     .await;
             }
-            GoalSetRuntimeEffect::Active(GoalActiveContinuation::Preserve) => {}
-            GoalSetRuntimeEffect::BudgetLimited => {
-                if !self.codex.session.has_active_turn().await {
-                    self.codex
-                        .session
-                        .clear_stopped_thread_goal_runtime_state()
-                        .await;
-                }
-            }
-            GoalSetRuntimeEffect::Stopped(StoppedGoalTransition::NewlyStopped) => {
-                self.codex
-                    .session
-                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                    .await;
-                self.codex
-                    .session
-                    .clear_stopped_thread_goal_runtime_state()
-                    .await;
-            }
-            GoalSetRuntimeEffect::Stopped(StoppedGoalTransition::AlreadyStopped) => {
+            codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::BudgetLimited
+            | codex_state::ThreadGoalStatus::Complete => {
                 self.codex
                     .session
                     .clear_stopped_thread_goal_runtime_state()
@@ -171,24 +131,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_goal_clear_runtime_effects(&self, transition: StoppedGoalTransition) {
-        if transition == StoppedGoalTransition::NewlyStopped {
-            self.codex
-                .session
-                .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                .await;
-        }
+    pub async fn apply_external_goal_clear(&self) {
         self.codex
             .session
             .clear_cached_thread_goal_after_delete()
             .await;
-    }
-
-    pub async fn account_thread_goal_before_external_mutation(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .account_thread_goal_before_external_mutation()
-            .await
     }
 
     #[doc(hidden)]

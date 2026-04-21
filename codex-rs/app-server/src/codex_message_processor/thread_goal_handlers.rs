@@ -74,15 +74,8 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
-        {
-            self.send_internal_error(
-                request_id,
-                format!("failed to account thread goal progress before update: {err}"),
-            )
-            .await;
-            return;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
         }
 
         let listener_command_tx = {
@@ -91,8 +84,6 @@ impl CodexMessageProcessor {
             thread_state.listener_command_tx()
         };
         let status = params.status.map(thread_goal_status_to_state);
-        let mut previous_status = None;
-        let mut replacing_goal = params.objective.is_some();
 
         let goal = if let Some(objective) = params.objective {
             let objective = objective.trim();
@@ -110,13 +101,11 @@ impl CodexMessageProcessor {
             }
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
-                    previous_status = goal.as_ref().map(|goal| goal.status);
                     let same_incomplete_goal = goal.as_ref().is_some_and(|goal| {
                         goal.objective == objective
                             && goal.status != codex_state::ThreadGoalStatus::Complete
                     });
                     if same_incomplete_goal {
-                        replacing_goal = false;
                         state_db
                             .update_thread_goal(
                                 thread_id,
@@ -154,14 +143,6 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
-            previous_status = match state_db.get_thread_goal(thread_id).await {
-                Ok(goal) => goal.as_ref().map(|goal| goal.status),
-                Err(err) => {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-            };
             state_db
                 .update_thread_goal(
                     thread_id,
@@ -187,8 +168,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let goal = api_thread_goal_from_state(goal);
         let goal_status = goal.status;
+        let goal = api_thread_goal_from_state(goal);
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -197,36 +178,8 @@ impl CodexMessageProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
-        if self.config.features.enabled(Feature::Goals)
-            && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
-        {
-            let runtime_effect = match goal_status {
-                ThreadGoalStatus::Active => {
-                    let continuation = if replacing_goal
-                        && previous_status == Some(codex_state::ThreadGoalStatus::Active)
-                    {
-                        GoalActiveContinuation::Restart
-                    } else if replacing_goal
-                        || previous_status != Some(codex_state::ThreadGoalStatus::Active)
-                    {
-                        GoalActiveContinuation::StartIfIdle
-                    } else {
-                        GoalActiveContinuation::Preserve
-                    };
-                    GoalSetRuntimeEffect::Active(continuation)
-                }
-                ThreadGoalStatus::BudgetLimited => GoalSetRuntimeEffect::BudgetLimited,
-                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
-                    let transition =
-                        if previous_status == Some(codex_state::ThreadGoalStatus::Active) {
-                            StoppedGoalTransition::NewlyStopped
-                        } else {
-                            StoppedGoalTransition::AlreadyStopped
-                        };
-                    GoalSetRuntimeEffect::Stopped(transition)
-                }
-            };
-            thread.apply_goal_set_runtime_effects(runtime_effect).await;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.apply_external_goal_set(goal_status).await;
         }
     }
 
@@ -341,36 +294,14 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
-        {
-            self.send_internal_error(
-                request_id,
-                format!("failed to account thread goal progress before clear: {err}"),
-            )
-            .await;
-            return;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
         }
 
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
-        };
-        let previous_status = if running_thread.is_some() {
-            match state_db.get_thread_goal(thread_id).await {
-                Ok(goal) => goal.map(|goal| goal.status),
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to read thread goal before clear: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            }
-        } else {
-            None
         };
         let cleared = match state_db.delete_thread_goal(thread_id).await {
             Ok(cleared) => cleared,
@@ -382,12 +313,7 @@ impl CodexMessageProcessor {
         };
 
         if cleared && let Some(thread) = running_thread.as_ref() {
-            let transition = if previous_status == Some(codex_state::ThreadGoalStatus::Active) {
-                StoppedGoalTransition::NewlyStopped
-            } else {
-                StoppedGoalTransition::AlreadyStopped
-            };
-            thread.apply_goal_clear_runtime_effects(transition).await;
+            thread.apply_external_goal_clear().await;
         }
 
         self.outgoing

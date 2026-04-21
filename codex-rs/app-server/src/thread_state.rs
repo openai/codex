@@ -35,7 +35,6 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
     pub(crate) emit_thread_goal_update: bool,
     pub(crate) thread_goal_state_db: Option<StateDbHandle>,
-    pub(crate) continue_goal_if_idle: bool,
 }
 
 // ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.

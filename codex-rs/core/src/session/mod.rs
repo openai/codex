@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -23,8 +22,8 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
+use crate::goals::GoalRuntimeState;
 use crate::goals::GoalTurnAccountingState;
-use crate::goals::GoalWallClockAccountingState;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
@@ -3031,6 +3030,7 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
+    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -3044,6 +3044,7 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
+    #[cfg(test)]
     pub(crate) async fn has_active_turn(&self) -> bool {
         self.active_turn.lock().await.is_some()
     }

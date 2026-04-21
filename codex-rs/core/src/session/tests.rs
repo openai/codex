@@ -3311,12 +3311,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        thread_goal_state_db: Mutex::new(None),
-        thread_goal_may_exist: AtomicBool::new(false),
-        thread_goal_cache: Mutex::new(None),
-        thread_goal_wall_clock_accounting: crate::goals::GoalWallClockAccountingState::new(),
-        goal_continuation_lock: Semaphore::new(/*permits*/ 1),
-        goal_continuation_suppressed: AtomicBool::new(false),
+        goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -4324,12 +4319,7 @@ where
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        thread_goal_state_db: Mutex::new(None),
-        thread_goal_may_exist: AtomicBool::new(false),
-        thread_goal_cache: Mutex::new(None),
-        thread_goal_wall_clock_accounting: crate::goals::GoalWallClockAccountingState::new(),
-        goal_continuation_lock: Semaphore::new(/*permits*/ 1),
-        goal_continuation_suppressed: AtomicBool::new(false),
+        goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -5742,36 +5732,6 @@ impl SessionTask for NeverEndingTask {
     }
 }
 
-struct TokenUsageOnAbortTask {
-    token_usage: TokenUsage,
-}
-
-impl SessionTask for TokenUsageOnAbortTask {
-    fn kind(&self) -> TaskKind {
-        TaskKind::Regular
-    }
-
-    fn span_name(&self) -> &'static str {
-        "session_task.token_usage_on_abort"
-    }
-
-    async fn run(
-        self: Arc<Self>,
-        _session: Arc<SessionTaskContext>,
-        _ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
-        _cancellation_token: CancellationToken,
-    ) -> Option<String> {
-        loop {
-            sleep(Duration::from_secs(60)).await;
-        }
-    }
-
-    async fn abort(&self, session: Arc<SessionTaskContext>, _ctx: Arc<TurnContext>) {
-        set_total_token_usage(&session.clone_session(), self.token_usage.clone()).await;
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
@@ -6184,12 +6144,13 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
-        TokenUsageOnAbortTask {
-            token_usage: post_goal_token_usage(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
         },
     )
     .await;
-    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
@@ -6203,7 +6164,8 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     );
     assert_eq!(70, goal.tokens_used);
 
-    sess.maybe_start_turn_for_active_goal_continuation().await;
+    sess.maybe_start_turn_for_pending_work_or_goal_continuation()
+        .await;
     assert!(!sess.has_active_turn().await);
 
     Ok(())
@@ -6231,15 +6193,8 @@ async fn goal_continuation_without_tool_calls_suppresses_next_continuation() -> 
         },
     )
     .await;
-    let turn_state = {
-        let active = sess.active_turn.lock().await;
-        active
-            .as_ref()
-            .expect("turn should be active")
-            .turn_state
-            .clone()
-    };
-    turn_state.lock().await.started_from_goal_continuation = true;
+    sess.mark_thread_goal_continuation_turn_started(tc.sub_id.clone())
+        .await;
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
@@ -6406,16 +6361,6 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
     }));
 }
 
-fn pre_goal_token_usage() -> TokenUsage {
-    TokenUsage {
-        input_tokens: 30,
-        cached_input_tokens: 10,
-        output_tokens: 20,
-        reasoning_output_tokens: 5,
-        total_tokens: 55,
-    }
-}
-
 fn post_goal_token_usage() -> TokenUsage {
     TokenUsage {
         input_tokens: 50,
@@ -6554,6 +6499,38 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
     assert_eq!(40, goal.tokens_used);
 
+    sess.mark_thread_goal_turn_started(
+        tc.as_ref(),
+        TokenUsage {
+            input_tokens: 30,
+            cached_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 40,
+        },
+    )
+    .await;
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 35,
+            cached_input_tokens: 0,
+            output_tokens: 15,
+            reasoning_output_tokens: 0,
+            total_tokens: 50,
+        },
+    )
+    .await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::BudgetLimitSteering::Suppressed)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after budget-limited accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(50, goal.tokens_used);
+
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     Ok(())
@@ -6608,10 +6585,8 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         .await?
         .expect("goal status update should succeed");
     sess.clear_stopped_thread_goal_runtime_state().await;
-    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-        .await;
 
-    assert!(!sess.has_active_turn().await);
+    assert!(sess.has_active_turn().await);
     let goal = state_db
         .get_thread_goal(sess.conversation_id)
         .await?
@@ -6619,41 +6594,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
     assert_eq!(70, goal.tokens_used);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn clearing_goal_removes_queued_continuation_without_dropping_other_input()
--> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
-    sess.set_thread_goal(
-        tc.as_ref(),
-        SetGoalRequest {
-            objective: Some("Keep improving the benchmark".to_string()),
-            status: None,
-            token_budget: None,
-        },
-    )
-    .await?;
-    let mut queued = sess
-        .goal_continuation_items_if_active()
-        .await
-        .expect("active goal should produce continuation input");
-    let user_item = ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "keep this queued user input".to_string(),
-        }],
-    };
-    queued.push(user_item.clone());
-    sess.queue_response_items_for_next_turn(queued).await;
-
-    sess.clear_cached_thread_goal_after_delete().await;
-
-    assert_eq!(
-        vec![user_item],
-        sess.take_queued_response_items_for_next_turn().await
-    );
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
     Ok(())
 }
