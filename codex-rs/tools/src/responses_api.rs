@@ -92,6 +92,36 @@ where
     })
 }
 
+pub fn coalesce_loadable_tool_specs(
+    specs: impl IntoIterator<Item = LoadableToolSpec>,
+) -> Vec<LoadableToolSpec> {
+    let mut coalesced_specs = Vec::new();
+    for spec in specs {
+        match spec {
+            LoadableToolSpec::Function(tool) => {
+                coalesced_specs.push(LoadableToolSpec::Function(tool));
+            }
+            LoadableToolSpec::Namespace(mut namespace) => {
+                if let Some(existing_namespace) =
+                    coalesced_specs.iter_mut().find_map(|spec| match spec {
+                        LoadableToolSpec::Namespace(existing_namespace)
+                            if existing_namespace.name == namespace.name =>
+                        {
+                            Some(existing_namespace)
+                        }
+                        LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => None,
+                    })
+                {
+                    existing_namespace.tools.append(&mut namespace.tools);
+                } else {
+                    coalesced_specs.push(LoadableToolSpec::Namespace(namespace));
+                }
+            }
+        }
+    }
+    coalesced_specs
+}
+
 pub fn mcp_tool_to_responses_api_tool(
     tool_name: &ToolName,
     tool: &rmcp::model::Tool,

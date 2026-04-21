@@ -6,14 +6,10 @@ use super::startup_sync::start_startup_remote_plugin_sync_once;
 use super::sync_openai_plugins_repo;
 use crate::SkillMetadata;
 use crate::config::Config;
-use crate::config::ConfigService;
-use crate::config::ConfigServiceError;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerStack;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::MergeStrategy;
 use codex_config::types::PluginConfig;
 use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
 use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
@@ -61,7 +57,6 @@ use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -70,7 +65,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -349,7 +344,7 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
-    remote_sync_lock: Mutex<()>,
+    remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
@@ -379,7 +374,7 @@ impl PluginsManager {
             ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
-            remote_sync_lock: Mutex::new(()),
+            remote_sync_lock: Semaphore::new(/*permits*/ 1),
             restriction_product,
             analytics_events_client: RwLock::new(None),
         }
@@ -565,9 +560,7 @@ impl PluginsManager {
             self.restriction_product,
         )?;
         let plugin_id = resolved.plugin_id.as_key();
-        // This only forwards the backend mutation before the local install flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local install flow.
         codex_core_plugins::remote::enable_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
@@ -611,18 +604,17 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        ConfigService::new_with_defaults(self.codex_home.clone())
-            .write_value(ConfigValueWriteParams {
-                key_path: format!("plugins.{}", result.plugin_id.as_key()),
-                value: json!({
-                    "enabled": true,
-                }),
-                merge_strategy: MergeStrategy::Replace,
-                file_path: None,
-                expected_version: None,
-            })
+        ConfigEditsBuilder::new(&self.codex_home)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    result.plugin_id.as_key(),
+                    "enabled".to_string(),
+                ],
+                value: value(true),
+            }])
+            .apply()
             .await
-            .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
@@ -655,11 +647,11 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         plugin_id: String,
     ) -> Result<(), PluginUninstallError> {
+        // TODO: Remove this legacy remote-sync path once remote plugins have
+        // their own manager and installed-state API.
         let plugin_id = PluginId::parse(&plugin_id)?;
         let plugin_key = plugin_id.as_key();
-        // This only forwards the backend mutation before the local uninstall flow. We rely on
-        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
-        // reconcile pass here.
+        // This only forwards the backend mutation before the local uninstall flow.
         codex_core_plugins::remote::uninstall_remote_plugin(
             &remote_plugin_service_config(config),
             auth,
@@ -708,7 +700,9 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         additive_only: bool,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
-        let _remote_sync_guard = self.remote_sync_lock.lock().await;
+        let _remote_sync_guard = self.remote_sync_lock.acquire().await.map_err(|_| {
+            PluginRemoteSyncError::Config(anyhow::anyhow!("remote plugin sync semaphore closed"))
+        })?;
 
         if !config.features.enabled(Feature::Plugins) {
             return Ok(RemotePluginSyncResult::default());
@@ -1060,10 +1054,11 @@ impl PluginsManager {
             })?;
         let plugin_key = plugin_id.as_key();
         if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && !plugin.installed {
+            let description = remote_plugin_install_required_description(&plugin.source);
             return Ok(PluginDetail {
                 id: plugin_key,
                 name: plugin.name,
-                description: None,
+                description: Some(description),
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
@@ -1497,6 +1492,34 @@ impl PluginsManager {
     }
 }
 
+fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
+    let source_description = match source {
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => {
+            let mut parts = vec![url.clone()];
+            if let Some(path) = path {
+                parts.push(format!("path `{path}`"));
+            }
+            if let Some(ref_name) = ref_name {
+                parts.push(format!("ref `{ref_name}`"));
+            }
+            if let Some(sha) = sha {
+                parts.push(format!("sha `{sha}`"));
+            }
+            parts.join(", ")
+        }
+        MarketplacePluginSource::Local { path } => path.as_path().display().to_string(),
+    };
+
+    format!(
+        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PluginInstallError {
     #[error("{0}")]
@@ -1509,7 +1532,7 @@ pub enum PluginInstallError {
     Store(#[from] PluginStoreError),
 
     #[error("{0}")]
-    Config(#[from] ConfigServiceError),
+    Config(#[from] anyhow::Error),
 
     #[error("failed to join plugin install task: {0}")]
     Join(#[from] tokio::task::JoinError),

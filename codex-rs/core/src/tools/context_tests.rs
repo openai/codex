@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -173,7 +174,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
                         },
                         FunctionCallOutputContentItem::InputImage {
                             image_url: image_url.to_string(),
-                            detail: None,
+                            detail: Some(DEFAULT_IMAGE_DETAIL),
                         },
                     ]
                     .as_slice()
@@ -239,7 +240,7 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -259,7 +260,7 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,AAA".to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputText {
                     text: "line 2".to_string(),

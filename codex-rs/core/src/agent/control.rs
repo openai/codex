@@ -116,6 +116,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,
+        RolloutItem::SessionState(_) => false,
         RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_)
@@ -143,6 +144,15 @@ impl AgentControl {
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
         Self {
             manager,
+            ..Default::default()
+        }
+    }
+
+    /// Create a control-plane handle over the same thread manager with an independent live-agent
+    /// registry.
+    pub(crate) fn detached_registry(&self) -> Self {
+        Self {
+            manager: self.manager.clone(),
             ..Default::default()
         }
     }

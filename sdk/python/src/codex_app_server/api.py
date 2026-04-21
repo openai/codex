@@ -105,7 +105,11 @@ class Codex:
 
         normalized_server_name = (server_name or "").strip()
         normalized_server_version = (server_version or "").strip()
-        if not user_agent or not normalized_server_name or not normalized_server_version:
+        if (
+            not user_agent
+            or not normalized_server_name
+            or not normalized_server_version
+        ):
             raise RuntimeError(
                 "initialize response missing required metadata "
                 f"(user_agent={user_agent!r}, server_name={normalized_server_name!r}, server_version={normalized_server_version!r})"
@@ -146,6 +150,7 @@ class Codex:
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
         service_tier: ServiceTier | None = None,
+        session_start_source: ThreadStartSource | None = None,
     ) -> Thread:
         params = ThreadStartParams(
             approval_policy=approval_policy,
@@ -161,6 +166,7 @@ class Codex:
             sandbox=sandbox,
             service_name=service_name,
             service_tier=service_tier,
+            session_start_source=session_start_source,
         )
         started = self._client.thread_start(params)
         return Thread(self._client, started.thread.id)
@@ -174,6 +180,7 @@ class Codex:
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
+        sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
     ) -> ThreadListResponse:
@@ -184,6 +191,7 @@ class Codex:
             limit=limit,
             model_providers=model_providers,
             search_term=search_term,
+            sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
         )
@@ -336,6 +344,7 @@ class AsyncCodex:
         sandbox: SandboxMode | None = None,
         service_name: str | None = None,
         service_tier: ServiceTier | None = None,
+        session_start_source: ThreadStartSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
         params = ThreadStartParams(
@@ -352,6 +361,7 @@ class AsyncCodex:
             sandbox=sandbox,
             service_name=service_name,
             service_tier=service_tier,
+            session_start_source=session_start_source,
         )
         started = await self._client.thread_start(params)
         return AsyncThread(self, started.thread.id)
@@ -365,6 +375,7 @@ class AsyncCodex:
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
+        sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
     ) -> ThreadListResponse:
@@ -376,6 +387,7 @@ class AsyncCodex:
             limit=limit,
             model_providers=model_providers,
             search_term=search_term,
+            sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
         )
@@ -629,7 +641,9 @@ class AsyncThread:
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
         await self._codex._ensure_initialized()
-        return await self._codex._client.thread_read(self.id, include_turns=include_turns)
+        return await self._codex._client.thread_read(
+            self.id, include_turns=include_turns
+        )
 
     async def set_name(self, name: str) -> ThreadSetNameResponse:
         await self._codex._ensure_initialized()
@@ -674,7 +688,10 @@ class TurnHandle:
         try:
             for event in stream:
                 payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
+                if (
+                    isinstance(payload, TurnCompletedNotification)
+                    and payload.turn.id == self.id
+                ):
                     completed = payload
         finally:
             stream.close()
@@ -725,7 +742,10 @@ class AsyncTurnHandle:
         try:
             async for event in stream:
                 payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
+                if (
+                    isinstance(payload, TurnCompletedNotification)
+                    and payload.turn.id == self.id
+                ):
                     completed = payload
         finally:
             await stream.aclose()

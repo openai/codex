@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,17 +52,15 @@ use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
-use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::StatusSurfacePreviewData;
+use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
-use crate::legacy_core::find_thread_name_by_id;
-use crate::legacy_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
@@ -79,6 +78,8 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
@@ -94,6 +95,7 @@ use codex_app_server_protocol::GuardianApprovalReviewAction;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -105,9 +107,11 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_chatgpt::connectors;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
 #[cfg(test)]
@@ -118,6 +122,7 @@ use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -131,6 +136,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -164,7 +170,6 @@ use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
 #[cfg(test)]
 use codex_protocol::protocol::Event;
-#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -191,6 +196,7 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -218,6 +224,7 @@ use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::Multiplexer;
@@ -317,6 +324,7 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
+use crate::bottom_pane::QueuedInputAction;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -371,6 +379,7 @@ use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod side;
 mod status_surfaces;
 use self::status_surfaces::CachedProjectRootName;
 use self::status_surfaces::TerminalTitleStatusKind;
@@ -463,8 +472,15 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+const MAX_AGENT_COPY_HISTORY: usize = 32;
+
+#[derive(Debug)]
+struct AgentTurnMarkdown {
+    user_turn_count: usize,
+    markdown: String,
+}
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -776,8 +792,10 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
+    codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    add_credits_nudge_email_in_flight: Option<AddCreditsNudgeCreditType>,
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -785,13 +803,17 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
-    /// Raw markdown of the most recently completed agent response.
-    ///
-    /// This cache is intentionally best-effort: if the user rolls back the
-    /// thread and then copies before a replacement response arrives, `/copy`
-    /// may still return the response from before the rollback. Keeping this as
-    /// a single cache avoids coupling copy state to the backtrack transcript.
+    /// Raw markdown of the most recently completed agent response that
+    /// survived any local thread rollback.
     last_agent_markdown: Option<String>,
+    /// Copyable agent responses keyed by the number of visible user turns at
+    /// the time the response completed.
+    agent_turn_markdowns: Vec<AgentTurnMarkdown>,
+    /// Number of user turns currently reflected in the visible transcript.
+    visible_user_turn_count: usize,
+    /// True when rollback discarded the requested copy source because it was
+    /// older than the retained copy history.
+    copy_history_evicted_by_rollback: bool,
     /// Raw markdown of the most recently completed proposed plan.
     ///
     /// This is cached only for the approval popup. It is reset at the start of each new task so the
@@ -870,7 +892,12 @@ pub(crate) struct ChatWidget {
     thread_id: Option<ThreadId>,
     last_turn_id: Option<String>,
     thread_name: Option<String>,
+    thread_rename_block_message: Option<String>,
+    active_side_conversation: bool,
+    normal_placeholder_text: String,
+    side_placeholder_text: String,
     forked_from: Option<ThreadId>,
+    interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -883,8 +910,10 @@ pub(crate) struct ChatWidget {
     // history has been rendered so resumed/forked prompts keep chronological
     // order.
     suppress_initial_user_message_submit: bool,
-    // User messages queued while a turn is in progress
-    queued_user_messages: VecDeque<UserMessage>,
+    // User inputs queued while a turn is in progress.
+    queued_user_messages: VecDeque<QueuedUserMessage>,
+    // A user turn has been submitted to core, but `TurnStarted` has not arrived yet.
+    user_turn_pending_start: bool,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1043,6 +1072,51 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellEscapePolicy {
+    Allow,
+    Disallow,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QueuedUserMessage {
+    user_message: UserMessage,
+    action: QueuedInputAction,
+}
+
+impl QueuedUserMessage {
+    fn new(user_message: UserMessage, action: QueuedInputAction) -> Self {
+        Self {
+            user_message,
+            action,
+        }
+    }
+
+    fn into_user_message(self) -> UserMessage {
+        self.user_message
+    }
+}
+
+impl From<UserMessage> for QueuedUserMessage {
+    fn from(user_message: UserMessage) -> Self {
+        Self::new(user_message, QueuedInputAction::Plain)
+    }
+}
+
+impl Deref for QueuedUserMessage {
+    type Target = UserMessage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.user_message
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueDrain {
+    Continue,
+    Stop,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 struct ThreadComposerState {
     text: String,
@@ -1069,7 +1143,8 @@ pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
-    queued_user_messages: VecDeque<UserMessage>,
+    queued_user_messages: VecDeque<QueuedUserMessage>,
+    user_turn_pending_start: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -1105,6 +1180,13 @@ impl From<&str> for UserMessage {
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum InterruptedTurnNoticeMode {
+    #[default]
+    Default,
+    Suppress,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -1270,6 +1352,14 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 pub(crate) enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionConfiguredDisplay {
+    Normal,
+    /// Apply session state without emitting the session info cell.
+    Quiet,
+    SideConversation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1583,6 +1673,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        cwd: Some(params.cwd),
     }
 }
 
@@ -1967,13 +2058,50 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
-        self.last_agent_markdown = Some(message.to_string());
+        let markdown = message.to_string();
+        match self.agent_turn_markdowns.last_mut() {
+            Some(entry) if entry.user_turn_count == self.visible_user_turn_count => {
+                entry.markdown = markdown.clone();
+            }
+            _ => {
+                self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                    user_turn_count: self.visible_user_turn_count,
+                    markdown: markdown.clone(),
+                });
+                if self.agent_turn_markdowns.len() > MAX_AGENT_COPY_HISTORY {
+                    self.agent_turn_markdowns.remove(0);
+                }
+            }
+        }
+        self.last_agent_markdown = Some(markdown);
+        self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = true;
     }
 
+    fn record_visible_user_turn_for_copy(&mut self) {
+        self.visible_user_turn_count = self.visible_user_turn_count.saturating_add(1);
+    }
+
     // --- Small event handlers ---
+    #[cfg(test)]
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.on_session_configured_with_display_and_fork_parent_title(
+            event,
+            SessionConfiguredDisplay::Normal,
+            /*fork_parent_title*/ None,
+        );
+    }
+
+    fn on_session_configured_with_display_and_fork_parent_title(
+        &mut self,
+        event: codex_protocol::protocol::SessionConfiguredEvent,
+        display: SessionConfiguredDisplay,
+        fork_parent_title: Option<String>,
+    ) {
         self.last_agent_markdown = None;
+        self.agent_turn_markdowns.clear();
+        self.visible_user_turn_count = 0;
+        self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
@@ -2026,24 +2154,34 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.refresh_plugin_mentions();
-        let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
-        #[cfg(test)]
-        let initial_messages = event.initial_messages.clone();
-        let session_info_cell = history_cell::new_session_info(
-            &self.config,
-            &model_for_header,
-            event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.plan_type,
-            show_fast_status,
-        );
-        self.apply_session_info_cell(session_info_cell);
+        if display == SessionConfiguredDisplay::Normal {
+            let startup_tooltip_override = self.startup_tooltip_override.take();
+            let show_fast_status =
+                self.should_show_fast_status(&model_for_header, event.service_tier);
+            #[cfg(test)]
+            let initial_messages = event.initial_messages.clone();
+            let session_info_cell = history_cell::new_session_info(
+                &self.config,
+                &model_for_header,
+                event,
+                self.show_welcome_banner,
+                startup_tooltip_override,
+                self.plan_type,
+                show_fast_status,
+            );
+            self.apply_session_info_cell(session_info_cell);
 
-        #[cfg(test)]
-        if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
+            #[cfg(test)]
+            if let Some(messages) = initial_messages {
+                self.replay_initial_messages(messages);
+            }
+        } else if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
+        {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
         }
         self.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
@@ -2057,8 +2195,10 @@ impl ChatWidget {
                 self.submit_user_message(user_message);
             }
         }
-        if let Some(forked_from_id) = forked_from_id {
-            self.emit_forked_thread_event(forked_from_id);
+        if display == SessionConfiguredDisplay::Normal
+            && let Some(forked_from_id) = forked_from_id
+        {
+            self.emit_forked_thread_event(forked_from_id, fork_parent_title);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
@@ -2077,51 +2217,62 @@ impl ChatWidget {
 
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        self.on_session_configured(thread_session_state_to_legacy_event(session));
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::Normal,
+            fork_parent_title,
+        );
     }
 
-    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
-        let app_event_tx = self.app_event_tx.clone();
-        let codex_home = self.config.codex_home.clone();
-        tokio::spawn(async move {
-            let forked_from_id_text = forked_from_id.to_string();
-            let send_name_and_id = |name: String| {
-                let line: Line<'static> = vec![
-                    "• ".dim(),
-                    "Thread forked from ".into(),
-                    name.cyan(),
-                    " (".into(),
-                    forked_from_id_text.clone().cyan(),
-                    ")".into(),
-                ]
-                .into();
-                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    PlainHistoryCell::new(vec![line]),
-                )));
-            };
-            let send_id_only = || {
-                let line: Line<'static> = vec![
-                    "• ".dim(),
-                    "Thread forked from ".into(),
-                    forked_from_id_text.clone().cyan(),
-                ]
-                .into();
-                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    PlainHistoryCell::new(vec![line]),
-                )));
-            };
+    pub(crate) fn handle_thread_session_quiet(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::Quiet,
+            /*fork_parent_title*/ None,
+        );
+    }
 
-            match find_thread_name_by_id(&codex_home, &forked_from_id).await {
-                Ok(Some(name)) if !name.trim().is_empty() => {
-                    send_name_and_id(name);
-                }
-                Ok(_) => send_id_only(),
-                Err(err) => {
-                    tracing::warn!("Failed to read forked thread name: {err}");
-                    send_id_only();
-                }
-            }
-        });
+    pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::SideConversation,
+            fork_parent_title,
+        );
+    }
+
+    fn emit_forked_thread_event(
+        &mut self,
+        forked_from_id: ThreadId,
+        fork_parent_title: Option<String>,
+    ) {
+        let forked_from_id_text = forked_from_id.to_string();
+        let line: Line<'static> = if let Some(name) = fork_parent_title
+            && !name.trim().is_empty()
+        {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                name.cyan(),
+                " (".into(),
+                forked_from_id_text.cyan(),
+                ")".into(),
+            ]
+            .into()
+        } else {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                forked_from_id_text.cyan(),
+            ]
+            .into()
+        };
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            PlainHistoryCell::new(vec![line]),
+        )));
     }
 
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
@@ -2134,6 +2285,7 @@ impl ChatWidget {
             self.refresh_terminal_title();
             self.refresh_status_surfaces();
             self.request_redraw();
+            self.maybe_send_next_queued_input();
         }
     }
 
@@ -2326,6 +2478,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.user_turn_pending_start = false;
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
@@ -2420,6 +2573,7 @@ impl ChatWidget {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -2480,34 +2634,66 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let context_usage_label = self.plan_implementation_context_usage_label();
 
         self.bottom_pane
             .show_selection_view(plan_implementation::selection_view_params(
                 default_mask,
                 self.latest_proposed_plan_markdown.as_deref(),
+                context_usage_label.as_deref(),
             ));
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
     }
 
+    /// Returns a context-used label for the plan implementation prompt.
+    ///
+    /// The footer reports context remaining because it is ambient status, but
+    /// this prompt is asking whether to discard prior conversation state before
+    /// implementing a plan. Reporting used context makes the cleanup tradeoff
+    /// explicit. A fully fresh or unknown context window returns no label so
+    /// the clear-context option does not imply urgency without evidence.
+    fn plan_implementation_context_usage_label(&self) -> Option<String> {
+        let info = self.token_info.as_ref()?;
+        let percent = self.context_remaining_percent(info);
+
+        let used_tokens = self.context_used_tokens(info, percent.is_some());
+        if let Some(percent) = percent {
+            let used_percent = 100 - percent.clamp(0, 100);
+            if used_percent <= 0 {
+                return None;
+            }
+            return Some(format!("{used_percent}% used"));
+        }
+
+        if let Some(tokens) = used_tokens
+            && tokens > 0
+        {
+            return Some(format!("{} used", format_tokens_compact(tokens)));
+        }
+
+        None
+    }
+
     fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
-    fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
+    fn pop_next_queued_user_message(&mut self) -> Option<QueuedUserMessage> {
         if self.rejected_steers_queue.is_empty() {
             self.queued_user_messages.pop_front()
         } else {
-            Some(merge_user_messages(
+            Some(QueuedUserMessage::from(merge_user_messages(
                 self.rejected_steers_queue.drain(..).collect(),
-            ))
+            )))
         }
     }
 
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
         self.queued_user_messages
             .pop_back()
+            .map(QueuedUserMessage::into_user_message)
             .or_else(|| self.rejected_steers_queue.pop_back())
     }
 
@@ -2725,6 +2911,11 @@ impl ChatWidget {
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit
+                && let Some(rate_limit_reached_type) = snapshot.rate_limit_reached_type
+            {
+                self.codex_rate_limit_reached_type = Some(rate_limit_reached_type);
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -2788,6 +2979,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.codex_rate_limit_reached_type = None;
         }
         self.refresh_status_line();
     }
@@ -2799,6 +2991,7 @@ impl ChatWidget {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -2840,6 +3033,62 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn workspace_owner_usage_nudge_enabled(&self) -> bool {
+        self.config
+            .features
+            .enabled(Feature::WorkspaceOwnerUsageNudge)
+    }
+
+    fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        if !self.workspace_owner_usage_nudge_enabled() {
+            self.on_error(message);
+            return;
+        }
+
+        let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
+            if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+                match kind {
+                    RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                        RateLimitReachedType::WorkspaceOwnerUsageLimitReached
+                    }
+                    RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                        RateLimitReachedType::WorkspaceMemberUsageLimitReached
+                    }
+                    other => other,
+                }
+            } else {
+                kind
+            }
+        });
+        self.codex_rate_limit_reached_type = rate_limit_reached_type;
+
+        match rate_limit_reached_type {
+            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
+                self.on_error(
+                    "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
+                        .to_string(),
+                );
+            }
+            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => {
+                self.on_error(
+                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
+                        .to_string(),
+                );
+            }
+            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
+                self.on_error(message);
+                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::Credits);
+            }
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
+                self.on_error(message);
+                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
+            }
+            Some(RateLimitReachedType::RateLimitReached) | None => {
+                self.on_error(message);
+            }
+        }
+    }
+
     fn handle_non_retry_error(
         &mut self,
         message: String,
@@ -2856,7 +3105,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_error(message)
+                    self.on_rate_limit_error(info, message)
                 }
             }
         } else {
@@ -3120,7 +3369,9 @@ impl ChatWidget {
         self.finalize_turn();
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
-        if reason != TurnAbortReason::ReviewEnded {
+        if reason != TurnAbortReason::ReviewEnded
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -3180,7 +3431,11 @@ impl ChatWidget {
                 .drain(..)
                 .map(|steer| steer.user_message),
         );
-        to_merge.extend(self.queued_user_messages.drain(..));
+        to_merge.extend(
+            self.queued_user_messages
+                .drain(..)
+                .map(QueuedUserMessage::into_user_message),
+        );
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -3191,7 +3446,7 @@ impl ChatWidget {
         Some(merge_user_messages(to_merge))
     }
 
-    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+    pub(crate) fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
         let UserMessage {
             text,
             local_images,
@@ -3227,6 +3482,7 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            user_turn_pending_start: self.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3240,6 +3496,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.user_turn_pending_start = input_state.user_turn_pending_start;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3283,6 +3540,7 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
+            self.user_turn_pending_start = false;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.set_remote_image_urls(Vec::new());
@@ -3350,6 +3608,14 @@ impl ChatWidget {
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        let permission_request_summary = |subject: &str, reason: &Option<String>| {
+            reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!("{subject}: {reason}"))
+                .unwrap_or_else(|| subject.to_string())
+        };
         let guardian_action_summary = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => Some(command.clone()),
             GuardianAssessmentAction::Execve { program, argv, .. } => {
@@ -3379,6 +3645,9 @@ impl ChatWidget {
                 let label = connector_name.as_deref().unwrap_or(server.as_str());
                 Some(format!("MCP {tool_name} on {label}"))
             }
+            GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                Some(permission_request_summary("permission request", reason))
+            }
         };
         let guardian_command = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => shlex::split(command)
@@ -3392,7 +3661,8 @@ impl ChatWidget {
             .filter(|command| !command.is_empty()),
             GuardianAssessmentAction::ApplyPatch { .. }
             | GuardianAssessmentAction::NetworkAccess { .. }
-            | GuardianAssessmentAction::McpToolCall { .. } => None,
+            | GuardianAssessmentAction::McpToolCall { .. }
+            | GuardianAssessmentAction::RequestPermissions { .. } => None,
         };
 
         if ev.status == GuardianAssessmentStatus::InProgress
@@ -3483,6 +3753,11 @@ impl ChatWidget {
                             "codex could access {target}"
                         ))
                     }
+                    GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                        history_cell::new_guardian_timed_out_action_request(
+                            permission_request_summary("codex could request permissions", reason),
+                        )
+                    }
                     GuardianAssessmentAction::Command { .. } => unreachable!(),
                     GuardianAssessmentAction::Execve { .. } => unreachable!(),
                 }
@@ -3519,6 +3794,12 @@ impl ChatWidget {
                 GuardianAssessmentAction::NetworkAccess { target, .. } => {
                     history_cell::new_guardian_denied_action_request(format!(
                         "codex to access {target}"
+                    ))
+                }
+                GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                    history_cell::new_guardian_denied_action_request(permission_request_summary(
+                        "codex to request permissions",
+                        reason,
                     ))
                 }
                 GuardianAssessmentAction::Command { .. } => unreachable!(),
@@ -4429,6 +4710,7 @@ impl ChatWidget {
         let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
+        let is_user_shell = source == ExecCommandSource::UserShell;
         let end_target = match self.active_cell.as_ref() {
             Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
                 Some(exec_cell)
@@ -4522,6 +4804,9 @@ impl ChatWidget {
         }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
+        if is_user_shell {
+            self.maybe_send_next_queued_input();
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -4790,6 +5075,8 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
+        let side_placeholder =
+            SIDE_PLACEHOLDERS[rng.random_range(0..SIDE_PLACEHOLDERS.len())].to_string();
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -4825,7 +5112,7 @@ impl ChatWidget {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
-                placeholder_text: placeholder,
+                placeholder_text: placeholder.clone(),
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
                 skills: None,
@@ -4848,8 +5135,10 @@ impl ChatWidget {
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
+            codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            add_credits_nudge_email_in_flight: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
@@ -4866,6 +5155,9 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             last_agent_markdown: None,
+            agent_turn_markdowns: Vec::new(),
+            visible_user_turn_count: 0,
+            copy_history_evicted_by_rollback: false,
             latest_proposed_plan_markdown: None,
             saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
@@ -4895,8 +5187,14 @@ impl ChatWidget {
             thread_id: None,
             last_turn_id: None,
             thread_name: None,
+            thread_rename_block_message: None,
+            active_side_conversation: false,
+            normal_placeholder_text: placeholder,
+            side_placeholder_text: side_placeholder,
             forked_from: None,
+            interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             queued_user_messages: VecDeque::new(),
+            user_turn_pending_start: false,
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -5085,70 +5383,83 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+            _ => {
+                let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    if user_message.text.is_empty()
-                        && user_message.local_images.is_empty()
-                        && user_message.remote_image_urls.is_empty()
-                    {
-                        return;
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        if user_message.text.is_empty()
+                            && user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty()
+                        {
+                            return;
+                        }
+                        let should_submit_now =
+                            self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                        if should_submit_now {
+                            if self.only_user_shell_commands_running()
+                                && !user_message.text.starts_with('!')
+                            {
+                                self.queue_user_message(user_message);
+                                return;
+                            }
+                            // Submitted is emitted when user submits.
+                            // Reset any reasoning header only when we are actually submitting a turn.
+                            self.reasoning_buffer.clear();
+                            self.full_reasoning_buffer.clear();
+                            self.set_status_header(String::from("Working"));
+                            self.submit_user_message(user_message);
+                        } else {
+                            self.queue_user_message(user_message);
+                        }
                     }
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
-                    if should_submit_now {
-                        // Submitted is emitted when user submits.
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
-                        self.queue_user_message(user_message);
-                    }
-                }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+                    InputResult::Queued {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                        action,
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    self.queue_user_message(user_message);
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        self.queue_user_message_with_options(user_message, action);
+                    }
+                    InputResult::Command(cmd) => {
+                        self.handle_slash_command_dispatch(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                        self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Command(cmd) => {
-                    self.handle_slash_command_dispatch(cmd);
+                if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
+                    self.maybe_send_next_queued_input();
                 }
-                InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
-                }
-                InputResult::None => {}
-            },
+            }
         }
     }
 
@@ -5221,6 +5532,23 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
+        &mut self,
+        user_turn_count: usize,
+    ) {
+        self.visible_user_turn_count = user_turn_count;
+        let had_copy_history = !self.agent_turn_markdowns.is_empty();
+        self.agent_turn_markdowns
+            .retain(|entry| entry.user_turn_count <= user_turn_count);
+        self.last_agent_markdown = self
+            .agent_turn_markdowns
+            .last()
+            .map(|entry| entry.markdown.clone());
+        self.copy_history_evicted_by_rollback =
+            had_copy_history && self.last_agent_markdown.is_none();
+        self.saw_copy_source_this_turn = false;
+    }
+
     /// Inner implementation with an injectable clipboard backend for testing.
     fn copy_last_agent_markdown_with(
         &mut self,
@@ -5239,6 +5567,11 @@ impl ChatWidget {
                     "Copy failed: {error}"
                 ))),
             },
+            _ if self.copy_history_evicted_by_rollback => {
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Cannot copy that response after rewinding. Only the most recent {MAX_AGENT_COPY_HISTORY} responses are available to /copy."
+                )));
+            }
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
             )),
@@ -5252,6 +5585,9 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        if !self.ensure_thread_rename_allowed() {
+            return;
+        }
         let tx = self.app_event_tx.clone();
         let existing_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         let title = if existing_name.is_some() {
@@ -5276,6 +5612,16 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn ensure_thread_rename_allowed(&mut self) -> bool {
+        match self.thread_rename_block_message.clone() {
+            Some(message) => {
+                self.add_error_message(message);
+                false
+            }
+            None => true,
+        }
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -5329,20 +5675,65 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
-            self.queued_user_messages.push_back(user_message);
+        self.queue_user_message_with_options(user_message, QueuedInputAction::Plain);
+    }
+
+    fn queue_user_message_with_options(
+        &mut self,
+        user_message: UserMessage,
+        action: QueuedInputAction,
+    ) {
+        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+            self.queued_user_messages
+                .push_back(QueuedUserMessage::new(user_message, action));
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
         }
     }
 
+    fn submit_shell_command(&mut self, command: &str) -> QueueDrain {
+        let cmd = command.trim();
+        if cmd.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                    Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+                ),
+            )));
+            QueueDrain::Continue
+        } else {
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
+            QueueDrain::Stop
+        }
+    }
+
+    fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+        match user_message.text.strip_prefix('!') {
+            Some(command) => self.submit_shell_command(command),
+            None => {
+                self.submit_user_message(user_message);
+                QueueDrain::Stop
+            }
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        let _ = self
+            .submit_user_message_with_shell_escape_policy(user_message, ShellEscapePolicy::Allow);
+    }
+
+    fn submit_user_message_with_shell_escape_policy(
+        &mut self,
+        user_message: UserMessage,
+        shell_escape_policy: ShellEscapePolicy,
+    ) -> Option<AppCommand> {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message);
+            self.queued_user_messages
+                .push_front(QueuedUserMessage::from(user_message));
             self.refresh_pending_input_preview();
-            return;
+            return None;
         }
         let UserMessage {
             text,
@@ -5352,7 +5743,7 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
-            return;
+            return None;
         }
         if (!local_images.is_empty() || !remote_image_urls.is_empty())
             && !self.current_model_supports_images()
@@ -5364,26 +5755,26 @@ impl ChatWidget {
                 mention_bindings,
                 remote_image_urls,
             );
-            return;
+            return None;
         }
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
-        if let Some(stripped) = text.strip_prefix('!') {
-            let cmd = stripped.trim();
-            if cmd.is_empty() {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(
-                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
-                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
-                    ),
-                )));
-                return;
+        if shell_escape_policy == ShellEscapePolicy::Allow
+            && let Some(stripped) = text.strip_prefix('!')
+        {
+            let app_command = match self.submit_shell_command(stripped) {
+                QueueDrain::Continue => None,
+                QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
+                    stripped.trim().to_string(),
+                )),
+            };
+            if let Some(app_command) = app_command {
+                return Some(app_command);
             }
-            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
-            return;
+            return None;
         }
 
         for image_url in &remote_image_urls {
@@ -5516,7 +5907,7 @@ impl ChatWidget {
             self.add_error_message(
                 "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before sending input.".to_string(),
             );
-            return;
+            return None;
         }
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -5555,8 +5946,11 @@ impl ChatWidget {
             personality,
         );
 
-        if !self.submit_op(op) {
-            return;
+        if !self.submit_op(op.clone()) {
+            return None;
+        }
+        if render_in_history {
+            self.user_turn_pending_start = true;
         }
 
         // Persist the text to cross-session message history. Mentions are
@@ -5593,6 +5987,7 @@ impl ChatWidget {
                     local_image_paths.clone(),
                     remote_image_urls.clone(),
                 ));
+            self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
@@ -5607,6 +6002,7 @@ impl ChatWidget {
                     Vec::new(),
                     remote_image_urls.clone(),
                 ));
+            self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
                 String::new(),
                 Vec::new(),
@@ -5616,6 +6012,7 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+        Some(op)
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.
@@ -5713,54 +6110,14 @@ impl ChatWidget {
         let replay_kind = render_source.replay_kind();
         match item {
             ThreadItem::UserMessage { id, content } => {
-                let user_message = codex_protocol::items::UserMessageItem {
+                let user_message = UserMessageItem {
                     id,
                     content: content
                         .into_iter()
                         .map(codex_app_server_protocol::UserInput::into_core)
                         .collect(),
                 };
-                let codex_protocol::protocol::EventMsg::UserMessage(event) =
-                    user_message.as_legacy_event()
-                else {
-                    unreachable!("user message item should convert to a user message event");
-                };
-                if from_replay {
-                    self.on_user_message_event(event);
-                } else {
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key =
-                        Self::pending_steer_compare_key_from_items(&user_message.content);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
-                }
+                self.on_committed_user_message(&user_message, from_replay);
             }
             ThreadItem::AgentMessage {
                 id,
@@ -6065,6 +6422,12 @@ impl ChatWidget {
         notification: ServerNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if self.active_side_conversation
+            && replay_kind.is_none()
+            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        {
+            return;
+        }
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -6196,6 +6559,7 @@ impl ChatWidget {
                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(DeprecationNoticeEvent {
                     summary: notification.summary,
@@ -6300,6 +6664,7 @@ impl ChatWidget {
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
+            | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
@@ -6712,7 +7077,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_rate_limit_error(kind, message)
                         }
                     }
                 } else {
@@ -6869,40 +7234,7 @@ impl ChatWidget {
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
                 if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
-                    let EventMsg::UserMessage(event) = item.as_legacy_event() else {
-                        unreachable!("user message item should convert to a legacy user message");
-                    };
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key = Self::pending_steer_compare_key_from_item(item);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
+                    self.on_committed_user_message(item, from_replay);
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
@@ -6987,6 +7319,51 @@ impl ChatWidget {
         self.exit_review_mode_after_item();
     }
 
+    fn on_committed_user_message(&mut self, item: &UserMessageItem, from_replay: bool) {
+        let EventMsg::UserMessage(event) = item.as_legacy_event() else {
+            unreachable!("user message item should convert to a legacy user message");
+        };
+        if from_replay {
+            if !self.is_review_mode {
+                self.on_user_message_event(event);
+            }
+            return;
+        }
+
+        let rendered = Self::rendered_user_message_event_from_event(&event);
+        let compare_key = Self::pending_steer_compare_key_from_item(item);
+        if self
+            .pending_steers
+            .front()
+            .is_some_and(|pending| pending.compare_key == compare_key)
+        {
+            if let Some(pending) = self.pending_steers.pop_front() {
+                self.refresh_pending_input_preview();
+                let pending_event = UserMessageEvent {
+                    message: pending.user_message.text,
+                    images: Some(pending.user_message.remote_image_urls),
+                    local_images: pending
+                        .user_message
+                        .local_images
+                        .into_iter()
+                        .map(|image| image.path)
+                        .collect(),
+                    text_elements: pending.user_message.text_elements,
+                };
+                self.on_user_message_event(pending_event);
+            } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                tracing::warn!(
+                    "pending steer matched compare key but queue was empty when rendering committed user message"
+                );
+                self.on_user_message_event(event);
+            }
+        } else if !self.is_review_mode
+            && self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+        {
+            self.on_user_message_event(event);
+        }
+    }
+
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
@@ -6995,6 +7372,7 @@ impl ChatWidget {
             || !event.text_elements.is_empty()
             || !remote_image_urls.is_empty()
         {
+            self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,
@@ -7071,14 +7449,47 @@ impl ChatWidget {
         if self.suppress_queue_autosend {
             return;
         }
-        if self.bottom_pane.is_task_running() {
+        if self.is_user_turn_pending_or_running() {
             return;
         }
-        if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+        while !self.is_user_turn_pending_or_running() {
+            let Some(queued_message) = self.pop_next_queued_user_message() else {
+                break;
+            };
+            match queued_message.action {
+                QueuedInputAction::Plain => {
+                    self.submit_user_message(queued_message.into_user_message());
+                    break;
+                }
+                QueuedInputAction::ParseSlash => {
+                    let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+                QueuedInputAction::RunShell => {
+                    let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+            }
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
+    }
+
+    pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
+        self.user_turn_pending_start || self.bottom_pane.is_task_running()
+    }
+
+    fn only_user_shell_commands_running(&self) -> bool {
+        self.agent_turn_running
+            && !self.running_commands.is_empty()
+            && self
+                .running_commands
+                .values()
+                .all(|command| command.source == ExecCommandSource::UserShell)
     }
 
     /// Rebuild and update the bottom-pane pending-input preview.
@@ -7107,6 +7518,18 @@ impl ChatWidget {
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
         self.bottom_pane.set_pending_thread_approvals(threads);
+    }
+
+    pub(crate) fn clear_thread_rename_block(&mut self) {
+        self.thread_rename_block_message = None;
+    }
+
+    pub(crate) fn set_thread_rename_block_message(&mut self, message: impl Into<String>) {
+        self.thread_rename_block_message = Some(message.into());
+    }
+
+    pub(crate) fn set_interrupted_turn_notice_mode(&mut self, mode: InterruptedTurnNoticeMode) {
+        self.interrupted_turn_notice_mode = mode;
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -7212,10 +7635,7 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
-            StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
-                self.status_line_value_for_item(&item)
-                    .map(|value| (item, value))
-            })),
+            self.status_surface_preview_data(),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -7226,9 +7646,38 @@ impl ChatWidget {
         self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
         let view = TerminalTitleSetupView::new(
             Some(configured_terminal_title_items.as_slice()),
+            self.terminal_title_preview_data(),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn status_surface_preview_data(&mut self) -> StatusSurfacePreviewData {
+        StatusSurfacePreviewData::from_iter(StatusSurfacePreviewItem::iter().filter_map(|item| {
+            self.status_surface_preview_value_for_item(item)
+                .map(|value| (item, value))
+        }))
+    }
+
+    fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
+        let mut preview_data = self.status_surface_preview_data();
+        let now = Instant::now();
+        for item in [
+            TerminalTitleItem::Project,
+            TerminalTitleItem::Thread,
+            TerminalTitleItem::GitBranch,
+            TerminalTitleItem::Model,
+            TerminalTitleItem::TaskProgress,
+        ] {
+            let Some(preview_item) = item.preview_item() else {
+                continue;
+            };
+            let Some(value) = self.terminal_title_value_for_item(item, now) else {
+                continue;
+            };
+            preview_data.set_live(preview_item, value);
+        }
+        preview_data
     }
 
     fn open_theme_picker(&mut self) {
@@ -7526,6 +7975,105 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn open_workspace_owner_nudge_prompt(&mut self, credit_type: AddCreditsNudgeCreditType) {
+        if !self.workspace_owner_usage_nudge_enabled()
+            || self.add_credits_nudge_email_in_flight.is_some()
+        {
+            return;
+        }
+
+        let (title, prompt) = match credit_type {
+            AddCreditsNudgeCreditType::Credits => (
+                "You've reached your workspace credit limit",
+                "Your workspace is out of credits. Ask your workspace owner to add more. Notify owner?",
+            ),
+            AddCreditsNudgeCreditType::UsageLimit => (
+                "Usage limit reached",
+                "Request a limit increase from your owner to continue using codex. Request increase?",
+            ),
+        };
+        let send_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::SendAddCreditsNudgeEmail { credit_type });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Yes".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
+                actions: send_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "No".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
+                is_default: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(title.to_string()),
+            subtitle: Some(prompt.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(1),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn start_add_credits_nudge_email_request(
+        &mut self,
+        credit_type: AddCreditsNudgeCreditType,
+    ) -> bool {
+        if !self.workspace_owner_usage_nudge_enabled() {
+            return false;
+        }
+
+        self.add_credits_nudge_email_in_flight = Some(credit_type);
+        true
+    }
+
+    pub(crate) fn finish_add_credits_nudge_email_request(
+        &mut self,
+        result: Result<AddCreditsNudgeEmailStatus, String>,
+    ) {
+        let credit_type = self
+            .add_credits_nudge_email_in_flight
+            .take()
+            .unwrap_or(AddCreditsNudgeCreditType::Credits);
+        if !self.workspace_owner_usage_nudge_enabled() {
+            return;
+        }
+        let message = match (credit_type, result) {
+            (AddCreditsNudgeCreditType::Credits, Ok(AddCreditsNudgeEmailStatus::Sent)) => {
+                "Workspace owner notified."
+            }
+            (
+                AddCreditsNudgeCreditType::Credits,
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive),
+            ) => "Workspace owner was already notified recently.",
+            (AddCreditsNudgeCreditType::Credits, Err(_)) => {
+                "Could not notify your workspace owner. Please try again."
+            }
+            (AddCreditsNudgeCreditType::UsageLimit, Ok(AddCreditsNudgeEmailStatus::Sent)) => {
+                "Limit increase requested."
+            }
+            (
+                AddCreditsNudgeCreditType::UsageLimit,
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive),
+            ) => "A limit increase was already requested recently.",
+            (AddCreditsNudgeCreditType::UsageLimit, Err(_)) => {
+                "Could not request a limit increase. Please try again."
+            }
+        };
+        self.add_to_history(history_cell::new_info_event(
+            message.to_string(),
+            /*hint*/ None,
+        ));
+        self.request_redraw();
     }
 
     /// Open a popup to choose a quick auto model. Selecting "All models"
@@ -9708,9 +10256,7 @@ impl ChatWidget {
         }
     }
 
-    fn plugins_for_mentions(
-        &self,
-    ) -> Option<&[crate::legacy_core::plugins::PluginCapabilitySummary]> {
+    fn plugins_for_mentions(&self) -> Option<&[PluginCapabilitySummary]> {
         if !self.config.features.enabled(Feature::Plugins) {
             return None;
         }
@@ -9808,7 +10354,7 @@ impl ChatWidget {
     ///
     /// The spinner lives in `active_cell` and is cleared by
     /// [`clear_mcp_inventory_loading`] once the result arrives.
-    pub(crate) fn add_mcp_output(&mut self) {
+    pub(crate) fn add_mcp_output(&mut self, detail: McpServerStatusDetail) {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
         self.active_cell = Some(Box::new(history_cell::new_mcp_inventory_loading(
@@ -9816,7 +10362,8 @@ impl ChatWidget {
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
-        self.app_event_tx.send(AppEvent::FetchMcpInventory);
+        self.app_event_tx
+            .send(AppEvent::FetchMcpInventory { detail });
     }
 
     /// Remove the MCP loading spinner if it is still the active cell.
@@ -10444,7 +10991,7 @@ impl ChatWidget {
 
     pub(crate) fn on_plugin_mentions_loaded(
         &mut self,
-        plugins: Option<Vec<crate::legacy_core::plugins::PluginCapabilitySummary>>,
+        plugins: Option<Vec<PluginCapabilitySummary>>,
     ) {
         self.bottom_pane.set_plugin_mentions(plugins);
     }
@@ -10890,6 +11437,12 @@ const PLACEHOLDERS: [&str; 8] = [
     "Improve documentation in @filename",
     "Run /review on my current changes",
     "Use /skills to list available skills",
+];
+
+const SIDE_PLACEHOLDERS: [&str; 3] = [
+    "Check recently modified functions for compatibility",
+    "How many files have been modified?",
+    "Will this algorithm scale well?",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

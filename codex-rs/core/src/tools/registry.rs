@@ -95,6 +95,11 @@ pub(crate) trait ToolArgumentDiffConsumer: Send {
     /// Consume the next argument diff for a tool call.
     fn consume_diff(&mut self, turn: &TurnContext, call_id: String, diff: &str)
     -> Option<EventMsg>;
+
+    /// Flush any buffered event before the tool call completes.
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        None
+    }
 }
 
 pub(crate) struct AnyToolResult {
@@ -234,6 +239,10 @@ impl ToolRegistry {
     //     }
     // }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "tool dispatch must keep active-turn accounting atomic"
+    )]
     pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,

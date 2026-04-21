@@ -97,6 +97,7 @@ fn test_model_info(
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
@@ -114,9 +115,9 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.2-codex");
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build(&server).await?;
-    let next_model = "gpt-5.1-codex-max";
+    let next_model = "gpt-5.4";
 
     test.codex
         .submit(Op::UserTurn {
@@ -205,7 +206,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     .await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5.2-codex")
+        .with_model("gpt-5.3-codex")
         .with_config(|config| {
             config
                 .features
@@ -914,6 +915,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(large_context_window),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),

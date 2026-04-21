@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -14,20 +15,29 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_identity::AgentIdentityManager;
-use crate::agent_identity::RegisteredAgentTask;
-use crate::apps::render_apps_section;
+use crate::build_available_skills;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::context::ApprovedCommandPrefixSaved;
+use crate::context::AppsInstructions;
+use crate::context::AvailablePluginsInstructions;
+use crate::context::AvailableSkillsInstructions;
+use crate::context::CollaborationModeInstructions;
+use crate::context::ContextualUserFragment;
+use crate::context::NetworkRuleSaved;
+use crate::context::PermissionsInstructions;
+use crate::context::PersonalitySpecInstructions;
+use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use async_channel::Receiver;
@@ -53,6 +63,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
@@ -110,6 +121,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
@@ -151,7 +163,6 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::environment_context::EnvironmentContext;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -162,6 +173,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod agent_task_lifecycle;
 mod handlers;
 mod mcp;
 mod review;
@@ -246,14 +258,13 @@ use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
 use crate::agents_md::AgentsMdManager;
+use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::instructions::UserInstructions;
 use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::plugins::render_plugins_section;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -266,6 +277,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -290,7 +302,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
-use codex_mcp::with_codex_apps_mcp;
+use codex_mcp::with_codex_apps_mcp_with_authorization_header;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -300,7 +312,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -362,9 +373,10 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
-/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
-/// the submission id for the initial `ConfigureSession` request and the
-/// unique session id.
+pub(crate) const THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE: &str = "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.";
+
+/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
+/// the unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
@@ -396,6 +408,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -892,7 +905,10 @@ impl Session {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            error!("managed network proxy refresh semaphore closed");
+            return;
+        };
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -984,7 +1000,10 @@ impl Session {
                     .ensure_registered_identity()
                     .await
                 {
-                    Ok(Some(_)) => return,
+                    Ok(Some(_)) => {
+                        sess.maybe_prewarm_agent_task_registration().await;
+                        return;
+                    }
                     Ok(None) => {
                         drop(sess);
                         if auth_state_rx.changed().await.is_err() {
@@ -1013,90 +1032,6 @@ impl Session {
             }),
         })
         .await;
-    }
-
-    async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
-        let agent_task = {
-            let state = self.state.lock().await;
-            state.agent_task()
-        }?;
-
-        if self
-            .services
-            .agent_identity_manager
-            .task_matches_current_binding(&agent_task)
-            .await
-        {
-            debug!(
-                agent_runtime_id = %agent_task.agent_runtime_id,
-                task_id = %agent_task.task_id,
-                "reusing cached agent task"
-            );
-            return Some(agent_task);
-        }
-
-        debug!(
-            agent_runtime_id = %agent_task.agent_runtime_id,
-            task_id = %agent_task.task_id,
-            "discarding cached agent task because auth binding changed"
-        );
-        let mut state = self.state.lock().await;
-        if state.agent_task().as_ref() == Some(&agent_task) {
-            state.clear_agent_task();
-        }
-        None
-    }
-
-    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
-        if let Some(agent_task) = self.cached_agent_task_for_current_binding().await {
-            return Ok(Some(agent_task));
-        }
-
-        for _ in 0..2 {
-            let Some(agent_task) = self.services.agent_identity_manager.register_task().await?
-            else {
-                return Ok(None);
-            };
-
-            if !self
-                .services
-                .agent_identity_manager
-                .task_matches_current_binding(&agent_task)
-                .await
-            {
-                debug!(
-                    agent_runtime_id = %agent_task.agent_runtime_id,
-                    task_id = %agent_task.task_id,
-                    "discarding newly registered agent task because auth binding changed"
-                );
-                continue;
-            }
-
-            {
-                let mut state = self.state.lock().await;
-                if let Some(existing_agent_task) = state.agent_task() {
-                    if existing_agent_task.has_same_binding(&agent_task) {
-                        return Ok(Some(existing_agent_task));
-                    }
-                    debug!(
-                        agent_runtime_id = %existing_agent_task.agent_runtime_id,
-                        task_id = %existing_agent_task.task_id,
-                        "replacing cached agent task because auth binding changed"
-                    );
-                }
-                state.set_agent_task(agent_task.clone());
-            }
-
-            info!(
-                thread_id = %self.conversation_id,
-                agent_runtime_id = %agent_task.agent_runtime_id,
-                task_id = %agent_task.task_id,
-                "registered agent task for thread"
-            );
-            return Ok(Some(agent_task));
-        }
-
-        Ok(None)
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1246,6 +1181,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                self.restore_persisted_agent_task(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -1724,8 +1660,9 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let fragment = ApprovedCommandPrefixSaved::new(prefixes);
+        let text = fragment.render();
+        let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1750,7 +1687,11 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let _refresh_guard = self
+            .managed_network_proxy_refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("managed network proxy refresh semaphore closed"))?;
         let host =
             Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self
@@ -1815,15 +1756,9 @@ impl Session {
         sub_id: &str,
         amendment: &NetworkPolicyAmendment,
     ) {
-        let (action, list_name) = match amendment.action {
-            NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
-            NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
-        };
-        let text = format!(
-            "{action} network rule saved in execpolicy ({list_name}): {}",
-            amendment.host
-        );
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let fragment = NetworkRuleSaved::new(amendment);
+        let text = fragment.render();
+        let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1854,6 +1789,10 @@ impl Session {
     /// be used to derive the available decisions via
     /// [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -1925,6 +1864,10 @@ impl Session {
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
@@ -1962,12 +1905,35 @@ impl Session {
     }
 
     pub async fn request_permissions(
-        &self,
-        turn_context: &TurnContext,
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
+        cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
-        match turn_context.approval_policy.value() {
+        self.request_permissions_for_cwd(
+            turn_context,
+            call_id,
+            args,
+            turn_context.cwd.clone(),
+            cancellation_token,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub(crate) async fn request_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
@@ -1988,13 +1954,92 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        let requested_permissions = args.permissions;
+
+        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+            let originating_turn_state = {
+                let active = self.active_turn.lock().await;
+                active.as_ref().map(|active| Arc::clone(&active.turn_state))
+            };
+            let review_id = crate::guardian::new_guardian_review_id();
+            let session = Arc::clone(self);
+            let turn = Arc::clone(turn_context);
+            let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
+                id: call_id,
+                turn_id: turn_context.sub_id.clone(),
+                reason: args.reason,
+                permissions: requested_permissions.clone(),
+            };
+            let review_rx = crate::guardian::spawn_approval_request_review(
+                session,
+                turn,
+                review_id,
+                request,
+                /*retry_reason*/ None,
+                cancellation_token.clone(),
+            );
+            let decision = tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => return None,
+                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+            };
+            let response = match decision {
+                ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                    RequestPermissionsResponse {
+                        permissions: requested_permissions.clone(),
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+                ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
+                    permissions: requested_permissions.clone(),
+                    scope: PermissionGrantScope::Session,
+                },
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment,
+                } => match network_policy_amendment.action {
+                    NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
+                        permissions: requested_permissions.clone(),
+                        scope: PermissionGrantScope::Turn,
+                    },
+                    NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    },
+                },
+                ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
+                    RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+            };
+            let response = Self::normalize_request_permissions_response(
+                requested_permissions,
+                response,
+                cwd.as_path(),
+            );
+            self.record_granted_request_permissions_for_turn(
+                &response,
+                originating_turn_state.as_ref(),
+            )
+            .await;
+            return Some(response);
+        }
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_request_permissions(call_id.clone(), tx_response)
+                    ts.insert_pending_request_permissions(
+                        call_id.clone(),
+                        PendingRequestPermissions {
+                            tx_response,
+                            requested_permissions: requested_permissions.clone(),
+                            cwd: cwd.clone(),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2003,19 +2048,32 @@ impl Session {
             warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
         }
 
-        // TODO(ccunningham): Support auto-review for request_permissions /
-        // with_additional_permissions. V0 still routes this surface through
-        // the existing manual RequestPermissions event flow.
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
-            call_id,
+            call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: requested_permissions,
+            cwd: Some(cwd),
         });
-        self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        self.send_event(turn_context.as_ref(), event).await;
+        tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                let mut active = self.active_turn.lock().await;
+                if let Some(at) = active.as_mut() {
+                    let mut ts = at.turn_state.lock().await;
+                    let _ = ts.remove_pending_request_permissions(&call_id);
+                }
+                None
+            }
+            response = rx_response => response.ok(),
+        }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_user_input(
         &self,
         turn_context: &TurnContext,
@@ -2048,6 +2106,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
@@ -2073,40 +2135,40 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
         response: RequestPermissionsResponse,
     ) {
-        let mut granted_for_session = None;
-        let entry = {
+        let (entry, originating_turn_state) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
                     let entry = ts.remove_pending_request_permissions(call_id);
-                    if entry.is_some() && !response.permissions.is_empty() {
-                        match response.scope {
-                            PermissionGrantScope::Turn => {
-                                ts.record_granted_permissions(response.permissions.clone().into());
-                            }
-                            PermissionGrantScope::Session => {
-                                granted_for_session = Some(response.permissions.clone());
-                            }
-                        }
-                    }
-                    entry
+                    let originating_turn_state = entry.as_ref().map(|_| Arc::clone(&at.turn_state));
+                    (entry, originating_turn_state)
                 }
-                None => None,
+                None => (None, None),
             }
         };
-        if let Some(permissions) = granted_for_session {
-            let mut state = self.state.lock().await;
-            state.record_granted_permissions(permissions.into());
-        }
         match entry {
-            Some(tx_response) => {
-                tx_response.send(response).ok();
+            Some(entry) => {
+                let response = Self::normalize_request_permissions_response(
+                    entry.requested_permissions,
+                    response,
+                    entry.cwd.as_path(),
+                );
+                self.record_granted_request_permissions_for_turn(
+                    &response,
+                    originating_turn_state.as_ref(),
+                )
+                .await;
+                entry.tx_response.send(response).ok();
             }
             None => {
                 warn!("No pending request_permissions found for call_id: {call_id}");
@@ -2114,6 +2176,52 @@ impl Session {
         }
     }
 
+    fn normalize_request_permissions_response(
+        requested_permissions: RequestPermissionProfile,
+        response: RequestPermissionsResponse,
+        cwd: &Path,
+    ) -> RequestPermissionsResponse {
+        if response.permissions.is_empty() {
+            return response;
+        }
+
+        RequestPermissionsResponse {
+            permissions: intersect_permission_profiles(
+                requested_permissions.into(),
+                response.permissions.into(),
+                cwd,
+            )
+            .into(),
+            scope: response.scope,
+        }
+    }
+
+    async fn record_granted_request_permissions_for_turn(
+        &self,
+        response: &RequestPermissionsResponse,
+        originating_turn_state: Option<&Arc<Mutex<crate::state::TurnState>>>,
+    ) {
+        if response.permissions.is_empty() {
+            return;
+        }
+        match response.scope {
+            PermissionGrantScope::Turn => {
+                if let Some(turn_state) = originating_turn_state {
+                    let mut ts = turn_state.lock().await;
+                    ts.record_granted_permissions(response.permissions.clone().into());
+                }
+            }
+            PermissionGrantScope::Session => {
+                let mut state = self.state.lock().await;
+                state.record_granted_permissions(response.permissions.clone().into());
+            }
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
     pub(crate) async fn granted_turn_permissions(&self) -> Option<PermissionProfile> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
@@ -2126,6 +2234,10 @@ impl Session {
         state.granted_permissions()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2147,6 +2259,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2307,6 +2423,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP app context rendering reads through the session-owned manager guard"
+    )]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2336,11 +2456,11 @@ impl Session {
                 turn_context,
             )
         {
-            developer_sections.push(model_switch_message.into_text());
+            developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
             developer_sections.push(
-                DeveloperInstructions::from_policy(
+                PermissionsInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
@@ -2353,7 +2473,7 @@ impl Session {
                         .features
                         .enabled(Feature::RequestPermissionsTool),
                 )
-                .into_text(),
+                .render(),
             );
         }
         let separate_guardian_developer_message =
@@ -2376,16 +2496,16 @@ impl Session {
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+            CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            developer_sections.push(collab_instructions.into_text());
+            developer_sections.push(collab_instructions.render());
         }
         if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
         ) {
-            developer_sections.push(realtime_update.into_text());
+            developer_sections.push(realtime_update);
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -2400,10 +2520,8 @@ impl Session {
                         personality,
                     )
             {
-                developer_sections.push(
-                    DeveloperInstructions::personality_spec_message(personality_message)
-                        .into_text(),
-                );
+                developer_sections
+                    .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
@@ -2414,25 +2532,48 @@ impl Session {
                     &turn_context.config,
                 )
                 .await;
-            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
-                developer_sections.push(apps_section);
+            if let Some(apps_instructions) =
+                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+            {
+                developer_sections.push(apps_instructions.render());
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
+        if turn_context.config.include_skill_instructions {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            let available_skills = build_available_skills(
+                &implicit_skills,
+                default_skill_metadata_budget(turn_context.model_info.context_window),
+                SkillRenderSideEffects::ThreadStart {
+                    session_telemetry: &self.services.session_telemetry,
+                },
+            );
+            if let Some(available_skills) = available_skills {
+                let emit_warning = available_skills.emit_warning;
+                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
+                if emit_warning {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                        }),
+                    })
+                    .await;
+                }
+                developer_sections.push(skills_instructions.render());
+            }
         }
         let loaded_plugins = self
             .services
             .plugins_manager
             .plugins_for_config(&turn_context.config)
             .await;
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
+        if let Some(plugin_instructions) =
+            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
-            developer_sections.push(plugin_section);
+            developer_sections.push(plugin_instructions.render());
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
@@ -2447,7 +2588,7 @@ impl Session {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
-                .serialize_to_text(),
+                .render(),
             );
         }
         if turn_context.config.include_environment_context {
@@ -2457,9 +2598,9 @@ impl Session {
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
-                    .serialize_to_xml(),
+                    .render(),
             );
         }
 
@@ -2751,6 +2892,10 @@ impl Session {
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -2810,6 +2955,10 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -2850,6 +2999,14 @@ impl Session {
             .set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
 
+    pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {
+        let turn_state = self.turn_state_for_sub_id(sub_id).await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.has_memory_citation = true;
+    }
+
     async fn turn_state_for_sub_id(
         &self,
         sub_id: &str,
@@ -2875,6 +3032,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -2887,6 +3048,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
@@ -2942,6 +3107,10 @@ impl Session {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state reads must remain atomic"
+    )]
     pub async fn has_pending_input(&self) -> bool {
         let (has_turn_pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;

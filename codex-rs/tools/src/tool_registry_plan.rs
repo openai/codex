@@ -1,5 +1,4 @@
 use crate::CommandToolOptions;
-use crate::LoadableToolSpec;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -18,6 +17,7 @@ use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
+use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
@@ -562,29 +562,7 @@ pub fn build_tool_registry_plan(
         match dynamic_tool_to_loadable_tool_spec(tool, default_namespace_description) {
             Ok(loadable_tool) => {
                 let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                match loadable_tool {
-                    LoadableToolSpec::Function(tool) => {
-                        dynamic_tool_specs.push(LoadableToolSpec::Function(tool));
-                    }
-                    LoadableToolSpec::Namespace(namespace) => {
-                        if let Some(existing) =
-                            dynamic_tool_specs.iter_mut().find_map(|spec| match spec {
-                                LoadableToolSpec::Namespace(existing)
-                                    if existing.name == namespace.name =>
-                                {
-                                    Some(existing)
-                                }
-                                LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => {
-                                    None
-                                }
-                            })
-                        {
-                            existing.tools.extend(namespace.tools);
-                        } else {
-                            dynamic_tool_specs.push(LoadableToolSpec::Namespace(namespace));
-                        }
-                    }
-                }
+                dynamic_tool_specs.push(loadable_tool);
                 plan.register_handler(handler_name, ToolHandlerKind::DynamicTool);
             }
             Err(error) => {
@@ -595,9 +573,9 @@ pub fn build_tool_registry_plan(
             }
         }
     }
-    for loadable_tool in dynamic_tool_specs {
+    for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
         plan.push_spec(
-            loadable_tool.into(),
+            spec.into(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );

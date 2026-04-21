@@ -19,8 +19,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
-use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
-use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
+use crate::context::ContextualUserFragment;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -35,10 +34,10 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_otel::TURN_E2E_DURATION_METRIC;
+use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -61,22 +60,13 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!(
-                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
-            ),
-        }],
-        end_turn: None,
-        phase: None,
-    }
+    ContextualUserFragment::into(crate::context::TurnAborted::new(
+        crate::context::TurnAborted::INTERRUPTED_GUIDANCE,
+    ))
 }
 
 fn emit_turn_network_proxy_metric(
@@ -94,6 +84,29 @@ fn emit_turn_network_proxy_metric(
         /*inc*/ 1,
         &[("active", active), tmp_mem],
     );
+}
+
+fn emit_turn_memory_metric(
+    session_telemetry: &SessionTelemetry,
+    feature_enabled: bool,
+    config_enabled: bool,
+    has_citations: bool,
+) {
+    let read_allowed = feature_enabled && config_enabled;
+    session_telemetry.counter(
+        TURN_MEMORY_METRIC,
+        /*inc*/ 1,
+        &[
+            ("read_allowed", bool_tag(read_allowed)),
+            ("feature_enabled", bool_tag(feature_enabled)),
+            ("config_use_memories", bool_tag(config_enabled)),
+            ("has_citations", bool_tag(has_citations)),
+        ],
+    );
+}
+
+fn bool_tag(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
@@ -409,6 +422,7 @@ impl Session {
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
+        let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
@@ -428,6 +442,7 @@ impl Session {
         if let Some(turn_state) = turn_state {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
+            turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
         }
@@ -531,6 +546,12 @@ impl Session {
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
+        emit_turn_memory_metric(
+            &self.services.session_telemetry,
+            turn_context.features.enabled(Feature::MemoryTool),
+            turn_context.config.memories.use_memories,
+            turn_had_memory_citation,
+        );
         let (completed_at, duration_ms) = turn_context
             .turn_timing_state
             .completed_at_and_duration_ms()

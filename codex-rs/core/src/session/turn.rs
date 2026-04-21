@@ -16,6 +16,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
@@ -78,6 +79,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
@@ -128,6 +130,10 @@ use tracing::warn;
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "turn execution must keep active-turn state transitions atomic"
+)]
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -242,7 +248,7 @@ pub(crate) async fn run_turn(
         turn_context.sub_id.clone(),
     );
     let SkillInjections {
-        items: skill_items,
+        items: skill_injections,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
@@ -257,6 +263,11 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+
+    let skill_items: Vec<ResponseItem> = skill_injections
+        .iter()
+        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
+        .collect();
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
@@ -334,20 +345,23 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    if let Err(error) = sess.ensure_agent_task_registered().await {
-        warn!(error = %error, "agent task registration failed");
-        sess.send_event(
-            turn_context.as_ref(),
-            EventMsg::Error(ErrorEvent {
-                message: format!(
-                    "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
-                ),
-                codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        )
-        .await;
-        return None;
-    }
+    let agent_task = match sess.ensure_agent_task_registered().await {
+        Ok(agent_task) => agent_task,
+        Err(error) => {
+            warn!(error = %error, "agent task registration failed");
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(ErrorEvent {
+                    message: format!(
+                        "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
+                    ),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            )
+            .await;
+            return None;
+        }
+    };
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -372,8 +386,21 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut prewarmed_client_session = prewarmed_client_session;
+    if agent_task.is_some()
+        && let Some(prewarmed_client_session) = prewarmed_client_session.as_mut()
+    {
+        prewarmed_client_session.disable_cached_websocket_session_on_drop();
+    }
+    let mut client_session = if let Some(agent_task) = agent_task {
+        sess.services
+            .model_client
+            .new_session_with_agent_task(Some(agent_task))
+    } else if let Some(prewarmed_client_session) = prewarmed_client_session.take() {
+        prewarmed_client_session
+    } else {
+        sess.services.model_client.new_session()
+    };
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
@@ -1157,6 +1184,10 @@ async fn run_sampling_request(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "tool router construction reads through the session-owned manager guard"
+)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1939,7 +1970,11 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                active_tool_argument_diff_consumer = None;
+                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                    && let Some(event) = consumer.flush_on_complete()
+                {
+                    sess.send_event(&turn_context, event).await;
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -1975,6 +2010,25 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
+                let preempt_for_mailbox_mail = match &item {
+                    ResponseItem::Message { role, phase, .. } => {
+                        role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
+                    }
+                    ResponseItem::Reasoning { .. } => true,
+                    ResponseItem::LocalShellCall { .. }
+                    | ResponseItem::FunctionCall { .. }
+                    | ResponseItem::ToolSearchCall { .. }
+                    | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCall { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+                    | ResponseItem::WebSearchCall { .. }
+                    | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GhostSnapshot { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::Other => false,
+                };
+
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
                         .instrument(handle_responses)
@@ -1990,6 +2044,13 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                // todo: remove before stabilizing multi-agent v2
+                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
+                    break Ok(SamplingRequestResult {
+                        needs_follow_up: true,
+                        last_agent_message,
+                    });
+                }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {

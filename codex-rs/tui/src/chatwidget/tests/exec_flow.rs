@@ -987,7 +987,7 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
+async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
@@ -1015,6 +1015,15 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     });
     drain_insert_history(&mut rx);
     while op_rx.try_recv().is_ok() {}
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
 
     chat.bottom_pane
         .set_composer_text("!echo hi".to_string(), Vec::new(), Vec::new());
@@ -1025,6 +1034,58 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
         other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn user_message_during_user_shell_command_is_queued_not_steered() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "user-shell-sleep",
+        "sleep 10",
+        ExecCommandSource::UserShell,
+    );
+
+    assert!(chat.only_user_shell_commands_running());
+    chat.bottom_pane
+        .set_composer_text("hi".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(chat.queued_user_message_texts(), vec!["hi".to_string()]);
+
+    end_exec(&mut chat, begin, "", "", /*exit_code*/ 0);
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("done".to_string()),
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "hi".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued user message after shell completion, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
 }
 
 #[tokio::test]

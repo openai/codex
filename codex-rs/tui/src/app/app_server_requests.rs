@@ -506,6 +506,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     item_id: "perm-1".to_string(),
+                    cwd: absolute_path(if cfg!(windows) { r"C:\tmp" } else { "/tmp" }),
                     reason: None,
                     permissions: serde_json::from_value(json!({
                         "network": { "enabled": null }
@@ -536,10 +537,10 @@ mod tests {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
                         }),
-                        file_system: Some(FileSystemPermissions {
-                            read: Some(vec![absolute_path(read_path)]),
-                            write: Some(vec![absolute_path(write_path)]),
-                        }),
+                        file_system: Some(FileSystemPermissions::from_read_write_roots(
+                            Some(vec![absolute_path(read_path)]),
+                            Some(vec![absolute_path(write_path)]),
+                        )),
                     },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
                 },
@@ -558,6 +559,8 @@ mod tests {
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
+                        glob_scan_max_depth: None,
+                        entries: None,
                     }),
                 },
                 scope: PermissionGrantScope::Session,

@@ -6,6 +6,7 @@ use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -100,6 +101,14 @@ pub enum GuardianUserAuthorization {
     High,
 }
 
+/// Final allow/deny outcome returned by the guardian reviewer.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianAssessmentOutcome {
+    Allow,
+    Deny,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentStatus {
@@ -154,6 +163,10 @@ pub enum GuardianAssessmentAction {
         connector_id: Option<String>,
         connector_name: Option<String>,
         tool_title: Option<String>,
+    },
+    RequestPermissions {
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
     },
 }
 

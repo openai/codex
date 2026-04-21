@@ -240,6 +240,10 @@ impl ToolHandler for McpResourceHandler {
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP resource listing reads through the session-owned manager guard"
+)]
 async fn handle_list_resources(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -344,6 +348,10 @@ async fn handle_list_resources(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP resource template listing reads through the session-owned manager guard"
+)]
 async fn handle_list_resource_templates(
     session: Arc<Session>,
     turn: Arc<TurnContext>,

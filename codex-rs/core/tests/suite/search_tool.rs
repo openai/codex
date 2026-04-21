@@ -99,15 +99,14 @@ fn tool_search_output_tools(request: &ResponsesRequest, call_id: &str) -> Vec<Va
 }
 
 fn configure_search_capable_model(config: &mut Config) {
-    config.model = Some("gpt-5-codex".to_string());
-
     let mut model_catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
         .iter_mut()
-        .find(|model| model.slug == "gpt-5-codex")
-        .expect("gpt-5-codex exists in bundled models.json");
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    config.model = Some("gpt-5.4".to_string());
     model.supports_search_tool = true;
     config.model_catalog = Some(model_catalog);
 }
@@ -882,6 +881,13 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
     let echo_call_id = "tool-search-echo";
     let image_call_id = "tool-search-image";
     let mock = mount_sse_sequence(
@@ -914,7 +920,6 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder =
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();
