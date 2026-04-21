@@ -12,6 +12,7 @@ mod inference;
 mod model;
 mod payload;
 mod raw_event;
+mod recorder;
 mod reducer;
 mod writer;
 
@@ -43,6 +44,14 @@ pub use raw_event::RawTraceEvent;
 pub use raw_event::RawTraceEventContext;
 /// Typed payload for one raw trace event.
 pub use raw_event::RawTraceEventPayload;
+/// Environment variable that enables local trace-bundle recording.
+pub use recorder::CODEX_ROLLOUT_TRACE_ROOT_ENV;
+/// Raw checkpoint payload for a remote compaction install event.
+pub use recorder::CompactionCheckpointTracePayload;
+/// Best-effort hot-path recorder for one rollout trace bundle.
+pub use recorder::RolloutTraceRecorder;
+/// Raw metadata captured when a thread starts.
+pub use recorder::ThreadStartedTraceMetadata;
 /// Replay a raw trace bundle and write/read its reduced `RolloutTrace`.
 pub use reducer::replay_bundle;
 /// Append-only writer used by hot-path Codex instrumentation.

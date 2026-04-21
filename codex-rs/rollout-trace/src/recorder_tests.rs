@@ -7,10 +7,11 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_rollout_trace::RolloutStatus;
 use tempfile::TempDir;
 
 use super::*;
+use crate::RolloutStatus;
+use crate::replay_bundle;
 
 #[test]
 fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
@@ -37,7 +38,7 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     .expect("trace recorder");
 
     let bundle_dir = single_bundle_dir(temp.path())?;
-    let replayed = codex_rollout_trace::replay_bundle(&bundle_dir)?;
+    let replayed = replay_bundle(&bundle_dir)?;
 
     assert_eq!(replayed.status, RolloutStatus::Running);
     assert_eq!(replayed.root_thread_id, thread_id.to_string());
@@ -82,7 +83,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         sandbox_policy: format!("{:?}", SandboxPolicy::DangerFullAccess),
     });
     let bundle_dir = single_bundle_dir(temp.path())?;
-    let replayed = codex_rollout_trace::replay_bundle(&bundle_dir)?;
+    let replayed = replay_bundle(&bundle_dir)?;
 
     assert_eq!(fs::read_dir(temp.path())?.count(), 1);
     assert_eq!(replayed.threads.len(), 2);
@@ -95,7 +96,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         replayed.threads[&child_thread_id.to_string()]
             .execution
             .status,
-        codex_rollout_trace::ExecutionStatus::Running
+        crate::ExecutionStatus::Running
     );
     assert_eq!(replayed.raw_payloads.len(), 2);
 

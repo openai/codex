@@ -1,8 +1,4 @@
-//! Opt-in producer for the rollout trace bundle.
-//!
-//! This module is the deliberately thin bridge from `codex-core` into
-//! `codex-rollout-trace`. Core emits raw observations; the trace crate's
-//! offline reducer owns the semantic graph.
+//! Opt-in hot-path producer for rollout trace bundles.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,31 +7,33 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
-use codex_rollout_trace::AgentThreadId;
-use codex_rollout_trace::CompactionTraceContext;
-use codex_rollout_trace::InferenceTraceContext;
-use codex_rollout_trace::RawPayloadKind;
-use codex_rollout_trace::RawTraceEventContext;
-use codex_rollout_trace::RawTraceEventPayload;
-use codex_rollout_trace::TraceWriter;
 use serde::Serialize;
 use tracing::debug;
 use tracing::warn;
 use uuid::Uuid;
+
+use crate::AgentThreadId;
+use crate::CompactionTraceContext;
+use crate::InferenceTraceContext;
+use crate::RawPayloadKind;
+use crate::RawPayloadRef;
+use crate::RawTraceEventContext;
+use crate::RawTraceEventPayload;
+use crate::TraceWriter;
 
 /// Environment variable that enables local trace-bundle recording.
 ///
 /// The value is a root directory. Each independent root session gets one child
 /// bundle directory. Spawned child threads share their root session's bundle so
 /// one reduced `state.json` describes the whole multi-agent rollout tree.
-pub(crate) const CODEX_ROLLOUT_TRACE_ROOT_ENV: &str = "CODEX_ROLLOUT_TRACE_ROOT";
+pub const CODEX_ROLLOUT_TRACE_ROOT_ENV: &str = "CODEX_ROLLOUT_TRACE_ROOT";
 
 /// Lightweight handle stored in `SessionServices`.
 ///
 /// Cloning the handle is cheap; all sequencing and file ownership remains
 /// inside `TraceWriter`.
 #[derive(Clone, Debug)]
-pub(crate) struct RolloutTraceRecorder {
+pub struct RolloutTraceRecorder {
     writer: Arc<TraceWriter>,
 }
 
@@ -44,19 +42,19 @@ pub(crate) struct RolloutTraceRecorder {
 /// This payload is intentionally operational rather than reduced: it is a raw
 /// payload that later reducers can mine as the reduced thread model evolves.
 #[derive(Serialize)]
-pub(crate) struct ThreadStartedTraceMetadata {
-    pub(crate) thread_id: String,
-    pub(crate) agent_path: String,
-    pub(crate) task_name: Option<String>,
-    pub(crate) nickname: Option<String>,
-    pub(crate) agent_role: Option<String>,
-    pub(crate) session_source: SessionSource,
-    pub(crate) cwd: PathBuf,
-    pub(crate) rollout_path: Option<PathBuf>,
-    pub(crate) model: String,
-    pub(crate) provider_name: String,
-    pub(crate) approval_policy: String,
-    pub(crate) sandbox_policy: String,
+pub struct ThreadStartedTraceMetadata {
+    pub thread_id: String,
+    pub agent_path: String,
+    pub task_name: Option<String>,
+    pub nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub session_source: SessionSource,
+    pub cwd: PathBuf,
+    pub rollout_path: Option<PathBuf>,
+    pub model: String,
+    pub provider_name: String,
+    pub approval_policy: String,
+    pub sandbox_policy: String,
 }
 
 /// History replacement checkpoint persisted when compaction installs new live history.
@@ -65,9 +63,9 @@ pub(crate) struct ThreadStartedTraceMetadata {
 /// `input_history` is the live thread history selected for compaction, while
 /// `replacement_history` is what future prompts may carry after the checkpoint.
 #[derive(Serialize)]
-pub(crate) struct CompactionCheckpointTracePayload<'a> {
-    pub(crate) input_history: &'a [ResponseItem],
-    pub(crate) replacement_history: &'a [ResponseItem],
+pub struct CompactionCheckpointTracePayload<'a> {
+    pub input_history: &'a [ResponseItem],
+    pub replacement_history: &'a [ResponseItem],
 }
 
 impl RolloutTraceRecorder {
@@ -76,10 +74,7 @@ impl RolloutTraceRecorder {
     /// Trace startup is best-effort. A tracing failure must not make the Codex
     /// session unusable, because traces are diagnostic and can be enabled while
     /// debugging unrelated production failures.
-    pub(crate) fn maybe_create(
-        thread_id: ThreadId,
-        metadata: ThreadStartedTraceMetadata,
-    ) -> Option<Self> {
+    pub fn maybe_create(thread_id: ThreadId, metadata: ThreadStartedTraceMetadata) -> Option<Self> {
         let root = std::env::var_os(CODEX_ROLLOUT_TRACE_ROOT_ENV)?;
         let root = PathBuf::from(root);
         match Self::create_in_root(root.as_path(), thread_id, metadata) {
@@ -126,7 +121,7 @@ impl RolloutTraceRecorder {
     /// child sessions call it on the inherited recorder. Keeping children in
     /// the root bundle preserves one raw payload namespace and one reduced
     /// `RolloutTrace` for the whole multi-agent task.
-    pub(crate) fn record_thread_started(&self, metadata: ThreadStartedTraceMetadata) {
+    pub fn record_thread_started(&self, metadata: ThreadStartedTraceMetadata) {
         let metadata_payload =
             self.write_json_payload_best_effort(RawPayloadKind::SessionMetadata, &metadata);
         self.append_best_effort(RawTraceEventPayload::ThreadStarted {
@@ -141,7 +136,7 @@ impl RolloutTraceRecorder {
     /// The returned context is intentionally not "an inference call" yet.
     /// Transport code owns retry/fallback attempts and calls `start_attempt`
     /// only after it has built the concrete request payload for that attempt.
-    pub(crate) fn inference_trace_context(
+    pub fn inference_trace_context(
         &self,
         thread_id: AgentThreadId,
         codex_turn_id: String,
@@ -163,7 +158,7 @@ impl RolloutTraceRecorder {
     /// The compact endpoint is a model-facing request whose output replaces live history, so it
     /// needs both request/response attempt events and a later checkpoint event when processed
     /// replacement history is installed.
-    pub(crate) fn compaction_trace_context(
+    pub fn compaction_trace_context(
         &self,
         thread_id: AgentThreadId,
         codex_turn_id: String,
@@ -187,7 +182,7 @@ impl RolloutTraceRecorder {
     /// and reinjects context before replacement history becomes live. The reducer uses this event
     /// to connect the pre-compaction history to the processed replacement items without treating
     /// repeated developer/context prefix items as part of the replacement itself.
-    pub(crate) fn record_compaction_installed(
+    pub fn record_compaction_installed(
         &self,
         thread_id: AgentThreadId,
         codex_turn_id: String,
@@ -213,7 +208,7 @@ impl RolloutTraceRecorder {
         &self,
         kind: RawPayloadKind,
         payload: &impl Serialize,
-    ) -> Option<codex_rollout_trace::RawPayloadRef> {
+    ) -> Option<RawPayloadRef> {
         match self.writer.write_json_payload(kind, payload) {
             Ok(payload_ref) => Some(payload_ref),
             Err(err) => {
@@ -246,5 +241,5 @@ impl RolloutTraceRecorder {
 }
 
 #[cfg(test)]
-#[path = "rollout_trace_tests.rs"]
+#[path = "recorder_tests.rs"]
 mod tests;
