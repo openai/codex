@@ -76,7 +76,8 @@ impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
-        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
+        let environment =
+            codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
             cwd,
@@ -115,7 +116,8 @@ pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
-            let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
+            let environment =
+                codex_exec_server::Environment::create_for_tests(Some(websocket_url))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -204,6 +206,7 @@ pub struct TestCodexBuilder {
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
     user_shell_override: Option<Shell>,
+    exec_server_url: Option<String>,
 }
 
 impl TestCodexBuilder {
@@ -252,6 +255,11 @@ impl TestCodexBuilder {
 
     pub fn with_user_shell(mut self, user_shell: Shell) -> Self {
         self.user_shell_override = Some(user_shell);
+        self
+    }
+
+    pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
+        self.exec_server_url = Some(exec_server_url.into());
         self
     }
 
@@ -350,8 +358,18 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
+        let exec_server_url = self
+            .exec_server_url
+            .clone()
+            .or_else(|| test_env.exec_server_url().map(str::to_owned));
         let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
+            codex_exec_server::EnvironmentManagerArgs {
+                exec_server_url,
+                local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
+                    std::env::current_exe()?,
+                    /*codex_linux_sandbox_exe*/ None,
+                )?,
+            },
         ));
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
@@ -885,6 +903,7 @@ pub fn test_codex() -> TestCodexBuilder {
         workspace_setups: vec![],
         home: None,
         user_shell_override: None,
+        exec_server_url: None,
     }
 }
 

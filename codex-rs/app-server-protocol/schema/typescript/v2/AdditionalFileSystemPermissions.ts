@@ -4,4 +4,4 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { FileSystemSandboxEntry } from "./FileSystemSandboxEntry";
 
-export type AdditionalFileSystemPermissions = { read: Array<AbsolutePathBuf> | null, write: Array<AbsolutePathBuf> | null, entries?: Array<FileSystemSandboxEntry>, };
+export type AdditionalFileSystemPermissions = { read: Array<AbsolutePathBuf> | null, write: Array<AbsolutePathBuf> | null, globScanMaxDepth?: number, entries?: Array<FileSystemSandboxEntry>, };

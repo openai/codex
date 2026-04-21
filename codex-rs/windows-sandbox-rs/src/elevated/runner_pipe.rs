@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use std::ptr;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
@@ -43,7 +45,8 @@ pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
 /// Generates a unique named-pipe path used to communicate with the runner process.
 pub fn pipe_pair() -> (String, String) {
     let mut rng = SmallRng::from_entropy();
-    let base = format!(r"\\.\pipe\codex-runner-{:x}", rng.gen::<u128>());
+    let nonce: u128 = rng.r#gen();
+    let base = format!(r"\\.\pipe\codex-runner-{nonce:x}");
     (format!("{base}-in"), format!("{base}-out"))
 }
 
@@ -86,6 +89,9 @@ pub fn create_named_pipe(name: &str, access: u32, sandbox_username: &str) -> io:
             &mut sa as *mut SECURITY_ATTRIBUTES,
         )
     };
+    unsafe {
+        LocalFree(sd as HLOCAL);
+    }
     if h == 0 || h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
         return Err(io::Error::from_raw_os_error(unsafe {
             GetLastError() as i32

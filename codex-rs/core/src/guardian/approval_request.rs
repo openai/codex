@@ -4,6 +4,7 @@ use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde_json::Value;
@@ -65,6 +66,12 @@ pub(crate) enum GuardianApprovalRequest {
         tool_description: Option<String>,
         annotations: Option<GuardianMcpAnnotations>,
     },
+    RequestPermissions {
+        id: String,
+        turn_id: String,
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -121,6 +128,15 @@ struct McpToolCallApprovalAction<'a> {
     tool_description: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     annotations: Option<&'a GuardianMcpAnnotations>,
+}
+
+#[derive(Serialize)]
+struct RequestPermissionsApprovalAction<'a> {
+    tool: &'static str,
+    turn_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a String>,
+    permissions: &'a RequestPermissionProfile,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -293,6 +309,17 @@ pub(crate) fn guardian_approval_request_to_json(
             tool_description: tool_description.as_ref(),
             annotations: annotations.as_ref(),
         }),
+        GuardianApprovalRequest::RequestPermissions {
+            id: _,
+            turn_id,
+            reason,
+            permissions,
+        } => serialize_guardian_action(RequestPermissionsApprovalAction {
+            tool: "request_permissions",
+            turn_id,
+            reason: reason.as_ref(),
+            permissions,
+        }),
     }
 }
 
@@ -352,6 +379,14 @@ pub(crate) fn guardian_assessment_action(
             connector_name: connector_name.clone(),
             tool_title: tool_title.clone(),
         },
+        GuardianApprovalRequest::RequestPermissions {
+            reason,
+            permissions,
+            ..
+        } => GuardianAssessmentAction::RequestPermissions {
+            reason: reason.clone(),
+            permissions: permissions.clone(),
+        },
     }
 }
 
@@ -360,7 +395,8 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         GuardianApprovalRequest::Shell { id, .. }
         | GuardianApprovalRequest::ExecCommand { id, .. }
         | GuardianApprovalRequest::ApplyPatch { id, .. }
-        | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
+        | GuardianApprovalRequest::McpToolCall { id, .. }
+        | GuardianApprovalRequest::RequestPermissions { id, .. } => Some(id),
         GuardianApprovalRequest::NetworkAccess { .. } => None,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { id, .. } => Some(id),
@@ -372,7 +408,8 @@ pub(crate) fn guardian_request_turn_id<'a>(
     default_turn_id: &'a str,
 ) -> &'a str {
     match request {
-        GuardianApprovalRequest::NetworkAccess { turn_id, .. } => turn_id,
+        GuardianApprovalRequest::NetworkAccess { turn_id, .. }
+        | GuardianApprovalRequest::RequestPermissions { turn_id, .. } => turn_id,
         GuardianApprovalRequest::Shell { .. }
         | GuardianApprovalRequest::ExecCommand { .. }
         | GuardianApprovalRequest::ApplyPatch { .. }

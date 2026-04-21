@@ -56,7 +56,7 @@ WHERE threads.id = ?
     ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
         let rows = sqlx::query(
             r#"
-SELECT name, description, input_schema, defer_loading
+SELECT namespace, name, description, input_schema, defer_loading
 FROM thread_dynamic_tools
 WHERE thread_id = ?
 ORDER BY position ASC
@@ -73,6 +73,7 @@ ORDER BY position ASC
             let input_schema: String = row.try_get("input_schema")?;
             let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
             tools.push(DynamicToolSpec {
+                namespace: row.try_get("namespace")?,
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 input_schema,
@@ -778,16 +779,18 @@ ON CONFLICT(id) DO UPDATE SET
 INSERT INTO thread_dynamic_tools (
     thread_id,
     position,
+    namespace,
     name,
     description,
     input_schema,
     defer_loading
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
             .bind(thread_id.as_str())
             .bind(position)
+            .bind(tool.namespace.as_deref())
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
@@ -965,8 +968,7 @@ SELECT
 pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
-        RolloutItem::SessionState(_)
-        | RolloutItem::ResponseItem(_)
+        RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -976,8 +978,7 @@ pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<
 pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
     items.iter().rev().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-        RolloutItem::SessionState(_)
-        | RolloutItem::ResponseItem(_)
+        RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,

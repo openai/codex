@@ -227,9 +227,13 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                let app_summaries =
-                    plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps)
-                        .await;
+                let environment_manager = self.thread_manager.environment_manager();
+                let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
+                    &config,
+                    &outcome.plugin.apps,
+                    &environment_manager,
+                )
+                .await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -322,8 +326,13 @@ impl CodexMessageProcessor {
                     .cloned()
                     .map(codex_core::plugins::AppConnectorId)
                     .collect::<Vec<_>>();
-                let app_summaries =
-                    plugin_app_helpers::load_plugin_app_summaries(&config, &plugin_apps).await;
+                let environment_manager = self.thread_manager.environment_manager();
+                let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
+                    &config,
+                    &plugin_apps,
+                    &environment_manager,
+                )
+                .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -420,10 +429,11 @@ impl CodexMessageProcessor {
                     ) {
                     Vec::new()
                 } else {
+                    let environment_manager = self.thread_manager.environment_manager();
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(
                         connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                        connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-                            &config, /*force_refetch*/ true
+                        connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                            &config, /*force_refetch*/ true, &environment_manager
                         ),
                     );
 

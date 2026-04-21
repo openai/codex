@@ -228,7 +228,6 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
                 .features
                 .disable(Feature::GhostCommit)
                 .expect("test config should allow feature update");
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -407,7 +406,6 @@ async fn process_sse_failed_event_logs_missing_error() {
                 .features
                 .disable(Feature::GhostCommit)
                 .expect("test config should allow feature update");
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await

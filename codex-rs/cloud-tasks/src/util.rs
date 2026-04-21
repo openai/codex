@@ -3,7 +3,6 @@ use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
-use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_login::AuthManager;
@@ -60,18 +59,18 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<Arc<AuthManager>> {
+pub async fn load_auth_manager() -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
-    if let Some(chatgpt_base_url) = chatgpt_base_url {
-        auth_manager.set_chatgpt_backend_base_url(Some(chatgpt_base_url));
-    }
-    Some(auth_manager)
+    Some(AuthManager::new(
+        config.codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    ))
 }
 
-/// Build headers for ChatGPT-backed requests.
+/// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
+/// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
     use reqwest::header::AUTHORIZATION;
     use reqwest::header::HeaderName;
@@ -85,33 +84,22 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    let base_url = normalize_base_url(
-        &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
-            .unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()),
-    );
-    if let Some(auth_manager) = load_auth_manager(Some(base_url)).await
-        && let Some(auth) = auth_manager.auth().await
+    if let Some(am) = load_auth_manager().await
+        && let Some(auth) = am.auth().await
+        && let Ok(tok) = auth.get_token()
+        && !tok.is_empty()
     {
-        if let Some(authorization_header_value) = auth_manager
-            .chatgpt_authorization_header_for_auth(&auth)
-            .await
-            && let Ok(hv) = HeaderValue::from_str(&authorization_header_value)
-        {
+        let v = format!("Bearer {tok}");
+        if let Ok(hv) = HeaderValue::from_str(&v) {
             headers.insert(AUTHORIZATION, hv);
         }
-        if let Some(acc) = auth.get_account_id().or_else(|| {
-            auth.get_token()
-                .ok()
-                .and_then(|token| extract_chatgpt_account_id(&token))
-        }) && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
+        if let Some(acc) = auth
+            .get_account_id()
+            .or_else(|| extract_chatgpt_account_id(&tok))
+            && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(&acc)
         {
             headers.insert(name, hv);
-        }
-        if auth.is_fedramp_account()
-            && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")
-        {
-            headers.insert(name, HeaderValue::from_static("true"));
         }
     }
     headers

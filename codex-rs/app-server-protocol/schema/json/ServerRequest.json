@@ -16,6 +16,14 @@
             "null"
           ]
         },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "read": {
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
@@ -425,6 +433,12 @@
         "arguments": true,
         "callId": {
           "type": "string"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"
@@ -1570,6 +1584,9 @@
     },
     "PermissionsRequestApprovalParams": {
       "properties": {
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
         "itemId": {
           "type": "string"
         },
@@ -1590,6 +1607,7 @@
         }
       },
       "required": [
+        "cwd",
         "itemId",
         "permissions",
         "threadId",

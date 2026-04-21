@@ -1,9 +1,9 @@
 use crate::JsonSchema;
+use crate::LoadableToolSpec;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ToolName;
-use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
 use crate::default_namespace_description;
 use crate::mcp_tool_to_deferred_responses_api_tool;
@@ -203,10 +203,10 @@ pub fn create_tool_search_tool(
     }
 }
 
-pub fn tool_search_result_source_to_output_tool(
+pub fn tool_search_result_source_to_loadable_tool_spec(
     source: ToolSearchResultSource<'_>,
-) -> Result<ToolSearchOutputTool, serde_json::Error> {
-    Ok(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+) -> Result<LoadableToolSpec, serde_json::Error> {
+    Ok(LoadableToolSpec::Namespace(ResponsesApiNamespace {
         name: source.tool_namespace.to_string(),
         description: tool_search_result_source_namespace_description(source),
         tools: vec![tool_search_result_source_to_namespace_tool(source)?],

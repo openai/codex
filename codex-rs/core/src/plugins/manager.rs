@@ -6,14 +6,10 @@ use super::startup_sync::start_startup_remote_plugin_sync_once;
 use super::sync_openai_plugins_repo;
 use crate::SkillMetadata;
 use crate::config::Config;
-use crate::config::ConfigService;
-use crate::config::ConfigServiceError;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerStack;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::MergeStrategy;
 use codex_config::types::PluginConfig;
 use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
 use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
@@ -61,7 +57,6 @@ use codex_plugin::PluginIdError;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -609,18 +604,17 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        ConfigService::new_with_defaults(self.codex_home.clone())
-            .write_value(ConfigValueWriteParams {
-                key_path: format!("plugins.{}", result.plugin_id.as_key()),
-                value: json!({
-                    "enabled": true,
-                }),
-                merge_strategy: MergeStrategy::Replace,
-                file_path: None,
-                expected_version: None,
-            })
+        ConfigEditsBuilder::new(&self.codex_home)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    result.plugin_id.as_key(),
+                    "enabled".to_string(),
+                ],
+                value: value(true),
+            }])
+            .apply()
             .await
-            .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
@@ -1528,7 +1522,7 @@ pub enum PluginInstallError {
     Store(#[from] PluginStoreError),
 
     #[error("{0}")]
-    Config(#[from] ConfigServiceError),
+    Config(#[from] anyhow::Error),
 
     #[error("failed to join plugin install task: {0}")]
     Join(#[from] tokio::task::JoinError),
