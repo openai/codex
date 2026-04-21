@@ -261,7 +261,10 @@ impl Inner {
     /// Fails active streamed HTTP bodies so callers do not wait forever after a
     /// transport disconnect or notification handling failure.
     pub(super) async fn fail_all_http_body_streams(&self, message: String) {
-        let streams = self.take_all_http_body_streams().await;
+        let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
+        let streams = self.http_body_streams.load();
+        let streams = streams.as_ref().clone();
+        self.http_body_streams.store(Arc::new(HashMap::new()));
         for (request_id, route) in streams {
             route.set_failure(message.clone());
             let _ = route.try_send(HttpRequestBodyDeltaNotification {
@@ -311,15 +314,6 @@ impl Inner {
         next_streams.remove(request_id);
         self.http_body_streams.store(Arc::new(next_streams));
         stream
-    }
-
-    /// Removes every streamed HTTP response route after a transport failure.
-    async fn take_all_http_body_streams(&self) -> HashMap<String, HttpBodyStreamRoute> {
-        let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
-        let streams = self.http_body_streams.load();
-        let removed_streams = streams.as_ref().clone();
-        self.http_body_streams.store(Arc::new(HashMap::new()));
-        removed_streams
     }
 }
 
