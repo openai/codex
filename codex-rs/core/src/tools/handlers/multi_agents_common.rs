@@ -243,7 +243,7 @@ pub(crate) fn reject_full_fork_spawn_overrides(
 ) -> Result<(), FunctionCallError> {
     if agent_type.is_some() || model.is_some() || reasoning_effort.is_some() {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         ));
     }
     Ok(())
