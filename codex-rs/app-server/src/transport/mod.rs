@@ -10,11 +10,11 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -45,24 +45,30 @@ pub(crate) use websocket::start_websocket_acceptor;
 const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
 const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
 
-pub fn app_server_control_socket_path(codex_home: &Path) -> PathBuf {
-    codex_home
-        .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
-        .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME)
+pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path(
+        codex_home
+            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
+            .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
+    )
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
     Stdio,
-    UnixSocket,
-    WebSocket { bind_address: SocketAddr },
+    UnixSocket {
+        socket_path: Option<AbsolutePathBuf>,
+    },
+    WebSocket {
+        bind_address: SocketAddr,
+    },
     Off,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AppServerTransportParseError {
     UnsupportedListenUrl(String),
-    InvalidUnixSocket(String),
+    InvalidUnixSocketPath { listen_url: String, message: String },
     InvalidWebSocketListenUrl(String),
 }
 
@@ -71,11 +77,14 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `ws://IP:PORT`, or `off`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
             ),
-            AppServerTransportParseError::InvalidUnixSocket(listen_url) => write!(
+            AppServerTransportParseError::InvalidUnixSocketPath {
+                listen_url,
+                message,
+            } => write!(
                 f,
-                "invalid unix socket --listen URL `{listen_url}`; expected `unix://`"
+                "invalid unix socket --listen URL `{listen_url}`; failed to resolve socket path: {message}"
             ),
             AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -95,14 +104,20 @@ impl AppServerTransport {
             return Ok(Self::Stdio);
         }
 
-        if listen_url == "unix://" {
-            return Ok(Self::UnixSocket);
-        }
-
-        if listen_url.starts_with("unix://") {
-            return Err(AppServerTransportParseError::InvalidUnixSocket(
-                listen_url.to_string(),
-            ));
+        if let Some(raw_socket_path) = listen_url.strip_prefix("unix://") {
+            let socket_path = if raw_socket_path.is_empty() {
+                None
+            } else {
+                Some(
+                    AbsolutePathBuf::relative_to_current_dir(raw_socket_path).map_err(|err| {
+                        AppServerTransportParseError::InvalidUnixSocketPath {
+                            listen_url: listen_url.to_string(),
+                            message: err.to_string(),
+                        }
+                    })?,
+                )
+            };
+            return Ok(Self::UnixSocket { socket_path });
         }
 
         if listen_url == "off" {
@@ -468,17 +483,30 @@ mod tests {
     fn listen_unix_socket_parses_as_unix_socket_transport() {
         assert_eq!(
             AppServerTransport::from_listen_url("unix://"),
-            Ok(AppServerTransport::UnixSocket)
+            Ok(AppServerTransport::UnixSocket { socket_path: None })
         );
     }
 
     #[test]
-    fn listen_unix_socket_rejects_custom_paths() {
+    fn listen_unix_socket_accepts_absolute_custom_path() {
         assert_eq!(
             AppServerTransport::from_listen_url("unix:///tmp/codex.sock"),
-            Err(AppServerTransportParseError::InvalidUnixSocket(
-                "unix:///tmp/codex.sock".to_string()
-            ))
+            Ok(AppServerTransport::UnixSocket {
+                socket_path: Some(absolute_path("/tmp/codex.sock"))
+            })
+        );
+    }
+
+    #[test]
+    fn listen_unix_socket_accepts_relative_custom_path() {
+        assert_eq!(
+            AppServerTransport::from_listen_url("unix://codex.sock"),
+            Ok(AppServerTransport::UnixSocket {
+                socket_path: Some(
+                    AbsolutePathBuf::relative_to_current_dir("codex.sock")
+                        .expect("relative path should resolve")
+                )
+            })
         );
     }
 

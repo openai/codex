@@ -544,7 +544,7 @@ pub async fn run_main_with_transport(
     let graceful_signal_restart_enabled = !single_client_mode;
     let mut app_server_client_name_rx = None;
 
-    match transport {
+    match &transport {
         AppServerTransport::Stdio => {
             let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
             app_server_client_name_rx = Some(stdio_client_name_rx);
@@ -555,8 +555,11 @@ pub async fn run_main_with_transport(
             )
             .await?;
         }
-        AppServerTransport::UnixSocket => {
-            let control_socket_path = app_server_control_socket_path(&config.codex_home);
+        AppServerTransport::UnixSocket { socket_path } => {
+            let control_socket_path = match socket_path {
+                Some(socket_path) => socket_path.clone(),
+                None => app_server_control_socket_path(&config.codex_home)?,
+            };
             let accept_handle = start_control_socket_acceptor(
                 control_socket_path,
                 transport_event_tx.clone(),
@@ -567,7 +570,7 @@ pub async fn run_main_with_transport(
         }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
-                bind_address,
+                *bind_address,
                 transport_event_tx.clone(),
                 transport_shutdown_token.clone(),
                 policy_from_settings(&auth)?,
@@ -672,7 +675,7 @@ pub async fn run_main_with_transport(
             config_warnings,
             session_source,
             auth_manager,
-            rpc_transport: analytics_rpc_transport(transport),
+            rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -784,7 +787,7 @@ pub async fn run_main_with_transport(
                                             .process_request(
                                                 connection_id,
                                                 request,
-                                                transport,
+                                                &transport,
                                                 Arc::clone(&connection_state.session),
                                             )
                                             .await;
@@ -904,10 +907,10 @@ pub async fn run_main_with_transport(
     Ok(())
 }
 
-fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTransport {
+fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
     match transport {
         AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::UnixSocket
+        AppServerTransport::UnixSocket { .. }
         | AppServerTransport::WebSocket { .. }
         | AppServerTransport::Off => AppServerRpcTransport::Websocket,
     }

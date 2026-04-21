@@ -1,12 +1,12 @@
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::Path;
-use std::path::PathBuf;
 
 use super::TransportEvent;
 use crate::transport::websocket::run_websocket_connection;
 use codex_uds::UnixListener;
 use codex_uds::UnixStream;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -22,14 +22,14 @@ use tracing::warn;
 const CONTROL_SOCKET_MODE: u32 = 0o600;
 
 pub(crate) async fn start_control_socket_acceptor(
-    socket_path: PathBuf,
+    socket_path: AbsolutePathBuf,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
 ) -> IoResult<JoinHandle<()>> {
-    prepare_control_socket_path(&socket_path).await?;
-    let listener = UnixListener::bind(&socket_path).await?;
+    prepare_control_socket_path(socket_path.as_path()).await?;
+    let listener = UnixListener::bind(socket_path.as_path()).await?;
     let socket_guard = ControlSocketFileGuard { socket_path };
-    set_control_socket_permissions(&socket_guard.socket_path).await?;
+    set_control_socket_permissions(socket_guard.socket_path.as_path()).await?;
     info!(
         socket_path = %socket_guard.socket_path.display(),
         "app-server control socket listening"
@@ -142,12 +142,12 @@ async fn set_control_socket_permissions(_socket_path: &Path) -> IoResult<()> {
 }
 
 struct ControlSocketFileGuard {
-    socket_path: PathBuf,
+    socket_path: AbsolutePathBuf,
 }
 
 impl Drop for ControlSocketFileGuard {
     fn drop(&mut self) {
-        if let Err(err) = std::fs::remove_file(&self.socket_path)
+        if let Err(err) = std::fs::remove_file(self.socket_path.as_path())
             && err.kind() != ErrorKind::NotFound
         {
             warn!(
@@ -178,10 +178,7 @@ mod tests {
     #[tokio::test]
     async fn control_socket_acceptor_forwards_websocket_text_messages_and_pings() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_path = temp_dir
-            .path()
-            .join("app-server-control")
-            .join("app-server-control.sock");
+        let socket_path = test_socket_path(temp_dir.path());
         let (transport_event_tx, mut transport_event_rx) =
             mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
         let shutdown_token = CancellationToken::new();
@@ -193,7 +190,7 @@ mod tests {
         .await
         .expect("control socket acceptor should start");
 
-        let stream = connect_to_socket(&socket_path)
+        let stream = connect_to_socket(socket_path.as_path())
             .await
             .expect("client should connect");
         let mut websocket = WebSocketStream::from_raw_socket(stream, Role::Client, None).await;
@@ -260,7 +257,7 @@ mod tests {
 
         shutdown_token.cancel();
         accept_handle.await.expect("acceptor should join");
-        assert_socket_path_removed(&socket_path);
+        assert_socket_path_removed(socket_path.as_path());
     }
 
     #[cfg(unix)]
@@ -269,10 +266,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_path = temp_dir
-            .path()
-            .join("app-server-control")
-            .join("app-server-control.sock");
+        let socket_path = test_socket_path(temp_dir.path());
         let (transport_event_tx, _transport_event_rx) =
             mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
         let shutdown_token = CancellationToken::new();
@@ -284,13 +278,22 @@ mod tests {
         .await
         .expect("control socket acceptor should start");
 
-        let metadata = tokio::fs::metadata(&socket_path)
+        let metadata = tokio::fs::metadata(socket_path.as_path())
             .await
             .expect("socket metadata should exist");
         assert_eq!(metadata.permissions().mode() & 0o777, CONTROL_SOCKET_MODE);
 
         shutdown_token.cancel();
         accept_handle.await.expect("acceptor should join");
+    }
+
+    fn test_socket_path(temp_dir: &Path) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(
+            temp_dir
+                .join("app-server-control")
+                .join("app-server-control.sock"),
+        )
+        .expect("socket path should resolve")
     }
 
     async fn connect_to_socket(socket_path: &Path) -> IoResult<UnixStream> {
