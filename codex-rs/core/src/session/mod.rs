@@ -3030,6 +3030,7 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
+    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -3043,6 +3044,7 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
+    #[cfg(test)]
     pub(crate) async fn has_active_turn(&self) -> bool {
         self.active_turn.lock().await.is_some()
     }

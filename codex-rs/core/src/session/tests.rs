@@ -6193,15 +6193,8 @@ async fn goal_continuation_without_tool_calls_suppresses_next_continuation() -> 
         },
     )
     .await;
-    let turn_state = {
-        let active = sess.active_turn.lock().await;
-        active
-            .as_ref()
-            .expect("turn should be active")
-            .turn_state
-            .clone()
-    };
-    turn_state.lock().await.started_from_goal_continuation = true;
+    sess.mark_thread_goal_continuation_turn_started(tc.sub_id.clone())
+        .await;
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
@@ -6569,8 +6562,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
     assert_eq!(70, goal.tokens_used);
 
-    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-        .await;
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
     Ok(())
 }

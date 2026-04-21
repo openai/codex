@@ -29,7 +29,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -115,9 +114,7 @@ impl CodexThread {
             codex_state::ThreadGoalStatus::Active => {
                 self.codex
                     .session
-                    .goal_runtime
-                    .continuation_suppressed
-                    .store(false, Ordering::SeqCst);
+                    .reset_thread_goal_continuation_suppression();
                 self.codex
                     .session
                     .maybe_start_turn_for_pending_work_or_goal_continuation()

@@ -161,7 +161,7 @@ async fn handle_update_goal(
         .account_thread_goal_progress(turn_context, BudgetLimitSteering::Suppressed)
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    session
+    let goal = session
         .set_thread_goal(
             turn_context,
             SetGoalRequest {
@@ -172,11 +172,7 @@ async fn handle_update_goal(
         )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    let goal = session
-        .get_thread_goal()
-        .await
-        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    goal_response(goal)
+    goal_response(Some(goal))
 }
 
 fn format_goal_error(err: anyhow::Error) -> String {
