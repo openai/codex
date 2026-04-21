@@ -918,7 +918,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         loader_overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /* requirements_hostname */ None,
+        /*requirements_hostname*/ None,
     )
     .await?;
 
@@ -1091,7 +1091,7 @@ pub async fn load_global_mcp_servers(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
-        /* requirements_hostname */ None,
+        /*requirements_hostname*/ None,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();

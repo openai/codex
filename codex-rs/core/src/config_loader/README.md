@@ -57,7 +57,7 @@ let layers = load_config_layers_state(
     LoaderOverrides::default(),
     CloudRequirementsLoader::default(),
     &NoopThreadConfigLoader,
-    /* requirements_hostname */ None,
+    /*requirements_hostname*/ None,
 ).await?;
 
 let effective = layers.effective_config();

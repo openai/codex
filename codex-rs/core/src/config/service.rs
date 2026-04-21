@@ -152,7 +152,7 @@ impl ConfigService {
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
-            /* requirements_hostname */ None,
+            /*requirements_hostname*/ None,
         )
     }
 
