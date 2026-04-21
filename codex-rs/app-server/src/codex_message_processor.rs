@@ -2579,7 +2579,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
-        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -2722,7 +2722,7 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
-                environment_selections,
+                environments,
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

@@ -488,7 +488,7 @@ impl Session {
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
-        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<Arc<TurnContext>> {
         let update_result = {
             let mut state = self.state.lock().await;
@@ -533,23 +533,22 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
-        let effective_environment_selections =
-            environment_selections.or_else(|| session_configuration.environment_selections.clone());
-        let turn_environments =
-            match self.resolve_turn_environments(effective_environment_selections) {
-                Ok(turn_environments) => turn_environments,
-                Err(err) => {
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: err.to_string(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(err);
-                }
-            };
+        let effective_environments =
+            environments.or_else(|| session_configuration.environments.clone());
+        let turn_environments = match self.resolve_turn_environments(effective_environments) {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(err);
+            }
+        };
 
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
@@ -575,27 +574,27 @@ impl Session {
 
     fn resolve_turn_environments(
         &self,
-        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<Option<Vec<TurnEnvironment>>> {
-        let Some(environment_selections) = environment_selections else {
+        let Some(environments) = environments else {
             return Ok(None);
         };
 
-        let mut turn_environments = Vec::with_capacity(environment_selections.len());
-        for environment_selection in environment_selections {
+        let mut turn_environments = Vec::with_capacity(environments.len());
+        for selected_environment in environments {
             let environment = self
                 .services
                 .environment_manager
-                .get_environment(&environment_selection.environment_id)
+                .get_environment(&selected_environment.environment_id)
                 .ok_or_else(|| {
                     CodexErr::InvalidRequest(format!(
                         "unknown turn environment id `{}`",
-                        environment_selection.environment_id
+                        selected_environment.environment_id
                     ))
                 })?;
-            let cwd = environment_selection.cwd;
+            let cwd = selected_environment.cwd;
             turn_environments.push(TurnEnvironment {
-                environment_id: environment_selection.environment_id,
+                environment_id: selected_environment.environment_id,
                 environment,
                 cwd,
             });

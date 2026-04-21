@@ -781,7 +781,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
                 ..Default::default()
             },
-            /*environment_selections*/ None,
+            /*environments*/ None,
         )
         .await?;
 
@@ -2240,7 +2240,7 @@ async fn set_rate_limits_retains_previous_credits() {
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -2346,7 +2346,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -2797,7 +2797,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3115,7 +3115,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3220,7 +3220,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -3438,7 +3438,7 @@ async fn make_session_with_config_and_rx(
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,
@@ -4066,7 +4066,7 @@ async fn user_turn_updates_approvals_reviewer() {
 }
 
 #[tokio::test]
-async fn turn_environment_selection_sets_primary_environment() {
+async fn turn_environments_set_primary_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let selected_cwd =
         AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
@@ -4076,7 +4076,7 @@ async fn turn_environment_selection_sets_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate::default(),
-            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+            Some(vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
                 cwd: selected_cwd.clone(),
             }]),
@@ -4102,7 +4102,7 @@ async fn turn_environment_selection_sets_primary_environment() {
 }
 
 #[tokio::test]
-async fn multiple_turn_environment_selections_use_first_as_primary_environment() {
+async fn multiple_turn_environments_use_first_as_primary_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let first_cwd =
@@ -4115,11 +4115,11 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
             "sub-1".to_string(),
             SessionSettingsUpdate::default(),
             Some(vec![
-                codex_protocol::protocol::TurnEnvironmentSelection {
+                TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
                     cwd: first_cwd.clone(),
                 },
-                codex_protocol::protocol::TurnEnvironmentSelection {
+                TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
                     cwd: second_cwd.clone(),
                 },
@@ -4147,7 +4147,7 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
 }
 
 #[tokio::test]
-async fn empty_turn_environment_selection_clears_primary_environment() {
+async fn empty_turn_environments_clear_primary_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
 
     let turn_context = session
@@ -4173,14 +4173,14 @@ async fn empty_turn_environment_selection_clears_primary_environment() {
 }
 
 #[tokio::test]
-async fn unknown_turn_environment_selection_returns_error() {
+async fn unknown_turn_environment_returns_error() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
 
     let err = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate::default(),
-            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+            Some(vec![TurnEnvironmentSelection {
                 environment_id: "missing".to_string(),
                 cwd: session.get_config().await.cwd.clone(),
             }]),
@@ -4538,7 +4538,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
-        environment_selections: None,
+        environments: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
         app_server_client_name: None,

@@ -111,6 +111,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -406,7 +407,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_rollout_trace: RolloutTraceRecorder,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -463,7 +464,7 @@ impl Codex {
             inherited_exec_policy,
             inherited_rollout_trace,
             parent_trace: _,
-            environment_selections,
+            environments,
             analytics_events_client,
             thread_store,
         } = args;
@@ -636,7 +637,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
-            environment_selections,
+            environments,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -646,7 +647,7 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
-            environment_selections,
+            environments,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
