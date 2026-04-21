@@ -56,6 +56,7 @@ impl GuardianTranscriptEntryKind {
 pub(crate) struct GuardianPromptItems {
     pub(crate) items: Vec<UserInput>,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
+    pub(crate) reviewed_action_truncated: bool,
 }
 
 /// Points to the end of the transcript that the guardian has already reviewed.
@@ -176,11 +177,12 @@ pub(crate) async fn build_guardian_prompt_items(
             .to_string(),
     );
     push_text("Planned action JSON:\n".to_string());
-    push_text(format!("{planned_action_json}\n"));
+    push_text(format!("{}\n", planned_action_json.text));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
     Ok(GuardianPromptItems {
         items,
         transcript_cursor,
+        reviewed_action_truncated: planned_action_json.truncated,
     })
 }
 
@@ -240,7 +242,7 @@ fn render_guardian_transcript_entries_with_offset(
             } else {
                 GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS
             };
-            let text = guardian_truncate_text(&entry.text, token_cap);
+            let (text, _) = guardian_truncate_text(&entry.text, token_cap);
             let rendered = format!(
                 "[{}] {}: {}",
                 index + entry_number_offset + 1,
@@ -420,20 +422,20 @@ pub(crate) fn collect_guardian_transcript_entries(
     entries
 }
 
-pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
+pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {
     if content.is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
 
     let max_bytes = approx_bytes_for_tokens(token_cap);
     if content.len() <= max_bytes {
-        return content.to_string();
+        return (content.to_string(), false);
     }
 
     let omitted_tokens = approx_tokens_from_byte_count(content.len().saturating_sub(max_bytes));
     let marker = format!("<{TRUNCATION_TAG} omitted_approx_tokens=\"{omitted_tokens}\" />");
     if max_bytes <= marker.len() {
-        return marker;
+        return (marker, true);
     }
 
     let available_bytes = max_bytes.saturating_sub(marker.len());
@@ -441,7 +443,7 @@ pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> String 
     let suffix_budget = available_bytes.saturating_sub(prefix_budget);
     let (prefix, suffix) = split_guardian_truncation_bounds(content, prefix_budget, suffix_budget);
 
-    format!("{prefix}{marker}{suffix}")
+    (format!("{prefix}{marker}{suffix}"), true)
 }
 
 fn split_guardian_truncation_bounds(
