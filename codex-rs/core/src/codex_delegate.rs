@@ -772,7 +772,9 @@ async fn handle_request_permissions(
         reason: event.reason,
         permissions: event.permissions,
     };
-    let response_fut = parent_session.request_permissions(parent_ctx, call_id.clone(), args);
+    let cwd = event.cwd.unwrap_or_else(|| parent_ctx.cwd.clone());
+    let response_fut =
+        parent_session.request_permissions_for_cwd(parent_ctx, call_id.clone(), args, cwd);
     let response =
         await_request_permissions_with_cancel(response_fut, parent_session, &call_id, cancel_token)
             .await;

@@ -1899,6 +1899,17 @@ impl Session {
         call_id: String,
         args: RequestPermissionsArgs,
     ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd(turn_context, call_id, args, turn_context.cwd.clone())
+            .await
+    }
+
+    pub(crate) async fn request_permissions_for_cwd(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+    ) -> Option<RequestPermissionsResponse> {
         match turn_context.approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -1943,6 +1954,7 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
+            cwd: Some(cwd),
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
