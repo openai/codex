@@ -379,6 +379,7 @@ use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod reasoning_shortcuts;
 mod side;
 mod status_surfaces;
 use self::status_surfaces::CachedProjectRootName;
@@ -5275,6 +5276,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_reasoning_shortcut(key_event) {
+            return;
+        }
+
         match key_event {
             // Ctrl+O - copy last agent response from the main view.
             KeyEvent {

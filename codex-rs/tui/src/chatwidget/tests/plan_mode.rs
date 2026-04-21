@@ -260,6 +260,29 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
 }
 
 #[tokio::test]
+async fn reasoning_shortcut_in_plan_mode_opens_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::High)
+        } if model == "gpt-5.4"
+    );
+}
+
+#[tokio::test]
 async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
