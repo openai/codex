@@ -385,6 +385,8 @@ zeroize = "1.8.2"
 rust = {}
 
 [workspace.lints.clippy]
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
 expect_used = "deny"
 identity_op = "deny"
 manual_clamp = "deny"
