@@ -1758,6 +1758,7 @@ dependencies = [
  "codex-protocol",
  "crypto_box",
  "ed25519-dalek",
+ "jsonwebtoken",
  "pretty_assertions",
  "rand 0.9.3",
  "reqwest",

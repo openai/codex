@@ -13,6 +13,7 @@ use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::login_with_agent_identity;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
@@ -34,6 +35,8 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
+const AGENT_IDENTITY_LOGIN_DISABLED_MESSAGE: &str =
+    "Agent Identity login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
@@ -187,31 +190,74 @@ pub async fn run_login_with_api_key(
     }
 }
 
+pub async fn run_login_with_agent_identity(
+    cli_config_overrides: CliConfigOverrides,
+    agent_identity: String,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting agent identity login flow");
+
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        eprintln!("{AGENT_IDENTITY_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    match login_with_agent_identity(
+        &config.codex_home,
+        &agent_identity,
+        config.cli_auth_credentials_store_mode,
+    ) {
+        Ok(_) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging in with Agent Identity: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub fn read_api_key_from_stdin() -> String {
+    read_stdin_secret(
+        "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`.",
+        "Reading API key from stdin...",
+        "No API key provided via stdin.",
+    )
+}
+
+pub fn read_agent_identity_from_stdin() -> String {
+    read_stdin_secret(
+        "--with-agent-identity expects the Agent Identity token on stdin. Try piping it, e.g. `printenv CODEX_AGENT_IDENTITY | codex login --with-agent-identity`.",
+        "Reading Agent Identity token from stdin...",
+        "No Agent Identity token provided via stdin.",
+    )
+}
+
+fn read_stdin_secret(terminal_message: &str, reading_message: &str, empty_message: &str) -> String {
     let mut stdin = std::io::stdin();
 
     if stdin.is_terminal() {
-        eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
-        );
+        eprintln!("{terminal_message}");
         std::process::exit(1);
     }
 
-    eprintln!("Reading API key from stdin...");
+    eprintln!("{reading_message}");
 
     let mut buffer = String::new();
     if let Err(err) = stdin.read_to_string(&mut buffer) {
-        eprintln!("Failed to read API key from stdin: {err}");
+        eprintln!("Failed to read stdin: {err}");
         std::process::exit(1);
     }
 
-    let api_key = buffer.trim().to_string();
-    if api_key.is_empty() {
-        eprintln!("No API key provided via stdin.");
+    let secret = buffer.trim().to_string();
+    if secret.is_empty() {
+        eprintln!("{empty_message}");
         std::process::exit(1);
     }
 
-    api_key
+    secret
 }
 
 /// Login using the OAuth device code flow.
