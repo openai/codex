@@ -270,7 +270,13 @@ impl ConfigLayerStack {
         );
 
         let mut layers = self.layers.clone();
-        match self.user_layer_index {
+        let matching_user_layer_index = layers.iter().position(|layer| {
+            matches!(
+                &layer.name,
+                ConfigLayerSource::User { file } if file == config_toml
+            )
+        });
+        match matching_user_layer_index.or(self.user_layer_index) {
             Some(index) => {
                 layers[index] = user_layer;
                 Self {

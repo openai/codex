@@ -81,3 +81,53 @@ approval_policy = "on-failure"
         Some("on-failure")
     );
 }
+
+#[test]
+fn with_user_config_updates_matching_user_layer_without_replacing_active_profile() {
+    let base_file = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/config.toml"))
+        .expect("absolute base path");
+    let profile_file =
+        AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/codex/work.config.toml"))
+            .expect("absolute profile path");
+    let base_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: base_file.clone(),
+        },
+        toml::from_str(r#"model = "base""#).expect("base config"),
+    );
+    let profile_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: profile_file.clone(),
+        },
+        toml::from_str(r#"approval_policy = "on-failure""#).expect("profile config"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![base_layer, profile_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("multiple user layers should be valid");
+
+    let updated = stack.with_user_config(
+        &base_file,
+        toml::from_str(r#"model = "updated-base""#).expect("updated base config"),
+    );
+
+    assert_eq!(updated.get_user_config_file(), Some(&profile_file));
+    assert_eq!(
+        updated
+            .effective_user_config()
+            .expect("merged user config")
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("updated-base")
+    );
+    assert_eq!(
+        updated
+            .effective_user_config()
+            .expect("merged user config")
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("on-failure")
+    );
+}

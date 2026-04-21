@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_config::ConfigEditsBuilder;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::load_global_mcp_servers;
 use codex_login::default_client::is_first_party_originator;
 use codex_login::default_client::originator;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -14,8 +16,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::SkillMetadata;
-use crate::config::edit::ConfigEdit;
-use crate::config::edit::ConfigEditsBuilder;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;
@@ -86,16 +86,38 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
+    let codex_home = config.codex_home.clone();
     let installed = sess.services.mcp_manager.configured_servers(config).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
         return;
     }
 
-    let added = missing;
+    let mut servers = match load_global_mcp_servers(&codex_home).await {
+        Ok(servers) => servers,
+        Err(err) => {
+            warn!("failed to load MCP servers while installing skill dependencies: {err}");
+            return;
+        }
+    };
 
-    if let Err(err) = ConfigEditsBuilder::for_config(config)
-        .with_edits(mcp_dependency_config_edits(&added))
+    let mut updated = false;
+    let mut added = Vec::new();
+    for (name, config) in missing {
+        if servers.contains_key(&name) {
+            continue;
+        }
+        servers.insert(name.clone(), config.clone());
+        added.push((name, config));
+        updated = true;
+    }
+
+    if !updated {
+        return;
+    }
+
+    if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
         .apply()
         .await
     {
@@ -103,7 +125,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         return;
     }
 
-    for (name, server_config) in &added {
+    for (name, server_config) in added {
         let oauth_config = match oauth_login_support(&server_config.transport).await {
             McpOAuthLoginSupport::Supported(config) => config,
             McpOAuthLoginSupport::Unsupported => continue,
@@ -127,7 +149,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_config.discovered_scopes.clone(),
         );
         let first_attempt = perform_oauth_login(
-            name,
+            &name,
             &oauth_config.url,
             config.mcp_oauth_credentials_store_mode,
             oauth_config.http_headers.clone(),
@@ -150,7 +172,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                 .await;
 
                 if let Err(err) = perform_oauth_login(
-                    name,
+                    &name,
                     &oauth_config.url,
                     config.mcp_oauth_credentials_store_mode,
                     oauth_config.http_headers,
@@ -171,14 +193,14 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
 
     // Refresh from the effective merged MCP map (global + repo + managed) and
-    // overlay the newly added dependency servers so we don't drop repo-scoped servers.
+    // overlay the updated global servers so we don't drop repo-scoped servers.
     let auth = sess.services.auth_manager.auth().await;
     let mut refresh_servers = sess
         .services
         .mcp_manager
         .effective_servers(config, auth.as_ref())
         .await;
-    for (name, server_config) in &added {
+    for (name, server_config) in &servers {
         refresh_servers
             .entry(name.clone())
             .or_insert_with(|| server_config.clone());
@@ -189,19 +211,6 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         config.mcp_oauth_credentials_store_mode,
     )
     .await;
-}
-
-fn mcp_dependency_config_edits(
-    missing: &HashMap<String, McpServerConfig>,
-) -> impl Iterator<Item = ConfigEdit> + '_ {
-    let mut entries: Vec<_> = missing.iter().collect();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    entries
-        .into_iter()
-        .map(|(name, config)| ConfigEdit::SetMcpServer {
-            name: name.clone(),
-            config: Box::new(config.clone()),
-        })
 }
 
 async fn should_install_mcp_dependencies(
@@ -458,77 +467,4 @@ fn collect_missing_mcp_dependencies(
     }
 
     missing
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ConfigBuilder;
-    use crate::config_loader::LoaderOverrides;
-    use codex_config::CONFIG_TOML_FILE;
-    use codex_config::config_toml::ConfigToml;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
-    use tempfile::tempdir;
-
-    fn http_dependency(name: &str, url: &str) -> SkillToolDependency {
-        SkillToolDependency {
-            r#type: "mcp".to_string(),
-            value: name.to_string(),
-            description: None,
-            transport: Some("streamable_http".to_string()),
-            command: None,
-            url: Some(url.to_string()),
-        }
-    }
-
-    #[tokio::test]
-    async fn dependency_install_edits_do_not_copy_base_servers_into_profile() {
-        let tmp = tempdir().expect("tempdir");
-        let profile_config = tmp.path().join("work.config.toml");
-        std::fs::write(
-            tmp.path().join(CONFIG_TOML_FILE),
-            "[mcp_servers.base]\nurl = \"https://base.example/mcp\"\n",
-        )
-        .expect("seed base config");
-        std::fs::write(
-            &profile_config,
-            "[mcp_servers.profile]\nurl = \"https://profile.example/mcp\"\n",
-        )
-        .expect("seed profile config");
-        let config = ConfigBuilder::without_managed_config_for_tests()
-            .codex_home(tmp.path().to_path_buf())
-            .loader_overrides(LoaderOverrides {
-                user_config_path: Some(profile_config.clone()),
-                ..LoaderOverrides::without_managed_config_for_tests()
-            })
-            .build()
-            .await
-            .expect("load profile config");
-        let missing = HashMap::from([(
-            "missing".to_string(),
-            mcp_dependency_to_server_config(&http_dependency(
-                "missing",
-                "https://missing.example/mcp",
-            ))
-            .expect("dependency config"),
-        )]);
-
-        ConfigEditsBuilder::for_config(&config)
-            .with_edits(mcp_dependency_config_edits(&missing))
-            .apply()
-            .await
-            .expect("persist dependency");
-
-        let profile_contents =
-            std::fs::read_to_string(&profile_config).expect("read profile config");
-        let profile: ConfigToml = toml::from_str(&profile_contents).expect("parse profile config");
-        assert!(profile.mcp_servers.contains_key("profile"));
-        assert!(profile.mcp_servers.contains_key("missing"));
-        assert!(!profile.mcp_servers.contains_key("base"));
-        assert_eq!(
-            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read base config"),
-            "[mcp_servers.base]\nurl = \"https://base.example/mcp\"\n"
-        );
-    }
 }

@@ -394,8 +394,7 @@ impl ConfigService {
         })?;
 
         if !config_edits.is_empty() {
-            ConfigEditsBuilder::new(&self.codex_home)
-                .with_config_path(provided_path.as_path())
+            ConfigEditsBuilder::for_config_path(provided_path.as_path())
                 .with_edits(config_edits)
                 .apply()
                 .await

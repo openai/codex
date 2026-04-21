@@ -736,13 +736,13 @@ pub async fn run_main(
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
-    let user_config_path = cli
+    let mut loader_overrides = loader_overrides;
+    if let Some(user_config_path) = cli
         .config_profile_v2
         .as_deref()
         .map(|profile_v2| resolve_profile_v2_config_path(&codex_home, profile_v2))
-        .transpose()?;
-    let mut loader_overrides = loader_overrides;
-    if let Some(user_config_path) = user_config_path.clone() {
+        .transpose()?
+    {
         loader_overrides.user_config_path = Some(user_config_path);
     }
 
@@ -773,13 +773,11 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) =
-        crate::legacy_core::personality_migration::maybe_migrate_personality_with_config_path(
-            &codex_home,
-            &config_toml,
-            user_config_path.as_deref(),
-        )
-        .await
+    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
+        &codex_home,
+        &config_toml,
+    )
+    .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }

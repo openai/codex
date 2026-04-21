@@ -14,16 +14,12 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 #[tokio::test]
 async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let config_path = std::fs::canonicalize(codex_home.path())?.join("config.toml");
 
     let mut cmd = codex_command(codex_home.path())?;
     cmd.args(["features", "enable", "unified_exec"])
         .assert()
         .success()
-        .stdout(contains(format!(
-            "Enabled feature `unified_exec` in {}.",
-            config_path.display()
-        )));
+        .stdout(contains("Enabled feature `unified_exec` in config.toml."));
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("[features]"));
@@ -35,16 +31,12 @@ async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
 #[tokio::test]
 async fn features_disable_writes_feature_flag_to_config() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let config_path = std::fs::canonicalize(codex_home.path())?.join("config.toml");
 
     let mut cmd = codex_command(codex_home.path())?;
     cmd.args(["features", "disable", "shell_tool"])
         .assert()
         .success()
-        .stdout(contains(format!(
-            "Disabled feature `shell_tool` in {}.",
-            config_path.display()
-        )));
+        .stdout(contains("Disabled feature `shell_tool` in config.toml."));
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("[features]"));

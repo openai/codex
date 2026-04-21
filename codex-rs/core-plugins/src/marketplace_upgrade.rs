@@ -108,10 +108,10 @@ fn marketplace_install_root(codex_home: &Path) -> PathBuf {
 fn configured_git_marketplaces(
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<ConfiguredGitMarketplace> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+    let Some(marketplaces_value) = user_config.get("marketplaces") else {
         return Vec::new();
     };
     let marketplaces = match marketplaces_value
@@ -295,4 +295,55 @@ fn read_configured_git_marketplace(
         marketplace_name.to_string(),
         marketplace,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+
+    fn user_layer(path: &str, config: &str) -> ConfigLayerEntry {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
+                    .expect("absolute user config path"),
+            },
+            toml::from_str(config).expect("user config toml"),
+        )
+    }
+
+    #[test]
+    fn configured_git_marketplace_names_merge_user_layers() {
+        let stack = ConfigLayerStack::new(
+            vec![
+                user_layer(
+                    "/tmp/codex/config.toml",
+                    r#"
+[marketplaces.base]
+source_type = "git"
+source = "https://example.com/base.git"
+"#,
+                ),
+                user_layer(
+                    "/tmp/codex/work.config.toml",
+                    r#"
+[marketplaces.profile]
+source_type = "git"
+source = "https://example.com/profile.git"
+"#,
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("valid config layer stack");
+
+        assert_eq!(
+            configured_git_marketplace_names(&stack),
+            vec!["base".to_string(), "profile".to_string()]
+        );
+    }
 }

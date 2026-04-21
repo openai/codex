@@ -1,5 +1,4 @@
 use crate::config::edit::ConfigEditsBuilder;
-use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
 use codex_thread_store::ListThreadsParams;
@@ -8,7 +7,6 @@ use codex_thread_store::ThreadSortKey;
 use codex_thread_store::ThreadStore;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
@@ -26,20 +24,7 @@ pub async fn maybe_migrate_personality(
     codex_home: &Path,
     config_toml: &ConfigToml,
 ) -> io::Result<PersonalityMigrationStatus> {
-    maybe_migrate_personality_with_config_path(
-        codex_home,
-        config_toml,
-        /*user_config_path*/ None,
-    )
-    .await
-}
-
-pub async fn maybe_migrate_personality_with_config_path(
-    codex_home: &Path,
-    config_toml: &ConfigToml,
-    user_config_path: Option<&Path>,
-) -> io::Result<PersonalityMigrationStatus> {
-    let marker_path = personality_migration_marker_path(codex_home, user_config_path);
+    let marker_path = codex_home.join(PERSONALITY_MIGRATION_FILENAME);
     if tokio::fs::try_exists(&marker_path).await? {
         return Ok(PersonalityMigrationStatus::SkippedMarker);
     }
@@ -62,11 +47,7 @@ pub async fn maybe_migrate_personality_with_config_path(
         return Ok(PersonalityMigrationStatus::SkippedNoSessions);
     }
 
-    let mut builder = ConfigEditsBuilder::new(codex_home);
-    if let Some(user_config_path) = user_config_path {
-        builder = builder.with_config_path(user_config_path);
-    }
-    builder
+    ConfigEditsBuilder::new(codex_home)
         .set_personality(Some(Personality::Pragmatic))
         .apply()
         .await
@@ -107,24 +88,6 @@ async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<boo
         .await
         .map(|page| !page.items.is_empty())
         .map_err(io::Error::other)
-}
-
-fn personality_migration_marker_path(
-    codex_home: &Path,
-    user_config_path: Option<&Path>,
-) -> PathBuf {
-    let base_config_path = codex_home.join(CONFIG_TOML_FILE);
-    let Some(user_config_path) =
-        user_config_path.filter(|path| *path != base_config_path.as_path())
-    else {
-        return codex_home.join(PERSONALITY_MIGRATION_FILENAME);
-    };
-
-    let file_name = user_config_path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_else(|| CONFIG_TOML_FILE.into());
-    user_config_path.with_file_name(format!(".{file_name}{PERSONALITY_MIGRATION_FILENAME}"))
 }
 
 async fn create_marker(marker_path: &Path) -> io::Result<()> {

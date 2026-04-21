@@ -20,11 +20,6 @@ async fn read_config_toml(codex_home: &Path) -> io::Result<ConfigToml> {
     toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-async fn read_config_toml_at(config_path: &Path) -> io::Result<ConfigToml> {
-    let contents = tokio::fs::read_to_string(config_path).await?;
-    toml::from_str(&contents).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-}
-
 async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
     let thread_id = ThreadId::new();
     let dir = codex_home
@@ -99,35 +94,6 @@ async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
 
     let persisted = read_config_toml(temp.path()).await?;
     assert_eq!(persisted.personality, Some(Personality::Pragmatic));
-    Ok(())
-}
-
-#[tokio::test]
-async fn profile_migration_does_not_consume_global_marker() -> io::Result<()> {
-    let temp = TempDir::new()?;
-    write_session_with_user_event(temp.path()).await?;
-    let profile_config = temp.path().join("work.config.toml");
-
-    let profile_status = maybe_migrate_personality_with_config_path(
-        temp.path(),
-        &ConfigToml::default(),
-        Some(&profile_config),
-    )
-    .await?;
-
-    assert_eq!(profile_status, PersonalityMigrationStatus::Applied);
-    assert!(personality_migration_marker_path(temp.path(), Some(&profile_config)).exists());
-    assert!(!temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
-    assert!(!temp.path().join("config.toml").exists());
-    let profile_persisted = read_config_toml_at(&profile_config).await?;
-    assert_eq!(profile_persisted.personality, Some(Personality::Pragmatic));
-
-    let base_status = maybe_migrate_personality(temp.path(), &ConfigToml::default()).await?;
-
-    assert_eq!(base_status, PersonalityMigrationStatus::Applied);
-    assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
-    let base_persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(base_persisted.personality, Some(Personality::Pragmatic));
     Ok(())
 }
 

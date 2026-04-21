@@ -55,11 +55,6 @@ pub enum ConfigEdit {
     RecordModelMigrationSeen { from: String, to: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
-    /// Add or update one entry under `[mcp_servers]` without touching siblings.
-    SetMcpServer {
-        name: String,
-        config: Box<McpServerConfig>,
-    },
     /// Set or clear a skill config entry under `[[skills.config]]` by path.
     SetSkillConfig { path: PathBuf, enabled: bool },
     /// Set or clear a skill config entry under `[[skills.config]]` by name.
@@ -511,7 +506,6 @@ impl ConfigDocument {
                 value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
-            ConfigEdit::SetMcpServer { name, config } => Ok(self.set_mcp_server(name, config)),
             ConfigEdit::SetSkillConfig { path, enabled } => {
                 Ok(self.set_skill_config(SkillConfigSelector::Path(path.clone()), *enabled))
             }
@@ -559,7 +553,23 @@ impl ConfigDocument {
             return self.clear(Scope::Global, &["mcp_servers"]);
         }
 
-        let Some(table) = self.mcp_servers_table_for_write() else {
+        let root = self.doc.as_table_mut();
+        if !root.contains_key("mcp_servers") {
+            root.insert(
+                "mcp_servers",
+                TomlItem::Table(document_helpers::new_implicit_table()),
+            );
+        }
+
+        let Some(item) = root.get_mut("mcp_servers") else {
+            return false;
+        };
+
+        if document_helpers::ensure_table_for_write(item).is_none() {
+            *item = TomlItem::Table(document_helpers::new_implicit_table());
+        }
+
+        let Some(table) = item.as_table_mut() else {
             return false;
         };
 
@@ -574,42 +584,21 @@ impl ConfigDocument {
         }
 
         for (name, config) in servers {
-            upsert_mcp_server(table, name, config);
+            if let Some(existing) = table.get_mut(name.as_str()) {
+                if let TomlItem::Value(value) = existing
+                    && let Some(inline) = value.as_inline_table_mut()
+                {
+                    let replacement = document_helpers::serialize_mcp_server_inline(config);
+                    document_helpers::merge_inline_table(inline, replacement);
+                } else {
+                    *existing = document_helpers::serialize_mcp_server(config);
+                }
+            } else {
+                table.insert(name, document_helpers::serialize_mcp_server(config));
+            }
         }
 
         true
-    }
-
-    fn set_mcp_server(&mut self, name: &str, config: &McpServerConfig) -> bool {
-        if name.trim().is_empty() {
-            return false;
-        }
-
-        let Some(table) = self.mcp_servers_table_for_write() else {
-            return false;
-        };
-        upsert_mcp_server(table, name, config);
-        true
-    }
-
-    fn mcp_servers_table_for_write(&mut self) -> Option<&mut TomlTable> {
-        let root = self.doc.as_table_mut();
-        if !root.contains_key("mcp_servers") {
-            root.insert(
-                "mcp_servers",
-                TomlItem::Table(document_helpers::new_implicit_table()),
-            );
-        }
-
-        let item = root.get_mut("mcp_servers")?;
-
-        if document_helpers::ensure_table_for_write(item).is_none() {
-            *item = TomlItem::Table(document_helpers::new_implicit_table());
-        }
-
-        let table = item.as_table_mut()?;
-
-        Some(table)
     }
 
     fn set_skill_config(&mut self, selector: SkillConfigSelector, enabled: bool) -> bool {
@@ -869,21 +858,6 @@ fn write_skill_config_selector(table: &mut TomlTable, selector: &SkillConfigSele
     }
 }
 
-fn upsert_mcp_server(table: &mut TomlTable, name: &str, config: &McpServerConfig) {
-    if let Some(existing) = table.get_mut(name) {
-        if let TomlItem::Value(value) = existing
-            && let Some(inline) = value.as_inline_table_mut()
-        {
-            let replacement = document_helpers::serialize_mcp_server_inline(config);
-            document_helpers::merge_inline_table(inline, replacement);
-        } else {
-            *existing = document_helpers::serialize_mcp_server(config);
-        }
-    } else {
-        table.insert(name, document_helpers::serialize_mcp_server(config));
-    }
-}
-
 /// Persist edits using a blocking strategy.
 pub fn apply_blocking(
     codex_home: &Path,
@@ -988,11 +962,6 @@ impl ConfigEditsBuilder {
             profile: None,
             edits: Vec::new(),
         }
-    }
-
-    pub fn with_config_path(mut self, config_path: &Path) -> Self {
-        self.config_path = config_path.to_path_buf();
-        self
     }
 
     pub fn with_profile(mut self, profile: Option<&str>) -> Self {
