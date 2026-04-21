@@ -228,7 +228,6 @@ color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
-crypto_box = { version = "0.9.1", features = ["seal"] }
 csv = "1.3.1"
 ctor = "0.6.3"
 deno_core_icudata = "0.77.0"
