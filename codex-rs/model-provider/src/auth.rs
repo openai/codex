@@ -14,40 +14,30 @@ use http::HeaderValue;
 use crate::bearer_auth_provider::BearerAuthProvider;
 
 #[derive(Clone, Debug)]
-struct CodexAuthProvider {
-    auth: CodexAuth,
+struct AgentIdentityAuthProvider {
+    auth: codex_login::auth::AgentIdentityAuth,
 }
 
-impl AuthProvider for CodexAuthProvider {
+impl AuthProvider for AgentIdentityAuthProvider {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        let header_value = match &self.auth {
-            CodexAuth::AgentIdentity(auth) => {
-                let record = auth.record();
-                let process_task_id = auth.process_task_id().ok_or_else(|| {
-                    std::io::Error::other("agent identity process task is not initialized")
-                });
-                process_task_id.and_then(|task_id| {
-                    authorization_header_for_agent_task(
-                        AgentIdentityKey {
-                            agent_runtime_id: &record.agent_runtime_id,
-                            private_key_pkcs8_base64: &record.agent_private_key,
-                        },
-                        AgentTaskAuthorizationTarget {
-                            agent_runtime_id: &record.agent_runtime_id,
-                            task_id,
-                        },
-                    )
-                    .map_err(std::io::Error::other)
-                })
-            }
-            CodexAuth::ApiKey(_) => self.auth.api_key().map_or_else(
-                || Err(std::io::Error::other("API key auth missing API key")),
-                |api_key| Ok(format!("Bearer {api_key}")),
-            ),
-            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
-                self.auth.get_token().map(|token| format!("Bearer {token}"))
-            }
-        };
+        let record = self.auth.record();
+        let header_value = self
+            .auth
+            .process_task_id()
+            .ok_or_else(|| std::io::Error::other("agent identity process task is not initialized"))
+            .and_then(|task_id| {
+                authorization_header_for_agent_task(
+                    AgentIdentityKey {
+                        agent_runtime_id: &record.agent_runtime_id,
+                        private_key_pkcs8_base64: &record.agent_private_key,
+                    },
+                    AgentTaskAuthorizationTarget {
+                        agent_runtime_id: &record.agent_runtime_id,
+                        task_id,
+                    },
+                )
+                .map_err(std::io::Error::other)
+            });
 
         if let Ok(header_value) = header_value
             && let Ok(header) = HeaderValue::from_str(&header_value)
@@ -55,9 +45,7 @@ impl AuthProvider for CodexAuthProvider {
             let _ = headers.insert(http::header::AUTHORIZATION, header);
         }
 
-        if let Some(account_id) = self.auth.get_account_id()
-            && let Ok(header) = HeaderValue::from_str(&account_id)
-        {
+        if let Ok(header) = HeaderValue::from_str(self.auth.account_id()) {
             let _ = headers.insert("ChatGPT-Account-ID", header);
         }
 
@@ -65,6 +53,31 @@ impl AuthProvider for CodexAuthProvider {
             let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct CodexBearerAuthProvider {
+    auth: CodexAuth,
+}
+
+impl AuthProvider for CodexBearerAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        BearerAuthProvider {
+            token: self.auth.get_token().ok(),
+            account_id: self.auth.get_account_id(),
+            is_fedramp_account: self.auth.is_fedramp_account(),
+        }
+        .add_auth_headers(headers);
+    }
+}
+
+// Some providers are meant to send no auth headers. Examples include local OSS
+// providers and custom test providers with `requires_openai_auth = false`.
+#[derive(Clone, Debug)]
+struct NoAuthProvider;
+
+impl AuthProvider for NoAuthProvider {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
@@ -84,34 +97,55 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
+    if let Some(auth) = bearer_auth_for_provider(provider)? {
+        return Ok(Arc::new(auth));
+    }
+
+    Ok(match auth {
+        Some(auth) => auth_provider_from_auth(auth),
+        None => Arc::new(NoAuthProvider),
+    })
+}
+
+fn bearer_auth_for_provider(
+    provider: &ModelProviderInfo,
+) -> codex_protocol::error::Result<Option<BearerAuthProvider>> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(Arc::new(BearerAuthProvider {
-            token: Some(api_key),
-            account_id: None,
-            is_fedramp_account: false,
-        }));
+        return Ok(Some(BearerAuthProvider::new(api_key)));
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(Arc::new(BearerAuthProvider {
-            token: Some(token),
-            account_id: None,
-            is_fedramp_account: false,
-        }));
+        return Ok(Some(BearerAuthProvider::new(token)));
     }
 
-    let Some(auth) = auth else {
-        return Ok(Arc::new(BearerAuthProvider {
-            token: None,
-            account_id: None,
-            is_fedramp_account: false,
-        }));
-    };
-
-    Ok(auth_provider_from_auth(auth))
+    Ok(None)
 }
 
 /// Builds request-header auth for a first-party Codex auth snapshot.
 pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
-    Arc::new(CodexAuthProvider { auth: auth.clone() })
+    match auth {
+        CodexAuth::AgentIdentity(auth) => {
+            Arc::new(AgentIdentityAuthProvider { auth: auth.clone() })
+        }
+        CodexAuth::ApiKey(_) | CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            Arc::new(CodexBearerAuthProvider { auth: auth.clone() })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_model_provider_info::WireApi;
+    use codex_model_provider_info::create_oss_provider_with_base_url;
+
+    use super::*;
+
+    #[test]
+    fn no_auth_provider_adds_no_headers() {
+        let provider =
+            create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+        let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
+
+        assert!(auth.to_auth_headers().is_empty());
+    }
 }

@@ -50,6 +50,14 @@ pub enum KnownPlan {
 }
 
 impl KnownPlan {
+    pub fn is_team_like(self) -> bool {
+        matches!(self, Self::Team | Self::SelfServeBusinessUsageBased)
+    }
+
+    pub fn is_business_like(self) -> bool {
+        matches!(self, Self::Business | Self::EnterpriseCbpUsageBased)
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Free => "Free",
@@ -83,15 +91,9 @@ impl KnownPlan {
     }
 
     pub fn is_workspace_account(self) -> bool {
-        matches!(
-            self,
-            Self::Team
-                | Self::SelfServeBusinessUsageBased
-                | Self::Business
-                | Self::EnterpriseCbpUsageBased
-                | Self::Enterprise
-                | Self::Edu
-        )
+        self.is_team_like()
+            || self.is_business_like()
+            || matches!(self, Self::Enterprise | Self::Edu)
     }
 }
 

@@ -398,17 +398,8 @@ impl CodexAuth {
     }
 
     pub fn is_workspace_account(&self) -> bool {
-        matches!(
-            self.account_plan_type(),
-            Some(
-                AccountPlanType::Team
-                    | AccountPlanType::SelfServeBusinessUsageBased
-                    | AccountPlanType::Business
-                    | AccountPlanType::EnterpriseCbpUsageBased
-                    | AccountPlanType::Enterprise
-                    | AccountPlanType::Edu
-            )
-        )
+        self.account_plan_type()
+            .is_some_and(AccountPlanType::is_workspace_account)
     }
 
     /// Returns `None` if token-backed ChatGPT auth is unavailable.
@@ -1721,6 +1712,13 @@ impl AuthManager {
             return Some(AuthMode::ApiKey);
         }
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
+    }
+
+    pub fn current_auth_uses_codex_backend(&self) -> bool {
+        matches!(
+            self.auth_mode(),
+            Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
+        )
     }
 
     fn is_stale_for_proactive_refresh(auth: &CodexAuth) -> bool {
