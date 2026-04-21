@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: status_line_popup_snapshot(&mut chat)
+---
+  Configure Status Line
+  Select which items to display in the status line.
+
+  Type to search
+  >
+› [x] project-root          Project root directory (omitted when unavailable)
+  [x] git-branch            Current Git branch (omitted when unavailable)
+  [x] thread-title          Current thread title (omitted unless changed by user)
+  [ ] model-name            Current model name
+  [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] current-dir           Current working directory
+  [ ] context-remaining     Percentage of context window remaining (omitted when unknown)
+  [ ] context-used          Percentage of context window used (omitted when unknown)
+
+  preview-live-root · feature/live-preview-branch · Live preview thread
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

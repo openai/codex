@@ -108,6 +108,7 @@ impl ConfigApi {
             self.current_cli_overrides(),
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
+            codex_config::host_name(),
         )
     }
 
@@ -563,6 +564,7 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
@@ -675,6 +677,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
@@ -733,6 +736,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
