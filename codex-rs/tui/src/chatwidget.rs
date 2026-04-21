@@ -1673,6 +1673,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        cwd: Some(params.cwd),
     }
 }
 
