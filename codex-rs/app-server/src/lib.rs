@@ -2,6 +2,7 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -416,6 +417,7 @@ pub async fn run_main_with_transport(
         }
     };
     let loader_overrides_for_config_api = loader_overrides.clone();
+    let thread_config_loader = Arc::new(NoopThreadConfigLoader);
     let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
@@ -659,6 +661,7 @@ pub async fn run_main_with_transport(
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
+            thread_config_loader,
             feedback: feedback.clone(),
             log_db,
             config_warnings,

@@ -11,6 +11,8 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::config_loader::project_trust_key;
+use crate::context::ContextualUserFragment;
+use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
@@ -3441,6 +3443,41 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
 }
 
 #[tokio::test]
+async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let originating_active_turn = ActiveTurn::default();
+    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
+    *session.active_turn.lock().await = Some(originating_active_turn);
+
+    let current_active_turn = ActiveTurn::default();
+    let current_turn_state = Arc::clone(&current_active_turn.turn_state);
+    *session.active_turn.lock().await = Some(current_active_turn);
+
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(codex_protocol::models::NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    session
+        .record_granted_request_permissions_for_turn(
+            &codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: requested_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
+            },
+            Some(&originating_turn_state),
+        )
+        .await;
+
+    assert_eq!(
+        originating_turn_state.lock().await.granted_permissions(),
+        Some(requested_permissions.into())
+    );
+    assert_eq!(current_turn_state.lock().await.granted_permissions(), None);
+    assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
 async fn request_permissions_emits_event_when_granular_policy_allows_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
@@ -3476,7 +3513,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         async move {
             session
                 .request_permissions(
-                    turn_context.as_ref(),
+                    &turn_context,
                     call_id,
                     codex_protocol::request_permissions::RequestPermissionsArgs {
                         reason: Some("need network".to_string()),
@@ -3487,6 +3524,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
                             ..RequestPermissionProfile::default()
                         },
                     },
+                    CancellationToken::new(),
                 )
                 .await
         }
@@ -3534,7 +3572,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
     let call_id = "call-1".to_string();
     let response = session
         .request_permissions(
-            turn_context.as_ref(),
+            &turn_context,
             call_id,
             codex_protocol::request_permissions::RequestPermissionsArgs {
                 reason: Some("need network".to_string()),
@@ -3545,6 +3583,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
                     ..RequestPermissionProfile::default()
                 },
             },
+            CancellationToken::new(),
         )
         .await;
 
@@ -6314,7 +6353,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
                 let ContentItem::InputText { text } = content_item else {
                     return false;
                 };
-                text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                TurnAborted::matches_text(text)
             })
         }),
         "expected a model-visible turn aborted marker in history after interrupt"
@@ -6322,6 +6361,10 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let tools = {
@@ -6362,6 +6405,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session),
             Arc::clone(&turn_context),
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -6779,6 +6823,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
@@ -6857,6 +6902,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
