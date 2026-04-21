@@ -19,6 +19,9 @@ jobs:
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
+    env:
+      CARGO_DYLINT_VERSION: 5.0.0
+      DYLINT_LINK_VERSION: 5.0.0
 
     strategy:
       fail-fast: false
@@ -65,8 +68,8 @@ jobs:
         shell: bash
         run: |
           install_root="${RUNNER_TEMP}/argument-comment-lint-tools"
-          cargo install --locked cargo-dylint --root "$install_root"
-          cargo install --locked dylint-link
+          cargo install --locked cargo-dylint --version "$CARGO_DYLINT_VERSION" --root "$install_root"
+          cargo install --locked dylint-link --version "$DYLINT_LINK_VERSION"
           echo "INSTALL_ROOT=$install_root" >> "$GITHUB_ENV"
 
       - name: Cargo build

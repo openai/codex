@@ -49,6 +49,7 @@ pub struct ExecRequest {
     pub expiration: ExecExpiration,
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
+    pub windows_sandbox_policy_cwd: AbsolutePathBuf,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub sandbox_policy: SandboxPolicy,
@@ -75,6 +76,7 @@ impl ExecRequest {
         network_sandbox_policy: NetworkSandboxPolicy,
         arg0: Option<String>,
     ) -> Self {
+        let windows_sandbox_policy_cwd = cwd.clone();
         Self {
             command,
             cwd,
@@ -84,6 +86,7 @@ impl ExecRequest {
             expiration,
             capture_policy,
             sandbox,
+            windows_sandbox_policy_cwd,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             sandbox_policy,
@@ -97,6 +100,7 @@ impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
         options: ExecOptions,
+        windows_sandbox_policy_cwd: AbsolutePathBuf,
     ) -> Self {
         let SandboxExecRequest {
             command,
@@ -134,6 +138,7 @@ impl ExecRequest {
             expiration,
             capture_policy,
             sandbox,
+            windows_sandbox_policy_cwd,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
             sandbox_policy,

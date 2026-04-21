@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -20,7 +21,7 @@ use crate::schema::PreToolUseCommandInput;
 pub struct PreToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -239,13 +240,13 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToo
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     use super::PreToolUseHandlerData;
@@ -471,7 +472,13 @@ mod tests {
         let runs = preview(&[handler()], &request);
 
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].id, "pre-tool-use:0:/tmp/hooks.json:tool-call-123");
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "pre-tool-use:0:{}:tool-call-123",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
 
         let parsed = parse_completed(
             &handler(),
@@ -506,7 +513,8 @@ mod tests {
             command: "echo hook".to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
         }
     }
@@ -527,7 +535,7 @@ mod tests {
         super::PreToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),

@@ -286,9 +286,11 @@ impl ExecutorFileSystem for DirectFileSystem {
     ) -> FileSystemResult<FileMetadata> {
         reject_sandbox_context(sandbox)?;
         let metadata = tokio::fs::metadata(path.as_path()).await?;
+        let symlink_metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
+            is_symlink: symlink_metadata.file_type().is_symlink(),
             created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
             modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
         })
@@ -303,7 +305,9 @@ impl ExecutorFileSystem for DirectFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let metadata = tokio::fs::metadata(entry.path()).await?;
+            let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
+                continue;
+            };
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_directory: metadata.is_dir(),

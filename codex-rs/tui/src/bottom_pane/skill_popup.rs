@@ -28,7 +28,7 @@ pub(crate) struct MentionItem {
     pub(crate) sort_rank: u8,
 }
 
-const MENTION_NAME_TRUNCATE_LEN: usize = 24;
+const MENTION_NAME_TRUNCATE_LEN: usize = 28;
 
 pub(crate) struct SkillPopup {
     query: String,

@@ -4,19 +4,28 @@ use crate::events::TrackEventRequest;
 use crate::events::TrackEventsRequest;
 use crate::events::current_runtime_metadata;
 use crate::facts::AnalyticsFact;
+use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::HookRunFact;
+use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_plugin::PluginTelemetryMetadata;
@@ -167,12 +176,26 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+        self.record_fact(AnalyticsFact::Request {
+            connection_id,
+            request_id,
+            request: Box::new(request),
+        });
+    }
+
     pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         if !self.queue.should_enqueue_app_used(&tracking, &app) {
             return;
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
             AppUsedInput { tracking, app },
+        )));
+    }
+
+    pub fn track_hook_run(&self, tracking: TrackEventsContext, hook: HookRunFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(
+            HookRunInput { tracking, hook },
         )));
     }
 
@@ -188,6 +211,18 @@ impl AnalyticsEventsClient {
     pub fn track_compaction(&self, event: crate::facts::CodexCompactionEvent) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
+        )));
+    }
+
+    pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
+        ));
+    }
+
+    pub fn track_turn_token_usage(&self, fact: TurnTokenUsageFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
+            Box::new(fact),
         )));
     }
 
@@ -240,10 +275,29 @@ impl AnalyticsEventsClient {
             response: Box::new(response),
         });
     }
+
+    pub fn track_error_response(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+        error_type: Option<AnalyticsJsonRpcError>,
+    ) {
+        self.record_fact(AnalyticsFact::ErrorResponse {
+            connection_id,
+            request_id,
+            error,
+            error_type,
+        });
+    }
+
+    pub fn track_notification(&self, notification: ServerNotification) {
+        self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
+    }
 }
 
 async fn send_track_events(
-    auth_manager: &AuthManager,
+    auth_manager: &Arc<AuthManager>,
     base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
@@ -256,9 +310,11 @@ async fn send_track_events(
     if !auth.is_chatgpt_auth() {
         return;
     }
-    let access_token = match auth.get_token() {
-        Ok(token) => token,
-        Err(_) => return,
+    let Some(authorization_header_value) = auth_manager
+        .chatgpt_authorization_header_for_auth(&auth)
+        .await
+    else {
+        return;
     };
     let Some(account_id) = auth.get_account_id() else {
         return;
@@ -268,15 +324,17 @@ async fn send_track_events(
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let response = create_client()
+    let mut request = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .bearer_auth(&access_token)
+        .header("authorization", authorization_header_value)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await;
+        .json(&payload);
+    if auth.is_fedramp_account() {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
+    let response = request.send().await;
 
     match response {
         Ok(response) if response.status().is_success() => {}

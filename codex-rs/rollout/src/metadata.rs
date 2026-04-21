@@ -70,7 +70,8 @@ pub fn builder_from_items(
 ) -> Option<ThreadMetadataBuilder> {
     if let Some(session_meta) = items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line),
-        RolloutItem::ResponseItem(_)
+        RolloutItem::SessionState(_)
+        | RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -124,7 +125,8 @@ pub async fn extract_metadata_from_rollout(
         metadata,
         memory_mode: items.iter().rev().find_map(|item| match item {
             RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-            RolloutItem::ResponseItem(_)
+            RolloutItem::SessionState(_)
+            | RolloutItem::ResponseItem(_)
             | RolloutItem::Compacted(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::EventMsg(_) => None,
@@ -371,7 +373,7 @@ fn backfill_watermark_for_path(codex_home: &Path, path: &Path) -> String {
 async fn file_modified_time_utc(path: &Path) -> Option<DateTime<Utc>> {
     let modified = tokio::fs::metadata(path).await.ok()?.modified().ok()?;
     let updated_at: DateTime<Utc> = modified.into();
-    updated_at.with_nanosecond(0)
+    Some(updated_at)
 }
 
 fn parse_timestamp_to_utc(ts: &str) -> Option<DateTime<Utc>> {
@@ -381,7 +383,7 @@ fn parse_timestamp_to_utc(ts: &str) -> Option<DateTime<Utc>> {
         return dt.with_nanosecond(0);
     }
     if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-        return dt.with_timezone(&Utc).with_nanosecond(0);
+        return Some(dt.with_timezone(&Utc));
     }
     None
 }

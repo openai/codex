@@ -1,5 +1,7 @@
 use crate::FreeformTool;
 use crate::JsonSchema;
+use crate::LoadableToolSpec;
+use crate::ResponsesApiNamespace;
 use crate::ResponsesApiTool;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchContextSize;
@@ -20,6 +22,8 @@ const WEB_SEARCH_TEXT_AND_IMAGE_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 pub enum ToolSpec {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
+    #[serde(rename = "namespace")]
+    Namespace(ResponsesApiNamespace),
     #[serde(rename = "tool_search")]
     ToolSearch {
         execution: String,
@@ -57,11 +61,21 @@ impl ToolSpec {
     pub fn name(&self) -> &str {
         match self {
             ToolSpec::Function(tool) => tool.name.as_str(),
+            ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::LocalShell {} => "local_shell",
             ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
+        }
+    }
+}
+
+impl From<LoadableToolSpec> for ToolSpec {
+    fn from(value: LoadableToolSpec) -> Self {
+        match value {
+            LoadableToolSpec::Function(tool) => ToolSpec::Function(tool),
+            LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
         }
     }
 }

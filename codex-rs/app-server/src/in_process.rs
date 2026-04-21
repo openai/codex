@@ -75,6 +75,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -82,6 +83,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
+pub use codex_state::log_db::LogDbLayer;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -115,8 +117,12 @@ pub struct InProcessStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
+    /// Loader used to fetch typed thread config sources before a thread starts.
+    pub thread_config_loader: Arc<dyn ThreadConfigLoader>,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
+    /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
+    pub log_db: Option<LogDbLayer>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -386,7 +392,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let processor = MessageProcessor::new(MessageProcessorArgs {
+            let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
@@ -394,16 +400,17 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
+                thread_config_loader: args.thread_config_loader,
                 feedback: args.feedback,
-                log_db: None,
+                log_db: args.log_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
-            });
+            }));
             let mut thread_created_rx = processor.thread_created_receiver();
-            let mut session = ConnectionSessionState::default();
+            let session = Arc::new(ConnectionSessionState::default());
             let mut listen_for_threads = true;
 
             loop {
@@ -411,28 +418,33 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     command = processor_rx.recv() => {
                         match command {
                             Some(ProcessorCommand::Request(request)) => {
-                                let was_initialized = session.initialized;
+                                let was_initialized = session.initialized();
                                 processor
                                     .process_client_request(
                                         IN_PROCESS_CONNECTION_ID,
                                         *request,
-                                        &mut session,
+                                        Arc::clone(&session),
                                         &outbound_initialized,
                                     )
                                     .await;
+                                let opted_out_notification_methods_snapshot =
+                                    session.opted_out_notification_methods();
+                                let experimental_api_enabled =
+                                    session.experimental_api_enabled();
+                                let is_initialized = session.initialized();
                                 if let Ok(mut opted_out_notification_methods) =
                                     outbound_opted_out_notification_methods.write()
                                 {
                                     *opted_out_notification_methods =
-                                        session.opted_out_notification_methods.clone();
+                                        opted_out_notification_methods_snapshot;
                                 } else {
                                     warn!("failed to update outbound opted-out notifications");
                                 }
                                 outbound_experimental_api_enabled.store(
-                                    session.experimental_api_enabled,
+                                    experimental_api_enabled,
                                     Ordering::Release,
                                 );
-                                if !was_initialized && session.initialized {
+                                if !was_initialized && is_initialized {
                                     processor.send_initialize_notifications().await;
                                 }
                             }
@@ -447,7 +459,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let connection_ids = if session.initialized {
+                                let connection_ids = if session.initialized() {
                                     vec![IN_PROCESS_CONNECTION_ID]
                                 } else {
                                     Vec::<ConnectionId>::new()
@@ -708,6 +720,7 @@ mod tests {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
             Err(_) => Config::load_default_with_cli_overrides(Vec::new())
+                .await
                 .expect("default config should load"),
         }
     }
@@ -722,7 +735,9 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
+            thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             config_warnings: Vec::new(),
             session_source,

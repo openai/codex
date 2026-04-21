@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -196,6 +197,17 @@ impl RequestUserInputOverlay {
 
     fn question_count(&self) -> usize {
         self.request.questions.len()
+    }
+
+    fn advance_queue_or_complete(&mut self) {
+        if let Some(next) = self.queue.pop_front() {
+            self.request = next;
+            self.reset_for_request();
+            self.ensure_focus_available();
+            self.restore_current_draft();
+        } else {
+            self.done = true;
+        }
     }
 
     fn has_options(&self) -> bool {
@@ -759,14 +771,23 @@ impl RequestUserInputOverlay {
                 interrupted: false,
             },
         )));
-        if let Some(next) = self.queue.pop_front() {
-            self.request = next;
-            self.reset_for_request();
-            self.ensure_focus_available();
-            self.restore_current_draft();
-        } else {
-            self.done = true;
+        self.advance_queue_or_complete();
+    }
+
+    fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let ResolvedAppServerRequest::UserInput { call_id } = request else {
+            return false;
+        };
+
+        let queue_len = self.queue.len();
+        self.queue
+            .retain(|queued_request| queued_request.call_id != *call_id);
+        if self.request.call_id == *call_id {
+            self.advance_queue_or_complete();
+            return true;
         }
+
+        self.queue.len() != queue_len
     }
 
     fn open_unanswered_confirmation(&mut self) {
@@ -912,6 +933,7 @@ impl RequestUserInputOverlay {
             | InputResult::Queued {
                 text,
                 text_elements,
+                ..
             } => {
                 if self.has_options()
                     && matches!(self.focus, Focus::Notes)
@@ -1273,6 +1295,10 @@ impl BottomPaneView for RequestUserInputOverlay {
         self.queue.push_back(request);
         None
     }
+
+    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        self.dismiss_resolved_request(request)
+    }
 }
 
 #[cfg(test)]
@@ -1530,6 +1556,118 @@ mod tests {
 
         assert!(overlay.done, "expected overlay to be done");
         expect_interrupt_only(&mut rx);
+    }
+
+    #[test]
+    fn resolved_request_dismisses_overlay_without_emitting_events() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            RequestUserInputEvent {
+                call_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+            },
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                call_id: "call-1".to_string(),
+            })
+        );
+        assert!(overlay.done, "resolved request should close the overlay");
+        assert!(
+            rx.try_recv().is_err(),
+            "dismissing a stale request should not emit an interrupt or answer"
+        );
+    }
+
+    #[test]
+    fn resolved_current_request_advances_to_next_same_turn_prompt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            RequestUserInputEvent {
+                call_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+            },
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-2".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![question_with_options("q2", "Second")],
+        });
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                call_id: "call-1".to_string(),
+            })
+        );
+
+        assert!(!overlay.done, "newer same-turn prompt should stay pending");
+        assert_eq!(overlay.request.call_id, "call-2");
+        assert_eq!(overlay.request.turn_id, "turn-1");
+        assert_eq!(overlay.request.questions[0].id, "q2");
+        assert!(
+            rx.try_recv().is_err(),
+            "dismissing a stale request should not emit an interrupt or answer"
+        );
+    }
+
+    #[test]
+    fn resolved_queued_request_removes_only_that_prompt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            RequestUserInputEvent {
+                call_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+            },
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-2".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![question_with_options("q2", "Second")],
+        });
+        overlay.try_consume_user_input_request(RequestUserInputEvent {
+            call_id: "call-3".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![question_with_options("q3", "Third")],
+        });
+
+        assert!(
+            overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                call_id: "call-2".to_string(),
+            })
+        );
+
+        assert_eq!(overlay.request.call_id, "call-1");
+        assert!(
+            rx.try_recv().is_err(),
+            "dismissing a stale queued request should not emit an event"
+        );
+        overlay.submit_answers();
+        assert_eq!(overlay.request.call_id, "call-3");
+        assert_eq!(overlay.request.questions[0].id, "q3");
+        assert!(
+            rx.try_recv().is_ok(),
+            "submitting the still-current prompt should emit an answer"
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "submitting the still-current prompt should emit a history cell"
+        );
     }
 
     #[test]

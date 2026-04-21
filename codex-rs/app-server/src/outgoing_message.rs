@@ -736,6 +736,7 @@ mod tests {
                     secondary: None,
                     credits: None,
                     plan_type: Some(PlanType::Plus),
+                    rate_limit_reached_type: None,
                 },
             });
 
@@ -754,7 +755,8 @@ mod tests {
                         },
                         "secondary": null,
                         "credits": null,
-                        "planType": "plus"
+                        "planType": "plus",
+                        "rateLimitReachedType": null
                     }
                 },
             }),
@@ -1065,6 +1067,7 @@ mod tests {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "call-0".to_string(),
+                    namespace: None,
                     tool: "tool".to_string(),
                     arguments: json!({}),
                 },
@@ -1122,6 +1125,7 @@ mod tests {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "call-0".to_string(),
+                    namespace: None,
                     tool: "tool".to_string(),
                     arguments: json!({}),
                 },

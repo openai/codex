@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::io;
@@ -25,6 +26,7 @@ pub struct CopyOptions {
 pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -40,6 +42,10 @@ pub struct ReadDirectoryEntry {
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
     pub sandbox_policy: SandboxPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy_cwd: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
@@ -52,6 +58,8 @@ impl FileSystemSandboxContext {
     pub fn new(sandbox_policy: SandboxPolicy) -> Self {
         Self {
             sandbox_policy,
+            sandbox_policy_cwd: None,
+            file_system_sandbox_policy: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,

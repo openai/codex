@@ -40,6 +40,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::SpanData;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -101,17 +102,12 @@ fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
         .expect("client request should convert to JSON-RPC")
 }
 
-fn tracing_test_guard() -> &'static tokio::sync::Mutex<()> {
-    static GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    GUARD.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
 struct TracingHarness {
     _server: MockServer,
     _codex_home: TempDir,
-    processor: MessageProcessor,
+    processor: Arc<MessageProcessor>,
     outgoing_rx: mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
-    session: ConnectionSessionState,
+    session: Arc<ConnectionSessionState>,
     tracing: &'static TestTracing,
 }
 
@@ -129,7 +125,7 @@ impl TracingHarness {
             _codex_home: codex_home,
             processor,
             outgoing_rx,
-            session: ConnectionSessionState::default(),
+            session: Arc::new(ConnectionSessionState::default()),
             tracing,
         };
 
@@ -152,7 +148,7 @@ impl TracingHarness {
                 /*trace*/ None,
             )
             .await;
-        assert!(harness.session.initialized);
+        assert!(harness.session.initialized());
 
         Ok(harness)
     }
@@ -182,7 +178,7 @@ impl TracingHarness {
                 TEST_CONNECTION_ID,
                 request,
                 AppServerTransport::Stdio,
-                &mut self.session,
+                Arc::clone(&self.session),
             )
             .await;
         read_response(&mut self.outgoing_rx, request_id).await
@@ -230,14 +226,14 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
 fn build_test_processor(
     config: Arc<Config>,
 ) -> (
-    MessageProcessor,
+    Arc<MessageProcessor>,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let auth_manager =
         AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false);
-    let processor = MessageProcessor::new(MessageProcessorArgs {
+    let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
@@ -245,6 +241,7 @@ fn build_test_processor(
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),
+        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),
@@ -252,7 +249,7 @@ fn build_test_processor(
         auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
         remote_control_handle: None,
-    });
+    }));
     (processor, outgoing_rx)
 }
 
@@ -504,8 +501,8 @@ where
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
 
     let RemoteTrace {
@@ -583,8 +580,8 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
     let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();

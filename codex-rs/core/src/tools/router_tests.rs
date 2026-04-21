@@ -1,11 +1,13 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::codex::make_session_and_context;
 use crate::function_tool::FunctionCallError;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolName;
+use tokio_util::sync::CancellationToken;
 
 use super::ToolCall;
 use super::ToolCallSource;
@@ -13,6 +15,10 @@ use super::ToolRouter;
 use super::ToolRouterParams;
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -32,6 +38,8 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -49,6 +57,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -65,6 +74,10 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -84,6 +97,8 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -101,6 +116,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::JsRepl,
@@ -129,6 +145,8 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -148,6 +166,7 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -164,6 +183,10 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let mcp_tools = session
@@ -178,6 +201,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
         },
@@ -185,12 +210,24 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
 
     let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
         .into_iter()
-        .find(|name| router.tool_supports_parallel(&ToolName::plain(*name)))
+        .find(|name| {
+            router.tool_supports_parallel(&ToolCall {
+                tool_name: ToolName::plain(*name),
+                call_id: "call-parallel-tool".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            })
+        })
         .expect("test session should expose a parallel shell-like tool");
 
-    assert!(
-        !router.tool_supports_parallel(&ToolName::namespaced("mcp__server__", parallel_tool_name))
-    );
+    assert!(!router.tool_supports_parallel(&ToolCall {
+        tool_name: ToolName::namespaced("mcp__server__", parallel_tool_name),
+        call_id: "call-namespaced-tool".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    }));
 
     Ok(())
 }
@@ -225,6 +262,46 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         }
         other => panic!("expected function payload, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
+            discoverable_tools: None,
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+        },
+    );
+
+    let deferred_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__echo__", "query_with_delay"),
+        call_id: "call-deferred".to_string(),
+        payload: ToolPayload::Mcp {
+            server: "echo".to_string(),
+            tool: "query_with_delay".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    };
+    assert!(router.tool_supports_parallel(&deferred_call));
+
+    let different_server_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
+        call_id: "call-other-server".to_string(),
+        payload: ToolPayload::Mcp {
+            server: "hello_echo".to_string(),
+            tool: "query_with_delay".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    };
+    assert!(!router.tool_supports_parallel(&different_server_call));
 
     Ok(())
 }

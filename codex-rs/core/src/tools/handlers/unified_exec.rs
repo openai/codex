@@ -20,8 +20,10 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -30,6 +32,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::UnifiedExecShellMode;
+use codex_utils_output_truncation::approx_token_count;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -230,6 +233,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let requested_additional_permissions = additional_permissions.clone();
                 let effective_additional_permissions = apply_granted_turn_permissions(
                     context.session.as_ref(),
+                    context.turn.cwd.as_path(),
                     sandbox_permissions,
                     additional_permissions,
                 )
@@ -289,7 +293,6 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     &cwd,
                     fs.as_ref(),
-                    Some(yield_time_ms),
                     context.session.clone(),
                     context.turn.clone(),
                     Some(&tracker),
@@ -314,11 +317,13 @@ impl ToolHandler for UnifiedExecHandler {
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                manager
+                let session_command = command.clone();
+                match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
                             raw_command,
+                            hook_command: raw_command.clone(),
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -336,11 +341,31 @@ impl ToolHandler for UnifiedExecHandler {
                         &context,
                     )
                     .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
+                {
+                    Ok(response) => response,
+                    Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+                        let output_text = output.aggregated_output.text;
+                        let original_token_count = approx_token_count(&output_text);
+                        ExecCommandToolOutput {
+                            event_call_id: context.call_id.clone(),
+                            chunk_id: generate_chunk_id(),
+                            wall_time: output.duration,
+                            raw_output: output_text.into_bytes(),
+                            max_output_tokens,
+                            // Sandbox denial is terminal, so there is no live
+                            // process for write_stdin to resume.
+                            process_id: None,
+                            exit_code: Some(output.exit_code),
+                            original_token_count: Some(original_token_count),
+                            session_command: Some(session_command),
+                        }
+                    }
+                    Err(err) => {
+                        return Err(FunctionCallError::RespondToModel(format!(
                             "exec_command failed for `{command_for_display}`: {err:?}"
-                        ))
-                    })?
+                        )));
+                    }
+                }
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;

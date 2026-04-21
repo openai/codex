@@ -12,10 +12,10 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::build_prompt;
-use crate::codex::built_tools;
 use crate::config::Config;
+use crate::session::session::Session;
+use crate::session::turn::build_prompt;
+use crate::session::turn::built_tools;
 use crate::thread_manager::ThreadManager;
 
 /// Build the model-visible `input` list for a single debug turn.
@@ -106,7 +106,7 @@ mod tests {
     async fn build_prompt_input_includes_context_and_user_message() {
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cwd = tempfile::tempdir().expect("create cwd");
-        let mut config = test_config();
+        let mut config = test_config().await;
         config.codex_home =
             AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("codex home is absolute");
         config.cwd = AbsolutePathBuf::try_from(cwd.path().to_path_buf()).expect("absolute cwd");

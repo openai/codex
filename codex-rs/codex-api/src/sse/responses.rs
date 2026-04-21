@@ -167,6 +167,8 @@ pub struct ResponsesStreamEvent {
     headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
+    item_id: Option<String>,
+    call_id: Option<String>,
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
@@ -248,6 +250,17 @@ pub fn process_responses_event(
         "response.output_text.delta" => {
             if let Some(delta) = event.delta {
                 return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+            }
+        }
+        "response.custom_tool_call_input.delta" => {
+            if let (Some(delta), Some(item_id)) =
+                (event.delta, event.item_id.clone().or(event.call_id.clone()))
+            {
+                return Ok(Some(ResponseEvent::ToolCallInputDelta {
+                    item_id,
+                    call_id: event.call_id,
+                    delta,
+                }));
             }
         }
         "response.reasoning_summary_text.delta" => {
@@ -690,6 +703,38 @@ mod tests {
                 && execution == "client"
                 && arguments == &json!({"query": "calendar create", "limit": 1})
         );
+    }
+
+    #[tokio::test]
+    async fn parses_tool_call_input_deltas() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.custom_tool_call_input.delta",
+                "item_id": "ctc_1",
+                "call_id": "call_1",
+                "delta": "*** Begin",
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "delta": "{\"input\":\"",
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ToolCallInputDelta {
+                item_id,
+                call_id: Some(call_id),
+                delta,
+            } if item_id == "ctc_1" && call_id == "call_1" && delta == "*** Begin"
+        );
+        assert_matches!(&events[1], ResponseEvent::Completed { .. });
     }
 
     #[tokio::test]

@@ -1225,9 +1225,9 @@ function parseImageDetail(detail) {
   if (typeof detail !== "string" || !detail) {
     throw new Error("codex.emitImage expected detail to be a non-empty string");
   }
-  if (detail !== "original") {
+  if (!["auto", "low", "high", "original"].includes(detail)) {
     throw new Error(
-      'codex.emitImage only supports detail "original"; omit detail for default behavior',
+      'codex.emitImage expected detail to be one of "auto", "low", "high", or "original"',
     );
   }
   return detail;
@@ -1330,6 +1330,20 @@ function normalizeMcpImageData(data, mimeType) {
   return `data:${normalizedMimeType};base64,${data}`;
 }
 
+function parseMcpImageDetail(meta) {
+  if (!isPlainObject(meta)) {
+    return undefined;
+  }
+  const detail = meta["codex/imageDetail"];
+  if (
+    typeof detail !== "string" ||
+    !["auto", "low", "high", "original"].includes(detail)
+  ) {
+    return undefined;
+  }
+  return detail;
+}
+
 function parseMcpToolResult(result) {
   if (typeof result === "string") {
     return { images: [], textCount: result.length > 0 ? 1 : 0 };
@@ -1362,6 +1376,7 @@ function parseMcpToolResult(result) {
     if (item.type === "image") {
       images.push({
         image_url: normalizeMcpImageData(item.data, item.mimeType ?? item.mime_type),
+        detail: parseMcpImageDetail(item._meta),
       });
       continue;
     }
