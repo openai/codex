@@ -625,6 +625,17 @@ fn report_helper_failure(
     }
 }
 
+fn setup_helper_launch_failure_message(last_error: u32) -> String {
+    if last_error == ERROR_CANCELLED {
+        "Windows canceled the sandbox setup helper launch (Win32 error 1223). \
+This usually means the Administrator/UAC prompt was dismissed, denied, or blocked by policy; \
+try again and approve the elevation request."
+            .to_string()
+    } else {
+        format!("ShellExecuteExW failed to launch setup helper: {last_error}")
+    }
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -711,7 +722,7 @@ fn run_setup_exe(
         };
         return Err(failure(
             code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
+            setup_helper_launch_failure_message(last_error),
         ));
     }
     unsafe {
@@ -978,6 +989,7 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::setup_helper_launch_failure_message;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
@@ -1601,5 +1613,14 @@ mod tests {
                 .into_iter()
                 .all(|path| roots.contains(&path))
         );
+    }
+
+    #[test]
+    fn canceled_helper_launch_message_is_actionable() {
+        let message = setup_helper_launch_failure_message(super::ERROR_CANCELLED);
+
+        assert!(message.contains("Win32 error 1223"));
+        assert!(message.contains("Administrator/UAC prompt"));
+        assert!(message.contains("approve the elevation request"));
     }
 }
