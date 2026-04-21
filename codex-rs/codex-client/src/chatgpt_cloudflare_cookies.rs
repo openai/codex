@@ -102,6 +102,8 @@ fn only_cloudflare_cookies(header: HeaderValue) -> Option<HeaderValue> {
 }
 
 fn is_allowed_cloudflare_cookie_name(name: &str) -> bool {
+    // Keep this allowlist aligned with Cloudflare's documented service cookies:
+    // https://developers.cloudflare.com/fundamentals/reference/policies-compliances/cloudflare-cookies/
     matches!(
         name,
         "__cf_bm"
