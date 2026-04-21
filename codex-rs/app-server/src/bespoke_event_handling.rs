@@ -21,6 +21,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
@@ -39,6 +40,8 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+use codex_app_server_protocol::McpToolCallResult;
+use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
@@ -1305,6 +1308,7 @@ async fn emit_turn_completed_with_status(
         completed_at: None,
         duration_ms: None,
     });
+    let turn = compact_turn_completed_turn(turn);
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
@@ -1321,6 +1325,98 @@ async fn emit_turn_completed_with_status(
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
+}
+
+fn compact_turn_completed_turn(turn: Turn) -> Turn {
+    let Turn {
+        id,
+        items,
+        items_view,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    } = turn;
+    Turn {
+        id,
+        items: items.into_iter().map(compact_turn_completed_item).collect(),
+        items_view,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    }
+}
+
+fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
+    match item {
+        ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: _,
+            exit_code,
+            duration_ms,
+        } => ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: None,
+            exit_code,
+            duration_ms,
+        },
+        ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: _,
+            error,
+            duration_ms,
+        } => ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: None,
+            error,
+            duration_ms,
+        },
+        ThreadItem::DynamicToolCall {
+            id,
+            namespace,
+            tool,
+            arguments,
+            status,
+            content_items: _,
+            success,
+            duration_ms,
+        } => ThreadItem::DynamicToolCall {
+            id,
+            namespace,
+            tool,
+            arguments,
+            status,
+            content_items: None,
+            success,
+            duration_ms,
+        },
+        other => other,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3382,6 +3478,117 @@ mod tests {
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
+    }
+
+    #[test]
+    fn compact_turn_completed_turn_elides_bulky_command_and_tool_outputs() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            items: vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: Some("large output".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: Some(Box::new(McpToolCallResult {
+                        content: vec![json!({"text":"large tool output"})],
+                        structured_content: Some(json!({"rows":[{"value":"large"}]})),
+                        meta: None,
+                    })),
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "large tool output".to_string(),
+                    }]),
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ],
+            items_view: TurnItemsView::Full,
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: Some(1),
+            completed_at: Some(2),
+            duration_ms: Some(3),
+        };
+
+        let compact = compact_turn_completed_turn(turn);
+
+        assert_eq!(
+            compact.items,
+            vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: None,
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: None,
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: None,
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ]
+        );
     }
 
     #[tokio::test]
