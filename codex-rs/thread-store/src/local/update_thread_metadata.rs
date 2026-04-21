@@ -231,11 +231,18 @@ mod tests {
     #[tokio::test]
     async fn update_thread_metadata_sets_memory_mode_on_active_rollout() {
         let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()));
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
         let uuid = Uuid::from_u128(302);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let path =
             write_session_file(home.path(), "2025-01-03T14-30-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
 
         let thread = store
             .update_thread_metadata(UpdateThreadMetadataParams {
@@ -254,6 +261,11 @@ mod tests {
         assert_eq!(appended["type"], "session_meta");
         assert_eq!(appended["payload"]["id"], thread_id.to_string());
         assert_eq!(appended["payload"]["memory_mode"], "disabled");
+        let memory_mode = runtime
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("thread memory mode should be readable");
+        assert_eq!(memory_mode.as_deref(), Some("disabled"));
     }
 
     #[tokio::test]
