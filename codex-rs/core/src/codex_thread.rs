@@ -30,6 +30,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -103,6 +104,10 @@ impl CodexThread {
         should_continue_active_goal: bool,
     ) {
         if goal_status == ThreadGoalStatus::Active && should_continue_active_goal {
+            self.codex
+                .session
+                .goal_continuation_suppressed
+                .store(false, Ordering::SeqCst);
             self.codex
                 .session
                 .maybe_start_turn_for_active_goal_continuation()

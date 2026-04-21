@@ -267,6 +267,8 @@ impl Session {
         task: T,
         startup_input: TurnStartupInput,
     ) {
+        let started_from_goal_continuation =
+            matches!(startup_input, TurnStartupInput::GoalContinuation(_));
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -294,14 +296,24 @@ impl Session {
                     self.goal_continuation_suppressed
                         .store(false, Ordering::SeqCst);
                 }
-                (startup_pending_input, false)
+                (startup_pending_input, started_from_goal_continuation)
             }
-            TurnStartupInput::GoalContinuation(items) => (items, true),
+            TurnStartupInput::GoalContinuation(items) => (items, started_from_goal_continuation),
         };
 
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.tasks.is_empty());
+        let Some(turn) = (if started_from_goal_continuation {
+            active.as_mut()
+        } else {
+            Some(active.get_or_insert_with(ActiveTurn::default))
+        }) else {
+            trace!("skipping goal continuation because active-turn reservation disappeared");
+            return;
+        };
+        if !turn.tasks.is_empty() {
+            trace!("skipping task start because another task is already active");
+            return;
+        }
         {
             let Ok(mut turn_state) = turn.turn_state.try_lock() else {
                 warn!("turn state was locked while starting a task");
