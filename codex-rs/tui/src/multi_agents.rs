@@ -593,6 +593,60 @@ mod tests {
     use ratatui::style::Modifier;
 
     #[test]
+    fn agent_picker_item_name_snapshot() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let snapshot = [
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    Some("explorer"),
+                    /*is_primary*/ true
+                ),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    Some("explorer"),
+                    /*is_primary*/ false
+                ),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    /*agent_role*/ None,
+                    /*is_primary*/ false
+                ),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(
+                    /*agent_nickname*/ None,
+                    Some("explorer"),
+                    /*is_primary*/ false
+                ),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(
+                    /*agent_nickname*/ None, /*agent_role*/ None,
+                    /*is_primary*/ false
+                ),
+                thread_id
+            ),
+        ]
+        .join("\n");
+        assert_snapshot!("agent_picker_item_name", snapshot);
+    }
+
+    #[test]
     fn collab_events_snapshot() {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
             .expect("valid sender thread id");

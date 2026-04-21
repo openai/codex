@@ -1,5 +1,5 @@
 ---
-source: tui/src/app.rs
+source: tui/src/multi_agents.rs
 expression: snapshot
 ---
 Main [default] | 00000000-0000-0000-0000-000000000123

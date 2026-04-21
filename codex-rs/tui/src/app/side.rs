@@ -568,3 +568,549 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::exec_approval_request;
+    use super::super::test_support::lines_to_single_string;
+    use super::super::test_support::make_test_app;
+    use super::super::test_support::make_test_app_with_channels;
+    use super::super::test_support::request_user_input_request;
+    use super::super::test_support::test_thread_session;
+    use super::super::test_support::test_turn;
+    use super::super::test_support::turn_completed_notification;
+    use super::super::test_support::turn_started_notification;
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::test_support::test_path_buf;
+    use codex_app_server_protocol::McpServerStartupState;
+    use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+    use codex_app_server_protocol::RequestId as AppServerRequestId;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnStatus;
+    use codex_app_server_protocol::UserInput as AppServerUserInput;
+    use codex_protocol::ThreadId;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
+        let mut app = make_test_app().await;
+        app.config.developer_instructions = Some("Existing developer policy.".to_string());
+        let original_approval_policy = app.config.permissions.approval_policy.value();
+        let original_sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+
+        let fork_config = app.side_fork_config();
+
+        assert!(fork_config.ephemeral);
+        assert_eq!(
+            fork_config.permissions.approval_policy.value(),
+            original_approval_policy
+        );
+        assert_eq!(
+            fork_config.permissions.sandbox_policy.get(),
+            &original_sandbox_policy
+        );
+        let developer_instructions = fork_config
+            .developer_instructions
+            .as_deref()
+            .expect("side developer instructions");
+        assert!(developer_instructions.contains("Existing developer policy."));
+        assert!(
+            developer_instructions.contains("You are in a side conversation, not the main thread.")
+        );
+        assert!(
+            developer_instructions
+                .contains("inherited fork history is provided only as reference context")
+        );
+        assert!(developer_instructions.contains(
+            "Only instructions submitted after the side-conversation boundary are active"
+        ));
+        assert!(developer_instructions.contains("Do not continue, execute, or complete any task"));
+        assert!(
+            developer_instructions
+                .contains("External tools may be available according to this thread's current")
+        );
+        assert!(
+            developer_instructions
+                .contains("Any MCP or external tool calls or outputs visible in the inherited")
+        );
+        assert!(developer_instructions.contains("non-mutating inspection"));
+        assert!(developer_instructions.contains("Do not modify files"));
+        assert!(developer_instructions.contains("Do not request escalated permissions"));
+        assert!(app.transcript_cells.is_empty());
+    }
+
+    #[test]
+    fn side_boundary_prompt_marks_inherited_history_reference_only() {
+        let item = App::side_boundary_prompt_item();
+        let codex_protocol::models::ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected hidden side boundary prompt to be a user message");
+        };
+        assert_eq!(role, "user");
+        let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected hidden side boundary prompt text");
+        };
+        assert!(text.contains("Side conversation boundary."));
+        assert!(text.contains("Everything before this boundary is inherited history"));
+        assert!(text.contains("It is not your current task."));
+        assert!(text.contains("Only messages submitted after this boundary are active"));
+        assert!(text.contains("Do not continue, execute, or complete"));
+        assert!(text.contains("separate from the main thread"));
+        assert!(
+            text.contains("External tools may be available according to this thread's current")
+        );
+        assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
+        assert!(text.contains("Do not modify files"));
+    }
+
+    #[test]
+    fn side_return_shortcuts_match_esc_and_ctrl_c() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+    }
+
+    #[tokio::test]
+    async fn side_start_block_message_tracks_open_side_conversation() {
+        let mut app = make_test_app().await;
+        assert_eq!(
+            app.side_start_block_message(),
+            Some("'/side' is unavailable until the main thread is ready.")
+        );
+
+        app.primary_thread_id = Some(ThreadId::new());
+        assert_eq!(app.side_start_block_message(), None);
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        assert_eq!(
+            app.side_start_block_message(),
+            Some(
+                "A side conversation is already open. Press Esc to return before starting another."
+            )
+        );
+
+        app.side_threads.remove(&side_thread_id);
+        assert_eq!(app.side_start_block_message(), None);
+    }
+
+    #[tokio::test]
+    async fn side_parent_status_tracks_parent_turn_lifecycle() -> color_eyre::eyre::Result<()> {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_completed_notification(parent_thread_id, "turn-1", TurnStatus::Completed),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::Finished)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_started_notification(parent_thread_id, "turn-2"),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            None
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_completed_notification(parent_thread_id, "turn-2", TurnStatus::Failed),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::Failed)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn side_parent_status_prioritizes_input_over_approval() -> color_eyre::eyre::Result<()> {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        app.enqueue_thread_request(
+            parent_thread_id,
+            exec_approval_request(
+                parent_thread_id,
+                "turn-approval",
+                "call-approval",
+                /*approval_id*/ None,
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsApproval)
+        );
+
+        app.enqueue_thread_request(
+            parent_thread_id,
+            request_user_input_request(parent_thread_id, "turn-input", "call-input"),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsInput)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: parent_thread_id.to_string(),
+                    request_id: AppServerRequestId::Integer(2),
+                },
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsApproval)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: parent_thread_id.to_string(),
+                    request_id: AppServerRequestId::Integer(1),
+                },
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            None
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn side_start_error_message_explains_missing_first_prompt() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
+        );
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
+        );
+    }
+
+    #[test]
+    fn side_start_error_message_uses_generic_start_wording() {
+        let err = color_eyre::eyre::eyre!("transport disconnected");
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "Failed to start side conversation: transport disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_hides_forked_parent_transcript() {
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 4);
+        let session = ThreadSessionState {
+            forked_from_id: Some(parent_thread_id),
+            ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+        };
+        let parent_turn = test_turn(
+            "parent-turn",
+            TurnStatus::Completed,
+            vec![ThreadItem::UserMessage {
+                id: "parent-user".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "parent prompt should stay hidden".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+        );
+
+        App::install_side_thread_snapshot(&mut store, session, vec![parent_turn]);
+
+        let stored_session = store.session.as_ref().expect("side session");
+        assert_eq!(stored_session.thread_id, side_thread_id);
+        assert_eq!(stored_session.forked_from_id, None);
+        assert_eq!(store.turns, Vec::<Turn>::new());
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_does_not_refresh_from_fork_history() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                rollout_path: None,
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        assert!(!app.should_refresh_snapshot_session(
+            side_thread_id,
+            /*is_replay_only*/ false,
+            &snapshot
+        ));
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_skips_session_header_preamble() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                forked_from_id: Some(parent_thread_id),
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert_eq!(app.chat_widget.thread_id(), Some(side_thread_id));
+        assert_eq!(rendered_cells, Vec::<String>::new());
+        assert_eq!(
+            app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn side_thread_ignores_global_mcp_startup_notifications() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.sync_side_thread_ui();
+
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    name: "sentry".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("sentry is not logged in".to_string()),
+                }),
+            ),
+        )
+        .await;
+
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn side_restore_user_message_puts_inline_question_back_in_composer() {
+        let mut app = make_test_app().await;
+        let user_message = crate::chatwidget::UserMessage::from("side question");
+
+        app.restore_side_user_message(Some(user_message));
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "side question"
+        );
+    }
+
+    #[tokio::test]
+    async fn side_discard_selection_keeps_current_side_thread() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        assert_eq!(
+            app.side_thread_to_discard_after_switch(side_thread_id),
+            None
+        );
+        assert_eq!(
+            app.side_thread_to_discard_after_switch(parent_thread_id),
+            Some(side_thread_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_side_thread_removes_agent_navigation_entry() -> color_eyre::eyre::Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut side_config = app.chat_widget.config_ref().clone();
+        side_config.ephemeral = true;
+        let started = app_server.start_thread(&side_config).await?;
+        let side_thread_id = started.session.thread_id;
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_side_thread_keeps_local_state_when_server_close_fails()
+    -> color_eyre::eyre::Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        assert!(
+            !app.discard_side_thread(&mut app_server, side_thread_id)
+                .await
+        );
+
+        assert_eq!(app.active_thread_id, Some(side_thread_id));
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .map(|state| state.parent_thread_id),
+            Some(parent_thread_id)
+        );
+        assert!(app.agent_navigation.get(&side_thread_id).is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.thread_event_channels
+            .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.discard_closed_side_thread(side_thread_id).await;
+
+        assert_eq!(app.active_thread_id, None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+    }
+}
