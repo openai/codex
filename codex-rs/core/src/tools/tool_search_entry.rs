@@ -1,17 +1,15 @@
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ToolSearchOutputTool;
+use codex_tools::LoadableToolSpec;
 use codex_tools::ToolSearchResultSource;
-use codex_tools::dynamic_tool_to_responses_api_tool;
-use codex_tools::tool_search_result_source_to_output_tool;
+use codex_tools::dynamic_tool_to_loadable_tool_spec;
+use codex_tools::tool_search_result_source_to_loadable_tool_spec;
 use std::collections::HashMap;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
-    pub(crate) output: ToolSearchOutputTool,
+    pub(crate) output: LoadableToolSpec,
     pub(crate) limit_bucket: Option<String>,
 }
 
@@ -57,7 +55,7 @@ pub(crate) fn build_tool_search_entries(
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
-        output: tool_search_result_source_to_output_tool(ToolSearchResultSource {
+        output: tool_search_result_source_to_loadable_tool_spec(ToolSearchResultSource {
             server_name: info.server_name.as_str(),
             tool_namespace: info.callable_namespace.as_str(),
             tool_name: info.callable_name.as_str(),
@@ -70,19 +68,9 @@ fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json:
 }
 
 fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, serde_json::Error> {
-    let output_tool = dynamic_tool_to_responses_api_tool(tool)?;
-    let output = match tool.namespace.as_ref() {
-        Some(namespace) => ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-            name: namespace.clone(),
-            description: "Tools provided by the current Codex thread.".to_string(),
-            tools: vec![ResponsesApiNamespaceTool::Function(output_tool)],
-        }),
-        None => ToolSearchOutputTool::Function(output_tool),
-    };
-
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
-        output,
+        output: dynamic_tool_to_loadable_tool_spec(tool)?,
         limit_bucket: None,
     })
 }

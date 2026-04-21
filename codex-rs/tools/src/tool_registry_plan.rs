@@ -58,7 +58,7 @@ use crate::create_wait_tool;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
-use crate::dynamic_tool_to_responses_api_tool;
+use crate::dynamic_tool_to_loadable_tool_spec;
 use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
@@ -557,20 +557,11 @@ pub fn build_tool_registry_plan(
     }
 
     for tool in params.dynamic_tools {
-        match dynamic_tool_to_responses_api_tool(tool) {
-            Ok(converted_tool) => {
+        match dynamic_tool_to_loadable_tool_spec(tool) {
+            Ok(loadable_tool) => {
                 let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                let spec = if let Some(namespace) = tool.namespace.as_ref() {
-                    ToolSpec::Namespace(ResponsesApiNamespace {
-                        name: namespace.clone(),
-                        description: default_namespace_description(namespace),
-                        tools: vec![ResponsesApiNamespaceTool::Function(converted_tool)],
-                    })
-                } else {
-                    ToolSpec::Function(converted_tool)
-                };
                 plan.push_spec(
-                    spec,
+                    loadable_tool.into(),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
