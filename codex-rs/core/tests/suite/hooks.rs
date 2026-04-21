@@ -443,6 +443,70 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
+fn write_session_start_and_user_prompt_submit_order_hooks(home: &Path) -> Result<()> {
+    let session_start_script_path = home.join("session_start_hook.py");
+    let user_prompt_submit_script_path = home.join("user_prompt_submit_hook.py");
+    let log_path = home.join("hook_order_log.jsonl");
+
+    let session_start_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+record = {{
+    "event": "session_start",
+    "transcript_path": payload.get("transcript_path"),
+}}
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let user_prompt_submit_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+record = {{
+    "event": "user_prompt_submit",
+    "prompt": payload.get("prompt"),
+}}
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", session_start_script_path.display()),
+                    "statusMessage": "running session start hook",
+                }]
+            }],
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", user_prompt_submit_script_path.display()),
+                    "statusMessage": "running user prompt submit hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&session_start_script_path, session_start_script)
+        .context("write session start order hook script")?;
+    fs::write(&user_prompt_submit_script_path, user_prompt_submit_script)
+        .context("write user prompt submit order hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
@@ -558,6 +622,15 @@ fn read_user_prompt_submit_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse user prompt submit hook log line"))
+        .collect()
+}
+
+fn read_hook_order_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("hook_order_log.jsonl"))
+        .context("read hook order log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse hook order log line"))
         .collect()
 }
 
@@ -750,6 +823,60 @@ async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
         Some(false)
     );
     assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_start_runs_before_user_prompt_submit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_and_user_prompt_submit_order_hooks(home) {
+                panic!("failed to write session start order hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let hook_inputs = read_hook_order_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 2);
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .map(|input| input["event"]
+                .as_str()
+                .expect("hook event name")
+                .to_string())
+            .collect::<Vec<_>>(),
+        vec![
+            "session_start".to_string(),
+            "user_prompt_submit".to_string(),
+        ],
+    );
+    assert_eq!(
+        hook_inputs[1].get("prompt").and_then(Value::as_str),
+        Some("hello"),
+    );
 
     Ok(())
 }

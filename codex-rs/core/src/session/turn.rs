@@ -297,6 +297,8 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
+    // Run SessionStart before UserPromptSubmit so startup hooks can shape the
+    // turn seen by prompt-submit hooks.
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
@@ -377,10 +379,6 @@ pub(crate) async fn run_turn(
     let mut can_drain_pending_input = input.is_empty();
 
     loop {
-        if run_pending_session_start_hooks(&sess, &turn_context).await {
-            break;
-        }
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
