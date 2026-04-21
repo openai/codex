@@ -58,6 +58,7 @@ impl ConfigManager {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_host_name(
         codex_home: PathBuf,
         cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
