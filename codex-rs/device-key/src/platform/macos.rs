@@ -21,6 +21,7 @@ use security_framework::access_control::SecAccessControl;
 use security_framework::key::Algorithm;
 use security_framework::key::SecKey;
 use security_framework_sys::access_control::kSecAccessControlPrivateKeyUsage;
+use security_framework_sys::access_control::kSecAccessControlUserPresence;
 use security_framework_sys::base::errSecItemNotFound;
 use security_framework_sys::base::errSecParam;
 use security_framework_sys::base::errSecSuccess;
@@ -40,13 +41,41 @@ use security_framework_sys::item::kSecClassKey;
 use security_framework_sys::item::kSecPrivateKeyAttrs;
 use security_framework_sys::item::kSecReturnRef;
 use security_framework_sys::keychain_item::SecItemCopyMatching;
+use std::ffi::c_char;
+use std::ffi::c_double;
+use std::ffi::c_void;
 use std::ptr;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 #[allow(non_upper_case_globals)]
 unsafe extern "C" {
     static kSecAttrApplicationTag: CFStringRef;
     static kSecAttrIsExtractable: CFStringRef;
+    static kSecUseAuthenticationContext: CFStringRef;
 }
+
+#[link(name = "LocalAuthentication", kind = "framework")]
+unsafe extern "C" {}
+
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn objc_getClass(name: *const c_char) -> ObjcId;
+    fn sel_registerName(name: *const c_char) -> ObjcSel;
+}
+
+type ObjcId = *mut c_void;
+type ObjcSel = *mut c_void;
+
+const LA_CONTEXT_CLASS: &[u8] = b"LAContext\0";
+const OBJC_MSG_SEND_SYMBOL: &[u8] = b"objc_msgSend\0";
+const OBJC_ALLOC_SELECTOR: &[u8] = b"alloc\0";
+const OBJC_INIT_SELECTOR: &[u8] = b"init\0";
+const OBJC_RELEASE_SELECTOR: &[u8] = b"release\0";
+const SET_TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SELECTOR: &[u8] =
+    b"setTouchIDAuthenticationAllowableReuseDuration:\0";
+const TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SECONDS: c_double = 300.0;
 
 #[derive(Debug)]
 pub(crate) struct MacOsDeviceKeyProvider;
@@ -103,7 +132,12 @@ impl DeviceKeyProvider for MacOsDeviceKeyProvider {
     ) -> Result<ProviderSignature, DeviceKeyError> {
         let class = MacKeyClass::from_protection_class(protection_class)
             .ok_or(DeviceKeyError::KeyNotFound)?;
-        let key = load_private_key(key_id, class)?.ok_or(DeviceKeyError::KeyNotFound)?;
+        let context = reusable_authentication_context()?;
+        let context = context
+            .lock()
+            .map_err(|err| DeviceKeyError::Platform(format!("LAContext mutex poisoned: {err}")))?;
+        let key = load_private_key_with_authentication_context(key_id, class, &context)?
+            .ok_or(DeviceKeyError::KeyNotFound)?;
         let signature_der = key
             .create_signature(Algorithm::ECDSASignatureMessageX962SHA256, payload)
             .map_err(|err| DeviceKeyError::Platform(err.to_string()))?;
@@ -112,6 +146,127 @@ impl DeviceKeyProvider for MacOsDeviceKeyProvider {
             algorithm: DeviceKeyAlgorithm::EcdsaP256Sha256,
         })
     }
+}
+
+struct LocalAuthenticationContext {
+    context: ObjcId,
+}
+
+unsafe impl Send for LocalAuthenticationContext {}
+
+impl LocalAuthenticationContext {
+    fn new() -> Result<Self, DeviceKeyError> {
+        let class = unsafe { objc_getClass(LA_CONTEXT_CLASS.as_ptr().cast::<c_char>()) };
+        if class.is_null() {
+            return Err(DeviceKeyError::Platform(
+                "LocalAuthentication.framework did not provide LAContext".to_string(),
+            ));
+        }
+
+        let allocated = unsafe { objc_msg_send_id(class, sel(OBJC_ALLOC_SELECTOR))? };
+        if allocated.is_null() {
+            return Err(DeviceKeyError::Platform(
+                "LAContext allocation returned null".to_string(),
+            ));
+        }
+
+        let context = unsafe { objc_msg_send_id(allocated, sel(OBJC_INIT_SELECTOR))? };
+        if context.is_null() {
+            return Err(DeviceKeyError::Platform(
+                "LAContext initialization returned null".to_string(),
+            ));
+        }
+
+        unsafe {
+            objc_msg_send_void_f64(
+                context,
+                sel(SET_TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SELECTOR),
+                TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SECONDS,
+            )?;
+        }
+        Ok(Self { context })
+    }
+
+    fn as_void(&self) -> *const c_void {
+        self.context.cast_const()
+    }
+}
+
+impl Drop for LocalAuthenticationContext {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = objc_msg_send_void(self.context, sel(OBJC_RELEASE_SELECTOR));
+        }
+    }
+}
+
+fn reusable_authentication_context()
+-> Result<&'static Mutex<LocalAuthenticationContext>, DeviceKeyError> {
+    static AUTHENTICATION_CONTEXT: OnceLock<Mutex<LocalAuthenticationContext>> = OnceLock::new();
+
+    if let Some(context) = AUTHENTICATION_CONTEXT.get() {
+        return Ok(context);
+    }
+
+    let context = LocalAuthenticationContext::new()?;
+    if AUTHENTICATION_CONTEXT.set(Mutex::new(context)).is_err() {
+        return AUTHENTICATION_CONTEXT.get().ok_or_else(|| {
+            DeviceKeyError::Platform(
+                "LAContext initialization raced but no context won".to_string(),
+            )
+        });
+    }
+    AUTHENTICATION_CONTEXT.get().ok_or_else(|| {
+        DeviceKeyError::Platform("LAContext was not stored after initialization".to_string())
+    })
+}
+
+fn sel(name: &'static [u8]) -> ObjcSel {
+    unsafe { sel_registerName(name.as_ptr().cast::<c_char>()) }
+}
+
+unsafe fn objc_msg_send_id(receiver: ObjcId, selector: ObjcSel) -> Result<ObjcId, DeviceKeyError> {
+    let msg_send: unsafe extern "C" fn(ObjcId, ObjcSel) -> ObjcId =
+        unsafe { std::mem::transmute(objc_msg_send_symbol()?) };
+    Ok(unsafe { msg_send(receiver, selector) })
+}
+
+unsafe fn objc_msg_send_void(receiver: ObjcId, selector: ObjcSel) -> Result<(), DeviceKeyError> {
+    let msg_send: unsafe extern "C" fn(ObjcId, ObjcSel) =
+        unsafe { std::mem::transmute(objc_msg_send_symbol()?) };
+    unsafe { msg_send(receiver, selector) };
+    Ok(())
+}
+
+unsafe fn objc_msg_send_void_f64(
+    receiver: ObjcId,
+    selector: ObjcSel,
+    value: c_double,
+) -> Result<(), DeviceKeyError> {
+    let msg_send: unsafe extern "C" fn(ObjcId, ObjcSel, c_double) =
+        unsafe { std::mem::transmute(objc_msg_send_symbol()?) };
+    unsafe { msg_send(receiver, selector, value) };
+    Ok(())
+}
+
+fn objc_msg_send_symbol() -> Result<*mut c_void, DeviceKeyError> {
+    let symbol = unsafe {
+        dlsym(
+            rtld_default(),
+            OBJC_MSG_SEND_SYMBOL.as_ptr().cast::<c_char>(),
+        )
+    };
+    if symbol.is_null() {
+        Err(DeviceKeyError::Platform(
+            "objc_msgSend lookup returned null".to_string(),
+        ))
+    } else {
+        Ok(symbol)
+    }
+}
+
+fn rtld_default() -> *mut c_void {
+    (-2_isize) as *mut c_void
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,6 +302,26 @@ impl MacKeyClass {
 }
 
 fn load_private_key(key_id: &str, class: MacKeyClass) -> Result<Option<SecKey>, DeviceKeyError> {
+    load_private_key_with_optional_authentication_context(key_id, class, None)
+}
+
+fn load_private_key_with_authentication_context(
+    key_id: &str,
+    class: MacKeyClass,
+    authentication_context: &LocalAuthenticationContext,
+) -> Result<Option<SecKey>, DeviceKeyError> {
+    load_private_key_with_optional_authentication_context(
+        key_id,
+        class,
+        Some(authentication_context),
+    )
+}
+
+fn load_private_key_with_optional_authentication_context(
+    key_id: &str,
+    class: MacKeyClass,
+    authentication_context: Option<&LocalAuthenticationContext>,
+) -> Result<Option<SecKey>, DeviceKeyError> {
     let tag = key_tag(key_id, class);
     let tag = CFData::from_buffer(tag.as_bytes());
     let mut query = unsafe {
@@ -173,6 +348,14 @@ fn load_private_key(key_id: &str, class: MacKeyClass) -> Result<Option<SecKey>, 
             query.add(
                 &kSecAttrIsExtractable.to_void(),
                 &CFBoolean::false_value().to_void(),
+            );
+        }
+    }
+    if let Some(authentication_context) = authentication_context {
+        unsafe {
+            query.add(
+                &kSecUseAuthenticationContext.to_void(),
+                &authentication_context.as_void(),
             );
         }
     }
@@ -218,15 +401,15 @@ fn create_or_load_private_key(key_id: &str, class: MacKeyClass) -> Result<SecKey
 
 /// Creates a macOS this-device-only P-256 signing key.
 ///
-/// The access-control flags below provide device-local non-exportability and continuity while the
-/// user session is unlocked. They do not request UserPresence or Biometry, so this provider is not
-/// by itself a malware-on-controller boundary; callers must still rely on local-transport
-/// restriction, app-server authorization, and structured payload validation.
+/// The access-control flags below keep the private key local to this device and require
+/// Security.framework to prove user presence before private-key use. The signing path also passes a
+/// process-local `LAContext` so successful biometric/password authentication can be reused for later
+/// signatures when macOS policy allows it.
 #[allow(deprecated)]
 fn create_private_key(key_id: &str, class: MacKeyClass) -> Result<SecKey, DeviceKeyError> {
     let access_control = SecAccessControl::create_with_protection(
         Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-        kSecAccessControlPrivateKeyUsage,
+        kSecAccessControlPrivateKeyUsage | kSecAccessControlUserPresence,
     )
     .map_err(|err| DeviceKeyError::Platform(err.to_string()))?;
     let tag = key_tag(key_id, class);
