@@ -9,7 +9,7 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
-    chat.emit_forked_thread_event(forked_from_id);
+    chat.emit_forked_thread_event(forked_from_id, /*fork_parent_title*/ None);
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -289,4 +289,22 @@ async fn side_context_label_preserves_status_line_snapshot() {
         "side_context_label_preserves_status_line",
         terminal.backend()
     );
+}
+
+#[tokio::test]
+async fn side_context_label_shows_parent_status_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.set_side_conversation_context_label(Some(
+        "Side from main thread · main needs input · Esc to return".to_string(),
+    ));
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw side conversation footer");
+    assert_chatwidget_snapshot!("side_context_label_shows_parent_status", terminal.backend());
 }

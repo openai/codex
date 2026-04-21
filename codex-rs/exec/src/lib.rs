@@ -87,6 +87,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -220,28 +221,32 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         command,
-        images,
-        model: model_cli_arg,
-        oss,
-        oss_provider,
-        config_profile,
-        config_profile_v2,
-        full_auto,
-        dangerously_bypass_approvals_and_sandbox,
-        cwd,
+        shared,
         skip_git_repo_check,
-        add_dir,
         ephemeral,
         ignore_user_config,
         ignore_rules,
         color,
         last_message_file,
         json: json_mode,
-        sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
+    let shared = shared.into_inner();
+    let SharedCliOptions {
+        images,
+        model: model_cli_arg,
+        oss,
+        oss_provider,
+        config_profile,
+        config_profile_v2,
+        sandbox_mode: sandbox_mode_cli_arg,
+        full_auto,
+        dangerously_bypass_approvals_and_sandbox,
+        cwd,
+        add_dir,
+    } = shared;
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),

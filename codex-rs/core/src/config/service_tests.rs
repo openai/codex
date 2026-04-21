@@ -62,7 +62,7 @@ X-Doc = "42"
 async fn write_value_preserves_comments_and_order() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let original = r#"# Codex user configuration
-model = "gpt-5"
+model = "gpt-5.2"
 approval_policy = "on-request"
 
 [notice]
@@ -88,7 +88,7 @@ unified_exec = true
 
     let updated = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
     let expected = r#"# Codex user configuration
-model = "gpt-5"
+model = "gpt-5.2"
 approval_policy = "on-request"
 
 [notice]
@@ -223,6 +223,7 @@ async fn read_includes_origins_and_layers() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let response = service
@@ -301,6 +302,7 @@ writable_roots = ["~/code"]
         vec![],
         loader_overrides,
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let response = service
@@ -341,6 +343,7 @@ async fn write_value_reports_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let result = service
@@ -390,7 +393,7 @@ async fn version_conflict_rejected() {
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "model".to_string(),
-            value: serde_json::json!("gpt-5"),
+            value: serde_json::json!("gpt-5.2"),
             merge_strategy: MergeStrategy::Replace,
             expected_version: Some("sha256:bogus".to_string()),
         })
@@ -477,6 +480,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let error = service
@@ -544,6 +548,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
+        /*host_name*/ None,
     );
 
     let error = service
@@ -590,6 +595,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
+        /*host_name*/ None,
     );
 
     let error = service
@@ -640,6 +646,7 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
         cli_overrides,
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let response = service
@@ -693,6 +700,7 @@ async fn write_value_reports_managed_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
 
     let result = service

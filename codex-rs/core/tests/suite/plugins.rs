@@ -118,7 +118,7 @@ async fn build_analytics_plugin_test_codex(
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5")
+        .with_model("gpt-5.2")
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
         });
@@ -396,7 +396,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         event["event_params"]["product_client_id"],
         serde_json::json!(codex_login::default_client::originator().value)
     );
-    assert_eq!(event["event_params"]["model_slug"], "gpt-5");
+    assert_eq!(event["event_params"]["model_slug"], "gpt-5.2");
     assert!(event["event_params"]["thread_id"].as_str().is_some());
     assert!(event["event_params"]["turn_id"].as_str().is_some());
 

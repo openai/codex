@@ -93,6 +93,8 @@ async fn request_permissions_round_trip() -> Result<()> {
                 file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
                     read: None,
                     write: Some(vec![requested_writes[0].clone()]),
+                    glob_scan_max_depth: None,
+                    entries: None,
                 }),
             },
             scope: PermissionGrantScope::Turn,

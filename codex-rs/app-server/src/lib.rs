@@ -2,6 +2,7 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -27,10 +28,11 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlStartOptions;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
-use crate::transport::start_remote_control;
+use crate::transport::start_remote_control_with_options;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
@@ -419,6 +421,7 @@ pub async fn run_main_with_transport(
         }
     };
     let loader_overrides_for_config_api = loader_overrides.clone();
+    let thread_config_loader = Arc::new(NoopThreadConfigLoader);
     let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
@@ -579,16 +582,17 @@ pub async fn run_main_with_transport(
         ));
     }
 
-    let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
-        config.chatgpt_base_url.clone(),
-        state_db.clone(),
-        auth_manager.clone(),
-        transport_event_tx.clone(),
-        transport_shutdown_token.clone(),
-        app_server_client_name_rx,
-        remote_control_enabled,
-    )
-    .await?;
+    let (remote_control_accept_handle, remote_control_handle) =
+        start_remote_control_with_options(RemoteControlStartOptions {
+            remote_control_url: config.chatgpt_base_url.clone(),
+            state_db: state_db.clone(),
+            auth_manager: auth_manager.clone(),
+            transport_event_tx: transport_event_tx.clone(),
+            shutdown_token: transport_shutdown_token.clone(),
+            app_server_client_name_rx,
+            initial_enabled: remote_control_enabled,
+        })
+        .await?;
     transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {
@@ -661,6 +665,7 @@ pub async fn run_main_with_transport(
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
+            thread_config_loader,
             feedback: feedback.clone(),
             log_db,
             config_warnings,

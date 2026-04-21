@@ -532,6 +532,12 @@
         "inputSchema": true,
         "name": {
           "type": "string"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1304,7 +1310,10 @@
           "type": "string"
         },
         "threadId": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uri": {
           "type": "string"
@@ -1312,7 +1321,6 @@
       },
       "required": [
         "server",
-        "threadId",
         "uri"
       ],
       "type": "object"

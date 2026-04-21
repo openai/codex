@@ -16,7 +16,9 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
+use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
+use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
@@ -26,6 +28,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -52,6 +55,7 @@ use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -738,7 +742,7 @@ fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
 }
 
 #[tokio::test]
-async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
+async fn routes_approval_to_guardian_requires_guardian_reviewer() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
@@ -748,6 +752,25 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
 
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     turn.config = Arc::new(config);
+
+    assert!(routes_approval_to_guardian(&turn));
+}
+
+#[tokio::test]
+async fn routes_approval_to_guardian_allows_granular_review_policy() {
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    turn.config = Arc::new(config);
+    turn.approval_policy
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }))
+        .expect("test setup should allow updating approval policy");
 
     assert!(routes_approval_to_guardian(&turn));
 }
@@ -1685,7 +1708,40 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_rejects_pinned_collab_feature() {
+async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
+    let mut parent_config = test_config().await;
+    let server: McpServerConfig =
+        toml::from_str("command = \"docs-server\"").expect("deserialize MCP server");
+    parent_config
+        .mcp_servers
+        .set(HashMap::from([("docs".to_string(), server)]))
+        .expect("parent MCP servers are configurable");
+    parent_config
+        .features
+        .enable(Feature::Apps)
+        .expect("apps feature is configurable");
+    parent_config
+        .features
+        .enable(Feature::Plugins)
+        .expect("plugins feature is configurable");
+    parent_config.include_apps_instructions = true;
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+    )
+    .expect("guardian config");
+
+    assert!(guardian_config.mcp_servers.get().is_empty());
+    assert!(!guardian_config.features.enabled(Feature::Apps));
+    assert!(!guardian_config.features.enabled(Feature::Plugins));
+    assert!(!guardian_config.include_apps_instructions);
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_allows_pinned_disabled_feature() {
     let mut parent_config = test_config().await;
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
@@ -1698,18 +1754,17 @@ async fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_review_session_config_for_test(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
     )
-    .expect_err("guardian config should fail when collab is pinned on");
+    .expect("guardian config should continue when a disabled feature is pinned on");
 
-    assert!(
-        err.to_string()
-            .contains("guardian review session requires `features.multi_agent` to be disabled")
-    );
+    assert!(guardian_config.features.enabled(Feature::Collab));
+    assert!(guardian_config.mcp_servers.get().is_empty());
+    assert!(!guardian_config.include_apps_instructions);
 }
 
 #[tokio::test]
