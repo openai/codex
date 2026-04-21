@@ -1,4 +1,5 @@
 use crate::CommandToolOptions;
+use crate::LoadableToolSpec;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
@@ -556,15 +557,34 @@ pub fn build_tool_registry_plan(
         }
     }
 
+    let mut dynamic_tool_specs = Vec::new();
     for tool in params.dynamic_tools {
         match dynamic_tool_to_loadable_tool_spec(tool, default_namespace_description) {
             Ok(loadable_tool) => {
                 let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                plan.push_spec(
-                    loadable_tool.into(),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
+                match loadable_tool {
+                    LoadableToolSpec::Function(tool) => {
+                        dynamic_tool_specs.push(LoadableToolSpec::Function(tool));
+                    }
+                    LoadableToolSpec::Namespace(namespace) => {
+                        if let Some(existing) =
+                            dynamic_tool_specs.iter_mut().find_map(|spec| match spec {
+                                LoadableToolSpec::Namespace(existing)
+                                    if existing.name == namespace.name =>
+                                {
+                                    Some(existing)
+                                }
+                                LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => {
+                                    None
+                                }
+                            })
+                        {
+                            existing.tools.extend(namespace.tools);
+                        } else {
+                            dynamic_tool_specs.push(LoadableToolSpec::Namespace(namespace));
+                        }
+                    }
+                }
                 plan.register_handler(handler_name, ToolHandlerKind::DynamicTool);
             }
             Err(error) => {
@@ -574,6 +594,13 @@ pub fn build_tool_registry_plan(
                 );
             }
         }
+    }
+    for loadable_tool in dynamic_tool_specs {
+        plan.push_spec(
+            loadable_tool.into(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
     }
 
     plan

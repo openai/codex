@@ -1462,6 +1462,80 @@ fn search_tool_registers_for_deferred_dynamic_tools() {
 }
 
 #[test]
+fn build_specs_groups_deferred_dynamic_tools_by_namespace() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let dynamic_tools = [
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: "automation_update".to_string(),
+            description: "Create, update, view, or delete recurring automations.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string" },
+                },
+            }),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: "linear_create_issue".to_string(),
+            description: "Create a Linear issue.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                },
+            }),
+            defer_loading: true,
+        },
+    ];
+
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &dynamic_tools,
+    );
+
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool.name() == "codex_app")
+            .count(),
+        1
+    );
+    assert_eq!(
+        namespace_function_names(&tools, "codex_app"),
+        vec![
+            "automation_update".to_string(),
+            "linear_create_issue".to_string(),
+        ]
+    );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced("codex_app", "automation_update"),
+        kind: ToolHandlerKind::DynamicTool,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::namespaced("codex_app", "linear_create_issue"),
+        kind: ToolHandlerKind::DynamicTool,
+    }));
+}
+
+#[test]
 fn tool_suggest_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
