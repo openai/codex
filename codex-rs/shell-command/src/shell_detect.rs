@@ -1,3 +1,5 @@
+use std::path::Path;
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// Shell executable families that Codex treats as known command wrappers.
@@ -10,7 +12,7 @@ pub enum ShellType {
     Cmd,
 }
 
-pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+pub fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
     let shell_text = shell_path.as_os_str().to_str()?;
     // Keep this exact: repo-local files named like shells must not inherit
     // shell-wrapper trust in approval or display decisions.
