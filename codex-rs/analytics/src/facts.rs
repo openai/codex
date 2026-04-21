@@ -295,7 +295,10 @@ pub(crate) enum AnalyticsFact {
     ServerResponse {
         response: Box<ServerResponse>,
     },
-    Notification(Box<ServerNotification>),
+    Notification {
+        connection_id: u64,
+        notification: Box<ServerNotification>,
+    },
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),
