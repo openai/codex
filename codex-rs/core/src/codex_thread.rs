@@ -81,7 +81,7 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
-    pub async fn continue_active_goal_if_idle(&self) {
+    async fn continue_active_goal_if_idle(&self) {
         self.codex
             .session
             .maybe_start_turn_for_pending_work_or_goal_continuation()
@@ -93,40 +93,52 @@ impl CodexThread {
             .session
             .activate_paused_thread_goal_after_resume()
             .await?;
+        self.continue_active_goal_if_idle().await;
         Ok(())
     }
 
-    pub async fn apply_goal_active_runtime_state(&self) {
-        self.codex
+    pub async fn prepare_external_goal_mutation(&self) {
+        if let Err(err) = self
+            .codex
             .session
-            .goal_runtime
-            .continuation_suppressed
-            .store(false, Ordering::SeqCst);
-        self.codex
-            .session
-            .maybe_start_turn_for_pending_work_or_goal_continuation()
-            .await;
+            .account_thread_goal_before_external_mutation()
+            .await
+        {
+            tracing::warn!(
+                "failed to account thread goal progress before external mutation: {err}"
+            );
+        }
     }
 
-    pub async fn apply_goal_stopped_runtime_state(&self) {
-        self.codex
-            .session
-            .clear_stopped_thread_goal_runtime_state()
-            .await;
+    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+        match status {
+            codex_state::ThreadGoalStatus::Active => {
+                self.codex
+                    .session
+                    .goal_runtime
+                    .continuation_suppressed
+                    .store(false, Ordering::SeqCst);
+                self.codex
+                    .session
+                    .maybe_start_turn_for_pending_work_or_goal_continuation()
+                    .await;
+            }
+            codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::BudgetLimited
+            | codex_state::ThreadGoalStatus::Complete => {
+                self.codex
+                    .session
+                    .clear_stopped_thread_goal_runtime_state()
+                    .await;
+            }
+        }
     }
 
-    pub async fn apply_goal_clear_runtime_state(&self) {
+    pub async fn apply_external_goal_clear(&self) {
         self.codex
             .session
             .clear_cached_thread_goal_after_delete()
             .await;
-    }
-
-    pub async fn account_thread_goal_before_external_mutation(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .account_thread_goal_before_external_mutation()
-            .await
     }
 
     #[doc(hidden)]

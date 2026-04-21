@@ -74,15 +74,8 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
-        {
-            self.send_internal_error(
-                request_id,
-                format!("failed to account thread goal progress before update: {err}"),
-            )
-            .await;
-            return;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
         }
 
         let listener_command_tx = {
@@ -175,8 +168,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let goal = api_thread_goal_from_state(goal);
         let goal_status = goal.status;
+        let goal = api_thread_goal_from_state(goal);
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -185,15 +178,8 @@ impl CodexMessageProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
-        if self.config.features.enabled(Feature::Goals)
-            && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
-        {
-            match goal_status {
-                ThreadGoalStatus::Active => thread.apply_goal_active_runtime_state().await,
-                ThreadGoalStatus::BudgetLimited
-                | ThreadGoalStatus::Paused
-                | ThreadGoalStatus::Complete => thread.apply_goal_stopped_runtime_state().await,
-            }
+        if let Some(thread) = running_thread.as_ref() {
+            thread.apply_external_goal_set(goal_status).await;
         }
     }
 
@@ -308,15 +294,8 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
-        {
-            self.send_internal_error(
-                request_id,
-                format!("failed to account thread goal progress before clear: {err}"),
-            )
-            .await;
-            return;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
         }
 
         let listener_command_tx = {
@@ -334,7 +313,7 @@ impl CodexMessageProcessor {
         };
 
         if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.apply_goal_clear_runtime_state().await;
+            thread.apply_external_goal_clear().await;
         }
 
         self.outgoing

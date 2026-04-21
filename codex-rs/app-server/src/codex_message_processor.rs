@@ -4480,7 +4480,6 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let core_thread = Arc::clone(&codex_thread);
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
@@ -4580,7 +4579,6 @@ impl CodexMessageProcessor {
                 .await;
                 if self.config.features.enabled(Feature::Goals) {
                     self.emit_thread_goal_snapshot(thread_id).await;
-                    core_thread.continue_active_goal_if_idle().await;
                 }
             }
             Err(err) => {
@@ -4785,7 +4783,6 @@ impl CodexMessageProcessor {
                     thread_summary,
                     emit_thread_goal_update,
                     thread_goal_state_db,
-                    continue_goal_if_idle: emit_thread_goal_update,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -9182,9 +9179,6 @@ async fn handle_pending_thread_resume_request(
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
-    if pending.continue_goal_if_idle {
-        conversation.continue_active_goal_if_idle().await;
-    }
 }
 
 enum ThreadTurnSource<'a> {
