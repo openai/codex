@@ -265,6 +265,9 @@ impl Session {
                                 .map(state_goal_status_from_protocol)
                                 .or(Some(codex_state::ThreadGoalStatus::Active)),
                             token_budget,
+                            expected_goal_id: existing_goal
+                                .as_ref()
+                                .map(|goal| goal.goal_id.clone()),
                         },
                     )
                     .await?
@@ -287,10 +290,9 @@ impl Session {
                     .await?
             }
         } else {
-            previous_status = state_db
-                .get_thread_goal(self.conversation_id)
-                .await?
-                .map(|goal| goal.status);
+            let existing_goal = state_db.get_thread_goal(self.conversation_id).await?;
+            previous_status = existing_goal.as_ref().map(|goal| goal.status);
+            let expected_goal_id = existing_goal.map(|goal| goal.goal_id);
             let status = status.map(state_goal_status_from_protocol);
             state_db
                 .update_thread_goal(
@@ -298,6 +300,7 @@ impl Session {
                     codex_state::ThreadGoalUpdate {
                         status,
                         token_budget,
+                        expected_goal_id,
                     },
                 )
                 .await?
@@ -704,6 +707,7 @@ impl Session {
                 codex_state::ThreadGoalUpdate {
                     status: Some(codex_state::ThreadGoalStatus::Active),
                     token_budget: None,
+                    expected_goal_id: Some(goal.goal_id.clone()),
                 },
             )
             .await?
