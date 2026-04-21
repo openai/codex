@@ -282,11 +282,6 @@ impl Session {
             .mark_turn_started(started_at)
             .await;
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
-        self.mark_thread_goal_turn_started(
-            turn_context.as_ref(),
-            token_usage_at_turn_start.clone(),
-        )
-        .await;
         let build_requeued_startup_input =
             |startup_pending_input: Vec<ResponseInputItem>,
              input: Vec<UserInput>,
@@ -353,12 +348,14 @@ impl Session {
                     .await;
                 return;
             };
-            turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            turn_state.token_usage_at_turn_start = token_usage_at_turn_start.clone();
             turn_state.started_from_goal_continuation = started_from_goal_continuation;
             for item in startup_pending_input {
                 turn_state.push_pending_input(item);
             }
         }
+        self.mark_thread_goal_turn_started(turn_context.as_ref(), token_usage_at_turn_start)
+            .await;
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);

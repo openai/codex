@@ -353,6 +353,21 @@ impl CodexMessageProcessor {
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
+        let previous_status = if running_thread.is_some() {
+            match state_db.get_thread_goal(thread_id).await {
+                Ok(goal) => goal.map(|goal| goal.status),
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to read thread goal before clear: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let cleared = match state_db.delete_thread_goal(thread_id).await {
             Ok(cleared) => cleared,
             Err(err) => {
@@ -363,7 +378,12 @@ impl CodexMessageProcessor {
         };
 
         if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.apply_goal_clear_runtime_effects().await;
+            let transition = if previous_status == Some(codex_state::ThreadGoalStatus::Active) {
+                StoppedGoalTransition::NewlyStopped
+            } else {
+                StoppedGoalTransition::AlreadyStopped
+            };
+            thread.apply_goal_clear_runtime_effects(transition).await;
         }
 
         self.outgoing

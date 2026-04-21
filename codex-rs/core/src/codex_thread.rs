@@ -156,11 +156,13 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_goal_clear_runtime_effects(&self) {
-        self.codex
-            .session
-            .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-            .await;
+    pub async fn apply_goal_clear_runtime_effects(&self, transition: StoppedGoalTransition) {
+        if transition == StoppedGoalTransition::NewlyStopped {
+            self.codex
+                .session
+                .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                .await;
+        }
         self.codex
             .session
             .clear_cached_thread_goal_after_delete()
