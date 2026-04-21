@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_core::ThreadManager;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_login::CodexAuth;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -237,7 +238,10 @@ async fn list_skills_skips_cwd_roots_when_environment_disabled() -> Result<()> {
         Arc::new(EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs {
                 exec_server_url: Some("none".to_string()),
-                local_runtime_paths: None,
+                local_runtime_paths: ExecServerRuntimePaths::new(
+                    std::env::current_exe()?,
+                    /*codex_linux_sandbox_exe*/ None,
+                )?,
             },
         )),
         /*analytics_events_client*/ None,

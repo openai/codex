@@ -279,9 +279,7 @@ fn build_test_processor(
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         config_manager,
-        environment_manager: Arc::new(EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
-        )),
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),

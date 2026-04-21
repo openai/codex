@@ -42,51 +42,40 @@ pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
 #[derive(Clone, Debug)]
 pub struct EnvironmentManagerArgs {
     pub exec_server_url: Option<String>,
-    pub local_runtime_paths: Option<ExecServerRuntimePaths>,
-}
-
-impl Default for EnvironmentManagerArgs {
-    fn default() -> Self {
-        Self {
-            exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
-            local_runtime_paths: None,
-        }
-    }
+    pub local_runtime_paths: ExecServerRuntimePaths,
 }
 
 impl EnvironmentManagerArgs {
-    pub fn default_for_tests() -> Self {
+    pub fn new(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             exec_server_url: None,
-            local_runtime_paths: None,
+            local_runtime_paths,
         }
     }
-}
 
-impl From<Option<String>> for EnvironmentManagerArgs {
-    fn from(exec_server_url: Option<String>) -> Self {
+    pub fn from_env(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
-            exec_server_url,
-            local_runtime_paths: None,
+            exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
+            local_runtime_paths,
         }
-    }
-}
-
-impl Default for EnvironmentManager {
-    fn default() -> Self {
-        Self::new(EnvironmentManagerArgs::default())
     }
 }
 
 impl EnvironmentManager {
+    /// Builds a test-only manager without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
-        Self::new(EnvironmentManagerArgs::default_for_tests())
+        Self {
+            default_environment: Some(LOCAL_ENVIRONMENT_ID.to_string()),
+            environments: HashMap::from([(
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                Arc::new(Environment::default_for_tests()),
+            )]),
+        }
     }
 
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
     /// runtime paths used when creating local filesystem helpers.
-    pub fn new(exec_server_url: impl Into<EnvironmentManagerArgs>) -> Self {
-        let args = exec_server_url.into();
+    pub fn new(args: EnvironmentManagerArgs) -> Self {
         let EnvironmentManagerArgs {
             exec_server_url,
             local_runtime_paths,
@@ -94,9 +83,7 @@ impl EnvironmentManager {
         let (exec_server_url, environment_disabled) = normalize_exec_server_url(exec_server_url);
         let mut environments = HashMap::from([(
             LOCAL_ENVIRONMENT_ID.to_string(),
-            Arc::new(Environment::local_with_runtime_paths(
-                local_runtime_paths.clone(),
-            )),
+            Arc::new(Environment::local(local_runtime_paths.clone())),
         )]);
         let default_environment = if environment_disabled {
             None
@@ -105,10 +92,7 @@ impl EnvironmentManager {
                 Some(exec_server_url) => {
                     environments.insert(
                         REMOTE_ENVIRONMENT_ID.to_string(),
-                        Arc::new(Environment::remote_with_runtime_paths(
-                            exec_server_url,
-                            local_runtime_paths,
-                        )),
+                        Arc::new(Environment::remote(exec_server_url, local_runtime_paths)),
                     );
                     Some(REMOTE_ENVIRONMENT_ID.to_string())
                 }
@@ -129,6 +113,12 @@ impl EnvironmentManager {
             .and_then(|environment_id| self.get_environment(environment_id))
     }
 
+    /// Returns the local environment instance used for internal runtime work.
+    pub fn local_environment(&self) -> Arc<Environment> {
+        self.get_environment(LOCAL_ENVIRONMENT_ID)
+            .expect("EnvironmentManager always has a local environment")
+    }
+
     /// Returns a named environment instance.
     pub fn get_environment(&self, environment_id: &str) -> Option<Arc<Environment>> {
         self.environments.get(environment_id).cloned()
@@ -147,8 +137,9 @@ pub struct Environment {
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
-impl Default for Environment {
-    fn default() -> Self {
+impl Environment {
+    /// Builds a test-only local environment without configured sandbox helper paths.
+    pub fn default_for_tests() -> Self {
         Self {
             exec_server_url: None,
             exec_backend: Arc::new(LocalProcess::default()),
@@ -168,13 +159,21 @@ impl std::fmt::Debug for Environment {
 
 impl Environment {
     /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value.
-    pub fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
-        Self::create_with_runtime_paths(exec_server_url, /*local_runtime_paths*/ None)
+    pub fn create(
+        exec_server_url: Option<String>,
+        local_runtime_paths: ExecServerRuntimePaths,
+    ) -> Result<Self, ExecServerError> {
+        Self::create_inner(exec_server_url, Some(local_runtime_paths))
+    }
+
+    /// Builds a test-only environment without configured sandbox helper paths.
+    pub fn create_for_tests(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
+        Self::create_inner(exec_server_url, /*local_runtime_paths*/ None)
     }
 
     /// Builds an environment from the raw `CODEX_EXEC_SERVER_URL` value and
     /// local runtime paths used when creating local filesystem helpers.
-    pub(crate) fn create_with_runtime_paths(
+    fn create_inner(
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
@@ -186,28 +185,30 @@ impl Environment {
         }
 
         Ok(match exec_server_url {
-            Some(exec_server_url) => {
-                Self::remote_with_runtime_paths(exec_server_url, local_runtime_paths)
-            }
-            None => Self::local_with_runtime_paths(local_runtime_paths),
+            Some(exec_server_url) => Self::remote_inner(exec_server_url, local_runtime_paths),
+            None => match local_runtime_paths {
+                Some(local_runtime_paths) => Self::local(local_runtime_paths),
+                None => Self::default_for_tests(),
+            },
         })
     }
 
-    fn local_with_runtime_paths(local_runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
-        let filesystem: Arc<dyn ExecutorFileSystem> = match local_runtime_paths.clone() {
-            Some(runtime_paths) => Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
-            None => Arc::new(LocalFileSystem::unsandboxed()),
-        };
-
+    fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
             exec_server_url: None,
             exec_backend: Arc::new(LocalProcess::default()),
-            filesystem,
-            local_runtime_paths,
+            filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
+                local_runtime_paths.clone(),
+            )),
+            local_runtime_paths: Some(local_runtime_paths),
         }
     }
 
-    fn remote_with_runtime_paths(
+    fn remote(exec_server_url: String, local_runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::remote_inner(exec_server_url, Some(local_runtime_paths))
+    }
+
+    fn remote_inner(
         exec_server_url: String,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
@@ -265,10 +266,18 @@ mod tests {
     use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
+    fn test_runtime_paths() -> ExecServerRuntimePaths {
+        ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths")
+    }
+
     #[tokio::test]
     async fn create_local_environment_does_not_connect() {
-        let environment =
-            Environment::create(/*exec_server_url*/ None).expect("create environment");
+        let environment = Environment::create(/*exec_server_url*/ None, test_runtime_paths())
+            .expect("create environment");
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(!environment.is_remote());
@@ -278,7 +287,7 @@ mod tests {
     async fn environment_manager_normalizes_empty_url() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some(String::new()),
-            local_runtime_paths: None,
+            local_runtime_paths: test_runtime_paths(),
         });
 
         let environment = manager.default_environment().expect("default environment");
@@ -296,7 +305,7 @@ mod tests {
     async fn environment_manager_treats_none_value_as_disabled() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
-            local_runtime_paths: None,
+            local_runtime_paths: test_runtime_paths(),
         });
 
         assert!(manager.default_environment().is_none());
@@ -313,7 +322,7 @@ mod tests {
     async fn environment_manager_reports_remote_url() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-            local_runtime_paths: None,
+            local_runtime_paths: test_runtime_paths(),
         });
 
         let environment = manager.default_environment().expect("default environment");
@@ -335,7 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_default_environment_caches_environment() {
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default_for_tests());
+        let manager = EnvironmentManager::default_for_tests();
 
         let first = manager.default_environment().expect("default environment");
         let second = manager.default_environment().expect("default environment");
@@ -349,14 +358,10 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_carries_local_runtime_paths() {
-        let runtime_paths = ExecServerRuntimePaths::new(
-            std::env::current_exe().expect("current exe"),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths");
+        let runtime_paths = test_runtime_paths();
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: None,
-            local_runtime_paths: Some(runtime_paths.clone()),
+            local_runtime_paths: runtime_paths.clone(),
         });
 
         let environment = manager.default_environment().expect("default environment");
@@ -364,7 +369,10 @@ mod tests {
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: environment.exec_server_url().map(str::to_owned),
-            local_runtime_paths: environment.local_runtime_paths().cloned(),
+            local_runtime_paths: environment
+                .local_runtime_paths()
+                .expect("local runtime paths")
+                .clone(),
         });
         let environment = manager.default_environment().expect("default environment");
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
@@ -374,7 +382,7 @@ mod tests {
     async fn disabled_environment_manager_has_no_default_environment() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
-            local_runtime_paths: None,
+            local_runtime_paths: test_runtime_paths(),
         });
 
         assert!(manager.default_environment().is_none());
@@ -384,7 +392,7 @@ mod tests {
     async fn environment_manager_keeps_local_lookup_when_default_disabled() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
-            local_runtime_paths: None,
+            local_runtime_paths: test_runtime_paths(),
         });
 
         assert!(manager.default_environment().is_none());
@@ -399,14 +407,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_environment_returns_none_for_unknown_id() {
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default_for_tests());
+        let manager = EnvironmentManager::default_for_tests();
 
         assert!(manager.get_environment("does-not-exist").is_none());
     }
 
     #[tokio::test]
     async fn default_environment_has_ready_local_executor() {
-        let environment = Environment::default();
+        let environment = Environment::default_for_tests();
 
         let response = environment
             .get_exec_backend()
@@ -424,5 +432,28 @@ mod tests {
             .expect("start process");
 
         assert_eq!(response.process.process_id().as_str(), "default-env-proc");
+    }
+
+    #[tokio::test]
+    async fn test_environment_rejects_sandboxed_filesystem_without_runtime_paths() {
+        let environment = Environment::default_for_tests();
+        let path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+            std::env::current_exe().expect("current exe").as_path(),
+        )
+        .expect("absolute current exe");
+        let sandbox = crate::FileSystemSandboxContext::new(
+            codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        );
+
+        let err = environment
+            .get_filesystem()
+            .read_file(&path, Some(&sandbox))
+            .await
+            .expect_err("sandboxed read should require runtime paths");
+
+        assert_eq!(
+            err.to_string(),
+            "sandboxed filesystem operations require configured runtime paths"
+        );
     }
 }
