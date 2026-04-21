@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use serde::Serialize;
 use tracing::debug;
@@ -13,11 +12,12 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::AgentThreadId;
+use crate::CodexTurnId;
+use crate::CompactionId;
 use crate::CompactionTraceContext;
 use crate::InferenceTraceContext;
 use crate::RawPayloadKind;
 use crate::RawPayloadRef;
-use crate::RawTraceEventContext;
 use crate::RawTraceEventPayload;
 use crate::TraceWriter;
 
@@ -68,17 +68,6 @@ pub struct ThreadStartedTraceMetadata {
     pub provider_name: String,
     pub approval_policy: String,
     pub sandbox_policy: String,
-}
-
-/// History replacement checkpoint persisted when compaction installs new live history.
-///
-/// The checkpoint keeps compaction separate from ordinary sampling snapshots:
-/// `input_history` is the live thread history selected for compaction, while
-/// `replacement_history` is what future prompts may carry after the checkpoint.
-#[derive(Serialize)]
-pub struct CompactionCheckpointTracePayload<'a> {
-    pub input_history: &'a [ResponseItem],
-    pub replacement_history: &'a [ResponseItem],
 }
 
 impl RolloutTraceRecorder {
@@ -165,10 +154,10 @@ impl RolloutTraceRecorder {
     /// only after it has built the concrete request payload for that attempt.
     pub fn inference_trace_context(
         &self,
-        thread_id: AgentThreadId,
-        codex_turn_id: String,
-        model: String,
-        provider_name: String,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+        model: impl Into<String>,
+        provider_name: impl Into<String>,
     ) -> InferenceTraceContext {
         let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
             return InferenceTraceContext::disabled();
@@ -176,10 +165,10 @@ impl RolloutTraceRecorder {
 
         InferenceTraceContext::enabled(
             Arc::clone(&recorder.writer),
-            thread_id,
-            codex_turn_id,
-            model,
-            provider_name,
+            thread_id.into(),
+            codex_turn_id.into(),
+            model.into(),
+            provider_name.into(),
         )
     }
 
@@ -191,11 +180,11 @@ impl RolloutTraceRecorder {
     /// replacement history is installed.
     pub fn compaction_trace_context(
         &self,
-        thread_id: AgentThreadId,
-        codex_turn_id: String,
-        compaction_id: String,
-        model: String,
-        provider_name: String,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+        compaction_id: impl Into<CompactionId>,
+        model: impl Into<String>,
+        provider_name: impl Into<String>,
     ) -> CompactionTraceContext {
         let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
             return CompactionTraceContext::disabled();
@@ -203,43 +192,12 @@ impl RolloutTraceRecorder {
 
         CompactionTraceContext::enabled(
             Arc::clone(&recorder.writer),
-            thread_id,
-            codex_turn_id,
-            compaction_id,
-            model,
-            provider_name,
+            thread_id.into(),
+            codex_turn_id.into(),
+            compaction_id.into(),
+            model.into(),
+            provider_name.into(),
         )
-    }
-
-    /// Emits the checkpoint where remote-compacted history replaces live thread history.
-    ///
-    /// This checkpoint is deliberately separate from the compact endpoint response: Codex filters
-    /// and reinjects context before replacement history becomes live. The reducer uses this event
-    /// to connect the pre-compaction history to the processed replacement items without treating
-    /// repeated developer/context prefix items as part of the replacement itself.
-    pub fn record_compaction_installed(
-        &self,
-        thread_id: AgentThreadId,
-        codex_turn_id: String,
-        compaction_id: String,
-        checkpoint: &CompactionCheckpointTracePayload<'_>,
-    ) {
-        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
-            return;
-        };
-        let Some(checkpoint_payload) = recorder
-            .write_json_payload_best_effort(RawPayloadKind::CompactionCheckpoint, checkpoint)
-        else {
-            return;
-        };
-        recorder.append_with_context_best_effort(
-            thread_id,
-            codex_turn_id,
-            RawTraceEventPayload::CompactionInstalled {
-                compaction_id,
-                checkpoint_payload,
-            },
-        );
     }
 }
 
@@ -260,21 +218,6 @@ impl EnabledRolloutTraceRecorder {
 
     fn append_best_effort(&self, payload: RawTraceEventPayload) {
         if let Err(err) = self.writer.append(payload) {
-            warn!("failed to append rollout trace event: {err:#}");
-        }
-    }
-
-    fn append_with_context_best_effort(
-        &self,
-        thread_id: AgentThreadId,
-        codex_turn_id: String,
-        payload: RawTraceEventPayload,
-    ) {
-        let context = RawTraceEventContext {
-            thread_id: Some(thread_id),
-            codex_turn_id: Some(codex_turn_id),
-        };
-        if let Err(err) = self.writer.append_with_context(context, payload) {
             warn!("failed to append rollout trace event: {err:#}");
         }
     }

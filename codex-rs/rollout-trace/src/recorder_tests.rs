@@ -10,6 +10,7 @@ use codex_protocol::protocol::SubAgentSource;
 use tempfile::TempDir;
 
 use super::*;
+use crate::CompactionCheckpointTracePayload;
 use crate::RolloutStatus;
 use crate::replay_bundle;
 
@@ -105,12 +106,8 @@ fn disabled_recorder_accepts_trace_calls_without_writing() -> anyhow::Result<()>
 
     recorder.record_thread_started(minimal_metadata(thread_id));
 
-    let inference_trace = recorder.inference_trace_context(
-        thread_id.to_string(),
-        "turn-1".to_string(),
-        "gpt-test".to_string(),
-        "test-provider".to_string(),
-    );
+    let inference_trace =
+        recorder.inference_trace_context(thread_id, "turn-1", "gpt-test", "test-provider");
     let inference_attempt = inference_trace.start_attempt();
     inference_attempt.record_started(&serde_json::json!({ "kind": "inference" }));
     let token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
@@ -118,25 +115,20 @@ fn disabled_recorder_accepts_trace_calls_without_writing() -> anyhow::Result<()>
     inference_attempt.record_failed("inference failed");
 
     let compaction_trace = recorder.compaction_trace_context(
-        thread_id.to_string(),
-        "turn-1".to_string(),
-        "compaction-1".to_string(),
-        "gpt-test".to_string(),
-        "test-provider".to_string(),
+        thread_id,
+        "turn-1",
+        "compaction-1",
+        "gpt-test",
+        "test-provider",
     );
     let compaction_attempt =
         compaction_trace.start_attempt(&serde_json::json!({ "kind": "compaction" }));
     compaction_attempt.record_completed(&[]);
     compaction_attempt.record_failed("compaction failed");
-    recorder.record_compaction_installed(
-        thread_id.to_string(),
-        "turn-1".to_string(),
-        "compaction-1".to_string(),
-        &CompactionCheckpointTracePayload {
-            input_history: &[],
-            replacement_history: &[],
-        },
-    );
+    compaction_trace.record_installed(&CompactionCheckpointTracePayload {
+        input_history: &[],
+        replacement_history: &[],
+    });
 
     assert_eq!(fs::read_dir(temp.path())?.count(), 0);
 

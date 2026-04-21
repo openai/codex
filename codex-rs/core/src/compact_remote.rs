@@ -118,7 +118,13 @@ async fn run_remote_compact_task_inner_impl(
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
     // endpoint attempts, and the installed history checkpoint all have one join key.
-    let compaction_id = context_compaction_item.id.clone();
+    let compaction_trace = sess.services.rollout_trace.compaction_trace_context(
+        sess.conversation_id,
+        turn_context.sub_id.as_str(),
+        context_compaction_item.id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
@@ -166,17 +172,6 @@ async fn run_remote_compact_task_inner_impl(
         personality: turn_context.personality,
         output_schema: None,
     };
-    // Remote compaction is the only compaction shape rollout tracing supports. The trace context
-    // records the exact `/responses/compact` request and response; normal sampling requests remain
-    // traced through the inference path.
-    let compaction_trace = sess.services.rollout_trace.compaction_trace_context(
-        sess.conversation_id.to_string(),
-        turn_context.sub_id.clone(),
-        compaction_id.clone(),
-        turn_context.model_info.slug.clone(),
-        turn_context.provider.info().name.clone(),
-    );
-
     let mut new_history = sess
         .services
         .model_client
@@ -223,15 +218,10 @@ async fn run_remote_compact_task_inner_impl(
     // Install is the semantic boundary where the compact endpoint's output becomes live
     // thread history. Keep it distinct from the later inference request so the reducer can
     // still represent repeated developer/context prefix items exactly as the model saw them.
-    sess.services.rollout_trace.record_compaction_installed(
-        sess.conversation_id.to_string(),
-        turn_context.sub_id.clone(),
-        compaction_id,
-        &CompactionCheckpointTracePayload {
-            input_history: &trace_input_history,
-            replacement_history: &new_history,
-        },
-    );
+    compaction_trace.record_installed(&CompactionCheckpointTracePayload {
+        input_history: &trace_input_history,
+        replacement_history: &new_history,
+    });
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(turn_context).await;

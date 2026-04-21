@@ -18,6 +18,8 @@ mod writer;
 
 /// Conventional reduced-state cache name written next to a raw trace bundle.
 pub use bundle::REDUCED_STATE_FILE_NAME;
+/// Raw checkpoint payload for a remote compaction install event.
+pub use compaction::CompactionCheckpointTracePayload;
 /// No-op-capable handle for recording remote-compaction requests.
 pub use compaction::CompactionTraceAttempt;
 /// Shared recorder context for a compaction checkpoint.
@@ -46,8 +48,6 @@ pub use raw_event::RawTraceEventContext;
 pub use raw_event::RawTraceEventPayload;
 /// Environment variable that enables local trace-bundle recording.
 pub use recorder::CODEX_ROLLOUT_TRACE_ROOT_ENV;
-/// Raw checkpoint payload for a remote compaction install event.
-pub use recorder::CompactionCheckpointTracePayload;
 /// Best-effort hot-path recorder for one rollout trace bundle.
 pub use recorder::RolloutTraceRecorder;
 /// Raw metadata captured when a thread starts.

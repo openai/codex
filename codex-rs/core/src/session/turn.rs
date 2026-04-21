@@ -1875,10 +1875,10 @@ async fn try_run_sampling_request(
         features = sess.features.enabled_features(),
     );
     let inference_trace = sess.services.rollout_trace.inference_trace_context(
-        sess.conversation_id.to_string(),
-        turn_context.sub_id.clone(),
-        turn_context.model_info.slug.clone(),
-        turn_context.provider.info().name.clone(),
+        sess.conversation_id,
+        turn_context.sub_id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
     );
     let mut stream = client_session
         .stream_with_trace(
