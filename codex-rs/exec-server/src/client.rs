@@ -3,12 +3,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
@@ -55,6 +57,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
+use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -69,6 +73,8 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
+
+pub(crate) mod http_client;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -145,6 +151,14 @@ struct Inner {
     // with the same canonical message. This client never reconnects, so the
     // latch only moves from unset to set once.
     disconnected: OnceLock<String>,
+    // Streaming HTTP responses are keyed by a client-generated request id
+    // because they share the same connection-global notification channel as
+    // process output. Keep the routing table local to the client so higher
+    // layers can consume body chunks like a normal byte stream.
+    http_body_streams: ArcSwap<HashMap<String, mpsc::Sender<HttpRequestBodyDeltaNotification>>>,
+    http_body_stream_failures: ArcSwap<HashMap<String, String>>,
+    http_body_streams_write_lock: Mutex<()>,
+    http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -380,7 +394,7 @@ impl ExecServerClient {
                                     &inner,
                                     format!("exec-server notification handling failed: {err}"),
                                 );
-                                fail_all_sessions(&inner, message).await;
+                                fail_all_in_flight_work(&inner, message).await;
                                 return;
                             }
                         }
@@ -390,7 +404,7 @@ impl ExecServerClient {
                                     &inner,
                                     disconnected_message(reason.as_deref()),
                                 );
-                                fail_all_sessions(&inner, message).await;
+                                fail_all_in_flight_work(&inner, message).await;
                             }
                             return;
                         }
@@ -403,6 +417,10 @@ impl ExecServerClient {
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
                 disconnected: OnceLock::new(),
+                http_body_streams: ArcSwap::from_pointee(HashMap::new()),
+                http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
+                http_body_streams_write_lock: Mutex::new(()),
+                http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
@@ -733,6 +751,12 @@ async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     }
 }
 
+/// Fails all in-flight work that depends on the shared JSON-RPC transport.
+async fn fail_all_in_flight_work(inner: &Arc<Inner>, message: String) {
+    fail_all_sessions(inner, message.clone()).await;
+    inner.fail_all_http_body_streams(message).await;
+}
+
 async fn handle_server_notification(
     inner: &Arc<Inner>,
     notification: JSONRPCNotification,
@@ -782,6 +806,11 @@ async fn handle_server_notification(
                     inner.remove_session(&params.process_id).await;
                 }
             }
+        }
+        HTTP_REQUEST_BODY_DELTA_METHOD => {
+            inner
+                .handle_http_body_delta_notification(notification.params)
+                .await?;
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");
