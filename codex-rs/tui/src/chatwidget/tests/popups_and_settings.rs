@@ -2132,6 +2132,27 @@ async fn alt_comma_lowers_reasoning_effort() {
 }
 
 #[tokio::test]
+async fn reasoning_shortcut_clears_armed_quit_shortcut() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.arm_quit_shortcut(key_hint::ctrl(KeyCode::Char('c')));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(chat.quit_shortcut_expires_at.is_none());
+    assert!(chat.quit_shortcut_key.is_none());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::Exit(_))),
+        "did not expect reasoning shortcut to quit; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn reasoning_shortcut_is_ignored_with_model_popup_open() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
