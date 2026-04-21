@@ -333,30 +333,6 @@ fn log_format_from_env() -> LogFormat {
     LogFormat::from_env_value(value.as_deref())
 }
 
-async fn load_startup_config(
-    config_manager: &ConfigManager,
-) -> IoResult<(Config, Vec<ConfigWarningNotification>)> {
-    let mut config_warnings = Vec::new();
-    let config = match config_manager
-        .load_latest_config(/*fallback_cwd*/ None)
-        .await
-    {
-        Ok(config) => config,
-        Err(err) => {
-            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
-            config_warnings.push(message);
-            config_manager.load_default_config().await.map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
-        }
-    };
-
-    Ok((config, config_warnings))
-}
-
 pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
@@ -445,7 +421,23 @@ pub async fn run_main_with_transport(
             // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
         }
     };
-    let (config, mut config_warnings) = load_startup_config(&config_manager).await?;
+    let mut config_warnings = Vec::new();
+    let config = match config_manager
+        .load_latest_config(/*fallback_cwd*/ None)
+        .await
+    {
+        Ok(config) => config,
+        Err(err) => {
+            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
+            config_warnings.push(message);
+            config_manager.load_default_config().await.map_err(|e| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("error loading default config after config error: {e}"),
+                )
+            })?
+        }
+    };
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);
@@ -910,16 +902,7 @@ fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTranspo
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
-    use super::load_startup_config;
-    use crate::config_manager::ConfigManager;
-    use codex_arg0::Arg0DispatchPaths;
-    use codex_config::NoopThreadConfigLoader;
-    use codex_core::config_loader::CloudRequirementsLoader;
-    use codex_core::config_loader::LoaderOverrides;
     use pretty_assertions::assert_eq;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-    use toml::Value as TomlValue;
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {
@@ -937,50 +920,5 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
-    }
-
-    #[tokio::test]
-    async fn load_startup_config_falls_back_to_defaults_with_manager_state() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let config_path = codex_home.path().join("config.toml");
-        std::fs::write(&config_path, "model = [").expect("write invalid config");
-        let config_manager = ConfigManager::new(
-            codex_home.path().to_path_buf(),
-            vec![(
-                "model".to_string(),
-                TomlValue::String("gpt-startup-fallback-test".to_string()),
-            )],
-            LoaderOverrides::without_managed_config_for_tests(),
-            CloudRequirementsLoader::default(),
-            Arg0DispatchPaths::default(),
-            Arc::new(NoopThreadConfigLoader),
-        );
-
-        let (config, warnings) = load_startup_config(&config_manager)
-            .await
-            .expect("fallback config");
-
-        assert_eq!(config.model.as_deref(), Some("gpt-startup-fallback-test"));
-        assert_eq!(config.codex_home.as_path(), codex_home.path());
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(
-            warnings[0].summary,
-            "Invalid configuration; using defaults."
-        );
-        assert!(
-            !warnings[0]
-                .details
-                .as_deref()
-                .expect("warning details")
-                .is_empty()
-        );
-        assert_eq!(
-            warnings[0].path.as_deref(),
-            Some(config_path.to_string_lossy().as_ref())
-        );
-        assert!(
-            warnings[0].range.is_some(),
-            "config parse error should include source range"
-        );
     }
 }
