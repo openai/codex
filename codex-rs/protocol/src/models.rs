@@ -345,6 +345,13 @@ impl PermissionProfile {
         self.file_system_sandbox_policy()
             .to_legacy_sandbox_policy(self.network_sandbox_policy(), cwd)
     }
+
+    pub fn to_runtime_permissions(&self) -> (FileSystemSandboxPolicy, NetworkSandboxPolicy) {
+        (
+            self.file_system_sandbox_policy(),
+            self.network_sandbox_policy(),
+        )
+    }
 }
 
 impl From<NetworkSandboxPolicy> for NetworkPermissions {
