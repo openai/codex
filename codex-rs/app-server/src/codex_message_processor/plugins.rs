@@ -86,7 +86,9 @@ impl CodexMessageProcessor {
             }
         };
 
-        if config.features.enabled(Feature::RemotePlugin) {
+        if config.features.enabled(Feature::Plugins)
+            && config.features.enabled(Feature::RemotePlugin)
+        {
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
@@ -96,11 +98,21 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(remote_marketplaces) => data.extend(
-                    remote_marketplaces
+                Ok(remote_marketplaces) => {
+                    for remote_marketplace in remote_marketplaces
                         .into_iter()
-                        .map(remote_marketplace_to_info),
-                ),
+                        .map(remote_marketplace_to_info)
+                    {
+                        if let Some(existing) = data
+                            .iter_mut()
+                            .find(|marketplace| marketplace.name == remote_marketplace.name)
+                        {
+                            *existing = remote_marketplace;
+                        } else {
+                            data.push(remote_marketplace);
+                        }
+                    }
+                }
                 Err(
                     RemotePluginCatalogError::AuthRequired
                     | RemotePluginCatalogError::UnsupportedAuthMode,
@@ -241,7 +253,9 @@ impl CodexMessageProcessor {
                 }
             }
             Err(remote_marketplace_name) => {
-                if !config.features.enabled(Feature::RemotePlugin) {
+                if !config.features.enabled(Feature::Plugins)
+                    || !config.features.enabled(Feature::RemotePlugin)
+                {
                     self.outgoing
                         .send_error(
                             request_id,
@@ -638,6 +652,13 @@ fn remote_plugin_catalog_error_to_jsonrpc(
             message: format!("{context}: {err}"),
             data: None,
         },
+        RemotePluginCatalogError::UnexpectedStatus { status, .. } if status.as_u16() == 404 => {
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("{context}: {err}"),
+                data: None,
+            }
+        }
         RemotePluginCatalogError::AuthToken(_)
         | RemotePluginCatalogError::Request { .. }
         | RemotePluginCatalogError::UnexpectedStatus { .. }

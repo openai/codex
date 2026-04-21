@@ -266,10 +266,25 @@ pub async fn fetch_remote_marketplaces(
     let mut installed_by_scope =
         BTreeMap::<RemotePluginScope, BTreeMap<String, RemotePluginInstalledItem>>::new();
 
-    for scope in RemotePluginScope::all() {
-        let directory_plugins = fetch_directory_plugins_for_scope(config, auth, scope).await?;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+    let global = async {
+        let scope = RemotePluginScope::Global;
+        let (directory_plugins, installed_plugins) = tokio::try_join!(
+            fetch_directory_plugins_for_scope(config, auth, scope),
+            fetch_installed_plugins_for_scope(config, auth, scope),
+        )?;
+        Ok::<_, RemotePluginCatalogError>((scope, directory_plugins, installed_plugins))
+    };
+    let workspace = async {
+        let scope = RemotePluginScope::Workspace;
+        let (directory_plugins, installed_plugins) = tokio::try_join!(
+            fetch_directory_plugins_for_scope(config, auth, scope),
+            fetch_installed_plugins_for_scope(config, auth, scope),
+        )?;
+        Ok::<_, RemotePluginCatalogError>((scope, directory_plugins, installed_plugins))
+    };
 
+    let (global, workspace) = tokio::try_join!(global, workspace)?;
+    for (scope, directory_plugins, installed_plugins) in [global, workspace] {
         if !directory_plugins.is_empty() {
             directory_by_scope.insert(
                 scope,
