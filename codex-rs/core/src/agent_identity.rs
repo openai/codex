@@ -27,11 +27,11 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::config::Config;
-
 mod task_registration;
 
 pub(crate) use task_registration::RegisteredAgentTask;
+
+use crate::config::Config;
 
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_IDENTITY_BISCUIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -339,7 +339,7 @@ impl AgentIdentityManager {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_for_tests(
+    fn new_for_tests(
         auth_manager: Arc<AuthManager>,
         feature_enabled: bool,
         chatgpt_base_url: String,
@@ -352,30 +352,6 @@ impl AgentIdentityManager {
             abom: build_abom(session_source),
             ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn seed_generated_identity_for_tests(
-        &self,
-        agent_runtime_id: &str,
-    ) -> Result<StoredAgentIdentity> {
-        let (auth, binding) = self
-            .current_auth_binding()
-            .await
-            .context("test agent identity requires ChatGPT auth")?;
-        let key_material = generate_agent_key_material()?;
-        let stored_identity = StoredAgentIdentity {
-            binding_id: binding.binding_id.clone(),
-            chatgpt_account_id: binding.chatgpt_account_id.clone(),
-            chatgpt_user_id: binding.chatgpt_user_id,
-            agent_runtime_id: agent_runtime_id.to_string(),
-            private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
-            public_key_ssh: key_material.public_key_ssh,
-            registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-            abom: self.abom.clone(),
-        };
-        self.store_identity(&auth, &stored_identity)?;
-        Ok(stored_identity)
     }
 }
 
@@ -607,7 +583,7 @@ mod tests {
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent-123",
+                "agent_runtime_id": "agent_123",
             })))
             .expect(1)
             .mount(&server)
@@ -633,7 +609,7 @@ mod tests {
             .unwrap()
             .expect("identity should be reused");
 
-        assert_eq!(first.agent_runtime_id, "agent-123");
+        assert_eq!(first.agent_runtime_id, "agent_123");
         assert_eq!(first, second);
         assert_eq!(first.abom.agent_harness_id, "codex-cli");
         assert_eq!(first.chatgpt_account_id, "account-123");
@@ -649,7 +625,7 @@ mod tests {
             .and(path("/v1/agent/register"))
             .and(header("x-openai-authorization", "human-biscuit"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent-456",
+                "agent_runtime_id": "agent_456",
             })))
             .expect(1)
             .mount(&server)
@@ -681,11 +657,11 @@ mod tests {
             .unwrap()
             .expect("identity should be registered");
 
-        assert_eq!(stored.agent_runtime_id, "agent-456");
+        assert_eq!(stored.agent_runtime_id, "agent_456");
         let persisted = auth
             .get_agent_identity(&binding.chatgpt_account_id)
             .expect("stored identity");
-        assert_eq!(persisted.agent_runtime_id, "agent-456");
+        assert_eq!(persisted.agent_runtime_id, "agent_456");
     }
 
     #[tokio::test]
