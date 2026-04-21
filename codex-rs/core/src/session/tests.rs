@@ -3161,7 +3161,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -4024,6 +4025,7 @@ async fn unknown_turn_environment_selection_returns_error() {
         .await
         .expect_err("unknown environment should fail");
 
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
     assert!(err.to_string().contains("missing"));
 }
 
@@ -4389,7 +4391,8 @@ where
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
