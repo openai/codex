@@ -63,12 +63,10 @@ codex-utils-rustls-provider = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 constant_time_eq = { workspace = true }
-dns-lookup = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
 hmac = { workspace = true }
 jsonwebtoken = { workspace = true }
-libc = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -89,6 +87,10 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
+
+[target.'cfg(unix)'.dependencies]
+dns-lookup = { workspace = true }
+libc = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi-util = { workspace = true }
