@@ -6,6 +6,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
+const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Optional model override for the new agent. Leave unset to inherit the same model as the parent, which is the preferred default. Only set this when the user explicitly asks for a different model or the task clearly requires one.";
+
 #[derive(Debug, Clone)]
 pub struct SpawnAgentToolOptions<'a> {
     pub available_models: &'a [ModelPreset],
@@ -527,8 +530,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         (
             "model".to_string(),
             JsonSchema::string(Some(
-                "Optional model override for the new agent. Replaces the inherited model."
-                    .to_string(),
+                SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string(),
             )),
         ),
         (
@@ -561,8 +563,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "model".to_string(),
             JsonSchema::string(Some(
-                "Optional model override for the new agent. Replaces the inherited model."
-                    .to_string(),
+                SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION.to_string(),
             )),
         ),
         (
@@ -592,7 +593,7 @@ fn spawn_agent_tool_description(
     let tool_description = format!(
         r#"
         {agent_role_guidance}
-        Spawn a sub-agent for a well-scoped task. {return_value_description}"#
+        Spawn a sub-agent for a well-scoped task. {return_value_description} {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}"#
     );
 
     if !include_usage_hint {
@@ -613,7 +614,7 @@ fn spawn_agent_tool_description(
     format!(
         r#"
         {tool_description}
-This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+This spawn_agent tool provides you access to sub-agents that inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model or there is a clear task-specific reason. You should follow the rules and guidelines below to use this tool.
 
 Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
 Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
@@ -621,7 +622,7 @@ Requests for depth, thoroughness, research, investigation, or detailed codebase 
 
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
-- Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
+- Use a subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
 - Do not delegate urgent blocking work when your immediate next step depends on that result. If the very next action is blocked on that task, the main rollout should usually do it locally to keep the critical path moving.
 - Keep work local when the subtask is too difficult to delegate well and when it is tightly coupled, urgent, or likely to block your immediate next step.
 
@@ -663,6 +664,7 @@ fn spawn_agent_tool_description_v2(
         Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
+{SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message."#
     );
@@ -684,10 +686,10 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let visible_models: Vec<&ModelPreset> =
         models.iter().filter(|model| model.show_in_picker).collect();
     if visible_models.is_empty() {
-        return "No picker-visible models are currently loaded.".to_string();
+        return "No picker-visible model overrides are currently loaded.".to_string();
     }
 
-    visible_models
+    let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
             let efforts = model
@@ -706,7 +708,10 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    format!(
+        "Available model overrides (optional; inherited parent model is preferred):\n{model_descriptions}"
+    )
 }
 
 fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema {

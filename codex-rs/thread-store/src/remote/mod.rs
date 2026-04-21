@@ -48,6 +48,10 @@ impl RemoteThreadStore {
 
 #[async_trait]
 impl ThreadStore for RemoteThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn create_thread(
         &self,
         _params: CreateThreadParams,

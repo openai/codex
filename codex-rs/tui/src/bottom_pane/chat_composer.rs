@@ -206,6 +206,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
+use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_app_server_protocol::AppInfo;
@@ -3455,7 +3456,7 @@ impl ChatComposer {
         let mut mentions = Vec::new();
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
-                let display_name = skill_display_name(skill).to_string();
+                let display_name = skill_display_name(skill);
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
                 let search_terms = if display_name == skill.name {
@@ -3657,14 +3658,6 @@ impl ChatComposer {
     pub fn remove_recording_meter_placeholder(&mut self, id: &str) {
         let _ = self.textarea.replace_element_by_id(id, "");
     }
-}
-
-fn skill_display_name(skill: &SkillMetadata) -> &str {
-    skill
-        .interface
-        .as_ref()
-        .and_then(|interface| interface.display_name.as_deref())
-        .unwrap_or(&skill.name)
 }
 
 fn skill_description(skill: &SkillMetadata) -> Option<String> {
