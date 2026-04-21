@@ -397,11 +397,6 @@ async fn unified_exec_environment_id_targets_non_primary_environment() -> Result
     )
     .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
     let bodies = request_log
         .requests()
         .into_iter()
