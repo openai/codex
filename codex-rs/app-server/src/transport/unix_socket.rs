@@ -63,7 +63,8 @@ async fn run_control_socket_acceptor(
                             err.kind(),
                             ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::Interrupted
                         ) {
-                            return;
+                            warn!("recoverable control socket accept error: {err}");
+                            continue;
                         }
                         error!("control socket accept error: {err}");
                         tokio::time::sleep(Duration::from_secs(1)).await;
