@@ -1,4 +1,5 @@
 use super::*;
+use crate::compact::SUMMARIZATION_PROMPT;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
@@ -12,6 +13,7 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::guardian::review::proactively_sync_guardian_trunk;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -41,6 +43,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
@@ -75,11 +78,21 @@ async fn guardian_test_session_and_turn(
 async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
+    guardian_test_session_and_turn_with_config(base_url, |_| {}).await
+}
+
+async fn guardian_test_session_and_turn_with_config(
+    base_url: &str,
+    configure: impl FnOnce(&mut Config),
+) -> (Arc<Session>, Arc<TurnContext>) {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
+    configure(&mut config);
+    turn.approval_policy = config.permissions.approval_policy.clone();
+    turn.compact_prompt = config.compact_prompt.clone();
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1315,6 +1328,111 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             )
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proactive_guardian_sync_compacts_trunk_before_review_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let compact_summary = "GUARDIAN_COMPACT_SUMMARY";
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The action is narrow and explicitly requested.",
+    })
+    .to_string();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-compact"),
+                ev_assistant_message("msg-guardian-compact", compact_summary),
+                ev_completed_with_tokens("resp-guardian-compact", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-review"),
+                ev_assistant_message("msg-guardian-review", &guardian_assessment),
+                ev_completed("resp-guardian-review"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (session, turn) =
+        guardian_test_session_and_turn_with_config(server.uri().as_str(), |config| {
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.model_provider.name = "OpenAI-compatible guardian compact test".to_string();
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+            config.model_auto_compact_token_limit = Some(1);
+        })
+        .await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    proactively_sync_guardian_trunk(&session, &turn).await;
+
+    let sync_requests = request_log.requests();
+    assert_eq!(
+        sync_requests.len(),
+        1,
+        "proactive transcript sync should compact before any approval review request"
+    );
+    assert!(
+        sync_requests[0].body_contains_text(SUMMARIZATION_PROMPT),
+        "proactive sync should trigger a compact request"
+    );
+    assert!(
+        sync_requests[0]
+            .body_contains_text("Transcript sync only. No approval decision is requested"),
+        "compact request should include the synced guardian transcript"
+    );
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-after-proactive-compact".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+        panic!("expected guardian assessment");
+    };
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected exactly one proactive compact request and one later guardian review request"
+    );
+    let compact_request = &requests[0];
+    let review_request = &requests[1];
+    assert!(compact_request.body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(
+        review_request.body_contains_text(compact_summary),
+        "review request should use compacted guardian trunk history"
+    );
+    assert!(
+        review_request.body_contains_text(">>> APPROVAL REQUEST START"),
+        "second request should be the approval review"
+    );
+    assert!(
+        !review_request.body_contains_text(SUMMARIZATION_PROMPT),
+        "approval review should not do request-time compaction after proactive compaction succeeded"
+    );
 
     Ok(())
 }
