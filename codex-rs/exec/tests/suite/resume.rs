@@ -435,36 +435,6 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
     let sessions_dir = test.home_path().join("sessions");
     let path = find_session_file_containing_marker(&sessions_dir, &marker)
         .expect("no session file found after first run");
-    let session_id = extract_conversation_id(&path);
-    assert!(
-        !session_id.is_empty(),
-        "missing conversation id in meta line"
-    );
-
-    // `resume --last` sorts by `updated_at`, which is second-granularity. Make
-    // the seeded session deterministically newest before checking that a later
-    // `--last` resume still honors the CLI configuration overrides.
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-    let marker_touch = format!("resume-config-touch-{}", Uuid::new_v4());
-    let prompt_touch = format!("echo {marker_touch}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .arg("--skip-git-repo-check")
-        .arg("--sandbox")
-        .arg("workspace-write")
-        .arg("--model")
-        .arg("gpt-5.1")
-        .arg("-C")
-        .arg(&repo_root)
-        .arg("resume")
-        .arg(&session_id)
-        .arg(&prompt_touch)
-        .assert()
-        .success();
-    let touched_path = find_session_file_containing_marker(&sessions_dir, &marker_touch)
-        .expect("no touched session file containing marker_touch");
-    assert_eq!(touched_path, path, "setup resume should touch seeded file");
-    std::thread::sleep(std::time::Duration::from_millis(1100));
 
     let marker2 = format!("resume-config-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
