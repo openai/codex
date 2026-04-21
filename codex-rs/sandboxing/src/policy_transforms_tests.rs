@@ -636,7 +636,7 @@ fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
     };
     let granted = PermissionProfile {
         file_system: Some(FileSystemPermissions {
-            entries: vec![root_write.clone(), deny_env_files.clone()],
+            entries: vec![root_write.clone(), deny_env_files],
             glob_scan_max_depth: std::num::NonZeroUsize::new(4),
         }),
         ..Default::default()
@@ -691,7 +691,7 @@ fn intersect_permission_profiles_uses_granted_unbounded_glob_scan_depth() {
     };
     let granted = PermissionProfile {
         file_system: Some(FileSystemPermissions {
-            entries: vec![root_write.clone(), deny_env_files.clone()],
+            entries: vec![root_write.clone(), deny_env_files],
             glob_scan_max_depth: None,
         }),
         ..Default::default()
