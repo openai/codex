@@ -44,7 +44,10 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -213,6 +216,7 @@ pub(crate) struct ThreadManagerState {
     skills_watcher: Arc<SkillsWatcher>,
     session_source: SessionSource,
     analytics_events_client: Option<AnalyticsEventsClient>,
+    thread_store: Arc<dyn ThreadStore>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -235,6 +239,15 @@ pub fn build_models_manager(
         collaboration_modes_config,
         openai_models_provider,
     ))
+}
+
+fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
+    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
+        warn!(
+            "experimental_thread_store_endpoint `{endpoint}` is configured, but remote thread write APIs are not implemented yet; using local thread store"
+        );
+    }
+    Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
 }
 
 impl ThreadManager {
@@ -260,6 +273,7 @@ impl ThreadManager {
             restriction_product,
         ));
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
+        let thread_store = configured_thread_store(config);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -277,6 +291,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 analytics_events_client,
+                thread_store,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -334,6 +349,13 @@ impl ThreadManager {
             restriction_product,
         ));
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(RolloutConfig {
+            codex_home: codex_home.clone(),
+            sqlite_home: codex_home.clone(),
+            cwd: std::env::current_dir().unwrap_or_else(|_| codex_home.clone()),
+            model_provider_id: OPENAI_PROVIDER_ID.to_string(),
+            generate_memories: true,
+        }));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -351,6 +373,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 analytics_events_client: None,
+                thread_store,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -957,6 +980,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
+            thread_store: Arc::clone(&self.thread_store),
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

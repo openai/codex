@@ -272,6 +272,7 @@ impl Session {
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
         inherited_rollout_trace: RolloutTraceRecorder,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -281,38 +282,16 @@ impl Session {
         );
         let forked_from_id = initial_history.forked_from_id();
 
-        let (conversation_id, rollout_params) = match &initial_history {
+        let event_persistence_mode = if session_configuration.persist_extended_history {
+            ThreadEventPersistenceMode::Extended
+        } else {
+            ThreadEventPersistenceMode::Limited
+        };
+        let conversation_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
-                        session_configuration.dynamic_tools.clone(),
-                        if session_configuration.persist_extended_history {
-                            EventPersistenceMode::Extended
-                        } else {
-                            EventPersistenceMode::Limited
-                        },
-                    ),
-                )
+                ThreadId::default()
             }
-            InitialHistory::Resumed(resumed_history) => (
-                resumed_history.conversation_id,
-                RolloutRecorderParams::resume(
-                    resumed_history.rollout_path.clone(),
-                    if session_configuration.persist_extended_history {
-                        EventPersistenceMode::Extended
-                    } else {
-                        EventPersistenceMode::Limited
-                    },
-                ),
-            ),
+            InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let window_generation = match &initial_history {
             InitialHistory::Resumed(resumed_history) => u64::try_from(
@@ -325,32 +304,44 @@ impl Session {
             .unwrap_or(u64::MAX),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
         };
-        let state_builder = match &initial_history {
-            InitialHistory::Resumed(resumed) => metadata::builder_from_items(
-                resumed.history.as_slice(),
-                resumed.rollout_path.as_path(),
-            ),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-        };
-
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
-        // - initialize RolloutRecorder with new or resumed session info
+        // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
         let rollout_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>((None, None))
+                Ok::<_, anyhow::Error>((false, None))
             } else {
-                let state_db_ctx = state_db::init(&config).await;
-                let rollout_recorder = RolloutRecorder::new(
-                    &config,
-                    rollout_params,
-                    state_db_ctx.clone(),
-                    state_builder.clone(),
-                )
-                .await?;
-                Ok((Some(rollout_recorder), state_db_ctx))
+                match &initial_history {
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        thread_store
+                            .create_thread(CreateThreadParams {
+                                thread_id: conversation_id,
+                                forked_from_id,
+                                source: session_source,
+                                base_instructions: BaseInstructions {
+                                    text: session_configuration.base_instructions.clone(),
+                                },
+                                dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                event_persistence_mode,
+                            })
+                            .await?;
+                    }
+                    InitialHistory::Resumed(resumed_history) => {
+                        thread_store
+                            .resume_thread(ResumeThreadParams {
+                                thread_id: resumed_history.conversation_id,
+                                rollout_path: Some(resumed_history.rollout_path.clone()),
+                                history: Some(resumed_history.history.clone()),
+                                include_archived: true,
+                                event_persistence_mode,
+                            })
+                            .await?;
+                    }
+                };
+                let state_db_ctx = thread_store.state_db(conversation_id).await?;
+                Ok((true, state_db_ctx))
             }
         }
         .instrument(info_span!(
@@ -397,18 +388,26 @@ impl Session {
 
         // Join all independent futures.
         let (
-            rollout_recorder_and_state_db,
+            thread_persistence_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
-            error!("failed to initialize rollout recorder: {e:#}");
-            e
-        })?;
-        let rollout_path = rollout_recorder
-            .as_ref()
-            .map(|rec| rec.rollout_path().to_path_buf());
+        let (thread_persistence_enabled, state_db_ctx) =
+            thread_persistence_and_state_db.map_err(|e| {
+                error!("failed to initialize thread persistence: {e:#}");
+                e
+            })?;
+        let persistence_cleanup = ThreadPersistenceCleanup::new(
+            thread_persistence_enabled,
+            conversation_id,
+            Arc::clone(&thread_store),
+        );
+        let rollout_path = if thread_persistence_enabled {
+            thread_store.rollout_path(conversation_id).await?
+        } else {
+            None
+        };
         let trace_agent_path = session_configuration
             .session_source
             .get_agent_path()
@@ -719,7 +718,6 @@ impl Session {
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             analytics_events_client,
             hooks,
-            rollout: Mutex::new(rollout_recorder),
             rollout_trace,
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
@@ -740,7 +738,8 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            thread_store: LocalThreadStore::new(RolloutConfig::from_view(config.as_ref())),
+            thread_persistence_enabled,
+            thread_store,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -933,6 +932,49 @@ impl Session {
             &session_configuration.session_source,
         );
 
+        persistence_cleanup.disarm();
         Ok(sess)
+    }
+}
+
+struct ThreadPersistenceCleanup {
+    thread_persistence_enabled: bool,
+    thread_id: ThreadId,
+    thread_store: Arc<dyn ThreadStore>,
+    disarmed: AtomicBool,
+}
+
+impl ThreadPersistenceCleanup {
+    fn new(
+        thread_persistence_enabled: bool,
+        thread_id: ThreadId,
+        thread_store: Arc<dyn ThreadStore>,
+    ) -> Self {
+        Self {
+            thread_persistence_enabled,
+            thread_id,
+            thread_store,
+            disarmed: AtomicBool::new(false),
+        }
+    }
+
+    fn disarm(&self) {
+        self.disarmed.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for ThreadPersistenceCleanup {
+    fn drop(&mut self) {
+        if !self.thread_persistence_enabled || self.disarmed.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let thread_id = self.thread_id;
+        let thread_store = Arc::clone(&self.thread_store);
+        tokio::spawn(async move {
+            if let Err(err) = thread_store.shutdown_thread(thread_id).await {
+                warn!("failed to clean up thread persistence for failed session init: {err}");
+            }
+        });
     }
 }

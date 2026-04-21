@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -120,14 +122,17 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
-use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_rollout_trace::RolloutTraceRecorder;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
-use codex_thread_store::LocalThreadStore;
+use codex_thread_store::AppendThreadItemsParams;
+use codex_thread_store::CreateThreadParams;
+use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::ThreadEventPersistenceMode;
+use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -267,11 +272,7 @@ use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::rollout::RolloutRecorder;
-use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
-use crate::rollout::metadata;
-use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
@@ -406,6 +407,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
+    pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -461,6 +463,7 @@ impl Codex {
             inherited_rollout_trace,
             parent_trace: _,
             analytics_events_client,
+            thread_store,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -663,6 +666,7 @@ impl Codex {
             agent_control,
             environment_manager,
             analytics_events_client,
+            thread_store,
             inherited_rollout_trace,
         )
         .await
@@ -1023,33 +1027,37 @@ impl Session {
         self.services.state_db.clone()
     }
 
+    pub(crate) async fn thread_persistence_enabled(&self) -> bool {
+        self.services.thread_persistence_enabled || self.current_rollout_path().await.is_some()
+    }
+
     /// Flush rollout writes and return the final durability-barrier result.
     pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(recorder) = recorder {
-            recorder.flush().await
+        if self.thread_persistence_enabled().await {
+            self.services
+                .thread_store
+                .flush_thread(self.conversation_id)
+                .await
+                .map_err(std::io::Error::other)
         } else {
             Ok(())
         }
     }
 
     pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(rec) = recorder {
-            rec.persist().await?;
+        if self.thread_persistence_enabled().await {
+            self.services
+                .thread_store
+                .persist_thread(self.conversation_id)
+                .await
+                .map_err(std::io::Error::other)?;
         }
         Ok(())
     }
 
     pub(crate) async fn ensure_rollout_materialized(&self) {
         if let Err(e) = self.try_ensure_rollout_materialized().await {
-            warn!("failed to materialize rollout recorder: {e}");
+            warn!("failed to materialize thread persistence: {e}");
         }
     }
 
@@ -1211,7 +1219,7 @@ impl Session {
                     state.set_token_info(Some(info));
                 }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
+                // If persisting, persist all rollout items as-is (the store filters).
                 if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
@@ -1554,7 +1562,7 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Persist the event into rollout (recorder filters as needed)
+        // Persist the event into rollout storage (the store filters as needed).
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         self.deliver_event_raw(event).await;
@@ -2666,12 +2674,15 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.record_items(items).await
+        if self.thread_persistence_enabled().await
+            && let Err(e) = self
+                .services
+                .thread_store
+                .append_items(AppendThreadItemsParams {
+                    thread_id: self.conversation_id,
+                    items: items.to_vec(),
+                })
+                .await
         {
             error!("failed to record rollout items: {e:#}");
         }
@@ -3191,11 +3202,12 @@ impl Session {
     }
 
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        recorder.map(|recorder| recorder.rollout_path().to_path_buf())
+        self.services
+            .thread_store
+            .rollout_path(self.conversation_id)
+            .await
+            .ok()
+            .flatten()
     }
 
     pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
