@@ -383,9 +383,15 @@ fn materialize_cwd_dependent_entry(
                 access: entry.access,
             })
             .unwrap_or_else(|| entry.clone()),
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GlobPattern { .. }
-        | FileSystemPath::Special { .. } => entry.clone(),
+        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            access: entry.access,
+        },
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
     }
 }
 
