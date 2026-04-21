@@ -995,7 +995,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_sdk_parser.add_argument(
         "--runtime-version",
         required=True,
-        help="Pinned codex-cli-bin version for the staged SDK package",
+        help="Pinned openai-codex-cli-bin version for the staged SDK package",
     )
     stage_sdk_parser.add_argument(
         "--sdk-version",

@@ -168,6 +168,19 @@ def test_examples_readme_matches_pinned_runtime_version() -> None:
     )
 
 
+def test_runtime_distribution_name_is_consistent() -> None:
+    script = _load_update_script_module()
+    runtime_setup = _load_runtime_setup_module()
+    from codex_app_server import client as client_module
+
+    assert script.RUNTIME_DISTRIBUTION_NAME == "openai-codex-cli-bin"
+    assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
+    assert client_module.RUNTIME_PKG_NAME == "openai-codex-cli-bin"
+    assert "importlib.metadata.version('codex-cli-bin')" not in (
+        ROOT / "_runtime_setup.py"
+    ).read_text()
+
+
 def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_setup = _load_runtime_setup_module()
     authorizations: list[str | None] = []
