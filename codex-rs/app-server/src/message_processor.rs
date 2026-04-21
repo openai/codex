@@ -63,6 +63,7 @@ use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
+use codex_config::ThreadConfigLoader;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -235,6 +236,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -256,6 +258,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             feedback,
             log_db,
             config_warnings,
@@ -301,6 +304,7 @@ impl MessageProcessor {
             cli_overrides: cli_overrides.clone(),
             runtime_feature_enablement: runtime_feature_enablement.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            thread_config_loader,
             feedback,
             log_db,
         });

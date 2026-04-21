@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
@@ -16,6 +17,7 @@ use wiremock::matchers::path;
 use super::*;
 use crate::agent_identity::AgentIdentityManager;
 use crate::agent_identity::RegisteredAgentTask;
+use crate::context::ContextualUserFragment;
 use crate::session::tests::make_session_and_context;
 use chrono::Utc;
 use codex_login::AuthCredentialsStoreMode;
@@ -143,11 +145,16 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
         .await;
     session
         .record_into_history(
-            &[
-                crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT.into_message(
-                    "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+            &[ContextualUserFragment::into(
+                crate::context::EnvironmentContext::new(
+                    Some(PathBuf::from("/tmp")),
+                    "zsh".to_string(),
+                    /*current_date*/ None,
+                    /*timezone*/ None,
+                    /*network*/ None,
+                    /*subagents*/ None,
                 ),
-            ],
+            )],
             &turn_context,
         )
         .await;

@@ -1,7 +1,7 @@
 use crate::Prompt;
 use crate::RolloutRecorder;
 use crate::config::Config;
-use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
+use crate::context::is_memory_excluded_contextual_user_fragment;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
