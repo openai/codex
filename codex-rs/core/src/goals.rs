@@ -456,7 +456,7 @@ impl Session {
     pub(crate) async fn clear_stopped_thread_goal_runtime_state(&self) {
         self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-        if let Some(turn_context) = self.active_turn_context().await {
+        for turn_context in self.active_turn_contexts().await {
             turn_context
                 .goal_accounting
                 .lock()
@@ -484,12 +484,21 @@ impl Session {
     }
 
     async fn active_turn_context(&self) -> Option<Arc<TurnContext>> {
+        self.active_turn_contexts().await.into_iter().next()
+    }
+
+    async fn active_turn_contexts(&self) -> Vec<Arc<TurnContext>> {
         let active = self.active_turn.lock().await;
         active
-            .as_ref()?
-            .tasks
-            .first()
-            .map(|(_, task)| Arc::clone(&task.turn_context))
+            .as_ref()
+            .map(|active_turn| {
+                active_turn
+                    .tasks
+                    .values()
+                    .map(|task| Arc::clone(&task.turn_context))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) async fn mark_thread_goal_turn_started(
@@ -518,7 +527,13 @@ impl Session {
             }
         };
         match state_db.get_thread_goal(self.conversation_id).await {
-            Ok(Some(goal)) if goal.status == codex_state::ThreadGoalStatus::Active => {
+            Ok(Some(goal))
+                if matches!(
+                    goal.status,
+                    codex_state::ThreadGoalStatus::Active
+                        | codex_state::ThreadGoalStatus::BudgetLimited
+                ) =>
+            {
                 turn_context
                     .goal_accounting
                     .lock()
