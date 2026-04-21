@@ -42,6 +42,7 @@ const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
 const INITIALIZE_METHOD: &str = "initialize";
 const INITIALIZED_METHOD: &str = "initialized";
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const HTTP_BODY_DELTA_CHANNEL_CAPACITY: u64 = 256;
 const OVERFLOWING_BODY_DELTA_FRAMES: u64 = 1_024;
 
 /// What this tests: the buffered HTTP helper always sends a buffered
@@ -735,6 +736,98 @@ async fn http_response_body_stream_fails_when_transport_disconnects() -> Result<
             "exec-server protocol error: http response stream `http-1` failed: exec-server transport disconnected"
         ),
         true
+    );
+
+    drop(client);
+    server.finish().await?;
+    Ok(())
+}
+
+/// What this tests: transport disconnect still records a terminal stream
+/// failure even when the client-side body-delta queue is already full.
+#[tokio::test]
+async fn http_response_body_stream_reports_disconnect_when_queue_is_full() -> Result<()> {
+    // Phase 1: fill the queued body-delta route exactly to capacity before the
+    // response headers arrive, then drop the transport without sending EOF.
+    let server = spawn_scripted_exec_server(|mut peer| async move {
+        let (request_id, params) = peer.read_http_request().await?;
+        assert_eq!(
+            params,
+            HttpRequestParams {
+                method: "GET".to_string(),
+                url: "https://example.test/mcp/disconnect-full-queue".to_string(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: None,
+                request_id: Some("http-1".to_string()),
+                stream_response: true,
+            }
+        );
+        for seq in 1..=HTTP_BODY_DELTA_CHANNEL_CAPACITY {
+            peer.write_body_delta(HttpRequestBodyDeltaNotification {
+                request_id: "http-1".to_string(),
+                seq,
+                delta: b"x".to_vec().into(),
+                done: false,
+                error: None,
+            })
+            .await?;
+        }
+        peer.write_response(
+            request_id,
+            HttpRequestResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            },
+        )
+        .await
+    })
+    .await?;
+    let client = server.connect_client().await?;
+
+    // Phase 2: start the streaming request and receive headers while the
+    // queue is already full.
+    let (_response, mut body_stream) = timeout(
+        TEST_TIMEOUT,
+        client.http_request_stream(HttpRequestParams {
+            method: "GET".to_string(),
+            url: "https://example.test/mcp/disconnect-full-queue".to_string(),
+            headers: Vec::new(),
+            body: None,
+            timeout_ms: None,
+            request_id: Some("caller-stream-id".to_string()),
+            stream_response: false,
+        }),
+    )
+    .await
+    .context("streamed http/request should return headers")??;
+
+    // Phase 3: drain the queued chunks and assert the transport disconnect is
+    // still reported as an error rather than a clean EOF.
+    let mut chunks = 0;
+    let error = loop {
+        match timeout(TEST_TIMEOUT, body_stream.recv())
+            .await
+            .context("disconnect should wake the full queued body stream")?
+        {
+            Ok(Some(_chunk)) => {
+                chunks += 1;
+            }
+            Ok(None) => bail!("disconnect with a full queue should not look like clean EOF"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(
+        (
+            chunks,
+            error
+                .to_string()
+                .starts_with(
+                    "exec-server protocol error: http response stream `http-1` failed: exec-server transport disconnected",
+                ),
+        ),
+        (HTTP_BODY_DELTA_CHANNEL_CAPACITY as usize, true)
     );
 
     drop(client);

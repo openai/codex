@@ -231,13 +231,21 @@ impl Inner {
         let streams = streams.as_ref().clone();
         self.http_body_streams.store(Arc::new(HashMap::new()));
         for (request_id, tx) in streams {
-            let _ = tx.try_send(HttpRequestBodyDeltaNotification {
-                request_id,
-                seq: 1,
-                delta: Vec::new().into(),
-                done: true,
-                error: Some(message.clone()),
-            });
+            if tx
+                .try_send(HttpRequestBodyDeltaNotification {
+                    request_id: request_id.clone(),
+                    seq: 1,
+                    delta: Vec::new().into(),
+                    done: true,
+                    error: Some(message.clone()),
+                })
+                .is_err()
+            {
+                let mut next_failures = self.http_body_stream_failures.load().as_ref().clone();
+                next_failures.insert(request_id, message.clone());
+                self.http_body_stream_failures
+                    .store(Arc::new(next_failures));
+            }
         }
     }
 
