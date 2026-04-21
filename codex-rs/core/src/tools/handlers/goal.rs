@@ -24,7 +24,6 @@ use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 pub struct GoalHandler;
 
@@ -94,8 +93,12 @@ impl ToolHandler for GoalHandler {
 
         match tool_name.name.as_str() {
             GET_GOAL_TOOL_NAME => handle_get_goal(session.as_ref()).await,
-            CREATE_GOAL_TOOL_NAME => handle_create_goal(&session, turn.as_ref(), &arguments).await,
-            UPDATE_GOAL_TOOL_NAME => handle_update_goal(&session, turn.as_ref(), &arguments).await,
+            CREATE_GOAL_TOOL_NAME => {
+                handle_create_goal(session.as_ref(), turn.as_ref(), &arguments).await
+            }
+            UPDATE_GOAL_TOOL_NAME => {
+                handle_update_goal(session.as_ref(), turn.as_ref(), &arguments).await
+            }
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
             ))),
@@ -112,7 +115,7 @@ async fn handle_get_goal(session: &Session) -> Result<FunctionToolOutput, Functi
 }
 
 async fn handle_create_goal(
-    session: &Arc<Session>,
+    session: &Session,
     turn_context: &TurnContext,
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -143,7 +146,7 @@ async fn handle_create_goal(
 }
 
 async fn handle_update_goal(
-    session: &Arc<Session>,
+    session: &Session,
     turn_context: &TurnContext,
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
