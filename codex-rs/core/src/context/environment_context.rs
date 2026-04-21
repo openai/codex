@@ -18,6 +18,7 @@ pub(crate) struct EnvironmentContext {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NetworkContext {
+    enabled: bool,
     allowed_domains: Vec<String>,
     denied_domains: Vec<String>,
 }
@@ -25,8 +26,17 @@ pub(crate) struct NetworkContext {
 impl NetworkContext {
     pub(crate) fn new(allowed_domains: Vec<String>, denied_domains: Vec<String>) -> Self {
         Self {
+            enabled: true,
             allowed_domains,
             denied_domains,
+        }
+    }
+
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            allowed_domains: Vec::new(),
+            denied_domains: Vec::new(),
         }
     }
 }
@@ -79,7 +89,10 @@ impl EnvironmentContext {
             _ => None,
         };
         let network = if before_network != after.network {
-            after.network.clone()
+            after
+                .network
+                .clone()
+                .or_else(|| Some(NetworkContext::disabled()))
         } else {
             before_network
         };
@@ -180,7 +193,7 @@ impl ContextualUserFragment for EnvironmentContext {
             lines.push(format!("  <timezone>{timezone}</timezone>"));
         }
         match &self.network {
-            Some(network) => {
+            Some(network) if network.enabled => {
                 lines.push("  <network enabled=\"true\">".to_string());
                 for allowed in &network.allowed_domains {
                     lines.push(format!("    <allowed>{allowed}</allowed>"));
@@ -189,6 +202,9 @@ impl ContextualUserFragment for EnvironmentContext {
                     lines.push(format!("    <denied>{denied}</denied>"));
                 }
                 lines.push("  </network>".to_string());
+            }
+            Some(_) => {
+                lines.push("  <network enabled=\"false\" />".to_string());
             }
             None => {
                 // TODO(mbolin): Include this line if it helps the model.
