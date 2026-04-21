@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use tokio::sync::Mutex as AsyncMutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use codex_app_server_protocol::AuthMode;
@@ -41,9 +43,12 @@ use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
+use codex_protocol::protocol::SessionSource;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::agent_identity::BackgroundAgentTaskAuthMode;
+use crate::agent_identity::BackgroundAgentTaskManager;
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
 pub enum CodexAuth {
@@ -93,6 +98,7 @@ const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
+static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -372,7 +378,7 @@ impl CodexAuth {
             .filter(|identity| identity.workspace_id == workspace_id)
     }
 
-    pub fn set_agent_identity(&self, record: AgentIdentityAuthRecord) -> std::io::Result<()> {
+    pub fn set_agent_identity(&self, mut record: AgentIdentityAuthRecord) -> std::io::Result<()> {
         let (state, storage) = match self {
             Self::Chatgpt(auth) => (&auth.state, &auth.storage),
             Self::ChatgptAuthTokens(auth) => (&auth.state, &auth.storage),
@@ -385,6 +391,13 @@ impl CodexAuth {
         let mut auth = guard
             .clone()
             .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
+        if record.background_task_id.is_none()
+            && let Some(existing) = auth.agent_identity.as_ref()
+            && existing.workspace_id == record.workspace_id
+            && existing.agent_runtime_id == record.agent_runtime_id
+        {
+            record.background_task_id = existing.background_task_id.clone();
+        }
         auth.agent_identity = Some(record);
         storage.save(&auth)?;
         *guard = Some(auth);
@@ -432,7 +445,11 @@ impl CodexAuth {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
         };
-        let storage = create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File);
+        let dummy_auth_id = NEXT_DUMMY_AUTH_ID.fetch_add(1, Ordering::Relaxed);
+        let storage = create_auth_storage(
+            PathBuf::from(format!("dummy-chatgpt-auth-{dummy_auth_id}")),
+            AuthCredentialsStoreMode::Ephemeral,
+        );
         Self::Chatgpt(ChatgptAuth { state, storage })
     }
 
@@ -1181,7 +1198,9 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
-    refresh_lock: AsyncMutex<()>,
+    chatgpt_base_url: RwLock<Option<String>>,
+    background_agent_task_auth_mode: RwLock<BackgroundAgentTaskAuthMode>,
+    refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_state_tx: watch::Sender<()>,
 }
@@ -1201,6 +1220,16 @@ pub trait AuthManagerConfig {
 
     /// Returns the workspace ID that ChatGPT auth should be restricted to, if any.
     fn forced_chatgpt_workspace_id(&self) -> Option<String>;
+
+    /// Returns the ChatGPT backend base URL used for first-party backend authorization.
+    fn chatgpt_base_url(&self) -> Option<String> {
+        None
+    }
+
+    /// Returns whether default ChatGPT backend authorization may use background AgentAssertion.
+    fn background_agent_task_auth_mode(&self) -> BackgroundAgentTaskAuthMode {
+        BackgroundAgentTaskAuthMode::Disabled
+    }
 }
 
 impl Debug for AuthManager {
@@ -1216,6 +1245,11 @@ impl Debug for AuthManager {
             .field(
                 "forced_chatgpt_workspace_id",
                 &self.forced_chatgpt_workspace_id,
+            )
+            .field("chatgpt_base_url", &self.chatgpt_base_url)
+            .field(
+                "background_agent_task_auth_mode",
+                &self.background_agent_task_auth_mode,
             )
             .field("has_external_auth", &self.has_external_auth())
             .finish_non_exhaustive()
@@ -1249,7 +1283,9 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            chatgpt_base_url: RwLock::new(None),
+            background_agent_task_auth_mode: RwLock::new(BackgroundAgentTaskAuthMode::Disabled),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         }
@@ -1269,7 +1305,9 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            chatgpt_base_url: RwLock::new(None),
+            background_agent_task_auth_mode: RwLock::new(BackgroundAgentTaskAuthMode::Disabled),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         })
@@ -1288,7 +1326,9 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            chatgpt_base_url: RwLock::new(None),
+            background_agent_task_auth_mode: RwLock::new(BackgroundAgentTaskAuthMode::Disabled),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         })
@@ -1305,7 +1345,9 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            chatgpt_base_url: RwLock::new(None),
+            background_agent_task_auth_mode: RwLock::new(BackgroundAgentTaskAuthMode::Disabled),
+            refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -1523,6 +1565,90 @@ impl AuthManager {
         Ok(Some(record))
     }
 
+    pub fn set_chatgpt_backend_auth_config(
+        &self,
+        chatgpt_base_url: Option<String>,
+        background_agent_task_auth_mode: BackgroundAgentTaskAuthMode,
+    ) {
+        let mut changed = false;
+        if let Ok(mut guard) = self.chatgpt_base_url.write()
+            && *guard != chatgpt_base_url
+        {
+            *guard = chatgpt_base_url;
+            changed = true;
+        }
+        if let Ok(mut guard) = self.background_agent_task_auth_mode.write()
+            && *guard != background_agent_task_auth_mode
+        {
+            *guard = background_agent_task_auth_mode;
+            changed = true;
+        }
+        if changed {
+            self.auth_state_tx.send_replace(());
+        }
+    }
+
+    pub fn set_chatgpt_backend_base_url(&self, chatgpt_base_url: Option<String>) {
+        let (_, auth_mode) = self.chatgpt_backend_auth_config();
+        self.set_chatgpt_backend_auth_config(chatgpt_base_url, auth_mode);
+    }
+
+    fn chatgpt_backend_auth_config(&self) -> (Option<String>, BackgroundAgentTaskAuthMode) {
+        let chatgpt_base_url = self
+            .chatgpt_base_url
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let auth_mode = self
+            .background_agent_task_auth_mode
+            .read()
+            .ok()
+            .map(|guard| *guard)
+            .unwrap_or_default();
+        (chatgpt_base_url, auth_mode)
+    }
+
+    /// Returns the default authorization header for ChatGPT backend requests.
+    ///
+    /// This uses background AgentAssertion when configured and available, otherwise it falls back
+    /// to the ChatGPT bearer token. Low-level bootstrap calls that must never use AgentAssertion
+    /// should use [`Self::chatgpt_bearer_authorization_header_for_auth`] instead.
+    pub async fn chatgpt_authorization_header(self: &Arc<Self>) -> Option<String> {
+        let auth = self.auth().await?;
+        self.chatgpt_authorization_header_for_auth(&auth).await
+    }
+
+    pub async fn chatgpt_authorization_header_for_auth(
+        self: &Arc<Self>,
+        auth: &CodexAuth,
+    ) -> Option<String> {
+        if !auth.is_chatgpt_auth() {
+            return None;
+        }
+
+        let (chatgpt_base_url, auth_mode) = self.chatgpt_backend_auth_config();
+        let Some(chatgpt_base_url) = chatgpt_base_url else {
+            return Self::chatgpt_bearer_authorization_header_for_auth(auth);
+        };
+
+        BackgroundAgentTaskManager::new_with_auth_mode(
+            Arc::clone(self),
+            chatgpt_base_url,
+            SessionSource::Cli,
+            auth_mode,
+        )
+        .authorization_header_value_or_bearer(auth)
+        .await
+    }
+
+    pub fn chatgpt_bearer_token_for_auth(auth: &CodexAuth) -> Option<String> {
+        auth.get_token().ok().filter(|token| !token.is_empty())
+    }
+
+    pub fn chatgpt_bearer_authorization_header_for_auth(auth: &CodexAuth) -> Option<String> {
+        Self::chatgpt_bearer_token_for_auth(auth).map(|token| format!("Bearer {token}"))
+    }
+
     pub fn subscribe_auth_state(&self) -> watch::Receiver<()> {
         self.auth_state_tx.subscribe()
     }
@@ -1565,6 +1691,10 @@ impl AuthManager {
             config.cli_auth_credentials_store_mode(),
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
+        auth_manager.set_chatgpt_backend_auth_config(
+            config.chatgpt_base_url(),
+            config.background_agent_task_auth_mode(),
+        );
         auth_manager
     }
 
@@ -1612,7 +1742,12 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1644,7 +1779,12 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         self.refresh_token_from_authority_impl().await
     }
 

@@ -1,16 +1,16 @@
 use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::config_loader::ConfigLayerEntry;
-use crate::legacy_core::config_loader::ConfigLayerStack;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
-use crate::legacy_core::config_loader::NetworkConstraints;
-use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
-use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
-use crate::legacy_core::config_loader::RequirementSource;
-use crate::legacy_core::config_loader::ResidencyRequirement;
-use crate::legacy_core::config_loader::SandboxModeRequirement;
-use crate::legacy_core::config_loader::WebSearchModeRequirement;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkDomainPermissionToml;
+use codex_config::NetworkUnixSocketPermissionToml;
+use codex_config::RequirementSource;
+use codex_config::ResidencyRequirement;
+use codex_config::SandboxModeRequirement;
+use codex_config::WebSearchModeRequirement;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -468,26 +468,26 @@ mod tests {
     use super::render_debug_config_lines;
     use super::session_all_proxy_url;
     use crate::legacy_core::config::Constrained;
-    use crate::legacy_core::config_loader::ConfigLayerEntry;
-    use crate::legacy_core::config_loader::ConfigLayerStack;
-    use crate::legacy_core::config_loader::ConfigRequirements;
-    use crate::legacy_core::config_loader::ConfigRequirementsToml;
-    use crate::legacy_core::config_loader::ConstrainedWithSource;
-    use crate::legacy_core::config_loader::FeatureRequirementsToml;
-    use crate::legacy_core::config_loader::FilesystemConstraints;
-    use crate::legacy_core::config_loader::McpServerIdentity;
-    use crate::legacy_core::config_loader::McpServerRequirement;
-    use crate::legacy_core::config_loader::NetworkConstraints;
-    use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
-    use crate::legacy_core::config_loader::NetworkDomainPermissionsToml;
-    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
-    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use crate::legacy_core::config_loader::RequirementSource;
-    use crate::legacy_core::config_loader::ResidencyRequirement;
-    use crate::legacy_core::config_loader::SandboxModeRequirement;
-    use crate::legacy_core::config_loader::Sourced;
-    use crate::legacy_core::config_loader::WebSearchModeRequirement;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::ConstrainedWithSource;
+    use codex_config::FeatureRequirementsToml;
+    use codex_config::FilesystemConstraints;
+    use codex_config::McpServerIdentity;
+    use codex_config::McpServerRequirement;
+    use codex_config::NetworkConstraints;
+    use codex_config::NetworkDomainPermissionToml;
+    use codex_config::NetworkDomainPermissionsToml;
+    use codex_config::NetworkUnixSocketPermissionToml;
+    use codex_config::NetworkUnixSocketPermissionsToml;
+    use codex_config::RequirementSource;
+    use codex_config::ResidencyRequirement;
+    use codex_config::SandboxModeRequirement;
+    use codex_config::Sourced;
+    use codex_config::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;
@@ -640,6 +640,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
@@ -843,6 +844,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,

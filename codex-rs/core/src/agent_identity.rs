@@ -22,7 +22,7 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -42,7 +42,7 @@ pub(crate) struct AgentIdentityManager {
     chatgpt_base_url: String,
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
-    ensure_lock: Arc<Mutex<()>>,
+    ensure_lock: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for AgentIdentityManager {
@@ -110,7 +110,7 @@ impl AgentIdentityManager {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             feature_enabled: config.features.enabled(Feature::UseAgentIdentity),
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -137,7 +137,11 @@ impl AgentIdentityManager {
         auth: &CodexAuth,
         binding: &AgentIdentityBinding,
     ) -> Result<StoredAgentIdentity> {
-        let _guard = self.ensure_lock.lock().await;
+        let _guard = self
+            .ensure_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("agent identity ensure semaphore closed"))?;
 
         if let Some(stored_identity) = self.load_stored_identity(auth, binding)? {
             info!(
@@ -346,7 +350,7 @@ impl AgentIdentityManager {
             chatgpt_base_url,
             feature_enabled,
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -408,6 +412,7 @@ impl StoredAgentIdentity {
             agent_runtime_id: self.agent_runtime_id.clone(),
             agent_private_key: self.private_key_pkcs8_base64.clone(),
             registered_at: self.registered_at.clone(),
+            background_task_id: None,
         }
     }
 
@@ -668,6 +673,7 @@ mod tests {
             agent_runtime_id: "agent_invalid".to_string(),
             agent_private_key: "not-valid-base64".to_string(),
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed invalid identity");
 
@@ -707,6 +713,7 @@ mod tests {
             agent_runtime_id: "agent_old".to_string(),
             agent_private_key: stale_key.private_key_pkcs8_base64,
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed stale identity");
 

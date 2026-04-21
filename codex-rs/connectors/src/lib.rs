@@ -418,6 +418,9 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
+    static ALL_CONNECTORS_CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
     fn cache_key(id: &str) -> AllConnectorsCacheKey {
         AllConnectorsCacheKey::new(
             "https://chatgpt.example".to_string(),
@@ -443,7 +446,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
     async fn list_all_connectors_uses_shared_cache() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
         let key = cache_key("shared");
@@ -481,7 +490,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
     async fn list_all_connectors_merges_and_normalizes_directory_apps() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let key = cache_key("merged");
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);

@@ -232,7 +232,7 @@ max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
 extract_model = "gpt-5-mini"
-consolidation_model = "gpt-5"
+consolidation_model = "gpt-5.2"
 "#;
     let memories_cfg =
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
@@ -247,7 +247,7 @@ consolidation_model = "gpt-5"
             max_rollouts_per_startup: Some(9),
             min_rollout_idle_hours: Some(24),
             extract_model: Some("gpt-5-mini".to_string()),
-            consolidation_model: Some("gpt-5".to_string()),
+            consolidation_model: Some("gpt-5.2".to_string()),
         }),
         memories_cfg.memories
     );
@@ -271,7 +271,7 @@ consolidation_model = "gpt-5"
             max_rollouts_per_startup: 9,
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
-            consolidation_model: Some("gpt-5".to_string()),
+            consolidation_model: Some("gpt-5.2".to_string()),
         }
     );
 
@@ -367,6 +367,108 @@ command = "print-token"
         err.to_string()
             .contains("model_providers.corp: provider auth cannot be combined with env_key")
     );
+}
+
+#[test]
+fn rejects_provider_aws_for_custom_provider() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.custom]
+name = "Custom Provider"
+
+[model_providers.custom.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains(
+            "model_providers.custom: provider aws is only supported for `amazon-bedrock`"
+        )
+    );
+}
+
+#[test]
+fn accepts_amazon_bedrock_aws_profile_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock AWS profile override should deserialize");
+
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.aws.as_ref())
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_amazon_bedrock_aws_profile_override() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock AWS profile override should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.model_provider_id, "amazon-bedrock");
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.profile.as_deref()),
+        Some("codex-bedrock")
+    );
+}
+
+#[tokio::test]
+async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock]
+name = "Custom Bedrock"
+base_url = "https://bedrock.example.com/v1"
+requires_openai_auth = true
+supports_websockets = true
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+"#,
+    )
+    .expect("Amazon Bedrock unsupported overrides should deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains(
+        "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+    ));
 }
 
 #[test]
@@ -2110,6 +2212,8 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         &Vec::new(),
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let cfg =
@@ -2244,6 +2348,8 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         &[("model".to_string(), TomlValue::String("cli".to_string()))],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -3229,14 +3335,14 @@ async fn set_model_updates_defaults() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
 
     ConfigEditsBuilder::new(codex_home.path())
-        .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::High))
         .apply()
         .await?;
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-    assert_eq!(parsed.model.as_deref(), Some("gpt-5.1-codex"));
+    assert_eq!(parsed.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
     Ok(())
@@ -3250,7 +3356,7 @@ async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
     tokio::fs::write(
         &config_path,
         r#"
-model = "gpt-5.1-codex"
+model = "gpt-5.4"
 model_reasoning_effort = "medium"
 
 [profiles.dev]
@@ -3286,7 +3392,7 @@ async fn set_model_updates_profile() -> anyhow::Result<()> {
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium))
+        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::Medium))
         .apply()
         .await?;
 
@@ -3297,7 +3403,7 @@ async fn set_model_updates_profile() -> anyhow::Result<()> {
         .get("dev")
         .expect("profile should be created");
 
-    assert_eq!(profile.model.as_deref(), Some("gpt-5.1-codex"));
+    assert_eq!(profile.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(
         profile.model_reasoning_effort,
         Some(ReasoningEffort::Medium)
@@ -3319,7 +3425,7 @@ model = "gpt-4"
 model_reasoning_effort = "medium"
 
 [profiles.prod]
-model = "gpt-5.1-codex"
+model = "gpt-5.4"
 "#,
     )
     .await?;
@@ -3348,7 +3454,7 @@ model = "gpt-5.1-codex"
             .profiles
             .get("prod")
             .and_then(|profile| profile.model.as_deref()),
-        Some("gpt-5.1-codex"),
+        Some("gpt-5.4"),
     );
 
     Ok(())
@@ -3713,7 +3819,7 @@ async fn agent_role_file_metadata_overrides_config_toml_metadata() -> std::io::R
 description = "Role metadata from file"
 nickname_candidates = ["Hypatia"]
 developer_instructions = "Research carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -3775,7 +3881,7 @@ trust_level = "trusted"
         r#"
 name = "researcher"
 description = "Role metadata from file"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -3785,7 +3891,7 @@ model = "gpt-5"
 name = "reviewer"
 description = "Review role"
 developer_instructions = "Review carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -3830,7 +3936,7 @@ async fn legacy_agent_role_config_file_allows_missing_developer_instructions() -
     tokio::fs::write(
         &role_config_path,
         r#"
-model = "gpt-5"
+model = "gpt-5.2"
 model_reasoning_effort = "high"
 "#,
     )
@@ -3882,7 +3988,7 @@ async fn agent_role_without_description_after_merge_is_dropped_with_warning() ->
         &role_config_path,
         r#"
 developer_instructions = "Research carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -4001,7 +4107,7 @@ async fn agent_role_file_name_takes_precedence_over_config_key() -> std::io::Res
 name = "archivist"
 description = "Role metadata from file"
 developer_instructions = "Research carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -4286,7 +4392,7 @@ nickname_candidates = ["Ada"]
         home_agents_dir.join("researcher.toml"),
         r#"
 developer_instructions = "Research carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -4319,7 +4425,7 @@ name = "writer"
 description = "Writer role from file"
 nickname_candidates = ["Sagan"]
 developer_instructions = "Write carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -4426,7 +4532,7 @@ config_file = "./agents/researcher.toml"
         home_agents_dir.join("researcher.toml"),
         r#"
 developer_instructions = "Research carefully"
-model = "gpt-5"
+model = "gpt-5.2"
 "#,
     )
     .await?;
@@ -4725,7 +4831,7 @@ approval_policy = "on-failure"
 enabled = false
 
 [profiles.gpt5]
-model = "gpt-5.1"
+model = "gpt-5.4"
 model_provider = "openai"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
@@ -4753,6 +4859,7 @@ model_verbosity = "high"
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -4887,6 +4994,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
+            experimental_thread_store_endpoint: None,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5038,6 +5146,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5187,6 +5296,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5248,7 +5358,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
     )
     .await?;
     let expected_gpt5_profile_config = Config {
-        model: Some("gpt-5.1".to_string()),
+        model: Some("gpt-5.4".to_string()),
         review_model: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
@@ -5321,6 +5431,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5375,6 +5486,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
@@ -5898,7 +6010,7 @@ fn config_toml_deserializes_mcp_oauth_callback_url() {
 async fn config_loads_mcp_oauth_callback_port_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
-model = "gpt-5.1"
+model = "gpt-5.4"
 mcp_oauth_callback_port = 5678
 "#;
     let cfg: ConfigToml =
@@ -5920,7 +6032,7 @@ async fn config_loads_allow_login_shell_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg: ConfigToml = toml::from_str(
         r#"
-model = "gpt-5.1"
+model = "gpt-5.4"
 allow_login_shell = false
 "#,
     )
@@ -5941,7 +6053,7 @@ allow_login_shell = false
 async fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
-model = "gpt-5.1"
+model = "gpt-5.4"
 mcp_oauth_callback_url = "https://example.com/callback"
 "#;
     let cfg: ConfigToml =
@@ -6051,6 +6163,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,

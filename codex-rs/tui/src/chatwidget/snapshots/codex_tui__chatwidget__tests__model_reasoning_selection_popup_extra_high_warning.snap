@@ -1,14 +1,16 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
-  Select Reasoning Level for gpt-5.1-codex-max
+  Select Reasoning Level for gpt-5.2
 
-  1. Low                   Fast responses with lighter reasoning
-  2. Medium (default)      Balances speed and reasoning depth for everyday
-                           tasks
-  3. High                  Greater reasoning depth for complex problems
-› 4. Extra high (current)  Extra high reasoning depth for complex problems
+  1. Low                   Balances speed with some reasoning; useful for
+                           straightforward queries and short explanations
+  2. Medium (default)      Provides a solid balance of reasoning depth and
+                           latency for general-purpose tasks
+  3. High                  Maximizes reasoning depth for complex or ambiguous
+                           problems
+› 4. Extra high (current)  Extra high reasoning for complex problems
                            ⚠ Extra high reasoning effort can quickly consume
                            Plus plan rate limits.
 
