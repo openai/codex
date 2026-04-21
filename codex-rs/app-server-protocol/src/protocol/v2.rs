@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use crate::RequestId;
@@ -612,6 +613,8 @@ pub struct ToolsV2 {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolSpec {
+    #[ts(optional)]
+    pub namespace: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -622,6 +625,7 @@ pub struct DynamicToolSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DynamicToolSpecDe {
+    namespace: Option<String>,
     name: String,
     description: String,
     input_schema: JsonValue,
@@ -635,6 +639,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         D: serde::Deserializer<'de>,
     {
         let DynamicToolSpecDe {
+            namespace,
             name,
             description,
             input_schema,
@@ -643,6 +648,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         } = DynamicToolSpecDe::deserialize(deserializer)?;
 
         Ok(Self {
+            namespace,
             name,
             description,
             input_schema,
@@ -1162,6 +1168,9 @@ pub struct AdditionalFileSystemPermissions {
     pub write: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
@@ -1171,12 +1180,14 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
             Self {
                 read,
                 write,
+                glob_scan_max_depth: None,
                 entries: None,
             }
         } else {
             Self {
                 read: None,
                 write: None,
+                glob_scan_max_depth: value.glob_scan_max_depth,
                 entries: Some(
                     value
                         .entries
@@ -1191,16 +1202,19 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        if let Some(entries) = value.entries {
+        let mut permissions = if let Some(entries) = value.entries {
             Self {
                 entries: entries
                     .into_iter()
                     .map(CoreFileSystemSandboxEntry::from)
                     .collect(),
+                glob_scan_max_depth: None,
             }
         } else {
             CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
-        }
+        };
+        permissions.glob_scan_max_depth = value.glob_scan_max_depth;
+        permissions
     }
 }
 
@@ -2232,7 +2246,8 @@ pub struct ListMcpServerStatusResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadParams {
-    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     pub server: String,
     pub uri: String,
 }
@@ -4877,6 +4892,7 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     DynamicToolCall {
         id: String,
+        namespace: Option<String>,
         tool: String,
         arguments: JsonValue,
         status: DynamicToolCallStatus,
@@ -5132,6 +5148,14 @@ pub struct GuardianMcpToolCallReviewAction {
     pub tool_title: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianRequestPermissionsReviewAction {
+    pub reason: Option<String>,
+    pub permissions: RequestPermissionProfile,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", rename_all = "camelCase")]
@@ -5174,6 +5198,12 @@ pub enum GuardianApprovalReviewAction {
         connector_id: Option<String>,
         connector_name: Option<String>,
         tool_title: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    RequestPermissions {
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
     },
 }
 
@@ -5226,6 +5256,13 @@ impl From<CoreGuardianAssessmentAction> for GuardianApprovalReviewAction {
                 connector_id,
                 connector_name,
                 tool_title,
+            },
+            CoreGuardianAssessmentAction::RequestPermissions {
+                reason,
+                permissions,
+            } => Self::RequestPermissions {
+                reason,
+                permissions: permissions.into(),
             },
         }
     }
@@ -5280,6 +5317,13 @@ impl From<GuardianApprovalReviewAction> for CoreGuardianAssessmentAction {
                 connector_id,
                 connector_name,
                 tool_title,
+            },
+            GuardianApprovalReviewAction::RequestPermissions {
+                reason,
+                permissions,
+            } => Self::RequestPermissions {
+                reason,
+                permissions: permissions.into(),
             },
         }
     }
@@ -6612,6 +6656,7 @@ pub struct DynamicToolCallParams {
     pub thread_id: String,
     pub turn_id: String,
     pub call_id: String,
+    pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,
 }
@@ -6950,6 +6995,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
     fn absolute_path_string(path: &str) -> String {
@@ -7084,6 +7130,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }
@@ -7155,6 +7202,7 @@ mod tests {
                     access: CoreFileSystemAccessMode::None,
                 },
             ],
+            glob_scan_max_depth: NonZeroUsize::new(2),
         };
 
         let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
@@ -7163,6 +7211,7 @@ mod tests {
             AdditionalFileSystemPermissions {
                 read: None,
                 write: None,
+                glob_scan_max_depth: NonZeroUsize::new(2),
                 entries: Some(vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -7183,6 +7232,17 @@ mod tests {
             CoreFileSystemPermissions::from(permissions),
             core_permissions
         );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<AdditionalFileSystemPermissions>(json!({
+            "read": null,
+            "write": null,
+            "globScanMaxDepth": 0,
+            "entries": [],
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
     }
 
     #[test]
@@ -7225,6 +7285,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }
@@ -9249,6 +9310,7 @@ mod tests {
         assert_eq!(
             actual,
             DynamicToolSpec {
+                namespace: None,
                 name: "lookup_ticket".to_string(),
                 description: "Fetch a ticket".to_string(),
                 input_schema: json!({

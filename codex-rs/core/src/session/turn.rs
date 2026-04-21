@@ -16,6 +16,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
@@ -93,7 +94,9 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -127,6 +130,10 @@ use tracing::warn;
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "turn execution must keep active-turn state transitions atomic"
+)]
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -241,7 +248,7 @@ pub(crate) async fn run_turn(
         turn_context.sub_id.clone(),
     );
     let SkillInjections {
-        items: skill_items,
+        items: skill_injections,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
@@ -256,6 +263,11 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+
+    let skill_items: Vec<ResponseItem> = skill_injections
+        .iter()
+        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
+        .collect();
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
@@ -969,7 +981,7 @@ pub(crate) fn build_prompt(
         .dynamic_tools
         .iter()
         .filter(|tool| tool.defer_loading)
-        .map(|tool| tool.name.as_str())
+        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
         .collect::<HashSet<_>>();
     let tools = if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -977,7 +989,7 @@ pub(crate) fn build_prompt(
         router
             .model_visible_specs()
             .into_iter()
-            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
+            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
 
@@ -988,6 +1000,35 @@ pub(crate) fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+    }
+}
+
+fn filter_deferred_dynamic_tool_spec(
+    spec: ToolSpec,
+    deferred_dynamic_tools: &HashSet<ToolName>,
+) -> Option<ToolSpec> {
+    match spec {
+        ToolSpec::Function(tool) => {
+            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
+                None
+            } else {
+                Some(ToolSpec::Function(tool))
+            }
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
+                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
+                ),
+            });
+            if namespace.tools.is_empty() {
+                None
+            } else {
+                Some(ToolSpec::Namespace(namespace))
+            }
+        }
+        spec => Some(spec),
     }
 }
 
@@ -1143,6 +1184,10 @@ async fn run_sampling_request(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "tool router construction reads through the session-owned manager guard"
+)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,

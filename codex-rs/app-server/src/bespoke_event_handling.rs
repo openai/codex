@@ -510,7 +510,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
-                    RealtimeEvent::ConversationItemDone { .. } => {}
+                    RealtimeEvent::ConversationItemDone { .. }
+                    | RealtimeEvent::NoopRequested(_) => {}
                     RealtimeEvent::HandoffRequested(handoff) => {
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
@@ -953,10 +954,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             if matches!(api_version, ApiVersion::V2) {
                 let call_id = request.call_id;
                 let turn_id = request.turn_id;
+                let namespace = request.namespace;
                 let tool = request.tool;
                 let arguments = request.arguments;
                 let item = ThreadItem::DynamicToolCall {
                     id: call_id.clone(),
+                    namespace: namespace.clone(),
                     tool: tool.clone(),
                     arguments: arguments.clone(),
                     status: DynamicToolCallStatus::InProgress,
@@ -976,6 +979,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
                     call_id: call_id.clone(),
+                    namespace,
                     tool: tool.clone(),
                     arguments: arguments.clone(),
                 };
@@ -1014,6 +1018,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let duration_ms = i64::try_from(response.duration.as_millis()).ok();
                 let item = ThreadItem::DynamicToolCall {
                     id: response.call_id,
+                    namespace: response.namespace,
                     tool: response.tool,
                     arguments: response.arguments,
                     status,

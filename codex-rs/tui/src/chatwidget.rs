@@ -52,8 +52,9 @@ use crate::app_server_session::ThreadSessionState;
 #[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
-use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::StatusSurfacePreviewData;
+use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
@@ -2081,14 +2082,20 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
+    #[cfg(test)]
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
-        self.on_session_configured_with_display(event, SessionConfiguredDisplay::Normal);
+        self.on_session_configured_with_display_and_fork_parent_title(
+            event,
+            SessionConfiguredDisplay::Normal,
+            /*fork_parent_title*/ None,
+        );
     }
 
-    fn on_session_configured_with_display(
+    fn on_session_configured_with_display_and_fork_parent_title(
         &mut self,
         event: codex_protocol::protocol::SessionConfiguredEvent,
         display: SessionConfiguredDisplay,
+        fork_parent_title: Option<String>,
     ) {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
@@ -2190,7 +2197,7 @@ impl ChatWidget {
         if display == SessionConfiguredDisplay::Normal
             && let Some(forked_from_id) = forked_from_id
         {
-            self.emit_forked_thread_event(forked_from_id);
+            self.emit_forked_thread_event(forked_from_id, fork_parent_title);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
@@ -2209,33 +2216,59 @@ impl ChatWidget {
 
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        self.on_session_configured(thread_session_state_to_legacy_event(session));
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::Normal,
+            fork_parent_title,
+        );
     }
 
     pub(crate) fn handle_thread_session_quiet(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        self.on_session_configured_with_display(
+        self.on_session_configured_with_display_and_fork_parent_title(
             thread_session_state_to_legacy_event(session),
             SessionConfiguredDisplay::Quiet,
+            /*fork_parent_title*/ None,
         );
     }
 
     pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
-        self.on_session_configured_with_display(
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
             thread_session_state_to_legacy_event(session),
             SessionConfiguredDisplay::SideConversation,
+            fork_parent_title,
         );
     }
 
-    fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
+    fn emit_forked_thread_event(
+        &mut self,
+        forked_from_id: ThreadId,
+        fork_parent_title: Option<String>,
+    ) {
         let forked_from_id_text = forked_from_id.to_string();
-        let line: Line<'static> = vec![
-            "• ".dim(),
-            "Thread forked from ".into(),
-            forked_from_id_text.cyan(),
-        ]
-        .into();
+        let line: Line<'static> = if let Some(name) = fork_parent_title
+            && !name.trim().is_empty()
+        {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                name.cyan(),
+                " (".into(),
+                forked_from_id_text.cyan(),
+                ")".into(),
+            ]
+            .into()
+        } else {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                forked_from_id_text.cyan(),
+            ]
+            .into()
+        };
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             PlainHistoryCell::new(vec![line]),
         )));
@@ -3574,6 +3607,14 @@ impl ChatWidget {
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        let permission_request_summary = |subject: &str, reason: &Option<String>| {
+            reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!("{subject}: {reason}"))
+                .unwrap_or_else(|| subject.to_string())
+        };
         let guardian_action_summary = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => Some(command.clone()),
             GuardianAssessmentAction::Execve { program, argv, .. } => {
@@ -3603,6 +3644,9 @@ impl ChatWidget {
                 let label = connector_name.as_deref().unwrap_or(server.as_str());
                 Some(format!("MCP {tool_name} on {label}"))
             }
+            GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                Some(permission_request_summary("permission request", reason))
+            }
         };
         let guardian_command = |action: &GuardianAssessmentAction| match action {
             GuardianAssessmentAction::Command { command, .. } => shlex::split(command)
@@ -3616,7 +3660,8 @@ impl ChatWidget {
             .filter(|command| !command.is_empty()),
             GuardianAssessmentAction::ApplyPatch { .. }
             | GuardianAssessmentAction::NetworkAccess { .. }
-            | GuardianAssessmentAction::McpToolCall { .. } => None,
+            | GuardianAssessmentAction::McpToolCall { .. }
+            | GuardianAssessmentAction::RequestPermissions { .. } => None,
         };
 
         if ev.status == GuardianAssessmentStatus::InProgress
@@ -3707,6 +3752,11 @@ impl ChatWidget {
                             "codex could access {target}"
                         ))
                     }
+                    GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                        history_cell::new_guardian_timed_out_action_request(
+                            permission_request_summary("codex could request permissions", reason),
+                        )
+                    }
                     GuardianAssessmentAction::Command { .. } => unreachable!(),
                     GuardianAssessmentAction::Execve { .. } => unreachable!(),
                 }
@@ -3743,6 +3793,12 @@ impl ChatWidget {
                 GuardianAssessmentAction::NetworkAccess { target, .. } => {
                     history_cell::new_guardian_denied_action_request(format!(
                         "codex to access {target}"
+                    ))
+                }
+                GuardianAssessmentAction::RequestPermissions { reason, .. } => {
+                    history_cell::new_guardian_denied_action_request(permission_request_summary(
+                        "codex to request permissions",
+                        reason,
                     ))
                 }
                 GuardianAssessmentAction::Command { .. } => unreachable!(),
@@ -7563,10 +7619,7 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
-            StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
-                self.status_line_value_for_item(&item)
-                    .map(|value| (item, value))
-            })),
+            self.status_surface_preview_data(),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -7577,9 +7630,38 @@ impl ChatWidget {
         self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
         let view = TerminalTitleSetupView::new(
             Some(configured_terminal_title_items.as_slice()),
+            self.terminal_title_preview_data(),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn status_surface_preview_data(&mut self) -> StatusSurfacePreviewData {
+        StatusSurfacePreviewData::from_iter(StatusSurfacePreviewItem::iter().filter_map(|item| {
+            self.status_surface_preview_value_for_item(item)
+                .map(|value| (item, value))
+        }))
+    }
+
+    fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
+        let mut preview_data = self.status_surface_preview_data();
+        let now = Instant::now();
+        for item in [
+            TerminalTitleItem::Project,
+            TerminalTitleItem::Thread,
+            TerminalTitleItem::GitBranch,
+            TerminalTitleItem::Model,
+            TerminalTitleItem::TaskProgress,
+        ] {
+            let Some(preview_item) = item.preview_item() else {
+                continue;
+            };
+            let Some(value) = self.terminal_title_value_for_item(item, now) else {
+                continue;
+            };
+            preview_data.set_live(preview_item, value);
+        }
+        preview_data
     }
 
     fn open_theme_picker(&mut self) {

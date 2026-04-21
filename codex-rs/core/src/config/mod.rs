@@ -21,6 +21,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -64,6 +65,7 @@ use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -90,6 +92,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -646,14 +649,31 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
+    host_name: Option<String>,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self {
+            codex_home: None,
+            cli_overrides: None,
+            harness_overrides: None,
+            loader_overrides: None,
+            cloud_requirements: CloudRequirementsLoader::default(),
+            thread_config_loader: None,
+            fallback_cwd: None,
+            host_name: codex_config::host_name(),
+        }
+    }
 }
 
 impl ConfigBuilder {
@@ -682,8 +702,21 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn thread_config_loader(
+        mut self,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    ) -> Self {
+        self.thread_config_loader = Some(thread_config_loader);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
+        self
+    }
+
+    pub fn host_name(mut self, host_name: Option<String>) -> Self {
+        self.host_name = host_name;
         self
     }
 
@@ -694,7 +727,9 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             fallback_cwd,
+            host_name,
         } = self;
         let codex_home = match codex_home {
             Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
@@ -716,6 +751,10 @@ impl ConfigBuilder {
             &cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader
+                .as_deref()
+                .unwrap_or(&codex_config::NoopThreadConfigLoader),
+            host_name.as_deref(),
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -894,6 +933,8 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         &cli_overrides,
         loader_overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1065,6 +1106,8 @@ pub async fn load_global_mcp_servers(
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
@@ -1804,11 +1847,9 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
-        let mut model_providers = built_in_model_providers(openai_base_url);
-        // Merge user-defined providers into the built-in list.
-        for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
-        }
+        let model_providers =
+            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
+                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
