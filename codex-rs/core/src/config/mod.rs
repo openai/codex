@@ -49,8 +49,13 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::EnvVarEnvironmentProvider;
+use codex_exec_server::EnvironmentProvider;
+use codex_exec_server::EnvironmentSpec;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::RemoteExecServerTransport;
+use codex_exec_server::StaticEnvironmentProvider;
 pub use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -833,6 +838,18 @@ impl Config {
         }
     }
 
+    pub fn environment_provider(
+        &self,
+        exec_server_url: Option<String>,
+    ) -> std::io::Result<Box<dyn EnvironmentProvider>> {
+        let environment_config: EnvironmentConfigToml = self
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        build_environment_provider(environment_config, exec_server_url)
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -1281,6 +1298,210 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
         .collect();
 
     ToolSuggestConfig { discoverables }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EnvironmentConfigToml {
+    environment_provider: Option<EnvironmentProviderToml>,
+    default_environment: Option<String>,
+    environments: Option<Vec<EnvironmentToml>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnvironmentProviderToml {
+    #[serde(rename = "type")]
+    provider_type: EnvironmentProviderKind,
+    default_environment: Option<String>,
+    environments: Option<Vec<EnvironmentToml>>,
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EnvironmentProviderKind {
+    Env,
+    Static,
+    Http,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnvironmentToml {
+    id: String,
+    #[serde(alias = "websocket_url", alias = "websocketUrl")]
+    url: Option<String>,
+    #[serde(alias = "execServerCommand")]
+    exec_server_command: Option<String>,
+}
+
+fn build_environment_provider(
+    environment_config: EnvironmentConfigToml,
+    exec_server_url: Option<String>,
+) -> std::io::Result<Box<dyn EnvironmentProvider>> {
+    match environment_config.environment_provider {
+        Some(provider) => build_configured_environment_provider(provider, exec_server_url),
+        None if environment_config.default_environment.is_some()
+            || environment_config.environments.is_some() =>
+        {
+            Ok(Box::new(StaticEnvironmentProvider {
+                default_environment: environment_config.default_environment,
+                environments: build_environment_specs(
+                    environment_config.environments.as_deref().unwrap_or(&[]),
+                )?,
+            }))
+        }
+        None => Ok(Box::new(EnvVarEnvironmentProvider { exec_server_url })),
+    }
+}
+
+fn build_configured_environment_provider(
+    provider: EnvironmentProviderToml,
+    exec_server_url: Option<String>,
+) -> std::io::Result<Box<dyn EnvironmentProvider>> {
+    match provider.provider_type {
+        EnvironmentProviderKind::Env => Ok(Box::new(EnvVarEnvironmentProvider { exec_server_url })),
+        EnvironmentProviderKind::Static => Ok(Box::new(StaticEnvironmentProvider {
+            default_environment: provider.default_environment,
+            environments: build_environment_specs(provider.environments.as_deref().unwrap_or(&[]))?,
+        })),
+        EnvironmentProviderKind::Http => {
+            let url = provider
+                .url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "environment_provider.url is required for http provider",
+                    )
+                })?;
+            Ok(Box::new(HttpEnvironmentProvider {
+                url: url.to_string(),
+                client: reqwest::Client::new(),
+            }))
+        }
+    }
+}
+
+fn build_environment_specs(
+    environments: &[EnvironmentToml],
+) -> std::io::Result<Vec<EnvironmentSpec>> {
+    let mut environment_specs = Vec::with_capacity(environments.len());
+    for environment in environments {
+        environment_specs.push(build_environment_spec(environment)?);
+    }
+
+    Ok(environment_specs)
+}
+
+fn build_environment_spec(environment: &EnvironmentToml) -> std::io::Result<EnvironmentSpec> {
+    let id = environment.id.trim();
+    if id.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "environment id must not be empty",
+        ));
+    }
+    if id == "local" || id.eq_ignore_ascii_case("none") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("environment id `{id}` is reserved"),
+        ));
+    }
+
+    let url = environment
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let command = environment
+        .exec_server_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let transport = match (url, command) {
+        (Some(url), None) => {
+            if !(url.starts_with("ws://") || url.starts_with("wss://")) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("environment `{id}` url must start with ws:// or wss://"),
+                ));
+            }
+            RemoteExecServerTransport::WebSocket {
+                url: url.to_string(),
+            }
+        }
+        (None, Some(command)) => RemoteExecServerTransport::Command {
+            command: command.to_string(),
+        },
+        (Some(_), Some(_)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("environment `{id}` must set only one of url or exec_server_command"),
+            ));
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("environment `{id}` must set url or exec_server_command"),
+            ));
+        }
+    };
+
+    Ok(EnvironmentSpec {
+        id: id.to_string(),
+        transport,
+    })
+}
+
+struct HttpEnvironmentProvider {
+    url: String,
+    client: reqwest::Client,
+}
+
+#[async_trait::async_trait]
+impl EnvironmentProvider for HttpEnvironmentProvider {
+    async fn get_environments(
+        &self,
+    ) -> Result<(Option<String>, Vec<EnvironmentSpec>), codex_exec_server::ExecServerError> {
+        let url = format!("{}/environments", self.url.trim_end_matches('/'));
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|err| {
+                codex_exec_server::ExecServerError::Protocol(format!(
+                    "failed to load environments from `{url}`: {err}"
+                ))
+            })?
+            .error_for_status()
+            .map_err(|err| {
+                codex_exec_server::ExecServerError::Protocol(format!(
+                    "failed to load environments from `{url}`: {err}"
+                ))
+            })?
+            .json::<HttpEnvironmentResponse>()
+            .await
+            .map_err(|err| {
+                codex_exec_server::ExecServerError::Protocol(format!(
+                    "failed to parse environments from `{url}`: {err}"
+                ))
+            })?;
+        let environments = build_environment_specs(&response.environments).map_err(|err| {
+            codex_exec_server::ExecServerError::Protocol(format!(
+                "invalid environment service response from `{url}`: {err}"
+            ))
+        })?;
+        Ok((response.default_environment, environments))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpEnvironmentResponse {
+    #[serde(alias = "defaultEnvironment")]
+    default_environment: Option<String>,
+    environments: Vec<EnvironmentToml>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
