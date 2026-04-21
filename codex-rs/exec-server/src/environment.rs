@@ -115,8 +115,10 @@ impl EnvironmentManager {
 
     /// Returns the local environment instance used for internal runtime work.
     pub fn local_environment(&self) -> Arc<Environment> {
-        self.get_environment(LOCAL_ENVIRONMENT_ID)
-            .expect("EnvironmentManager always has a local environment")
+        match self.get_environment(LOCAL_ENVIRONMENT_ID) {
+            Some(environment) => environment,
+            None => unreachable!("EnvironmentManager always has a local environment"),
+        }
     }
 
     /// Returns a named environment instance.
