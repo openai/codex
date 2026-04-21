@@ -61,8 +61,8 @@ impl ChatWidget {
     /// input flow, which is important while a popup or modal has focus.
     ///
     /// Callers should route recognized shortcuts through this method rather than
-    /// directly mutating reasoning state. It preserves the existing model
-    /// persistence path and opens the Plan-mode scope prompt when a global
+    /// directly mutating reasoning state. It applies normal-mode changes without
+    /// persisting them and opens the Plan-mode scope prompt when a global
     /// reasoning change would otherwise cross the active Plan override.
     pub(super) fn handle_reasoning_shortcut(&mut self, key_event: KeyEvent) -> bool {
         let Some(direction) = ReasoningShortcutDirection::from_key_event(key_event) else {
@@ -107,7 +107,7 @@ impl ChatWidget {
                     effort: Some(next_effort),
                 });
         } else {
-            self.apply_model_and_effort(current_model, Some(next_effort));
+            self.apply_model_and_effort_without_persist(current_model, Some(next_effort));
         }
 
         true
