@@ -44,10 +44,6 @@ impl<T: HttpTransport> EndpointSession<T> {
         &self.provider
     }
 
-    pub(crate) fn should_send_legacy_conversation_header(&self) -> bool {
-        self.auth.should_send_legacy_conversation_header()
-    }
-
     fn make_request(
         &self,
         method: &Method,

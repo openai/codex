@@ -235,7 +235,6 @@ mod tests {
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.starts_with("Bearer bedrock-api-key-"))
         );
-        assert!(!resolved.auth.should_send_legacy_conversation_header());
     }
 
     #[test]

@@ -34,11 +34,6 @@ pub trait AuthProvider: Send + Sync {
     /// used by telemetry and non-HTTP request paths.
     fn add_auth_headers(&self, headers: &mut HeaderMap);
 
-    /// Whether Responses requests should include Codex's legacy `session_id` header.
-    fn should_send_legacy_conversation_header(&self) -> bool {
-        true
-    }
-
     /// Applies auth to a complete outbound request.
     ///
     /// Header-only auth providers can rely on the default implementation.

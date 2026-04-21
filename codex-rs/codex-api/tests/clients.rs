@@ -96,17 +96,6 @@ impl AuthProvider for NoAuth {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
-#[derive(Clone, Default)]
-struct NoLegacyConversationHeaderAuth;
-
-impl AuthProvider for NoLegacyConversationHeaderAuth {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
-
-    fn should_send_legacy_conversation_header(&self) -> bool {
-        false
-    }
-}
-
 #[derive(Clone)]
 struct StaticAuth {
     token: String,
@@ -496,60 +485,5 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_client_can_omit_legacy_conversation_header() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(
-        transport,
-        provider("external"),
-        Arc::new(NoLegacyConversationHeaderAuth),
-    );
-
-    let request = ResponsesApiRequest {
-        model: "gpt-test".into(),
-        instructions: "Say hi".into(),
-        input: Vec::new(),
-        tools: Vec::new(),
-        tool_choice: "auto".into(),
-        parallel_tool_calls: false,
-        reasoning: None,
-        store: false,
-        stream: true,
-        include: Vec::new(),
-        service_tier: None,
-        prompt_cache_key: None,
-        text: None,
-        client_metadata: None,
-    };
-
-    let _stream = client
-        .stream_request(
-            request,
-            ResponsesOptions {
-                conversation_id: Some("sess_123".into()),
-                compression: Compression::None,
-                ..Default::default()
-            },
-        )
-        .await?;
-
-    let requests = state.take_stream_requests();
-    assert_eq!(requests.len(), 1);
-    let req = &requests[0];
-
-    assert_eq!(
-        req.headers
-            .get("x-client-request-id")
-            .and_then(|v| v.to_str().ok()),
-        Some("sess_123")
-    );
-    assert_eq!(
-        req.headers.get("session_id").and_then(|v| v.to_str().ok()),
-        None
-    );
     Ok(())
 }
