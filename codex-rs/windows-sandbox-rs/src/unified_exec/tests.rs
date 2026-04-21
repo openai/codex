@@ -436,6 +436,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
 }
 
 #[test]
+#[ignore = "TODO: legacy ConPTY cmd.exe exits with STATUS_DLL_INIT_FAILED in CI"]
 fn legacy_tty_cmd_emits_output_and_accepts_input() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
@@ -483,6 +484,7 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
 }
 
 #[test]
+#[ignore = "TODO: legacy ConPTY cmd.exe exits with STATUS_DLL_INIT_FAILED in CI"]
 fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
