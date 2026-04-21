@@ -11,7 +11,12 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) {
-        let response = match app_server.thread_goal_get(thread_id).await {
+        let result = app_server.thread_goal_get(thread_id).await;
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return;
+        }
+
+        let response = match result {
             Ok(response) => response,
             Err(err) => {
                 self.chat_widget
