@@ -30,7 +30,6 @@ const CHILD_PROMPT: &str = "child: say done";
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(/*millis*/ 20);
 const TURN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_parent_and_subagent_requests_include_identity_headers() -> Result<()> {
     skip_if_no_network!(Ok(()));

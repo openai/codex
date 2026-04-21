@@ -48,6 +48,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 fn expect_text_output(output: &FunctionToolOutput) -> String {

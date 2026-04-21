@@ -26,7 +26,6 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     pub(super) js_repl: Arc<JsReplHandle>,
     pub(super) next_internal_sub_id: AtomicU64,
-    pub(super) agent_task_registration_lock: Semaphore,
 }
 
 #[derive(Clone)]
@@ -337,20 +336,8 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let authorization_header_value = match auth.as_ref() {
-                Some(auth) => {
-                    auth_manager_clone
-                        .chatgpt_authorization_header_for_auth(auth)
-                        .await
-                }
-                None => None,
-            };
             let mcp_servers = mcp_manager_for_mcp
-                .effective_servers_with_authorization_header(
-                    &config_for_mcp,
-                    auth.as_ref(),
-                    authorization_header_value.as_deref(),
-                )
+                .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
@@ -636,11 +623,6 @@ impl Session {
                 config.analytics_enabled,
             )
         });
-        let agent_identity_manager = Arc::new(AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        ));
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -663,7 +645,6 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
-            agent_identity_manager: Arc::clone(&agent_identity_manager),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -726,7 +707,6 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -853,7 +833,6 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
-        sess.start_agent_identity_registration();
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));

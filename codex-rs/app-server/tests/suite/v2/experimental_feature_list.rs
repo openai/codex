@@ -15,6 +15,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::LoaderOverrides;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
@@ -32,6 +33,9 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::with_managed_config_path_for_tests(
+            codex_home.path().join("managed_config.toml"),
+        ))
         .build()
         .await?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;

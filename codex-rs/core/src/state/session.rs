@@ -11,7 +11,6 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::SessionAgentTask;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -31,7 +30,6 @@ pub(crate) struct SessionState {
     previous_turn_settings: Option<PreviousTurnSettings>,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
-    pub(crate) agent_task: Option<SessionAgentTask>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
@@ -51,7 +49,6 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
             startup_prewarm: None,
-            agent_task: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
@@ -187,18 +184,6 @@ impl SessionState {
 
     pub(crate) fn take_session_startup_prewarm(&mut self) -> Option<SessionStartupPrewarmHandle> {
         self.startup_prewarm.take()
-    }
-
-    pub(crate) fn agent_task(&self) -> Option<SessionAgentTask> {
-        self.agent_task.clone()
-    }
-
-    pub(crate) fn set_agent_task(&mut self, agent_task: SessionAgentTask) {
-        self.agent_task = Some(agent_task);
-    }
-
-    pub(crate) fn clear_agent_task(&mut self) {
-        self.agent_task = None;
     }
 
     // Adds connector IDs to the active set and returns the merged selection.
