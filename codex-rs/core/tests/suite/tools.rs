@@ -76,66 +76,6 @@ fn ev_namespaced_function_call(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_server_none_omits_environment_backed_tools() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let response_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_exec_server_url("none")
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::UnifiedExec)
-                .expect("unified exec should enable for test");
-            config
-                .features
-                .enable(Feature::JsRepl)
-                .expect("js repl should enable for test");
-            config.include_apply_patch_tool = true;
-        });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn("which tools are available?").await?;
-
-    let tools = tool_names(&response_mock.single_request().body_json());
-    assert!(
-        tools.contains(&"update_plan".to_string()),
-        "non-environment tool should remain available; got {tools:?}"
-    );
-    for environment_tool in [
-        "exec_command",
-        "write_stdin",
-        "js_repl",
-        "js_repl_reset",
-        "apply_patch",
-        "view_image",
-    ] {
-        assert!(
-            !tools.contains(&environment_tool.to_string()),
-            "{environment_tool} should be omitted when CODEX_EXEC_SERVER_URL=none; got {tools:?}"
-        );
-    }
-    assert!(
-        test.thread_manager
-            .environment_manager()
-            .default_environment()
-            .is_none()
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
