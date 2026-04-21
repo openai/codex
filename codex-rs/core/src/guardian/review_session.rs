@@ -709,8 +709,13 @@ async fn run_review_on_session(
         };
     analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
-    let outcome =
-        wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
+    let outcome = wait_for_guardian_review(
+        review_session,
+        deadline,
+        params.external_cancel.as_ref(),
+        &mut analytics_result,
+    )
+    .await;
     if matches!(outcome.0, GuardianReviewSessionOutcome::Completed(_)) {
         if outcome.2
             && let Some(total_token_usage) = review_session.codex.session.total_token_usage().await
@@ -753,6 +758,7 @@ async fn wait_for_guardian_review(
     review_session: &GuardianReviewSession,
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
+    analytics_result: &mut GuardianReviewAnalyticsResult,
 ) -> (GuardianReviewSessionOutcome, bool, bool) {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
@@ -778,6 +784,9 @@ async fn wait_for_guardian_review(
                 match event {
                     Ok(event) => match event.msg {
                         EventMsg::TurnComplete(turn_complete) => {
+                            analytics_result.time_to_first_token_ms = turn_complete
+                                .time_to_first_token_ms
+                                .and_then(|ms| u64::try_from(ms).ok());
                             if turn_complete.last_agent_message.is_none()
                                 && let Some(error_message) = last_error_message
                             {
