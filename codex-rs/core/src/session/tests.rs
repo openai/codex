@@ -1740,7 +1740,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.default_environment_cwd().to_path_buf(),
         environments: Some(previous_environments.clone()),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -2992,7 +2992,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 #[tokio::test]
 async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let (session, turn_context) = make_session_and_context().await;
-    let updated_cwd = turn_context.cwd.join("project");
+    let updated_cwd = turn_context.default_environment_cwd().join("project");
     std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
 
     session
@@ -3011,8 +3011,8 @@ async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let next_turn = session.new_default_turn().await;
 
     assert_eq!(session_cwd, updated_cwd);
-    assert_eq!(config.cwd, turn_context.cwd);
-    assert_eq!(next_turn.cwd, updated_cwd);
+    assert_eq!(&config.cwd, turn_context.default_environment_cwd());
+    assert_eq!(next_turn.default_environment_cwd(), &updated_cwd);
     assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
@@ -3925,7 +3925,7 @@ async fn user_turn_updates_approvals_reviewer() {
 }
 
 #[tokio::test]
-async fn turn_environment_selection_sets_primary_environment() {
+async fn turn_environment_selection_sets_default_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let selected_cwd =
         AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
@@ -3943,31 +3943,27 @@ async fn turn_environment_selection_sets_primary_environment() {
         .await
         .expect("turn should start");
 
-    let turn_environments = turn_context
-        .environments
-        .as_ref()
-        .expect("turn environments should be recorded");
+    let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 1);
-    assert_eq!(turn_environments[0].environment_id, "local");
-    assert!(std::sync::Arc::ptr_eq(
-        turn_context
-            .environment
-            .as_ref()
-            .expect("primary environment should be set"),
-        &turn_environments[0].environment
-    ));
-    assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
+    assert_eq!(
+        turn_environments[0].environment_id.as_deref(),
+        Some("local")
+    );
+    assert_eq!(
+        turn_context.default_environment_cwd().as_path(),
+        selected_cwd.as_path()
+    );
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
 
-    let primary_environment = turn_context
-        .primary_environment()
-        .expect("primary environment should resolve");
-    assert_eq!(primary_environment.environment_id.as_deref(), Some("local"));
+    let default_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve");
+    assert_eq!(default_environment.environment_id.as_deref(), Some("local"));
     assert!(std::sync::Arc::ptr_eq(
-        &primary_environment.environment,
+        &default_environment.environment,
         &turn_environments[0].environment
     ));
-    assert_eq!(primary_environment.cwd, selected_cwd);
+    assert_eq!(default_environment.cwd, selected_cwd);
     let tool_environment = turn_context
         .environment_for_tool(Some("local"))
         .expect("tool environment should resolve by id");
@@ -3978,14 +3974,14 @@ async fn turn_environment_selection_sets_primary_environment() {
     ));
     let default_tool_environment = turn_context
         .environment_for_tool(/*environment_id*/ None)
-        .expect("tool environment should default to primary");
+        .expect("tool environment should resolve to the default environment");
     assert_eq!(
         default_tool_environment.environment_id.as_deref(),
         Some("local")
     );
     assert_eq!(
         turn_context
-            .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
+            .resolve_path_for_environment(&default_environment, Some("relative/path".to_string())),
         selected_cwd.join("relative/path")
     );
 
@@ -3999,7 +3995,7 @@ async fn turn_environment_selection_sets_primary_environment() {
 }
 
 #[tokio::test]
-async fn multiple_turn_environment_selections_use_first_as_primary_environment() {
+async fn multiple_turn_environment_selections_use_first_as_default_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let first_cwd =
@@ -4025,27 +4021,17 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
         .await
         .expect("turn should start");
 
-    let turn_environments = turn_context
-        .environments
-        .as_ref()
-        .expect("turn environments should be recorded");
+    let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.len(), 2);
     assert_eq!(turn_environments[0].cwd, first_cwd);
     assert_eq!(turn_environments[1].cwd, second_cwd);
-    assert!(std::sync::Arc::ptr_eq(
-        turn_context
-            .environment
-            .as_ref()
-            .expect("primary environment should be set"),
-        &turn_environments[0].environment
-    ));
-    assert_eq!(turn_context.cwd, first_cwd);
+    assert_eq!(turn_context.default_environment_cwd(), &first_cwd);
     assert_eq!(turn_context.config.cwd, first_cwd);
 
-    let primary_environment = turn_context
-        .primary_environment()
-        .expect("primary environment should resolve");
-    assert_eq!(primary_environment.cwd, first_cwd);
+    let default_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve");
+    assert_eq!(default_environment.cwd, first_cwd);
     let tool_environment = turn_context
         .environment_for_tool(Some("local"))
         .expect("tool environment should resolve by id");
@@ -4067,7 +4053,7 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
 }
 
 #[tokio::test]
-async fn empty_turn_environment_selection_clears_primary_environment() {
+async fn empty_turn_environment_selection_clears_default_environment() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
 
     let turn_context = session
@@ -4079,18 +4065,11 @@ async fn empty_turn_environment_selection_clears_primary_environment() {
         .await
         .expect("turn should start");
 
-    assert!(turn_context.environment.is_none());
-    assert_eq!(turn_context.cwd, session.get_config().await.cwd);
-    assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
-    assert_eq!(
-        turn_context
-            .environments
-            .as_ref()
-            .expect("turn environments should be recorded")
-            .len(),
-        0
-    );
-    assert!(turn_context.primary_environment().is_none());
+    let session_cwd = session.get_config().await.cwd;
+    assert_eq!(turn_context.default_environment_cwd(), &session_cwd);
+    assert_eq!(turn_context.config.cwd, session_cwd);
+    assert_eq!(turn_context.environments.len(), 0);
+    assert!(turn_context.default_environment().is_none());
     assert!(
         turn_context
             .environment_for_tool(/*environment_id*/ None)
@@ -4100,35 +4079,35 @@ async fn empty_turn_environment_selection_clears_primary_environment() {
 }
 
 #[tokio::test]
-async fn primary_environment_falls_back_to_compatibility_projection() {
+async fn default_environment_uses_default_environment_list_entry() {
     let (_session, turn_context, _rx) = make_session_and_context_with_rx().await;
 
-    let primary_environment = turn_context
-        .primary_environment()
-        .expect("primary environment should resolve from compatibility fields");
-    assert_eq!(primary_environment.environment_id.as_deref(), None);
+    let default_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve from default environment list entry");
+    assert_eq!(default_environment.environment_id.as_deref(), None);
     assert!(std::sync::Arc::ptr_eq(
-        &primary_environment.environment,
-        turn_context
-            .environment
-            .as_ref()
-            .expect("compatibility environment should be set")
+        &default_environment.environment,
+        &turn_context.environments[0].environment
     ));
-    assert_eq!(primary_environment.cwd, turn_context.cwd);
+    assert_eq!(
+        &default_environment.cwd,
+        turn_context.default_environment_cwd()
+    );
 
     let default_tool_environment = turn_context
         .environment_for_tool(/*environment_id*/ None)
-        .expect("tool environment should resolve from compatibility fields");
+        .expect("tool environment should resolve from default environment list entry");
     assert_eq!(default_tool_environment.environment_id.as_deref(), None);
     assert!(std::sync::Arc::ptr_eq(
         &default_tool_environment.environment,
-        &primary_environment.environment
+        &default_environment.environment
     ));
     assert!(turn_context.environment_for_tool(Some("local")).is_none());
     assert_eq!(
         turn_context
-            .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
-        turn_context.cwd.join("relative/path")
+            .resolve_path_for_environment(&default_environment, Some("relative/path".to_string())),
+        turn_context.default_environment_cwd().join("relative/path")
     );
 }
 
@@ -4151,15 +4130,19 @@ async fn multi_environment_feature_without_selections_uses_single_environment_be
             .features
             .enabled(Feature::MultiEnvironmentTools)
     );
-    assert!(turn_context.environments.is_none());
+    assert_eq!(turn_context.environments.len(), 1);
+    assert_eq!(turn_context.environments[0].environment_id, None);
     assert!(!turn_context.tools_config.multi_environment_tools);
     assert_eq!(turn_context.to_turn_context_item().environments, None);
 
-    let primary_environment = turn_context
-        .primary_environment()
-        .expect("primary environment should resolve from compatibility fields");
-    assert_eq!(primary_environment.environment_id, None);
-    assert_eq!(primary_environment.cwd, turn_context.cwd);
+    let default_environment = turn_context
+        .default_environment()
+        .expect("default environment should resolve from default environment list entry");
+    assert_eq!(default_environment.environment_id, None);
+    assert_eq!(
+        &default_environment.cwd,
+        turn_context.default_environment_cwd()
+    );
 }
 
 #[tokio::test]
@@ -5651,11 +5634,14 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
     let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
         turn_context.sandbox_policy.get(),
-        &turn_context.cwd,
+        turn_context.default_environment_cwd(),
     );
     policy.entries.push(FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
-            pattern: format!("{}/**/*.env", turn_context.cwd.as_path().display()),
+            pattern: format!(
+                "{}/**/*.env",
+                turn_context.default_environment_cwd().as_path().display()
+            ),
         },
         access: FileSystemAccessMode::None,
     });
@@ -5667,7 +5653,7 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
     let (_session, mut turn_context) = make_session_and_context().await;
     turn_context.file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
         turn_context.sandbox_policy.get(),
-        &turn_context.cwd,
+        turn_context.default_environment_cwd(),
     );
 
     let item = turn_context.to_turn_context_item();
@@ -7033,7 +7019,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.default_environment_cwd().clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -7065,7 +7051,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": Some(turn_context.default_environment_cwd().to_string_lossy().to_string()),
                     "timeout_ms": params.expiration.timeout_ms(),
                     "sandbox_permissions": params.sandbox_permissions,
                     "justification": params.justification.clone(),

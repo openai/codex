@@ -238,6 +238,15 @@ impl Session {
             guard.cancel();
             *guard = CancellationToken::new();
         }
+        let (runtime_environment, runtime_cwd) = turn_context
+            .default_environment()
+            .map(|environment| (environment.environment, environment.cwd.to_path_buf()))
+            .unwrap_or_else(|| {
+                (
+                    Arc::new(Environment::default()),
+                    turn_context.config.cwd.to_path_buf(),
+                )
+            });
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
@@ -246,13 +255,7 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.sandbox_policy.get().clone(),
-            McpRuntimeEnvironment::new(
-                turn_context
-                    .environment
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
-                turn_context.cwd.to_path_buf(),
-            ),
+            McpRuntimeEnvironment::new(runtime_environment, runtime_cwd),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,

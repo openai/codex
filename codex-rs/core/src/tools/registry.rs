@@ -611,11 +611,16 @@ async fn dispatch_after_tool_use_hook(
     let session = invocation.session.as_ref();
     let turn = invocation.turn.as_ref();
     let tool_input = HookToolInput::from(&invocation.payload);
+    let Some(tool_environment) = turn.default_environment() else {
+        return Some(FunctionCallError::RespondToModel(
+            "after-tool hooks are unavailable in this session".to_string(),
+        ));
+    };
     let hook_outcomes = session
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
+            cwd: tool_environment.cwd,
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {

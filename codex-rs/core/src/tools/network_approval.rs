@@ -349,6 +349,15 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
+        let Some(tool_environment) = turn_context.default_environment() else {
+            pending.set_decision(PendingApprovalDecision::Deny).await;
+            self.pending_host_approvals.lock().await.remove(&key);
+            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
+                policy_denial_message,
+            ))
+            .await;
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        };
         if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
@@ -442,7 +451,7 @@ impl NetworkApprovalService {
                     guardian_approval_id,
                     /*approval_id*/ None,
                     prompt_command,
-                    turn_context.cwd.clone(),
+                    tool_environment.cwd,
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,

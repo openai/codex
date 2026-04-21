@@ -46,7 +46,7 @@ pub(super) async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_has_environment(parent_turn_context.tools_config.has_environment)
+    .with_has_environment(!parent_turn_context.environments.is_empty())
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -85,6 +85,12 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
+    let parent_tool_environment = parent_turn_context.default_environment();
+    let review_cwd = parent_tool_environment.as_ref().map_or_else(
+        || parent_turn_context.config.cwd.clone(),
+        |environment| environment.cwd.clone(),
+    );
+    per_turn_config.cwd = review_cwd.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
@@ -92,7 +98,7 @@ pub(super) async fn spawn_review_thread(
         sess.conversation_id.to_string(),
         &session_source,
         review_turn_id.clone(),
-        parent_turn_context.cwd.clone(),
+        review_cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
     ));
@@ -109,8 +115,8 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
-        environment: parent_turn_context.environment.clone(),
         environments: parent_turn_context.environments.clone(),
+        environment_selections_explicit: parent_turn_context.environment_selections_explicit,
         tools_config,
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
@@ -129,7 +135,6 @@ pub(super) async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
-        cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),

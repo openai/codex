@@ -236,7 +236,7 @@ impl UnifiedExecProcessManager {
         let cwd = request
             .workdir
             .clone()
-            .unwrap_or_else(|| context.turn.cwd.clone());
+            .unwrap_or_else(|| context.turn.default_environment_cwd().clone());
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;

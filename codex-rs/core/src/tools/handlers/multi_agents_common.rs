@@ -266,7 +266,12 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
         })?;
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    config.cwd = turn.cwd.clone();
+    let Some(tool_environment) = turn.default_environment() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent is unavailable in this session".to_string(),
+        ));
+    };
+    config.cwd = tool_environment.cwd;
     config
         .permissions
         .sandbox_policy

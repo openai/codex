@@ -1321,7 +1321,7 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .build()
         .await
         .expect("load project config");
-    turn_context.cwd = config.cwd.clone();
+    turn_context.set_default_environment_cwd_for_test(config.cwd.clone());
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
         server: "docs".to_string(),

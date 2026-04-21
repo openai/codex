@@ -281,7 +281,6 @@ fn merge_apply_patch_environment_ids(
 async fn effective_patch_permissions(
     session: &Session,
     turn: &TurnContext,
-    cwd: &AbsolutePathBuf,
     action: &ApplyPatchAction,
 ) -> (
     Vec<AbsolutePathBuf>,
@@ -301,7 +300,7 @@ async fn effective_patch_permissions(
         session,
         turn.cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
-        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, cwd),
+        write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &action.cwd),
     )
     .await;
 
@@ -402,22 +401,10 @@ impl ToolHandler for ApplyPatchHandler {
         .await
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                let action_cwd = changes.cwd.clone();
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-                    effective_patch_permissions(
-                        session.as_ref(),
-                        turn.as_ref(),
-                        &action_cwd,
-                        &changes,
-                    )
-                    .await;
-                match apply_patch::apply_patch(
-                    turn.as_ref(),
-                    &action_cwd,
-                    &file_system_sandbox_policy,
-                    changes,
-                )
-                .await
+                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+                match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                    .await
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
@@ -438,7 +425,6 @@ impl ToolHandler for ApplyPatchHandler {
                         let req = ApplyPatchRequest {
                             environment_id: tool_environment.environment_id.clone(),
                             environment: tool_environment.environment,
-                            cwd: action_cwd,
                             action: apply.action,
                             file_paths,
                             changes,
@@ -520,7 +506,6 @@ pub(crate) async fn intercept_apply_patch(
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-            let action_cwd = changes.cwd.clone();
             session
                 .record_model_warning(
                     format!(
@@ -530,15 +515,9 @@ pub(crate) async fn intercept_apply_patch(
                 )
                 .await;
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
-                effective_patch_permissions(session.as_ref(), turn.as_ref(), &action_cwd, &changes)
-                    .await;
-            match apply_patch::apply_patch(
-                turn.as_ref(),
-                &action_cwd,
-                &file_system_sandbox_policy,
-                changes,
-            )
-            .await
+                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+            match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                .await
             {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
@@ -567,7 +546,6 @@ pub(crate) async fn intercept_apply_patch(
                                     "apply_patch is unavailable in this session".to_string(),
                                 )
                             })?,
-                        cwd: action_cwd,
                         action: apply.action,
                         file_paths: approval_keys,
                         changes,

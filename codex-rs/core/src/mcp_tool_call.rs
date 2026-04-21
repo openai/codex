@@ -518,10 +518,13 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
         return Ok(meta);
     }
 
+    let tool_environment = turn_context
+        .default_environment()
+        .ok_or_else(|| anyhow::anyhow!("MCP sandbox state is unavailable in this session"))?;
     let sandbox_state = serde_json::to_value(SandboxState {
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: turn_context.cwd.to_path_buf(),
+        sandbox_cwd: tool_environment.cwd.to_path_buf(),
         use_legacy_landlock: turn_context.features.use_legacy_landlock(),
     })?;
 

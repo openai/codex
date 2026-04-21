@@ -99,7 +99,11 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
-        let read_deny_matcher = ReadDenyMatcher::new(&turn.file_system_sandbox_policy, &turn.cwd);
+        let tool_environment = turn.default_environment().ok_or_else(|| {
+            FunctionCallError::RespondToModel("list_dir is unavailable in this session".to_string())
+        })?;
+        let read_deny_matcher =
+            ReadDenyMatcher::new(&turn.file_system_sandbox_policy, &tool_environment.cwd);
         if read_deny_matcher
             .as_ref()
             .is_some_and(|matcher| matcher.is_read_denied(&path))

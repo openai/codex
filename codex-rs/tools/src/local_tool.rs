@@ -15,6 +15,7 @@ pub struct CommandToolOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellToolOptions {
     pub exec_permission_approvals_enabled: bool,
+    pub multi_environment_tools: bool,
 }
 
 pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
@@ -68,7 +69,7 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
         properties.insert(
             "environment_id".to_string(),
             JsonSchema::string(Some(
-                "Optional selected environment id to run the command in; omit to use the primary environment.".to_string(),
+                "Optional selected environment id to run the command in; omit to use the default environment.".to_string(),
             )),
         );
     }
@@ -164,6 +165,14 @@ pub fn create_shell_tool(options: ShellToolOptions) -> ToolSpec {
             )),
         ),
     ]);
+    if options.multi_environment_tools {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional selected environment id to run the command in; omit to use the default environment.".to_string(),
+            )),
+        );
+    }
     properties.extend(create_approval_parameters(
         options.exec_permission_approvals_enabled,
     ));
@@ -232,6 +241,14 @@ pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
             JsonSchema::boolean(Some(
                 "Whether to run the shell with login shell semantics. Defaults to true."
                     .to_string(),
+            )),
+        );
+    }
+    if options.multi_environment_tools {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional selected environment id to run the command in; omit to use the default environment.".to_string(),
             )),
         );
     }

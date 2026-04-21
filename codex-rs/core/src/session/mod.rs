@@ -2460,6 +2460,7 @@ impl Session {
                 state.session_configuration.session_source.clone(),
             )
         };
+        let default_cwd = turn_context.default_environment_cwd().clone();
         if let Some(model_switch_message) =
             crate::context_manager::updates::build_model_instructions_update_item(
                 previous_turn_settings.as_ref(),
@@ -2475,7 +2476,7 @@ impl Session {
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
-                    &turn_context.cwd,
+                    &default_cwd,
                     turn_context
                         .features
                         .enabled(Feature::ExecPermissionApprovals),
@@ -2596,7 +2597,7 @@ impl Session {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+                    directory: default_cwd.to_string_lossy().into_owned(),
                 }
                 .render(),
             );

@@ -29,7 +29,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         properties.insert(
             "environment_id".to_string(),
             JsonSchema::string(Some(
-                "Optional selected environment id to load the image from; omit to use the primary environment.".to_string(),
+                "Optional selected environment id to load the image from; omit to use the default environment.".to_string(),
             )),
         );
     }

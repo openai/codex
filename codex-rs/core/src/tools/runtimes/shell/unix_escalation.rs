@@ -161,7 +161,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: attempt.sandbox_cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -259,7 +259,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: req.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };

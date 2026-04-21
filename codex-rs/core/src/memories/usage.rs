@@ -84,20 +84,24 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
     ) {
         (None, "shell") => serde_json::from_str::<ShellToolCallParams>(arguments)
             .ok()
-            .map(|params| {
-                (
-                    params.command,
-                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
-                )
+            .and_then(|params| {
+                let workdir = resolve_tool_workdir(
+                    invocation,
+                    params.environment_id.as_deref(),
+                    params.workdir,
+                )?;
+                Some((params.command, workdir))
             }),
         (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
-            .map(|params| {
+            .and_then(|params| {
+                let workdir = resolve_tool_workdir(
+                    invocation,
+                    params.environment_id.as_deref(),
+                    params.workdir,
+                )?;
                 if !invocation.turn.tools_config.allow_login_shell && params.login == Some(true) {
-                    return (
-                        Vec::new(),
-                        invocation.turn.resolve_path(params.workdir).to_path_buf(),
-                    );
+                    return Some((Vec::new(), workdir));
                 }
                 let use_login_shell = params
                     .login
@@ -106,14 +110,17 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     .session
                     .user_shell()
                     .derive_exec_args(&params.command, use_login_shell);
-                (
-                    command,
-                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
-                )
+                Some((command, workdir))
             }),
         (None, "exec_command") => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
             .and_then(|params| {
+                let environment_id = tool_environment_id(arguments);
+                let workdir = resolve_tool_workdir(
+                    invocation,
+                    environment_id.as_deref(),
+                    params.workdir.clone(),
+                )?;
                 let command = crate::tools::handlers::unified_exec::get_command(
                     &params,
                     invocation.session.user_shell(),
@@ -121,13 +128,41 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                     invocation.turn.tools_config.allow_login_shell,
                 )
                 .ok()?;
-                Some((
-                    command,
-                    invocation.turn.resolve_path(params.workdir).to_path_buf(),
-                ))
+                Some((command, workdir))
             }),
         (Some(_), _) | (None, _) => None,
     }
+}
+
+fn tool_environment_id(arguments: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    value
+        .get("environment_id")
+        .or_else(|| value.get("environmentId"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn resolve_tool_workdir(
+    invocation: &ToolInvocation,
+    environment_id: Option<&str>,
+    workdir: Option<String>,
+) -> Option<PathBuf> {
+    let requested_environment_id = invocation
+        .turn
+        .tools_config
+        .multi_environment_tools
+        .then_some(environment_id)
+        .flatten();
+    let environment = invocation
+        .turn
+        .environment_for_tool(requested_environment_id)?;
+    Some(
+        invocation
+            .turn
+            .resolve_path_for_environment(&environment, workdir)
+            .to_path_buf(),
+    )
 }
 
 fn get_memory_kind(path: String) -> Option<MemoriesUsageKind> {
