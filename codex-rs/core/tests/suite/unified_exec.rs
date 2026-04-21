@@ -408,7 +408,7 @@ async fn unified_exec_environment_id_targets_non_primary_environment() -> Result
         "environment list should be visible to the model: {request_text}"
     );
     assert!(
-        request_text.contains("id=\"local\""),
+        request_text.contains("id=\\\"local\\\""),
         "local environment id should be visible to the model: {request_text}"
     );
     assert!(
