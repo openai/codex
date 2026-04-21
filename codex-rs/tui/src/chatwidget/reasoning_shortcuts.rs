@@ -12,6 +12,7 @@
 //! next shortcut moves to the nearest supported effort in the requested
 //! direction.
 
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyCode;
@@ -62,8 +63,8 @@ impl ChatWidget {
     ///
     /// Callers should route recognized shortcuts through this method rather than
     /// directly mutating reasoning state. It applies normal-mode changes without
-    /// persisting them and opens the Plan-mode scope prompt when a global
-    /// reasoning change would otherwise cross the active Plan override.
+    /// persisting them. In Plan mode, shortcuts apply only to the active
+    /// Plan-mode override and skip the global-vs-Plan scope prompt.
     pub(super) fn handle_reasoning_shortcut(&mut self, key_event: KeyEvent) -> bool {
         let Some(direction) = ReasoningShortcutDirection::from_key_event(key_event) else {
             return false;
@@ -100,12 +101,9 @@ impl ChatWidget {
             return true;
         };
 
-        if self.should_prompt_plan_mode_reasoning_scope(&current_model, Some(next_effort)) {
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
             self.app_event_tx
-                .send(AppEvent::OpenPlanReasoningScopePrompt {
-                    model: current_model,
-                    effort: Some(next_effort),
-                });
+                .send(AppEvent::UpdatePlanModeReasoningEffort(Some(next_effort)));
         } else {
             self.apply_model_and_effort_without_persist(current_model, Some(next_effort));
         }

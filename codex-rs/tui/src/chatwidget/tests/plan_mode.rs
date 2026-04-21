@@ -260,7 +260,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
 }
 
 #[tokio::test]
-async fn reasoning_shortcut_in_plan_mode_opens_scope_prompt_event() {
+async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or_persist() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -272,13 +272,37 @@ async fn reasoning_shortcut_in_plan_mode_opens_scope_prompt_event() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
 
-    let event = rx.try_recv().expect("expected AppEvent");
-    assert_matches!(
-        event,
-        AppEvent::OpenPlanReasoningScopePrompt {
-            model,
-            effort: Some(ReasoningEffortConfig::High)
-        } if model == "gpt-5.4"
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan reasoning override update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected no Plan reasoning scope prompt event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "expected no Plan reasoning persistence event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected no global model persistence event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "expected no global reasoning update event; events: {events:?}"
     );
 }
 
