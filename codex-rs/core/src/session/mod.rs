@@ -252,6 +252,8 @@ use crate::agents_md::AgentsMdManager;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_runtime::PendingInputRecordOutcome;
+use crate::hook_runtime::record_pending_turn_input;
 use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
@@ -269,6 +271,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PendingTurnInput;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -2888,7 +2891,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(input);
         turn_state.accept_mailbox_delivery_for_current_turn();
         Ok(active_turn_id.clone())
     }
@@ -2975,12 +2978,18 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
+    #[cfg(test)]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(input);
+                ts.prepend_pending_input(
+                    input
+                        .into_iter()
+                        .map(PendingTurnInput::ResponseInputItem)
+                        .collect(),
+                );
                 Ok(())
             }
             None => Err(()),
@@ -2991,7 +3000,7 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+    pub(crate) async fn get_pending_turn_input(&self) -> Vec<PendingTurnInput> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3013,7 +3022,7 @@ impl Session {
             mailbox_rx
                 .drain()
                 .into_iter()
-                .map(|mail| mail.to_response_input_item())
+                .map(|mail| PendingTurnInput::ResponseInputItem(mail.to_response_input_item()))
                 .collect::<Vec<_>>()
         };
         if pending_input.is_empty() {
@@ -3025,6 +3034,73 @@ impl Session {
             pending_input.extend(mailbox_items);
             pending_input
         }
+    }
+
+    #[cfg(test)]
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        self.get_pending_turn_input()
+            .await
+            .into_iter()
+            .map(PendingTurnInput::into_response_input_item)
+            .collect()
+    }
+
+    async fn fill_pending_input_from_mailbox_if_empty(
+        &self,
+        turn_state: &Arc<Mutex<crate::state::TurnState>>,
+    ) {
+        let should_drain_mailbox = {
+            let ts = turn_state.lock().await;
+            !ts.has_pending_input() && ts.accepts_mailbox_delivery_for_current_turn()
+        };
+        if !should_drain_mailbox {
+            return;
+        }
+
+        let mailbox_items = {
+            let mut mailbox_rx = self.mailbox_rx.lock().await;
+            mailbox_rx
+                .drain()
+                .into_iter()
+                .map(|mail| PendingTurnInput::ResponseInputItem(mail.to_response_input_item()))
+                .collect::<Vec<_>>()
+        };
+        if mailbox_items.is_empty() {
+            return;
+        }
+
+        let mut ts = turn_state.lock().await;
+        for item in mailbox_items {
+            ts.push_pending_input(item);
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "pending transcript input must stay queued until hooks and history writes finish"
+    )]
+    pub(crate) async fn record_next_pending_turn_input_from_state(
+        self: &Arc<Self>,
+        turn_context: &Arc<crate::session::turn_context::TurnContext>,
+        turn_state: &Arc<Mutex<crate::state::TurnState>>,
+    ) -> Option<PendingInputRecordOutcome> {
+        self.fill_pending_input_from_mailbox_if_empty(turn_state)
+            .await;
+
+        let mut ts = turn_state.lock().await;
+        let pending_input = ts.front_pending_input()?;
+        let outcome = record_pending_turn_input(self, turn_context, pending_input).await;
+        let _ = ts.pop_front_pending_input();
+        Some(outcome)
+    }
+
+    pub(crate) async fn record_next_pending_turn_input(
+        self: &Arc<Self>,
+        turn_context: &Arc<crate::session::turn_context::TurnContext>,
+    ) -> Option<PendingInputRecordOutcome> {
+        let turn_state = self.turn_state_for_sub_id(&turn_context.sub_id).await?;
+        self.record_next_pending_turn_input_from_state(turn_context, &turn_state)
+            .await
     }
 
     /// Queue response items to be injected into the next active turn created for this session.

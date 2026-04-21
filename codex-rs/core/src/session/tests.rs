@@ -310,7 +310,10 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     .await;
     sess.spawn_task(
         Arc::clone(&tc),
-        Vec::new(),
+        vec![UserInput::Text {
+            text: "first prompt".to_string(),
+            text_elements: Vec::new(),
+        }],
         crate::tasks::RegularTask::new(),
     )
     .await;
@@ -326,23 +329,59 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-    let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected turn aborted event")
-        .expect("channel open");
-    let EventMsg::TurnAborted(TurnAbortedEvent {
+    let aborted = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("expected turn aborted event")
+            .expect("channel open");
+        if let EventMsg::TurnAborted(event) = event.msg {
+            break event;
+        }
+    };
+    let TurnAbortedEvent {
         turn_id,
         reason,
         completed_at,
         duration_ms,
-    }) = second.msg
-    else {
-        panic!("expected turn aborted event");
-    };
+    } = aborted;
     assert_eq!(turn_id, Some(tc.sub_id.clone()));
     assert_eq!(reason, TurnAbortReason::Interrupted);
     assert!(completed_at.is_some());
     assert!(duration_ms.is_some());
+
+    let history = sess.clone_history().await;
+    let prompt_idx = history.raw_items().iter().position(|item| {
+        matches!(
+            item,
+            ResponseItem::Message {
+                role,
+                content,
+                ..
+            } if role == "user"
+                && content == &[ContentItem::InputText {
+                    text: "first prompt".to_string()
+                }]
+        )
+    });
+    let aborted_idx = history.raw_items().iter().position(|item| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        role == "user"
+            && content.iter().any(|content_item| {
+                let ContentItem::InputText { text } = content_item else {
+                    return false;
+                };
+                TurnAborted::matches_text(text)
+            })
+    });
+    assert!(
+        prompt_idx.is_some_and(|prompt_idx| {
+            aborted_idx.is_some_and(|aborted_idx| prompt_idx < aborted_idx)
+        }),
+        "expected prompt to be recorded before the interrupted-turn marker: {:?}",
+        history.raw_items()
+    );
 }
 
 fn test_model_client_session() -> crate::client::ModelClientSession {

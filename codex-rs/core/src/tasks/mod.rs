@@ -20,13 +20,11 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::context::ContextualUserFragment;
-use crate::hook_runtime::PendingInputHookDisposition;
-use crate::hook_runtime::inspect_pending_input;
-use crate::hook_runtime::record_additional_contexts;
-use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::record_pending_turn_input;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
+use crate::state::PendingTurnInput;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnTokenUsageFact;
@@ -38,7 +36,6 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -149,6 +146,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Returns the tracing name for a spawned task span.
     fn span_name(&self) -> &'static str;
 
+    /// Whether the submitted user input should be queued for ordered transcript recording.
+    fn queues_initial_input(&self) -> bool {
+        false
+    }
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -186,6 +188,8 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
 
     fn span_name(&self) -> &'static str;
 
+    fn queues_initial_input(&self) -> bool;
+
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -211,6 +215,10 @@ where
 
     fn span_name(&self) -> &'static str {
         SessionTask::span_name(self)
+    }
+
+    fn queues_initial_input(&self) -> bool {
+        SessionTask::queues_initial_input(self)
     }
 
     fn run(
@@ -259,6 +267,7 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let queue_initial_input = task.queues_initial_input() && !input.is_empty();
         let started_at = Instant::now();
         turn_context
             .turn_timing_state
@@ -270,7 +279,7 @@ impl Session {
         let done = Arc::new(Notify::new());
 
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
-        let mailbox_items = self.get_pending_input().await;
+        let mailbox_items = self.get_pending_turn_input().await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -280,6 +289,9 @@ impl Session {
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            if queue_initial_input {
+                turn_state.push_pending_input(PendingTurnInput::UserInput(input.clone()));
+            }
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
@@ -398,8 +410,10 @@ impl Session {
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
+            let turn_state = Arc::clone(&active_turn.turn_state);
             for task in active_turn.drain_tasks() {
-                self.handle_task_abort(task, reason.clone()).await;
+                self.handle_task_abort(task, reason.clone(), Arc::clone(&turn_state))
+                    .await;
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -419,7 +433,7 @@ impl Session {
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
-        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_input = Vec::<PendingTurnInput>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
@@ -448,16 +462,7 @@ impl Session {
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item).await {
-                    PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(self, &turn_context, *pending_input).await;
-                    }
-                    PendingInputHookDisposition::Blocked {
-                        additional_contexts,
-                    } => {
-                        record_additional_contexts(self, &turn_context, additional_contexts).await;
-                    }
-                }
+                record_pending_turn_input(self, &turn_context, pending_input_item).await;
             }
         }
         // Emit token usage metrics.
@@ -594,7 +599,12 @@ impl Session {
         }
     }
 
-    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
+    async fn handle_task_abort(
+        self: &Arc<Self>,
+        task: RunningTask,
+        reason: TurnAbortReason,
+        turn_state: Arc<tokio::sync::Mutex<crate::state::TurnState>>,
+    ) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
@@ -624,6 +634,11 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
+            while self
+                .record_next_pending_turn_input_from_state(&task.turn_context, &turn_state)
+                .await
+                .is_some()
+            {}
 
             let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())

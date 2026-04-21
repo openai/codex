@@ -17,6 +17,7 @@ use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -34,6 +35,7 @@ use serde_json::Value;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::state::PendingTurnInput;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -44,6 +46,12 @@ pub(crate) struct HookRuntimeOutcome {
 pub(crate) enum PendingInputHookDisposition {
     Accepted(Box<PendingInputRecord>),
     Blocked { additional_contexts: Vec<String> },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingInputRecordOutcome {
+    Recorded,
+    Blocked,
 }
 
 pub(crate) enum PendingInputRecord {
@@ -268,6 +276,38 @@ pub(crate) async fn inspect_pending_input(
     }
 }
 
+pub(crate) async fn inspect_pending_turn_input(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    pending_input_item: PendingTurnInput,
+) -> PendingInputHookDisposition {
+    match pending_input_item {
+        PendingTurnInput::UserInput(input) => {
+            let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+            let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+                sess,
+                turn_context,
+                UserMessageItem::new(&input).message(),
+            )
+            .await;
+            if user_prompt_submit_outcome.should_stop {
+                PendingInputHookDisposition::Blocked {
+                    additional_contexts: user_prompt_submit_outcome.additional_contexts,
+                }
+            } else {
+                PendingInputHookDisposition::Accepted(Box::new(PendingInputRecord::UserMessage {
+                    content: input,
+                    response_item,
+                    additional_contexts: user_prompt_submit_outcome.additional_contexts,
+                }))
+            }
+        }
+        PendingTurnInput::ResponseInputItem(input) => {
+            inspect_pending_input(sess, turn_context, input).await
+        }
+    }
+}
+
 pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -290,6 +330,25 @@ pub(crate) async fn record_pending_input(
         PendingInputRecord::ConversationItem { response_item } => {
             sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
                 .await;
+        }
+    }
+}
+
+pub(crate) async fn record_pending_turn_input(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    pending_input_item: PendingTurnInput,
+) -> PendingInputRecordOutcome {
+    match inspect_pending_turn_input(sess, turn_context, pending_input_item).await {
+        PendingInputHookDisposition::Accepted(pending_input) => {
+            record_pending_input(sess, turn_context, *pending_input).await;
+            PendingInputRecordOutcome::Recorded
+        }
+        PendingInputHookDisposition::Blocked {
+            additional_contexts,
+        } => {
+            record_additional_contexts(sess, turn_context, additional_contexts).await;
+            PendingInputRecordOutcome::Blocked
         }
     }
 }
