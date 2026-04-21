@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_model_provider_info::ModelProviderInfo;
@@ -19,6 +20,8 @@ use proto::thread_config_loader_client::ThreadConfigLoaderClient;
 
 #[path = "proto/codex.thread_config.v1.rs"]
 mod proto;
+
+const REMOTE_THREAD_CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// gRPC-backed [`ThreadConfigLoader`] implementation.
 #[derive(Clone, Debug)]
@@ -54,15 +57,10 @@ impl ThreadConfigLoader for RemoteThreadConfigLoader {
         &self,
         context: ThreadConfigContext,
     ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
-        let request = proto::LoadThreadConfigRequest {
-            thread_id: context.thread_id,
-            cwd: context.cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
-        };
-
         let response = self
             .client()
             .await?
-            .load(request)
+            .load(load_thread_config_request(context))
             .await
             .map_err(remote_status_to_error)?
             .into_inner();
@@ -73,6 +71,17 @@ impl ThreadConfigLoader for RemoteThreadConfigLoader {
             .map(thread_config_source_from_proto)
             .collect()
     }
+}
+
+fn load_thread_config_request(
+    context: ThreadConfigContext,
+) -> tonic::Request<proto::LoadThreadConfigRequest> {
+    let mut request = tonic::Request::new(proto::LoadThreadConfigRequest {
+        thread_id: context.thread_id,
+        cwd: context.cwd.map(|cwd| cwd.to_string_lossy().into_owned()),
+    });
+    request.set_timeout(REMOTE_THREAD_CONFIG_LOAD_TIMEOUT);
+    request
 }
 
 fn remote_status_to_error(status: tonic::Status) -> ThreadConfigLoadError {
@@ -368,6 +377,19 @@ mod tests {
         server.await.expect("join server").expect("server");
 
         assert_eq!(loaded.expect("load thread config"), expected_sources());
+    }
+
+    #[test]
+    fn load_thread_config_request_sets_timeout() {
+        let request = load_thread_config_request(ThreadConfigContext::default());
+
+        assert_eq!(
+            request
+                .metadata()
+                .get("grpc-timeout")
+                .and_then(|value| value.to_str().ok()),
+            Some("5000000u")
+        );
     }
 
     #[test]
