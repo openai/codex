@@ -83,10 +83,11 @@ url = "{mcp_server_url}/mcp"
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+    let thread_id = thread.id.clone();
 
     let tool_call_request_id = mcp
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             server: TEST_SERVER_NAME.to_string(),
             tool: TEST_TOOL_NAME.to_string(),
             arguments: Some(json!({
@@ -114,6 +115,7 @@ url = "{mcp_server_url}/mcp"
         response.structured_content,
         Some(json!({
             "echoed": "hello from app",
+            "threadId": thread_id,
         }))
     );
     assert_eq!(response.is_error, Some(false));
@@ -203,7 +205,7 @@ impl ServerHandler for ToolAppsMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         assert_eq!(request.name.as_ref(), TEST_TOOL_NAME);
         let message = request
@@ -212,12 +214,19 @@ impl ServerHandler for ToolAppsMcpServer {
             .and_then(|arguments| arguments.get("message"))
             .and_then(|value| value.as_str())
             .unwrap_or_default();
+        let thread_id = context
+            .meta
+            .0
+            .get("threadId")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
 
         let mut meta = Meta::new();
         meta.0.insert("calledBy".to_string(), json!("mcp-app"));
 
         let mut result = CallToolResult::structured(json!({
             "echoed": message,
+            "threadId": thread_id,
         }));
         result.content = vec![Content::text(format!("echo: {message}"))];
         result.meta = Some(meta);

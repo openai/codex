@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -14,19 +15,26 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_identity::AgentIdentityManager;
-use crate::apps::render_apps_section;
+use crate::build_available_skills;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::context::ApprovedCommandPrefixSaved;
+use crate::context::AppsInstructions;
+use crate::context::AvailablePluginsInstructions;
+use crate::context::AvailableSkillsInstructions;
+use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
+use crate::context::NetworkRuleSaved;
+use crate::context::PermissionsInstructions;
+use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
@@ -113,6 +121,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
@@ -258,7 +267,6 @@ use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::plugins::render_plugins_section;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -271,6 +279,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -305,7 +314,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -1681,8 +1689,9 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let fragment = ApprovedCommandPrefixSaved::new(prefixes);
+        let text = fragment.render();
+        let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1776,15 +1785,9 @@ impl Session {
         sub_id: &str,
         amendment: &NetworkPolicyAmendment,
     ) {
-        let (action, list_name) = match amendment.action {
-            NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
-            NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
-        };
-        let text = format!(
-            "{action} network rule saved in execpolicy ({list_name}): {}",
-            amendment.host
-        );
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        let fragment = NetworkRuleSaved::new(amendment);
+        let text = fragment.render();
+        let message: ResponseItem = ContextualUserFragment::into(fragment);
 
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
@@ -1930,15 +1933,33 @@ impl Session {
         rx_approve
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub async fn request_permissions(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd(
+            turn_context,
+            call_id,
+            args,
+            turn_context.cwd.clone(),
+            cancellation_token,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub(crate) async fn request_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
@@ -1962,8 +1983,9 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        let requested_permissions = args.permissions;
+
         if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
-            let requested_permissions = args.permissions;
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
@@ -1993,19 +2015,19 @@ impl Session {
             let response = match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
-                        permissions: requested_permissions,
+                        permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                     }
                 }
                 ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
-                    permissions: requested_permissions,
+                    permissions: requested_permissions.clone(),
                     scope: PermissionGrantScope::Session,
                 },
                 ReviewDecision::NetworkPolicyAmendment {
                     network_policy_amendment,
                 } => match network_policy_amendment.action {
                     NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
-                        permissions: requested_permissions,
+                        permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                     },
                     NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
@@ -2020,6 +2042,11 @@ impl Session {
                     }
                 }
             };
+            let response = Self::normalize_request_permissions_response(
+                requested_permissions,
+                response,
+                cwd.as_path(),
+            );
             self.record_granted_request_permissions_for_turn(
                 &response,
                 originating_turn_state.as_ref(),
@@ -2034,7 +2061,14 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_request_permissions(call_id.clone(), tx_response)
+                    ts.insert_pending_request_permissions(
+                        call_id.clone(),
+                        PendingRequestPermissions {
+                            tx_response,
+                            requested_permissions: requested_permissions.clone(),
+                            cwd: cwd.clone(),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2047,7 +2081,8 @@ impl Session {
             call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: requested_permissions,
+            cwd: Some(cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
@@ -2150,20 +2185,43 @@ impl Session {
                 None => (None, None),
             }
         };
-        if entry.is_some() {
-            self.record_granted_request_permissions_for_turn(
-                &response,
-                originating_turn_state.as_ref(),
-            )
-            .await;
-        }
         match entry {
-            Some(tx_response) => {
-                tx_response.send(response).ok();
+            Some(entry) => {
+                let response = Self::normalize_request_permissions_response(
+                    entry.requested_permissions,
+                    response,
+                    entry.cwd.as_path(),
+                );
+                self.record_granted_request_permissions_for_turn(
+                    &response,
+                    originating_turn_state.as_ref(),
+                )
+                .await;
+                entry.tx_response.send(response).ok();
             }
             None => {
                 warn!("No pending request_permissions found for call_id: {call_id}");
             }
+        }
+    }
+
+    fn normalize_request_permissions_response(
+        requested_permissions: RequestPermissionProfile,
+        response: RequestPermissionsResponse,
+        cwd: &Path,
+    ) -> RequestPermissionsResponse {
+        if response.permissions.is_empty() {
+            return response;
+        }
+
+        RequestPermissionsResponse {
+            permissions: intersect_permission_profiles(
+                requested_permissions.into(),
+                response.permissions.into(),
+                cwd,
+            )
+            .into(),
+            scope: response.scope,
         }
     }
 
@@ -2427,11 +2485,11 @@ impl Session {
                 turn_context,
             )
         {
-            developer_sections.push(model_switch_message.into_text());
+            developer_sections.push(model_switch_message);
         }
         if turn_context.config.include_permissions_instructions {
             developer_sections.push(
-                DeveloperInstructions::from_policy(
+                PermissionsInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
@@ -2444,7 +2502,7 @@ impl Session {
                         .features
                         .enabled(Feature::RequestPermissionsTool),
                 )
-                .into_text(),
+                .render(),
             );
         }
         let separate_guardian_developer_message =
@@ -2467,16 +2525,16 @@ impl Session {
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
+            CollaborationModeInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            developer_sections.push(collab_instructions.into_text());
+            developer_sections.push(collab_instructions.render());
         }
         if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
             reference_context_item.as_ref(),
             previous_turn_settings.as_ref(),
             turn_context,
         ) {
-            developer_sections.push(realtime_update.into_text());
+            developer_sections.push(realtime_update);
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -2491,10 +2549,8 @@ impl Session {
                         personality,
                     )
             {
-                developer_sections.push(
-                    DeveloperInstructions::personality_spec_message(personality_message)
-                        .into_text(),
-                );
+                developer_sections
+                    .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
         if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
@@ -2505,8 +2561,10 @@ impl Session {
                     &turn_context.config,
                 )
                 .await;
-            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
-                developer_sections.push(apps_section);
+            if let Some(apps_instructions) =
+                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+            {
+                developer_sections.push(apps_instructions.render());
             }
         }
         if turn_context.config.include_skill_instructions {
@@ -2514,15 +2572,17 @@ impl Session {
                 .turn_skills
                 .outcome
                 .allowed_skills_for_implicit_invocation();
-            let rendered_skills = render_skills_section(
+            let available_skills = build_available_skills(
                 &implicit_skills,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
                 },
             );
-            if let Some(rendered_skills) = rendered_skills {
-                if rendered_skills.emit_warning {
+            if let Some(available_skills) = available_skills {
+                let emit_warning = available_skills.emit_warning;
+                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
+                if emit_warning {
                     self.send_event_raw(Event {
                         id: String::new(),
                         msg: EventMsg::Warning(WarningEvent {
@@ -2531,7 +2591,7 @@ impl Session {
                     })
                     .await;
                 }
-                developer_sections.push(rendered_skills.text);
+                developer_sections.push(skills_instructions.render());
             }
         }
         let loaded_plugins = self
@@ -2539,9 +2599,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config)
             .await;
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
+        if let Some(plugin_instructions) =
+            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
-            developer_sections.push(plugin_section);
+            developer_sections.push(plugin_instructions.render());
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(

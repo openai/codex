@@ -1,20 +1,4 @@
-use super::deserialize_config_toml_with_base;
-use crate::config::edit::ConfigEdit;
-use crate::config::edit::ConfigEditsBuilder;
-use crate::config::managed_features::validate_explicit_feature_settings_in_config_toml;
-use crate::config::managed_features::validate_feature_requirements_in_config_toml;
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::LoaderOverrides;
-use crate::config_loader::load_config_layers_state;
-use crate::config_loader::merge_toml_values;
-use crate::path_utils;
-use crate::path_utils::SymlinkWritePaths;
-use crate::path_utils::resolve_symlink_write_paths;
-use crate::path_utils::write_atomically;
+use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -29,7 +13,19 @@ use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
-use codex_exec_server::LOCAL_FS;
+use codex_core::config::deserialize_config_toml_with_base;
+use codex_core::config::edit::ConfigEdit;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::validate_feature_requirements_for_config_toml;
+use codex_core::config_loader::ConfigLayerEntry;
+use codex_core::config_loader::ConfigLayerStack;
+use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::ConfigRequirementsToml;
+use codex_core::config_loader::merge_toml_values;
+use codex_core::path_utils;
+use codex_core::path_utils::SymlinkWritePaths;
+use codex_core::path_utils::resolve_symlink_write_paths;
+use codex_core::path_utils::write_atomically;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
@@ -41,7 +37,7 @@ use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
 #[derive(Debug, Error)]
-pub enum ConfigServiceError {
+pub(crate) enum ConfigManagerError {
     #[error("{message}")]
     Write {
         code: ConfigWriteErrorCode,
@@ -77,7 +73,7 @@ pub enum ConfigServiceError {
     },
 }
 
-impl ConfigServiceError {
+impl ConfigManagerError {
     fn write(code: ConfigWriteErrorCode, message: impl Into<String>) -> Self {
         Self::Write {
             code,
@@ -101,7 +97,7 @@ impl ConfigServiceError {
         Self::Anyhow { context, source }
     }
 
-    pub fn write_error_code(&self) -> Option<ConfigWriteErrorCode> {
+    pub(crate) fn write_error_code(&self) -> Option<ConfigWriteErrorCode> {
         match self {
             Self::Write { code, .. } => Some(code.clone()),
             _ => None,
@@ -109,78 +105,22 @@ impl ConfigServiceError {
     }
 }
 
-#[derive(Clone)]
-pub struct ConfigService {
-    codex_home: PathBuf,
-    cli_overrides: Vec<(String, TomlValue)>,
-    loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
-    host_name: Option<String>,
-}
-
-impl ConfigService {
-    pub fn new(
-        codex_home: PathBuf,
-        cli_overrides: Vec<(String, TomlValue)>,
-        loader_overrides: LoaderOverrides,
-        cloud_requirements: CloudRequirementsLoader,
-        host_name: Option<String>,
-    ) -> Self {
-        Self {
-            codex_home,
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements,
-            host_name,
-        }
-    }
-
-    pub fn new_with_defaults(codex_home: PathBuf) -> Self {
-        Self {
-            codex_home,
-            cli_overrides: Vec::new(),
-            loader_overrides: LoaderOverrides::default(),
-            cloud_requirements: CloudRequirementsLoader::default(),
-            host_name: codex_config::host_name(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn without_managed_config_for_tests(codex_home: PathBuf) -> Self {
-        Self::new(
-            codex_home,
-            Vec::new(),
-            LoaderOverrides::without_managed_config_for_tests(),
-            CloudRequirementsLoader::default(),
-            /*host_name*/ None,
-        )
-    }
-
-    pub async fn read(
+impl ConfigManager {
+    pub(crate) async fn read(
         &self,
         params: ConfigReadParams,
-    ) -> Result<ConfigReadResponse, ConfigServiceError> {
+    ) -> Result<ConfigReadResponse, ConfigManagerError> {
         let layers = match params.cwd.as_deref() {
             Some(cwd) => {
                 let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
-                    ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
+                    ConfigManagerError::io("failed to resolve config cwd to an absolute path", err)
                 })?;
-                crate::config::ConfigBuilder::default()
-                    .codex_home(self.codex_home.clone())
-                    .cli_overrides(self.cli_overrides.clone())
-                    .loader_overrides(self.loader_overrides.clone())
-                    .fallback_cwd(Some(cwd.to_path_buf()))
-                    .cloud_requirements(self.cloud_requirements.clone())
-                    .host_name(self.host_name.clone())
-                    .build()
-                    .await
-                    .map_err(|err| {
-                        ConfigServiceError::io("failed to read configuration layers", err)
-                    })?
-                    .config_layer_stack
+                self.load_config_layers(Some(cwd)).await.map_err(|err| {
+                    ConfigManagerError::io("failed to read configuration layers", err)
+                })?
             }
             None => self.load_thread_agnostic_config().await.map_err(|err| {
-                ConfigServiceError::io("failed to read configuration layers", err)
+                ConfigManagerError::io("failed to read configuration layers", err)
             })?,
         };
 
@@ -188,12 +128,12 @@ impl ConfigService {
 
         let effective_config_toml: ConfigToml = effective
             .try_into()
-            .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
+            .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
 
         let json_value = serde_json::to_value(&effective_config_toml)
-            .map_err(|err| ConfigServiceError::json("failed to serialize configuration", err))?;
+            .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
         let config: ApiConfig = serde_json::from_value(json_value)
-            .map_err(|err| ConfigServiceError::json("failed to deserialize configuration", err))?;
+            .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
 
         Ok(ConfigReadResponse {
             config,
@@ -211,13 +151,13 @@ impl ConfigService {
         })
     }
 
-    pub async fn read_requirements(
+    pub(crate) async fn read_requirements(
         &self,
-    ) -> Result<Option<ConfigRequirementsToml>, ConfigServiceError> {
+    ) -> Result<Option<ConfigRequirementsToml>, ConfigManagerError> {
         let layers = self
             .load_thread_agnostic_config()
             .await
-            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+            .map_err(|err| ConfigManagerError::io("failed to read configuration layers", err))?;
 
         let requirements = layers.requirements_toml().clone();
         if requirements.is_empty() {
@@ -227,19 +167,19 @@ impl ConfigService {
         }
     }
 
-    pub async fn write_value(
+    pub(crate) async fn write_value(
         &self,
         params: ConfigValueWriteParams,
-    ) -> Result<ConfigWriteResponse, ConfigServiceError> {
+    ) -> Result<ConfigWriteResponse, ConfigManagerError> {
         let edits = vec![(params.key_path, params.value, params.merge_strategy)];
         self.apply_edits(params.file_path, params.expected_version, edits)
             .await
     }
 
-    pub async fn batch_write(
+    pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
-    ) -> Result<ConfigWriteResponse, ConfigServiceError> {
+    ) -> Result<ConfigWriteResponse, ConfigManagerError> {
         let edits = params
             .edits
             .into_iter()
@@ -250,36 +190,23 @@ impl ConfigService {
             .await
     }
 
-    pub async fn load_user_saved_config(
-        &self,
-    ) -> Result<codex_app_server_protocol::UserSavedConfig, ConfigServiceError> {
-        let layers = self
-            .load_thread_agnostic_config()
-            .await
-            .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
-
-        let toml_value = layers.effective_config();
-        let cfg: ConfigToml = toml_value
-            .try_into()
-            .map_err(|err| ConfigServiceError::toml("failed to parse config.toml", err))?;
-        Ok(cfg.into())
-    }
-
     async fn apply_edits(
         &self,
         file_path: Option<String>,
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
-    ) -> Result<ConfigWriteResponse, ConfigServiceError> {
-        let allowed_path = self.user_config_path()?;
+    ) -> Result<ConfigWriteResponse, ConfigManagerError> {
+        let allowed_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,
+                .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?,
             None => allowed_path.clone(),
         };
 
         if !paths_match(&allowed_path, &provided_path) {
-            return Err(ConfigServiceError::write(
+            return Err(ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigLayerReadonly,
                 "Only writes to the user config are allowed",
             ));
@@ -288,7 +215,7 @@ impl ConfigService {
         let layers = self
             .load_thread_agnostic_config()
             .await
-            .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
+            .map_err(|err| ConfigManagerError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
             None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
@@ -297,7 +224,7 @@ impl ConfigService {
         if let Some(expected) = expected_version.as_deref()
             && expected != user_layer.version
         {
-            return Err(ConfigServiceError::write(
+            return Err(ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigVersionConflict,
                 "Configuration was modified since last read. Fetch latest version and retry.",
             ));
@@ -309,20 +236,20 @@ impl ConfigService {
 
         for (key_path, value, strategy) in edits.into_iter() {
             let segments = parse_key_path(&key_path).map_err(|message| {
-                ConfigServiceError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+                ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
-                ConfigServiceError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+                ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
 
             apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy).map_err(
                 |err| match err {
-                    MergeError::PathNotFound => ConfigServiceError::write(
+                    MergeError::PathNotFound => ConfigManagerError::write(
                         ConfigWriteErrorCode::ConfigPathNotFound,
                         "Path not found",
                     ),
-                    MergeError::Validation(message) => ConfigServiceError::write(
+                    MergeError::Validation(message) => ConfigManagerError::write(
                         ConfigWriteErrorCode::ConfigValidationError,
                         message,
                     ),
@@ -335,7 +262,7 @@ impl ConfigService {
                     Some(value) => ConfigEdit::SetPath {
                         segments: segments.clone(),
                         value: toml_value_to_item(&value).map_err(|err| {
-                            ConfigServiceError::anyhow("failed to build config edits", err)
+                            ConfigManagerError::anyhow("failed to build config edits", err)
                         })?,
                     },
                     None => ConfigEdit::ClearPath {
@@ -349,45 +276,34 @@ impl ConfigService {
         }
 
         validate_config(&user_config).map_err(|err| {
-            ConfigServiceError::write(
+            ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
             )
         })?;
         let user_config_toml =
-            deserialize_config_toml_with_base(user_config.clone(), &self.codex_home).map_err(
+            deserialize_config_toml_with_base(user_config.clone(), self.codex_home()).map_err(
                 |err| {
-                    ConfigServiceError::write(
+                    ConfigManagerError::write(
                         ConfigWriteErrorCode::ConfigValidationError,
                         format!("Invalid configuration: {err}"),
                     )
                 },
             )?;
-        validate_explicit_feature_settings_in_config_toml(
+        validate_feature_requirements_for_config_toml(
             &user_config_toml,
             layers.requirements().feature_requirements.as_ref(),
         )
         .map_err(|err| {
-            ConfigServiceError::write(
+            ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
             )
         })?;
-        validate_feature_requirements_in_config_toml(
-            &user_config_toml,
-            layers.requirements().feature_requirements.as_ref(),
-        )
-        .map_err(|err| {
-            ConfigServiceError::write(
-                ConfigWriteErrorCode::ConfigValidationError,
-                format!("Invalid configuration: {err}"),
-            )
-        })?;
-
         let updated_layers = layers.with_user_config(&provided_path, user_config.clone());
         let effective = updated_layers.effective_config();
         validate_config(&effective).map_err(|err| {
-            ConfigServiceError::write(
+            ConfigManagerError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
             )
@@ -398,7 +314,7 @@ impl ConfigService {
                 .with_edits(config_edits)
                 .apply()
                 .await
-                .map_err(|err| ConfigServiceError::anyhow("failed to persist config.toml", err))?;
+                .map_err(|err| ConfigManagerError::anyhow("failed to persist config.toml", err))?;
         }
 
         let overridden = first_overridden_edit(&updated_layers, &effective, &parsed_segments);
@@ -412,7 +328,7 @@ impl ConfigService {
             version: updated_layers
                 .get_user_layer()
                 .ok_or_else(|| {
-                    ConfigServiceError::write(
+                    ConfigManagerError::write(
                         ConfigWriteErrorCode::UserLayerNotFound,
                         "user layer not found in updated layers",
                     )
@@ -428,51 +344,29 @@ impl ConfigService {
     /// include any in-repo .codex/ folders because there is no cwd/project root
     /// associated with this query.
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
-        let cwd: Option<AbsolutePathBuf> = None;
-        load_config_layers_state(
-            LOCAL_FS.as_ref(),
-            &self.codex_home,
-            cwd,
-            &self.cli_overrides,
-            self.loader_overrides.clone(),
-            self.cloud_requirements.clone(),
-            &codex_config::NoopThreadConfigLoader,
-            self.host_name.as_deref(),
-        )
-        .await
-    }
-
-    fn user_config_path(&self) -> Result<AbsolutePathBuf, ConfigServiceError> {
-        match self.loader_overrides.user_config_path.as_ref() {
-            Some(path) => AbsolutePathBuf::from_absolute_path(path.clone())
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err)),
-            None => Ok(AbsolutePathBuf::resolve_path_against_base(
-                CONFIG_TOML_FILE,
-                &self.codex_home,
-            )),
-        }
+        self.load_config_layers(/*cwd*/ None).await
     }
 }
 
 async fn create_empty_user_layer(
     config_toml: &AbsolutePathBuf,
-) -> Result<ConfigLayerEntry, ConfigServiceError> {
+) -> Result<ConfigLayerEntry, ConfigManagerError> {
     let SymlinkWritePaths {
         read_path,
         write_path,
     } = resolve_symlink_write_paths(config_toml.as_path())
-        .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+        .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
     let toml_value = match read_path {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(contents) => toml::from_str(&contents).map_err(|e| {
-                ConfigServiceError::toml("failed to parse existing user config.toml", e)
+                ConfigManagerError::toml("failed to parse existing user config.toml", e)
             })?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 write_empty_user_config(write_path.clone()).await?;
                 TomlValue::Table(toml::map::Map::new())
             }
             Err(err) => {
-                return Err(ConfigServiceError::io(
+                return Err(ConfigManagerError::io(
                     "failed to read user config.toml",
                     err,
                 ));
@@ -491,11 +385,11 @@ async fn create_empty_user_layer(
     ))
 }
 
-async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigServiceError> {
+async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {
     task::spawn_blocking(move || write_atomically(&write_path, ""))
         .await
-        .map_err(|err| ConfigServiceError::anyhow("config persistence task panicked", err.into()))?
-        .map_err(|err| ConfigServiceError::io("failed to create empty user config.toml", err))
+        .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
+        .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {
@@ -756,5 +650,5 @@ fn find_effective_layer(
 }
 
 #[cfg(test)]
-#[path = "service_tests.rs"]
+#[path = "config_manager_service_tests.rs"]
 mod tests;

@@ -8,6 +8,8 @@ use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
+use crate::context::ContextualUserFragment;
+use crate::context::ImageGenerationInstructions;
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::parse_memory_citation;
 use crate::memories::citations::thread_ids_from_memory_citation;
@@ -18,7 +20,6 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
@@ -392,12 +393,11 @@ pub(crate) async fn handle_non_tool_response_item(
                         let image_output_dir = image_output_path
                             .parent()
                             .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let message: ResponseItem = DeveloperInstructions::new(format!(
-                            "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-                            image_output_dir.display(),
-                            image_output_path.display(),
-                        ))
-                        .into();
+                        let message: ResponseItem =
+                            ContextualUserFragment::into(ImageGenerationInstructions::new(
+                                image_output_dir.display(),
+                                image_output_path.display(),
+                            ));
                         sess.record_conversation_items(turn_context, &[message])
                             .await;
                     }

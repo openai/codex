@@ -324,3 +324,31 @@ pub(super) fn normalize_harness_overrides_for_cwd(
     overrides.additional_writable_roots = normalized;
     Ok(overrides)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let base_cwd = temp_dir.path().join("base").abs();
+        std::fs::create_dir_all(base_cwd.as_path())?;
+
+        let overrides = ConfigOverrides {
+            additional_writable_roots: vec![PathBuf::from("rel")],
+            ..Default::default()
+        };
+        let normalized = normalize_harness_overrides_for_cwd(overrides, &base_cwd)?;
+
+        assert_eq!(
+            normalized.additional_writable_roots,
+            vec![base_cwd.join("rel").into_path_buf()]
+        );
+        Ok(())
+    }
+}
