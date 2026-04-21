@@ -38,6 +38,9 @@ mod windows_impl {
     use crate::logging::log_success;
     use crate::policy::SandboxPolicy;
     use crate::policy::parse_policy;
+    use crate::setup::SandboxSetupRequest;
+    use crate::setup::SetupRootOverrides;
+    use crate::setup::run_elevated_setup;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::resolve_sid;
@@ -220,6 +223,10 @@ mod windows_impl {
         }
     }
 
+    fn should_reprovision_sandbox_identity(err: i32) -> bool {
+        matches!(err, 1326 | 1909)
+    }
+
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
@@ -248,7 +255,7 @@ mod windows_impl {
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds = require_logon_sandbox_creds(
+        let mut sandbox_creds = require_logon_sandbox_creds(
             &policy,
             sandbox_policy_cwd,
             cwd,
@@ -319,9 +326,7 @@ mod windows_impl {
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        let user_w = to_wide(&sandbox_creds.username);
         let domain_w = to_wide(".");
-        let password_w = to_wide(&sandbox_creds.password);
         // Suppress WER/UI popups from the runner process so we can collect exit codes.
         let _ = unsafe { SetErrorMode(0x0001 | 0x0002) }; // SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
 
@@ -335,36 +340,75 @@ mod windows_impl {
             logs_base_dir,
         );
 
-        // Ensure command line buffer is mutable and includes the exe as argv[0].
-        let spawn_res = unsafe {
-            CreateProcessWithLogonW(
-                user_w.as_ptr(),
-                domain_w.as_ptr(),
-                password_w.as_ptr(),
-                LOGON_WITH_PROFILE,
-                exe_w.as_ptr(),
-                cmdline_vec.as_mut_ptr(),
-                windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
-                    | windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT,
-                env_block
-                    .as_ref()
-                    .map(|b| b.as_ptr() as *const c_void)
-                    .unwrap_or(ptr::null()),
-                cwd_w.as_ptr(),
-                &si,
-                &mut pi,
-            )
-        };
-        if spawn_res == 0 {
+        let mut launch_attempt = 0;
+        loop {
+            launch_attempt += 1;
+            let user_w = to_wide(&sandbox_creds.username);
+            let password_w = to_wide(&sandbox_creds.password);
+
+            // Ensure command line buffer is mutable and includes the exe as argv[0].
+            let spawn_res = unsafe {
+                CreateProcessWithLogonW(
+                    user_w.as_ptr(),
+                    domain_w.as_ptr(),
+                    password_w.as_ptr(),
+                    LOGON_WITH_PROFILE,
+                    exe_w.as_ptr(),
+                    cmdline_vec.as_mut_ptr(),
+                    windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
+                        | windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT,
+                    env_block
+                        .as_ref()
+                        .map(|b| b.as_ptr() as *const c_void)
+                        .unwrap_or(ptr::null()),
+                    cwd_w.as_ptr(),
+                    &si,
+                    &mut pi,
+                )
+            };
+            if spawn_res != 0 {
+                break;
+            }
+
             let err = unsafe { GetLastError() } as i32;
             log_note(
                 &format!(
-                    "runner launch failed before process start: exe={} cmdline={} error={err}",
+                    "runner launch failed before process start: exe={} cmdline={} error={err} attempt={launch_attempt}",
                     runner_exe.display(),
                     runner_full_cmd
                 ),
                 logs_base_dir,
             );
+            if launch_attempt == 1 && should_reprovision_sandbox_identity(err) {
+                log_note(
+                    &format!(
+                        "runner launch: retrying after reprovisioning sandbox identity for logon error {err}"
+                    ),
+                    logs_base_dir,
+                );
+                run_elevated_setup(
+                    SandboxSetupRequest {
+                        policy: &policy,
+                        policy_cwd: sandbox_policy_cwd,
+                        command_cwd: cwd,
+                        env_map: &env_map,
+                        codex_home,
+                        proxy_enforced,
+                    },
+                    SetupRootOverrides::default(),
+                )?;
+                sandbox_creds = require_logon_sandbox_creds(
+                    &policy,
+                    sandbox_policy_cwd,
+                    cwd,
+                    &env_map,
+                    codex_home,
+                    proxy_enforced,
+                )?;
+                cmdline_vec = to_wide(&runner_full_cmd);
+                continue;
+            }
+
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
 
@@ -501,6 +545,13 @@ mod windows_impl {
         #[test]
         fn applies_network_block_for_read_only() {
             assert!(!SandboxPolicy::new_read_only_policy().has_full_network_access());
+        }
+
+        #[test]
+        fn retries_only_for_logon_failures_that_setup_can_repair() {
+            assert!(super::should_reprovision_sandbox_identity(1326));
+            assert!(super::should_reprovision_sandbox_identity(1909));
+            assert!(!super::should_reprovision_sandbox_identity(5));
         }
     }
 }
