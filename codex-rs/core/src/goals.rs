@@ -597,9 +597,22 @@ impl Session {
                 expected_goal_id.as_deref(),
             )
             .await?;
+        let budget_limit_was_already_reported = self
+            .thread_goal_cache
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited);
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
-                let clear_active_goal = goal.status != codex_state::ThreadGoalStatus::Active;
+                let clear_active_goal = match goal.status {
+                    codex_state::ThreadGoalStatus::Active => false,
+                    codex_state::ThreadGoalStatus::BudgetLimited => {
+                        matches!(budget_limit_steering, BudgetLimitSteering::Suppressed)
+                    }
+                    codex_state::ThreadGoalStatus::Paused
+                    | codex_state::ThreadGoalStatus::Complete => true,
+                };
                 {
                     let mut turn_accounting = turn_context.goal_accounting.lock().await;
                     turn_accounting.mark_accounted(current_token_usage);
@@ -626,7 +639,8 @@ impl Session {
         };
         let should_steer_budget_limit =
             matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
-                && goal.status == codex_state::ThreadGoalStatus::BudgetLimited;
+                && goal.status == codex_state::ThreadGoalStatus::BudgetLimited
+                && !budget_limit_was_already_reported;
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.send_event(

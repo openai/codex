@@ -62,6 +62,7 @@ pub struct CodexThread {
 pub enum GoalActiveContinuation {
     StartIfIdle,
     Preserve,
+    Restart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +119,20 @@ impl CodexThread {
 
     pub async fn apply_goal_set_runtime_effects(&self, effect: GoalSetRuntimeEffect) {
         match effect {
+            GoalSetRuntimeEffect::Active(GoalActiveContinuation::Restart) => {
+                self.codex
+                    .session
+                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                    .await;
+                self.codex
+                    .session
+                    .clear_stopped_thread_goal_runtime_state()
+                    .await;
+                self.codex
+                    .session
+                    .maybe_start_turn_for_active_goal_continuation()
+                    .await;
+            }
             GoalSetRuntimeEffect::Active(GoalActiveContinuation::StartIfIdle) => {
                 self.codex
                     .session

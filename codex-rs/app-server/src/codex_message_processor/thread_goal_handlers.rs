@@ -203,6 +203,10 @@ impl CodexMessageProcessor {
             let runtime_effect = match goal_status {
                 ThreadGoalStatus::Active => {
                     let continuation = if replacing_goal
+                        && previous_status == Some(codex_state::ThreadGoalStatus::Active)
+                    {
+                        GoalActiveContinuation::Restart
+                    } else if replacing_goal
                         || previous_status != Some(codex_state::ThreadGoalStatus::Active)
                     {
                         GoalActiveContinuation::StartIfIdle
