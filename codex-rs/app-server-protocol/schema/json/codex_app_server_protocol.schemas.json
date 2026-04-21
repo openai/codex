@@ -16,6 +16,14 @@
             "null"
           ]
         },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "read": {
           "items": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"

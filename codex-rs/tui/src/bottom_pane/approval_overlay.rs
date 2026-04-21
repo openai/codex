@@ -1372,6 +1372,7 @@ mod tests {
                         access: FileSystemAccessMode::None,
                     },
                 ],
+                glob_scan_max_depth: None,
             }),
             ..Default::default()
         };
