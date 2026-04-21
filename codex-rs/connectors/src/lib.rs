@@ -446,6 +446,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
     async fn list_all_connectors_uses_shared_cache() -> anyhow::Result<()> {
         let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
 

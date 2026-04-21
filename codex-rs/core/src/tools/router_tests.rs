@@ -14,6 +14,10 @@ use super::ToolRouter;
 use super::ToolRouterParams;
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -68,6 +72,10 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -171,6 +179,10 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let mcp_tools = session

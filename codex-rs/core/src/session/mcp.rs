@@ -1,6 +1,10 @@
 use super::*;
 
 impl Session {
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
@@ -80,6 +84,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and manager fallback must stay serialized"
+    )]
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -111,6 +119,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn list_resources(
         &self,
         server: &str,
@@ -124,6 +136,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn list_resource_templates(
         &self,
         server: &str,
@@ -137,6 +153,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn read_resource(
         &self,
         server: &str,
@@ -150,6 +170,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP tool calls are serialized through the session-owned manager guard"
+    )]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -165,6 +189,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP tool metadata reads through the session-owned manager guard"
+    )]
     pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
