@@ -108,7 +108,7 @@ impl ConfigApi {
             self.current_cli_overrides(),
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
-            codex_config::requirements_hostname(),
+            codex_config::host_name(),
         )
     }
 

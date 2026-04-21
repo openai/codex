@@ -115,7 +115,7 @@ pub struct ConfigService {
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
-    requirements_hostname: Option<String>,
+    host_name: Option<String>,
 }
 
 impl ConfigService {
@@ -124,14 +124,14 @@ impl ConfigService {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
-        requirements_hostname: Option<String>,
+        host_name: Option<String>,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
-            requirements_hostname,
+            host_name,
         }
     }
 
@@ -141,7 +141,7 @@ impl ConfigService {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
-            requirements_hostname: codex_config::requirements_hostname(),
+            host_name: codex_config::host_name(),
         }
     }
 
@@ -152,7 +152,7 @@ impl ConfigService {
             Vec::new(),
             LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
-            /*requirements_hostname*/ None,
+            /*host_name*/ None,
         )
     }
 
@@ -171,7 +171,7 @@ impl ConfigService {
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
                     .cloud_requirements(self.cloud_requirements.clone())
-                    .requirements_hostname(self.requirements_hostname.clone())
+                    .host_name(self.host_name.clone())
                     .build()
                     .await
                     .map_err(|err| {
@@ -438,7 +438,7 @@ impl ConfigService {
             self.loader_overrides.clone(),
             self.cloud_requirements.clone(),
             &codex_config::NoopThreadConfigLoader,
-            self.requirements_hostname.as_deref(),
+            self.host_name.as_deref(),
         )
         .await
     }

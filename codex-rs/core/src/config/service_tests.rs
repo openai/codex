@@ -223,7 +223,7 @@ async fn read_includes_origins_and_layers() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let response = service
@@ -302,7 +302,7 @@ writable_roots = ["~/code"]
         vec![],
         loader_overrides,
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let response = service
@@ -343,7 +343,7 @@ async fn write_value_reports_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let result = service
@@ -443,7 +443,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let error = service
@@ -511,7 +511,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let error = service
@@ -558,7 +558,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
                 ..Default::default()
             }))
         }),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let error = service
@@ -609,7 +609,7 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
         cli_overrides,
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let response = service
@@ -663,7 +663,7 @@ async fn write_value_reports_managed_override() {
         vec![],
         LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone()),
         CloudRequirementsLoader::default(),
-        /*requirements_hostname*/ None,
+        /*host_name*/ None,
     );
 
     let result = service

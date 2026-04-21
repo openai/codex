@@ -8,19 +8,19 @@ use winapi_util::sysinfo::ComputerNameKind;
 #[cfg(windows)]
 use winapi_util::sysinfo::get_computer_name;
 
-static REQUIREMENTS_HOSTNAME: LazyLock<Option<String>> =
-    LazyLock::new(compute_requirements_hostname);
+static HOST_NAME: LazyLock<Option<String>> = LazyLock::new(compute_host_name);
 
-pub fn requirements_hostname() -> Option<String> {
-    REQUIREMENTS_HOSTNAME.clone()
+pub fn host_name() -> Option<String> {
+    HOST_NAME.clone()
 }
 
-fn compute_requirements_hostname() -> Option<String> {
+fn compute_host_name() -> Option<String> {
     let kernel_hostname = gethostname::gethostname();
-    let kernel_hostname = normalize_requirements_hostname(&kernel_hostname.to_string_lossy())?;
+    let kernel_hostname = normalize_host_name(&kernel_hostname.to_string_lossy())?;
 
     // Remote sandbox requirements are meant to target remote hosts by DNS name,
     // so prefer the canonical FQDN when the local resolver can provide one.
+    // This is best-effort host classification, not authenticated device proof.
     if let Some(fqdn) = local_fqdn_for_hostname(&kernel_hostname) {
         return Some(fqdn);
     }
@@ -31,7 +31,7 @@ fn compute_requirements_hostname() -> Option<String> {
     Some(kernel_hostname)
 }
 
-fn normalize_requirements_hostname(hostname: &str) -> Option<String> {
+fn normalize_host_name(hostname: &str) -> Option<String> {
     let hostname = hostname.trim().trim_end_matches('.');
     (!hostname.is_empty()).then(|| hostname.to_ascii_lowercase())
 }
@@ -66,7 +66,7 @@ fn local_fqdn_for_hostname(_hostname: &str) -> Option<String> {
 }
 
 fn normalize_fqdn_candidate(hostname: &str) -> Option<String> {
-    normalize_requirements_hostname(hostname).filter(|hostname| hostname.contains('.'))
+    normalize_host_name(hostname).filter(|hostname| hostname.contains('.'))
 }
 
 #[cfg(test)]

@@ -637,7 +637,7 @@ pub struct ConfigRequirementsToml {
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct RemoteSandboxConfigToml {
-    pub hostname_pattern: Vec<String>,
+    pub hostname_patterns: Vec<String>,
     pub allowed_sandbox_modes: Vec<SandboxModeRequirement>,
 }
 
@@ -838,7 +838,7 @@ impl ConfigRequirementsToml {
         };
         let Some(matched_config) = remote_sandbox_config
             .iter()
-            .find(|config| hostname_matches_any_pattern(&hostname, &config.hostname_pattern))
+            .find(|config| hostname_matches_any_pattern(&hostname, &config.hostname_patterns))
         else {
             return;
         };
@@ -1926,10 +1926,10 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn deserialize_remote_sandbox_config_requires_hostname_pattern_list() -> Result<()> {
+    fn deserialize_remote_sandbox_config_requires_hostname_patterns_list() -> Result<()> {
         let toml_str = r#"
             [[remote_sandbox_config]]
-            hostname_pattern = ["*.org", "runner-??.ci"]
+            hostname_patterns = ["*.org", "runner-??.ci"]
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
@@ -1937,7 +1937,7 @@ allowed_approvals_reviewers = ["user"]
         assert_eq!(
             config.remote_sandbox_config,
             Some(vec![RemoteSandboxConfigToml {
-                hostname_pattern: vec!["*.org".to_string(), "runner-??.ci".to_string()],
+                hostname_patterns: vec!["*.org".to_string(), "runner-??.ci".to_string()],
                 allowed_sandbox_modes: vec![
                     SandboxModeRequirement::ReadOnly,
                     SandboxModeRequirement::WorkspaceWrite,
@@ -1948,11 +1948,11 @@ allowed_approvals_reviewers = ["user"]
         let err = from_str::<ConfigRequirementsToml>(
             r#"
                 [[remote_sandbox_config]]
-                hostname_pattern = "*.org"
+                hostname_patterns = "*.org"
                 allowed_sandbox_modes = ["read-only"]
             "#,
         )
-        .expect_err("hostname_pattern should be list-only");
+        .expect_err("hostname_patterns should be list-only");
         assert!(
             err.to_string().contains("invalid type: string"),
             "unexpected error: {err}"
@@ -1969,11 +1969,11 @@ allowed_approvals_reviewers = ["user"]
                 allowed_sandbox_modes = ["read-only"]
 
                 [[remote_sandbox_config]]
-                hostname_pattern = ["build-*.example.com"]
+                hostname_patterns = ["build-*.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
 
                 [[remote_sandbox_config]]
-                hostname_pattern = ["build-01.example.com"]
+                hostname_patterns = ["build-01.example.com"]
                 allowed_sandbox_modes = ["read-only", "danger-full-access"]
             "#,
         )?;
@@ -2028,7 +2028,7 @@ allowed_approvals_reviewers = ["user"]
                 allowed_sandbox_modes = ["read-only"]
 
                 [[remote_sandbox_config]]
-                hostname_pattern = ["build-*.example.com"]
+                hostname_patterns = ["build-*.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,
         )?;
@@ -2065,7 +2065,7 @@ allowed_approvals_reviewers = ["user"]
         let mut low_precedence: ConfigRequirementsToml = from_str(
             r#"
                 [[remote_sandbox_config]]
-                hostname_pattern = ["runner-*.ci.example.com"]
+                hostname_patterns = ["runner-*.ci.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,
         )?;

@@ -1,6 +1,7 @@
 use super::ConfigRequirementsToml;
 use super::ConfigRequirementsWithSources;
 use super::RequirementSource;
+use super::merge_requirements_with_remote_sandbox_config;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core_foundation::base::TCFType;
@@ -64,7 +65,7 @@ fn load_managed_admin_config() -> io::Result<Option<ManagedAdminConfigLayer>> {
 pub(crate) async fn load_managed_admin_requirements_toml(
     target: &mut ConfigRequirementsWithSources,
     override_base64: Option<&str>,
-    requirements_hostname: Option<&str>,
+    host_name: Option<&str>,
 ) -> io::Result<()> {
     if let Some(encoded) = override_base64 {
         let trimmed = encoded.trim();
@@ -72,17 +73,24 @@ pub(crate) async fn load_managed_admin_requirements_toml(
             return Ok(());
         }
 
-        let mut requirements = parse_managed_requirements_base64(trimmed)?;
-        requirements.apply_remote_sandbox_config(requirements_hostname);
-        target.merge_unset_fields(managed_preferences_requirements_source(), requirements);
+        merge_requirements_with_remote_sandbox_config(
+            target,
+            managed_preferences_requirements_source(),
+            parse_managed_requirements_base64(trimmed)?,
+            host_name,
+        );
         return Ok(());
     }
 
     match task::spawn_blocking(load_managed_admin_requirements).await {
         Ok(result) => {
-            if let Some(mut requirements) = result? {
-                requirements.apply_remote_sandbox_config(requirements_hostname);
-                target.merge_unset_fields(managed_preferences_requirements_source(), requirements);
+            if let Some(requirements) = result? {
+                merge_requirements_with_remote_sandbox_config(
+                    target,
+                    managed_preferences_requirements_source(),
+                    requirements,
+                    host_name,
+                );
             }
             Ok(())
         }
