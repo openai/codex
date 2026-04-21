@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -21,8 +20,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
 use sha2::Sha512;
-
-const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stored key material for a registered agent identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,24 +55,6 @@ struct AgentAssertionEnvelope {
     signature: String,
 }
 
-#[derive(Serialize)]
-struct RegisterTaskRequest {
-    timestamp: String,
-    signature: String,
-}
-
-#[derive(Deserialize)]
-struct RegisterTaskResponse {
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default, rename = "taskId")]
-    task_id_camel: Option<String>,
-    #[serde(default)]
-    encrypted_task_id: Option<String>,
-    #[serde(default, rename = "encryptedTaskId")]
-    encrypted_task_id_camel: Option<String>,
-}
-
 pub fn authorization_header_for_agent_task(
     key: AgentIdentityKey<'_>,
     target: AgentTaskAuthorizationTarget<'_>,
@@ -105,41 +84,6 @@ pub fn sign_task_registration_payload(
     let signing_key = signing_key_from_private_key_pkcs8_base64(key.private_key_pkcs8_base64)?;
     let payload = format!("{}:{timestamp}", key.agent_runtime_id);
     Ok(BASE64_STANDARD.encode(signing_key.sign(payload.as_bytes()).to_bytes()))
-}
-
-pub fn register_agent_task_blocking(
-    chatgpt_base_url: &str,
-    key: AgentIdentityKey<'_>,
-) -> Result<String> {
-    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let request = RegisterTaskRequest {
-        signature: sign_task_registration_payload(key, &timestamp)?,
-        timestamp,
-    };
-
-    let response: RegisterTaskResponse = reqwest::blocking::Client::builder()
-        .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
-        .build()
-        .context("failed to build agent task registration client")?
-        .post(agent_task_registration_url(
-            chatgpt_base_url,
-            key.agent_runtime_id,
-        ))
-        .json(&request)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .context("failed to register agent task")?
-        .json()
-        .context("failed to decode agent task registration response")?;
-
-    if let Some(task_id) = response.task_id.or(response.task_id_camel) {
-        return Ok(task_id);
-    }
-    let encrypted_task_id = response
-        .encrypted_task_id
-        .or(response.encrypted_task_id_camel)
-        .context("agent task registration response omitted task id")?;
-    decrypt_task_id_response(key, &encrypted_task_id)
 }
 
 pub fn decrypt_task_id_response(
