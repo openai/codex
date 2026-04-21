@@ -5,6 +5,9 @@
 //! `state.json` shape consumed by the standalone trace viewer.
 
 mod local;
+mod model;
+mod payload;
+mod raw_event;
 mod reduce;
 
 pub use local::CODEX_TRACE_ROOT_ENV;

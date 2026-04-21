@@ -7,10 +7,13 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use chrono::DateTime;
-use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
+
+use crate::model::*;
+use crate::payload::RawPayloadKind;
+use crate::payload::RawPayloadRef as ModelRawPayloadRef;
 
 pub const REDUCED_STATE_FILE_NAME: &str = "state.json";
 
@@ -21,32 +24,9 @@ struct CapturedEvent {
     fields: Map<String, Value>,
 }
 
-#[derive(Debug, Serialize)]
-struct ReducedTrace {
-    schema_version: u32,
-    trace_id: String,
-    rollout_id: String,
-    started_at_unix_ms: i64,
-    ended_at_unix_ms: Option<i64>,
-    status: String,
-    root_thread_id: String,
-    threads: BTreeMap<String, Value>,
-    codex_turns: BTreeMap<String, Value>,
-    conversation_items: BTreeMap<String, Value>,
-    inference_calls: BTreeMap<String, Value>,
-    code_cells: BTreeMap<String, Value>,
-    tool_calls: BTreeMap<String, Value>,
-    terminal_sessions: BTreeMap<String, Value>,
-    terminal_operations: BTreeMap<String, Value>,
-    compactions: BTreeMap<String, Value>,
-    compaction_requests: BTreeMap<String, Value>,
-    interaction_edges: BTreeMap<String, Value>,
-    raw_payloads: BTreeMap<String, Value>,
-}
-
 struct Reducer<'a> {
     bundle_dir: &'a Path,
-    trace: ReducedTrace,
+    trace: RolloutTrace,
     // The reduced item drops provider metadata, so keep the private raw item
     // around only while reducing. It lets full request snapshots point back to
     // the canonical item without writing the raw item into state.json.
@@ -64,7 +44,7 @@ pub fn reduce_bundle_to_path(bundle_dir: impl AsRef<Path>, output: impl AsRef<Pa
         .with_context(|| format!("write {}", output.as_ref().display()))
 }
 
-fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
+fn reduce_bundle(bundle_dir: &Path) -> Result<RolloutTrace> {
     let manifest = read_json(bundle_dir.join("manifest.json")).unwrap_or_else(|_| json!({}));
     let trace_id = manifest
         .get("trace_id")
@@ -77,27 +57,13 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
         .unwrap_or(0);
     let mut reducer = Reducer {
         bundle_dir,
-        trace: ReducedTrace {
-            schema_version: 1,
-            trace_id: trace_id.clone(),
-            rollout_id: trace_id,
+        trace: RolloutTrace::new(
+            1,
+            trace_id.clone(),
+            trace_id,
+            String::new(),
             started_at_unix_ms,
-            ended_at_unix_ms: None,
-            status: "running".to_string(),
-            root_thread_id: String::new(),
-            threads: BTreeMap::new(),
-            codex_turns: BTreeMap::new(),
-            conversation_items: BTreeMap::new(),
-            inference_calls: BTreeMap::new(),
-            code_cells: BTreeMap::new(),
-            tool_calls: BTreeMap::new(),
-            terminal_sessions: BTreeMap::new(),
-            terminal_operations: BTreeMap::new(),
-            compactions: BTreeMap::new(),
-            compaction_requests: BTreeMap::new(),
-            interaction_edges: BTreeMap::new(),
-            raw_payloads: BTreeMap::new(),
-        },
+        ),
         raw_conversation_items: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
         next_conversation_item_ordinal: 1,
@@ -118,7 +84,6 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
     reducer.link_tools_to_conversation_items();
     reducer.link_code_cells_to_conversation_items();
     reducer.drop_redundant_code_cell_tool_calls();
-    reducer.attach_wait_tool_payloads_to_code_cells();
     reducer.sync_terminal_model_observations();
     reducer.attach_tool_payloads_to_interaction_edges();
     if reducer.trace.started_at_unix_ms == 0 {
@@ -126,10 +91,7 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
             .trace
             .threads
             .values()
-            .filter_map(|thread| {
-                execution(thread).and_then(|execution| execution.get("started_at_unix_ms"))
-            })
-            .filter_map(Value::as_i64)
+            .map(|thread| thread.execution.started_at_unix_ms)
             .min()
             .unwrap_or(0);
     }
@@ -137,13 +99,10 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
         .trace
         .threads
         .values()
-        .filter_map(|thread| {
-            execution(thread).and_then(|execution| execution.get("ended_at_unix_ms"))
-        })
-        .filter_map(Value::as_i64)
+        .filter_map(|thread| thread.execution.ended_at_unix_ms)
         .max();
     if reducer.trace.ended_at_unix_ms.is_some() {
-        reducer.trace.status = "completed".to_string();
+        reducer.trace.status = RolloutStatus::Completed;
     }
     Ok(reducer.trace)
 }
@@ -200,11 +159,11 @@ impl Reducer<'_> {
         }
         self.trace.raw_payloads.insert(
             id.to_string(),
-            json!({
-                "raw_payload_id": id,
-                "kind": kind,
-                "path": path,
-            }),
+            ModelRawPayloadRef {
+                raw_payload_id: id.to_string(),
+                kind: raw_payload_kind(kind),
+                path: path.to_string(),
+            },
         );
     }
 
@@ -215,14 +174,14 @@ impl Reducer<'_> {
         self.trace
             .threads
             .entry(thread_id.to_string())
-            .or_insert_with(|| {
-                json!({
-                    "thread_id": thread_id,
-                    "agent_path": "/root",
-                    "origin": { "type": "root" },
-                    "execution": execution_json(now, None, "running", 0, None),
-                    "conversation_item_ids": [],
-                })
+            .or_insert_with(|| AgentThread {
+                thread_id: thread_id.to_string(),
+                agent_path: "/root".to_string(),
+                nickname: None,
+                origin: AgentOrigin::Root,
+                execution: execution_window(now, None, ExecutionStatus::Running, 0, None),
+                default_model: None,
+                conversation_item_ids: Vec::new(),
             });
     }
 
@@ -232,33 +191,26 @@ impl Reducer<'_> {
         };
         self.ensure_thread(thread_id, event.wall_time_unix_ms);
         if let Some(thread) = self.trace.threads.get_mut(thread_id) {
-            set_string(
-                thread,
-                "agent_path",
-                trace_field_str(event, "agent", "path").unwrap_or("/root"),
-            );
-            set_string(
-                thread,
-                "default_model",
-                field_str(event, "default_model")
-                    .or_else(|| field_str(event, "model"))
-                    .unwrap_or(""),
-            );
-            set_string(
-                thread,
-                "source",
-                trace_field_str(event, "thread", "source").unwrap_or(""),
-            );
+            let agent_path = trace_field_str(event, "agent", "path")
+                .unwrap_or("/root")
+                .to_string();
+            thread.agent_path = agent_path.clone();
+            thread.default_model = field_str(event, "default_model")
+                .or_else(|| field_str(event, "model"))
+                .filter(|model| !model.is_empty())
+                .map(str::to_string);
             let parent_thread_id = trace_field_str(event, "parent_thread", "id").unwrap_or("");
-            thread["origin"] = if parent_thread_id.is_empty() {
-                json!({ "type": "root" })
+            thread.origin = if parent_thread_id.is_empty() {
+                AgentOrigin::Root
             } else {
-                json!({
-                    "type": "spawned",
-                    "parent_thread_id": parent_thread_id,
-                })
+                AgentOrigin::Spawned {
+                    parent_thread_id: parent_thread_id.to_string(),
+                    spawn_edge_id: String::new(),
+                    task_name: task_name_from_agent_path(&agent_path),
+                    agent_role: String::new(),
+                }
             };
-            set_execution_start(thread, event.wall_time_unix_ms, event.seq);
+            set_execution_start(&mut thread.execution, event.wall_time_unix_ms, event.seq);
         }
     }
 
@@ -272,13 +224,18 @@ impl Reducer<'_> {
         self.ensure_thread(thread_id, event.wall_time_unix_ms);
         self.trace.codex_turns.insert(
             turn_id.to_string(),
-            json!({
-                "codex_turn_id": turn_id,
-                "thread_id": thread_id,
-                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
-                "input_item_ids": [],
-                "output_item_ids": [],
-            }),
+            CodexTurn {
+                codex_turn_id: turn_id.to_string(),
+                thread_id: thread_id.to_string(),
+                execution: execution_window(
+                    event.wall_time_unix_ms,
+                    None,
+                    ExecutionStatus::Running,
+                    event.seq,
+                    None,
+                ),
+                input_item_ids: Vec::new(),
+            },
         );
     }
 
@@ -288,10 +245,10 @@ impl Reducer<'_> {
         };
         if let Some(turn) = self.trace.codex_turns.get_mut(turn_id) {
             set_execution_end(
-                turn,
+                &mut turn.execution,
                 event.wall_time_unix_ms,
                 event.seq,
-                field_str(event, "status").unwrap_or("completed"),
+                execution_status(field_str(event, "status").unwrap_or("completed")),
             );
         }
     }
@@ -309,18 +266,29 @@ impl Reducer<'_> {
         let request_item_ids = self.add_request_items(thread_id, event, request_payload_id)?;
         self.trace.inference_calls.insert(
             inference_id.to_string(),
-            json!({
-                "inference_call_id": inference_id,
-                "thread_id": thread_id,
-                "codex_turn_id": turn_id,
-                "model": field_str(event, "model").unwrap_or(""),
-                "provider_name": trace_field_str(event, "provider", "name").unwrap_or(""),
-                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
-                "request_item_ids": request_item_ids,
-                "response_item_ids": [],
-                "raw_request_payload_id": empty_to_null(request_payload_id),
-                "raw_response_payload_id": Value::Null,
-            }),
+            InferenceCall {
+                inference_call_id: inference_id.to_string(),
+                thread_id: thread_id.to_string(),
+                codex_turn_id: turn_id.to_string(),
+                execution: execution_window(
+                    event.wall_time_unix_ms,
+                    None,
+                    ExecutionStatus::Running,
+                    event.seq,
+                    None,
+                ),
+                model: field_str(event, "model").unwrap_or("").to_string(),
+                provider_name: trace_field_str(event, "provider", "name")
+                    .unwrap_or("")
+                    .to_string(),
+                upstream_request_id: None,
+                request_item_ids,
+                response_item_ids: Vec::new(),
+                tool_call_ids_started_by_response: Vec::new(),
+                usage: None,
+                raw_request_payload_id: request_payload_id.to_string(),
+                raw_response_payload_id: None,
+            },
         );
         Ok(())
     }
@@ -333,27 +301,20 @@ impl Reducer<'_> {
         let (thread_id, response_item_ids, usage) =
             self.add_response_items(inference_id, event, response_payload_id)?;
         if let Some(inference) = self.trace.inference_calls.get_mut(inference_id) {
-            set_execution_end(inference, event.wall_time_unix_ms, event.seq, "completed");
-            set_string(
-                inference,
-                "response_id",
-                trace_field_str(event, "response", "id").unwrap_or(""),
+            set_execution_end(
+                &mut inference.execution,
+                event.wall_time_unix_ms,
+                event.seq,
+                ExecutionStatus::Completed,
             );
-            inference["raw_response_payload_id"] = empty_to_null(response_payload_id);
-            inference["response_item_ids"] = json!(response_item_ids);
-            if let Some(usage) = usage {
-                inference["usage"] = usage;
-            }
-            if let Some(turn_id) = inference.get("codex_turn_id").and_then(Value::as_str)
-                && let Some(turn) = self.trace.codex_turns.get_mut(turn_id)
-            {
-                extend_array_unique(turn, "output_item_ids", response_item_ids.iter());
-            }
+            inference.raw_response_payload_id = non_empty_string(response_payload_id);
+            inference.response_item_ids = response_item_ids.clone();
+            inference.usage = usage.and_then(token_usage_from_value);
         }
         if let Some(thread_id) = thread_id
             && let Some(thread) = self.trace.threads.get_mut(&thread_id)
         {
-            extend_array_unique(thread, "conversation_item_ids", response_item_ids.iter());
+            extend_unique(&mut thread.conversation_item_ids, &response_item_ids);
         }
         Ok(())
     }
@@ -363,8 +324,12 @@ impl Reducer<'_> {
             return;
         };
         if let Some(inference) = self.trace.inference_calls.get_mut(inference_id) {
-            set_execution_end(inference, event.wall_time_unix_ms, event.seq, "failed");
-            set_string(inference, "error", field_str(event, "error").unwrap_or(""));
+            set_execution_end(
+                &mut inference.execution,
+                event.wall_time_unix_ms,
+                event.seq,
+                ExecutionStatus::Failed,
+            );
         }
     }
 
@@ -394,27 +359,36 @@ impl Reducer<'_> {
         )?;
         self.trace.tool_calls.insert(
             tool_call_id.to_string(),
-            json!({
-                "tool_call_id": tool_call_id,
-                "thread_id": thread_id,
-                "codex_turn_id": turn_id,
-                "started_by_codex_turn_id": turn_id,
-                "model_visible_call_id": model_visible_call_id,
-                "code_mode_runtime_tool_id": code_mode_runtime_tool_id,
-                "model_visible_call_item_ids": [],
-                "model_visible_output_item_ids": [],
-                "requester": requester,
-                "kind": tool_call_kind(tool_name),
-                "terminal_operation_id": terminal_operation_id,
-                "summary": {
-                    "input_preview": "",
-                    "output_preview": "",
-                },
-                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
-                "raw_invocation_payload_id": empty_to_null(raw_invocation_payload_id),
-                "raw_result_payload_id": Value::Null,
-                "raw_runtime_payload_ids": [],
-            }),
+            ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                model_visible_call_id: model_visible_call_id.map(str::to_string),
+                code_mode_runtime_tool_id: code_mode_runtime_tool_id.map(str::to_string),
+                thread_id: thread_id.to_string(),
+                started_by_codex_turn_id: Some(turn_id.to_string()),
+                execution: execution_window(
+                    event.wall_time_unix_ms,
+                    None,
+                    ExecutionStatus::Running,
+                    event.seq,
+                    None,
+                ),
+                requester,
+                kind: tool_call_kind(tool_name),
+                model_visible_call_item_ids: Vec::new(),
+                model_visible_output_item_ids: Vec::new(),
+                terminal_operation_id: terminal_operation_id.clone(),
+                summary: terminal_operation_id.map_or_else(
+                    || ToolCallSummary::Generic {
+                        label: tool_name.to_string(),
+                        input_preview: Some(String::new()),
+                        output_preview: Some(String::new()),
+                    },
+                    |operation_id| ToolCallSummary::Terminal { operation_id },
+                ),
+                raw_invocation_payload_id: non_empty_string(raw_invocation_payload_id),
+                raw_result_payload_id: None,
+                raw_runtime_payload_ids: Vec::new(),
+            },
         );
         self.link_tool_call_to_code_cell(tool_call_id);
         Ok(())
@@ -429,22 +403,19 @@ impl Reducer<'_> {
         let mut thread_id = None;
         if let Some(tool) = self.trace.tool_calls.get_mut(tool_call_id) {
             let status = field_str(event, "status").unwrap_or("completed");
-            set_execution_end(tool, event.wall_time_unix_ms, event.seq, status);
-            if let Some(summary) = tool.get_mut("summary").and_then(Value::as_object_mut) {
-                summary.insert(
-                    "output_preview".to_string(),
-                    Value::String(field_str(event, "output_preview").unwrap_or("").to_string()),
-                );
+            set_execution_end(
+                &mut tool.execution,
+                event.wall_time_unix_ms,
+                event.seq,
+                execution_status(status),
+            );
+            if let ToolCallSummary::Generic { output_preview, .. } = &mut tool.summary {
+                *output_preview =
+                    Some(field_str(event, "output_preview").unwrap_or("").to_string());
             }
-            tool["raw_result_payload_id"] = empty_to_null(raw_result_payload_id);
-            terminal_operation_id = tool
-                .get("terminal_operation_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            thread_id = tool
-                .get("thread_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            tool.raw_result_payload_id = non_empty_string(raw_result_payload_id);
+            terminal_operation_id = tool.terminal_operation_id.clone();
+            thread_id = Some(tool.thread_id.clone());
         }
         if let Some(operation_id) = terminal_operation_id {
             self.end_terminal_operation(
@@ -471,25 +442,35 @@ impl Reducer<'_> {
             (thread_id.to_string(), runtime_cell_id.to_string()),
             code_cell_id.clone(),
         );
-        self.trace.code_cells.entry(code_cell_id.clone()).or_insert_with(|| {
-            let raw_invocation_payload_id =
-                raw_payload_field_str(event, "invocation", "id").unwrap_or("");
-            json!({
-                "code_cell_id": code_cell_id,
-                "model_visible_call_id": model_visible_call_id,
-                "thread_id": thread_id,
-                "codex_turn_id": turn_id,
-                "source_item_id": Value::Null,
-                "output_item_ids": [],
-                "runtime_cell_id": runtime_cell_id,
-                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
-                "runtime_status": "running",
-                "source_js": field_str(event, "code_cell.source_js").unwrap_or(""),
-                "nested_tool_call_ids": [],
-                "wait_tool_call_ids": [],
-                "raw_payload_ids": non_empty_array(raw_invocation_payload_id),
-            })
-        });
+        self.trace
+            .code_cells
+            .entry(code_cell_id.clone())
+            .or_insert_with(|| CodeCell {
+                code_cell_id: code_cell_id.clone(),
+                model_visible_call_id: model_visible_call_id.to_string(),
+                thread_id: thread_id.to_string(),
+                codex_turn_id: turn_id.to_string(),
+                source_item_id: String::new(),
+                output_item_ids: Vec::new(),
+                runtime_cell_id: Some(runtime_cell_id.to_string()),
+                execution: execution_window(
+                    event.wall_time_unix_ms,
+                    None,
+                    ExecutionStatus::Running,
+                    event.seq,
+                    None,
+                ),
+                runtime_status: CodeCellRuntimeStatus::Running,
+                initial_response_at_unix_ms: None,
+                initial_response_seq: None,
+                yielded_at_unix_ms: None,
+                yielded_seq: None,
+                source_js: field_str(event, "code_cell.source_js")
+                    .unwrap_or("")
+                    .to_string(),
+                nested_tool_call_ids: Vec::new(),
+                wait_tool_call_ids: Vec::new(),
+            });
     }
 
     fn code_cell_ended(&mut self, event: &CapturedEvent) {
@@ -509,22 +490,17 @@ impl Reducer<'_> {
         if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
             let runtime_status = field_str(event, "status").unwrap_or("completed");
             set_execution_end(
-                cell,
+                &mut cell.execution,
                 event.wall_time_unix_ms,
                 event.seq,
                 code_cell_execution_status(runtime_status),
             );
-            cell["runtime_status"] = Value::String(runtime_status.to_string());
+            cell.runtime_status = code_cell_runtime_status(runtime_status);
             if let Some(wait_call_id) = trace_field_str(event, "model_visible_wait_call", "id")
                 .filter(|call_id| !call_id.is_empty())
             {
                 let tool_call_id = normalize_tool_call_id(wait_call_id);
-                push_unique_json_string(cell, "wait_tool_call_ids", &tool_call_id);
-            }
-            if let Some(raw_result_payload_id) = raw_payload_field_str(event, "result", "id")
-                .filter(|payload_id| !payload_id.is_empty())
-            {
-                push_unique_json_string(cell, "raw_payload_ids", raw_result_payload_id);
+                push_unique(&mut cell.wait_tool_call_ids, &tool_call_id);
             }
         }
     }
@@ -537,8 +513,8 @@ impl Reducer<'_> {
         let edge_id = interaction_edge_id(kind, &tool_call_id);
         self.upsert_interaction_edge(
             edge_id,
-            kind,
-            json!({ "type": "tool_call", "tool_call_id": tool_call_id }),
+            interaction_edge_kind(kind),
+            TraceAnchor::ToolCall { tool_call_id },
             thread_anchor(target_thread_id),
             event,
         );
@@ -546,13 +522,17 @@ impl Reducer<'_> {
 
     fn tool_to_thread_edge_ended(&mut self, event: &CapturedEvent, kind: &str) {
         self.tool_to_thread_edge_started(event, kind);
+        let mut completed_spawn_edge_id = None;
         if let Some(tool_call_id) = normalized_tool_call_id(event) {
             let edge_id = interaction_edge_id(kind, &tool_call_id);
             if let Some(edge) = self.trace.interaction_edges.get_mut(&edge_id) {
-                edge["ended_at_unix_ms"] = event.wall_time_unix_ms.into();
+                edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
+            }
+            if kind == "spawn_agent" {
+                completed_spawn_edge_id = Some(edge_id);
             }
         }
-        self.apply_target_agent_metadata(event);
+        self.apply_target_agent_metadata(event, completed_spawn_edge_id.as_deref());
     }
 
     fn agent_result_edge_started(&mut self, event: &CapturedEvent) {
@@ -565,9 +545,11 @@ impl Reducer<'_> {
         let edge_id = agent_result_edge_id(&tool_call_id, target_thread_id);
         self.upsert_interaction_edge(
             edge_id,
-            "agent_result",
-            thread_anchor(target_thread_id),
-            json!({ "type": "tool_call", "tool_call_id": tool_call_id }),
+            InteractionEdgeKind::AgentResult,
+            TraceAnchor::Thread {
+                thread_id: target_thread_id.to_string(),
+            },
+            Some(TraceAnchor::ToolCall { tool_call_id }),
             event,
         );
     }
@@ -582,50 +564,48 @@ impl Reducer<'_> {
         {
             let edge_id = agent_result_edge_id(&tool_call_id, target_thread_id);
             if let Some(edge) = self.trace.interaction_edges.get_mut(&edge_id) {
-                edge["ended_at_unix_ms"] = event.wall_time_unix_ms.into();
+                edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
             }
         } else {
             let edge_prefix = format!("edge:agent_result:{tool_call_id}:");
             for (edge_id, edge) in &mut self.trace.interaction_edges {
                 if edge_id.starts_with(&edge_prefix) {
-                    edge["ended_at_unix_ms"] = event.wall_time_unix_ms.into();
+                    edge.ended_at_unix_ms = Some(event.wall_time_unix_ms);
                 }
             }
         }
-        self.apply_target_agent_metadata(event);
+        self.apply_target_agent_metadata(event, None);
     }
 
     fn upsert_interaction_edge(
         &mut self,
         edge_id: String,
-        kind: &str,
-        source: Value,
-        target: Value,
+        kind: InteractionEdgeKind,
+        source: TraceAnchor,
+        target: Option<TraceAnchor>,
         event: &CapturedEvent,
     ) {
         let edge = self
             .trace
             .interaction_edges
             .entry(edge_id.clone())
-            .or_insert_with(|| {
-                json!({
-                    "interaction_edge_id": edge_id,
-                    "kind": { "type": kind },
-                    "source": Value::Null,
-                    "target": Value::Null,
-                    "started_at_unix_ms": event.wall_time_unix_ms,
-                    "ended_at_unix_ms": Value::Null,
-                    "carried_item_ids": [],
-                    "carried_raw_payload_ids": [],
-                })
+            .or_insert_with(|| InteractionEdge {
+                edge_id,
+                kind,
+                source: source.clone(),
+                target: target.clone().unwrap_or_else(|| source.clone()),
+                started_at_unix_ms: event.wall_time_unix_ms,
+                ended_at_unix_ms: None,
+                carried_item_ids: Vec::new(),
+                carried_raw_payload_ids: Vec::new(),
             });
-        edge["source"] = source;
-        if !target.is_null() {
-            edge["target"] = target;
+        edge.source = source;
+        if let Some(target) = target {
+            edge.target = target;
         }
     }
 
-    fn apply_target_agent_metadata(&mut self, event: &CapturedEvent) {
+    fn apply_target_agent_metadata(&mut self, event: &CapturedEvent, spawn_edge_id: Option<&str>) {
         let Some(target_thread_id) =
             trace_field_str(event, "target.thread", "id").filter(|thread_id| !thread_id.is_empty())
         else {
@@ -637,16 +617,27 @@ impl Reducer<'_> {
         if let Some(nickname) = trace_field_str(event, "target.agent", "nickname")
             .filter(|nickname| !nickname.is_empty())
         {
-            set_string(thread, "nickname", nickname);
+            thread.nickname = Some(nickname.to_string());
         }
-        if let Some(agent_role) =
-            trace_field_str(event, "target.agent", "role").filter(|role| !role.is_empty())
-            && let Some(origin) = thread.get_mut("origin").and_then(Value::as_object_mut)
+        let fallback_task_name = task_name_from_agent_path(&thread.agent_path);
+        if let AgentOrigin::Spawned {
+            spawn_edge_id: existing_spawn_edge_id,
+            task_name,
+            agent_role,
+            ..
+        } = &mut thread.origin
         {
-            origin.insert(
-                "agent_role".to_string(),
-                Value::String(agent_role.to_string()),
-            );
+            if let Some(spawn_edge_id) = spawn_edge_id {
+                *existing_spawn_edge_id = spawn_edge_id.to_string();
+            }
+            if task_name.is_empty() {
+                *task_name = fallback_task_name;
+            }
+            if let Some(observed_role) =
+                trace_field_str(event, "target.agent", "role").filter(|role| !role.is_empty())
+            {
+                *agent_role = observed_role.to_string();
+            }
         }
     }
 
@@ -670,7 +661,7 @@ impl Reducer<'_> {
             .trace
             .threads
             .get(thread_id)
-            .map(|thread| string_array_field(thread, "conversation_item_ids"))
+            .map(|thread| thread.conversation_item_ids.clone())
             .unwrap_or_default();
 
         // Requests carry the full model-visible input in thread order. Reuse
@@ -702,7 +693,7 @@ impl Reducer<'_> {
             next_existing_index = thread_item_ids.len();
         }
         if let Some(thread) = self.trace.threads.get_mut(thread_id) {
-            extend_array_unique(thread, "conversation_item_ids", ids.iter());
+            extend_unique(&mut thread.conversation_item_ids, &ids);
         }
         Ok(ids)
     }
@@ -716,10 +707,7 @@ impl Reducer<'_> {
         let Some(inference) = self.trace.inference_calls.get(inference_id) else {
             return Ok((None, Vec::new(), None));
         };
-        let thread_id = inference
-            .get("thread_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let thread_id = Some(inference.thread_id.clone());
         let Some(payload) = self.payload_by_id(raw_payload_id)? else {
             return Ok((thread_id, Vec::new(), None));
         };
@@ -728,10 +716,9 @@ impl Reducer<'_> {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let producer = Some(json!({
-            "type": "inference",
-            "inference_call_id": inference_id,
-        }));
+        let producer = Some(ProducerRef::Inference {
+            inference_call_id: inference_id.to_string(),
+        });
         let ids = thread_id.as_deref().map_or_else(Vec::new, |thread_id| {
             self.add_conversation_items(
                 thread_id,
@@ -749,7 +736,7 @@ impl Reducer<'_> {
         thread_id: &str,
         first_seen_at_unix_ms: i64,
         items: Vec<Value>,
-        producer: Option<Value>,
+        producer: Option<ProducerRef>,
         raw_payload_id: &str,
     ) -> Vec<String> {
         let mut ids = Vec::new();
@@ -771,7 +758,7 @@ impl Reducer<'_> {
         thread_id: &str,
         first_seen_at_unix_ms: i64,
         item: Value,
-        producer: Option<Value>,
+        producer: Option<ProducerRef>,
         raw_payload_id: &str,
     ) -> String {
         let item_id = format!("item:{}", self.next_conversation_item_ordinal);
@@ -792,42 +779,41 @@ impl Reducer<'_> {
         item_id
     }
 
-    fn tool_requester(&self, event: &CapturedEvent, thread_id: &str) -> Value {
+    fn tool_requester(&self, event: &CapturedEvent, thread_id: &str) -> ToolCallRequester {
         if field_str(event, "tool.requester.type") != Some("code_cell") {
-            return json!({ "type": "model" });
+            return ToolCallRequester::Model;
         }
 
         // Code-mode nested tools are not visible to the model as ordinary
         // request/response items. The runtime cell id is the stable bridge
         // from the tool event back to the model-visible `exec` code cell.
         let Some(runtime_cell_id) = field_str(event, "code_cell.runtime_id") else {
-            return json!({ "type": "code_cell", "code_cell_id": Value::Null });
+            return ToolCallRequester::CodeCell {
+                code_cell_id: String::new(),
+            };
         };
         let code_cell_id = self
             .code_cell_ids_by_runtime
             .get(&(thread_id.to_string(), runtime_cell_id.to_string()))
-            .cloned();
-        json!({
-            "type": "code_cell",
-            "code_cell_id": code_cell_id,
-            "runtime_cell_id": runtime_cell_id,
-        })
+            .cloned()
+            .unwrap_or_default();
+        ToolCallRequester::CodeCell { code_cell_id }
     }
 
     fn link_tool_call_to_code_cell(&mut self, tool_call_id: &str) {
-        let Some(code_cell_id) = self
-            .trace
-            .tool_calls
-            .get(tool_call_id)
-            .and_then(|tool| tool.get("requester"))
-            .and_then(|requester| requester.get("code_cell_id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
+        let Some(code_cell_id) =
+            self.trace
+                .tool_calls
+                .get(tool_call_id)
+                .and_then(|tool| match &tool.requester {
+                    ToolCallRequester::CodeCell { code_cell_id } => Some(code_cell_id.clone()),
+                    ToolCallRequester::Model => None,
+                })
         else {
             return;
         };
         if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
-            push_unique_json_string(cell, "nested_tool_call_ids", tool_call_id);
+            push_unique(&mut cell.nested_tool_call_ids, tool_call_id);
         }
     }
 
@@ -838,9 +824,9 @@ impl Reducer<'_> {
         tool_call_id: &str,
         tool_name: &str,
         raw_invocation_payload_id: &str,
-    ) -> Result<Value> {
+    ) -> Result<Option<TerminalOperationId>> {
         if !is_terminal_tool(tool_name) {
-            return Ok(Value::Null);
+            return Ok(None);
         }
 
         // Terminal operations are a runtime view over shell-like tools. They
@@ -851,24 +837,39 @@ impl Reducer<'_> {
             self.next_terminal_operation_ordinal
         );
         self.next_terminal_operation_ordinal += 1;
-        let request = self
-            .payload_by_id(raw_invocation_payload_id)?
-            .map(|payload| terminal_request_from_invocation(&payload))
-            .unwrap_or_else(|| json!({ "type": "exec_command" }));
-        let terminal_id = terminal_id_from_terminal_request(&request);
+        let payload = self.payload_by_id(raw_invocation_payload_id)?;
+        let terminal_id = payload
+            .as_ref()
+            .and_then(terminal_id_from_invocation_payload);
+        let request = payload
+            .as_ref()
+            .map(terminal_request_from_invocation)
+            .unwrap_or_else(|| TerminalRequest::ExecCommand {
+                command: Vec::new(),
+                display_command: String::new(),
+                cwd: String::new(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            });
         self.trace.terminal_operations.insert(
             operation_id.clone(),
-            json!({
-                "operation_id": operation_id,
-                "terminal_id": terminal_id,
-                "tool_call_id": tool_call_id,
-                "kind": terminal_operation_kind(tool_name),
-                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
-                "request": request,
-                "result": Value::Null,
-                "model_observations": [],
-                "raw_payload_ids": non_empty_array(raw_invocation_payload_id),
-            }),
+            TerminalOperation {
+                operation_id: operation_id.clone(),
+                terminal_id: terminal_id.clone(),
+                tool_call_id: tool_call_id.to_string(),
+                kind: terminal_operation_kind(tool_name),
+                execution: execution_window(
+                    event.wall_time_unix_ms,
+                    None,
+                    ExecutionStatus::Running,
+                    event.seq,
+                    None,
+                ),
+                request,
+                result: None,
+                model_observations: Vec::new(),
+                raw_payload_ids: non_empty_vec(raw_invocation_payload_id),
+            },
         );
         // Continuation tools already name their terminal session in the request.
         // Create the session immediately so interrupted traces still group the
@@ -876,7 +877,7 @@ impl Reducer<'_> {
         if let Some(terminal_id) = terminal_id {
             self.ensure_terminal_session_for_operation(thread_id, &terminal_id, &operation_id);
         }
-        Ok(json!(operation_id))
+        Ok(Some(operation_id))
     }
 
     fn end_terminal_operation(
@@ -891,25 +892,31 @@ impl Reducer<'_> {
             .ok()
             .flatten()
             .unwrap_or_else(|| json!({}));
-        let request_terminal_id = self
+        let existing_terminal_id = self
             .trace
             .terminal_operations
             .get(operation_id)
-            .and_then(terminal_id_from_operation_request);
+            .and_then(|operation| operation.terminal_id.clone());
         // Prefer real runtime ids over synthetic ids. Some continuation
-        // results omit `session_id`, but their request still names the session.
+        // results omit `session_id`, so preserve the id learned when the
+        // operation started before inventing a one-shot synthetic session.
         let terminal_id = terminal_id_from_result_payload(&result_payload, "")
-            .or(request_terminal_id)
+            .or(existing_terminal_id)
             .or_else(|| terminal_id_from_result_payload(&result_payload, operation_id));
         if let Some(operation) = self.trace.terminal_operations.get_mut(operation_id) {
             let status = field_str(event, "status").unwrap_or("completed");
-            set_execution_end(operation, event.wall_time_unix_ms, event.seq, status);
-            if let Some(terminal_id) = terminal_id.as_deref() {
-                operation["terminal_id"] = Value::String(terminal_id.to_string());
-            }
-            operation["result"] =
-                terminal_result_from_payload(&result_payload, field_str(event, "output_preview"));
-            push_unique_json_string(operation, "raw_payload_ids", raw_result_payload_id);
+            set_execution_end(
+                &mut operation.execution,
+                event.wall_time_unix_ms,
+                event.seq,
+                execution_status(status),
+            );
+            operation.terminal_id = terminal_id.clone();
+            operation.result = Some(terminal_result_from_payload(
+                &result_payload,
+                field_str(event, "output_preview"),
+            ));
+            push_unique(&mut operation.raw_payload_ids, raw_result_payload_id);
         }
         if let Some(terminal_id) = terminal_id {
             self.ensure_terminal_session_for_operation(thread_id, &terminal_id, operation_id);
@@ -929,32 +936,29 @@ impl Reducer<'_> {
             .trace
             .terminal_operations
             .get(operation_id)
-            .and_then(|operation| operation.get("execution"))
-            .cloned()
-            .unwrap_or_else(|| execution_json(0, None, "running", 0, None));
+            .map(|operation| operation.execution.clone())
+            .unwrap_or_else(|| execution_window(0, None, ExecutionStatus::Running, 0, None));
         let session_execution = if terminal_id.starts_with("terminal:terminal_operation:") {
             operation_execution
         } else {
             let mut execution = operation_execution;
-            execution["ended_at_unix_ms"] = Value::Null;
-            execution["ended_seq"] = Value::Null;
-            execution["status"] = Value::String("running".to_string());
+            execution.ended_at_unix_ms = None;
+            execution.ended_seq = None;
+            execution.status = ExecutionStatus::Running;
             execution
         };
         self.trace
             .terminal_sessions
             .entry(terminal_id.to_string())
-            .or_insert_with(|| {
-                json!({
-                    "terminal_id": terminal_id,
-                    "thread_id": thread_id,
-                    "created_by_operation_id": operation_id,
-                    "operation_ids": [],
-                    "execution": session_execution,
-                })
+            .or_insert_with(|| TerminalSession {
+                terminal_id: terminal_id.to_string(),
+                thread_id: thread_id.to_string(),
+                created_by_operation_id: operation_id.to_string(),
+                operation_ids: Vec::new(),
+                execution: session_execution,
             });
         if let Some(session) = self.trace.terminal_sessions.get_mut(terminal_id) {
-            push_unique_json_string(session, "operation_ids", operation_id);
+            push_unique(&mut session.operation_ids, operation_id);
         }
     }
 
@@ -965,44 +969,33 @@ impl Reducer<'_> {
         let Some(payload) = self.trace.raw_payloads.get(raw_payload_id) else {
             return Ok(None);
         };
-        let Some(path) = payload.get("path").and_then(Value::as_str) else {
-            return Ok(None);
-        };
-        read_json(self.bundle_dir.join(path)).map(Some)
+        read_json(self.bundle_dir.join(&payload.path)).map(Some)
     }
 
     fn link_tools_to_conversation_items(&mut self) {
         for tool in self.trace.tool_calls.values_mut() {
-            let Some(call_id) = tool
-                .get("model_visible_call_id")
-                .and_then(Value::as_str)
-                .filter(|call_id| !call_id.is_empty())
-            else {
+            let Some(call_id) = tool.model_visible_call_id.as_deref() else {
                 continue;
             };
             let mut call_items = Vec::new();
             let mut output_items = Vec::new();
             for item in self.trace.conversation_items.values() {
-                if item.get("call_id").and_then(Value::as_str) != Some(call_id) {
+                if item.call_id.as_deref() != Some(call_id) {
                     continue;
                 }
-                let Some(item_id) = item.get("item_id").and_then(Value::as_str) else {
-                    continue;
-                };
-                match item.get("kind").and_then(Value::as_str) {
-                    Some("function_call" | "custom_tool_call" | "local_shell_call") => {
-                        call_items.push(item_id.to_string());
+                match item.kind {
+                    ConversationItemKind::FunctionCall | ConversationItemKind::CustomToolCall => {
+                        call_items.push(item.item_id.clone());
                     }
-                    Some(
-                        "function_call_output" | "custom_tool_call_output" | "tool_search_output",
-                    ) => {
-                        output_items.push(item_id.to_string());
+                    ConversationItemKind::FunctionCallOutput
+                    | ConversationItemKind::CustomToolCallOutput => {
+                        output_items.push(item.item_id.clone());
                     }
                     _ => {}
                 }
             }
-            tool["model_visible_call_item_ids"] = json!(call_items);
-            tool["model_visible_output_item_ids"] = json!(output_items);
+            tool.model_visible_call_item_ids = call_items;
+            tool.model_visible_output_item_ids = output_items;
         }
 
         let links = self
@@ -1010,17 +1003,15 @@ impl Reducer<'_> {
             .tool_calls
             .iter()
             .flat_map(|(tool_call_id, tool)| {
-                string_array_field(tool, "model_visible_output_item_ids")
-                    .into_iter()
+                tool.model_visible_output_item_ids
+                    .iter()
+                    .cloned()
                     .map(|item_id| (tool_call_id.clone(), item_id))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
         for (tool_call_id, item_id) in links {
-            self.add_conversation_item_producer(
-                &item_id,
-                json!({ "type": "tool", "tool_call_id": tool_call_id }),
-            );
+            self.add_conversation_item_producer(&item_id, ProducerRef::Tool { tool_call_id });
         }
     }
 
@@ -1031,18 +1022,16 @@ impl Reducer<'_> {
                 .trace
                 .code_cells
                 .get(&code_cell_id)
-                .and_then(|cell| cell.get("model_visible_call_id"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
+                .map(|cell| cell.model_visible_call_id.clone())
             else {
                 continue;
             };
 
-            let mut source_item_id = None;
+            let mut source_item_id = String::new();
             let mut output_item_ids = Vec::new();
             let mut output_call_ids = vec![model_visible_call_id.clone()];
             if let Some(cell) = self.trace.code_cells.get(&code_cell_id) {
-                for wait_tool_call_id in string_array_field(cell, "wait_tool_call_ids") {
+                for wait_tool_call_id in &cell.wait_tool_call_ids {
                     if let Some(call_id) = wait_tool_call_id.strip_prefix("tool:") {
                         output_call_ids.push(call_id.to_string());
                     }
@@ -1054,7 +1043,7 @@ impl Reducer<'_> {
             // yielded cell may emit its final model-visible output through a
             // later `wait` call, so outputs are collected from both ids.
             for item in self.trace.conversation_items.values() {
-                let Some(item_call_id) = item.get("call_id").and_then(Value::as_str) else {
+                let Some(item_call_id) = item.call_id.as_deref() else {
                     continue;
                 };
                 if !output_call_ids
@@ -1063,30 +1052,30 @@ impl Reducer<'_> {
                 {
                     continue;
                 }
-                let Some(item_id) = item.get("item_id").and_then(Value::as_str) else {
-                    continue;
-                };
-                match item.get("kind").and_then(Value::as_str) {
-                    Some("custom_tool_call") if item_call_id == model_visible_call_id => {
-                        source_item_id = Some(item_id.to_string());
+                match item.kind {
+                    ConversationItemKind::CustomToolCall
+                        if item_call_id == model_visible_call_id =>
+                    {
+                        source_item_id = item.item_id.clone();
                     }
-                    Some("custom_tool_call_output" | "function_call_output") => {
-                        output_item_ids.push(item_id.to_string());
+                    ConversationItemKind::CustomToolCallOutput
+                    | ConversationItemKind::FunctionCallOutput => {
+                        output_item_ids.push(item.item_id.clone());
                     }
                     _ => {}
                 }
             }
 
             if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
-                if let Some(source_item_id) = source_item_id {
-                    cell["source_item_id"] = Value::String(source_item_id);
-                }
-                cell["output_item_ids"] = json!(output_item_ids);
+                cell.source_item_id = source_item_id;
+                cell.output_item_ids = output_item_ids.clone();
             }
             for output_item_id in output_item_ids {
                 self.add_conversation_item_producer(
                     &output_item_id,
-                    json!({ "type": "code_cell", "code_cell_id": code_cell_id }),
+                    ProducerRef::CodeCell {
+                        code_cell_id: code_cell_id.clone(),
+                    },
                 );
             }
         }
@@ -1095,17 +1084,10 @@ impl Reducer<'_> {
     fn drop_redundant_code_cell_tool_calls(&mut self) {
         let mut redundant_tool_call_ids = Vec::new();
         for (tool_call_id, tool) in &self.trace.tool_calls {
-            if tool
-                .get("kind")
-                .and_then(|kind| kind.get("type"))
-                .and_then(Value::as_str)
-                != Some("code_cell")
-            {
+            if !matches!(&tool.kind, ToolCallKind::Other { name } if name == "exec") {
                 continue;
-            }
-            let Some(model_visible_call_id) =
-                tool.get("model_visible_call_id").and_then(Value::as_str)
-            else {
+            };
+            let Some(model_visible_call_id) = tool.model_visible_call_id.as_deref() else {
                 continue;
             };
             let code_cell_id = reduced_code_cell_id(model_visible_call_id);
@@ -1117,35 +1099,9 @@ impl Reducer<'_> {
         for tool_call_id in redundant_tool_call_ids {
             // `exec` itself is represented by `code_cells`; keeping the generic
             // dispatch ToolCall makes viewers render two roots for the same
-            // model-visible JavaScript cell. Copy its payload refs first so the
-            // code-cell details view still has a direct path to raw bytes.
-            if let Some(tool) = self.trace.tool_calls.remove(&tool_call_id)
-                && let Some(model_visible_call_id) =
-                    tool.get("model_visible_call_id").and_then(Value::as_str)
-            {
-                let code_cell_id = reduced_code_cell_id(model_visible_call_id);
-                if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
-                    for raw_payload_id in tool_raw_payload_ids(&tool) {
-                        push_unique_json_string(cell, "raw_payload_ids", &raw_payload_id);
-                    }
-                }
-            }
-            self.remove_conversation_item_producer(
-                json!({ "type": "tool", "tool_call_id": tool_call_id }),
-            );
-        }
-    }
-
-    fn attach_wait_tool_payloads_to_code_cells(&mut self) {
-        for cell in self.trace.code_cells.values_mut() {
-            for wait_tool_call_id in string_array_field(cell, "wait_tool_call_ids") {
-                let Some(wait_tool) = self.trace.tool_calls.get(&wait_tool_call_id) else {
-                    continue;
-                };
-                for raw_payload_id in tool_raw_payload_ids(wait_tool) {
-                    push_unique_json_string(cell, "raw_payload_ids", &raw_payload_id);
-                }
-            }
+            // model-visible JavaScript cell.
+            self.trace.tool_calls.remove(&tool_call_id);
+            self.remove_conversation_item_producer(ProducerRef::Tool { tool_call_id });
         }
     }
 
@@ -1161,9 +1117,7 @@ impl Reducer<'_> {
                 .trace
                 .terminal_operations
                 .get(&operation_id)
-                .and_then(|operation| operation.get("tool_call_id"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
+                .map(|operation| operation.tool_call_id.clone())
             else {
                 continue;
             };
@@ -1174,59 +1128,45 @@ impl Reducer<'_> {
             // call/output items. Nested shell tools are only observed through
             // the enclosing code cell's output, so terminal playback needs to
             // point at the code cell in that case.
-            let observation = if tool
-                .get("requester")
-                .and_then(|requester| requester.get("type"))
-                .and_then(Value::as_str)
-                == Some("code_cell")
+            let observation = if let ToolCallRequester::CodeCell { code_cell_id } = &tool.requester
             {
-                let Some(code_cell_id) = tool
-                    .get("requester")
-                    .and_then(|requester| requester.get("code_cell_id"))
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
                 let Some(cell) = self.trace.code_cells.get(code_cell_id) else {
                     continue;
                 };
-                json!({
-                    "call_item_ids": non_empty_array(cell.get("source_item_id").and_then(Value::as_str).unwrap_or("")),
-                    "output_item_ids": string_array_field(cell, "output_item_ids"),
-                    "source": "code_cell_output",
-                })
+                TerminalModelObservation {
+                    call_item_ids: non_empty_vec(&cell.source_item_id),
+                    output_item_ids: cell.output_item_ids.clone(),
+                    source: TerminalObservationSource::CodeCellOutput,
+                }
             } else {
-                json!({
-                    "call_item_ids": string_array_field(tool, "model_visible_call_item_ids"),
-                    "output_item_ids": string_array_field(tool, "model_visible_output_item_ids"),
-                    "source": "direct_tool_call",
-                })
+                TerminalModelObservation {
+                    call_item_ids: tool.model_visible_call_item_ids.clone(),
+                    output_item_ids: tool.model_visible_output_item_ids.clone(),
+                    source: TerminalObservationSource::DirectToolCall,
+                }
             };
             if let Some(operation) = self.trace.terminal_operations.get_mut(&operation_id) {
-                operation["model_observations"] = json!([observation]);
+                operation.model_observations = vec![observation];
             }
         }
     }
 
-    fn add_conversation_item_producer(&mut self, item_id: &str, producer: Value) {
+    fn add_conversation_item_producer(&mut self, item_id: &str, producer: ProducerRef) {
         let Some(item) = self.trace.conversation_items.get_mut(item_id) else {
             return;
         };
-        let Some(produced_by) = item.get_mut("produced_by").and_then(Value::as_array_mut) else {
-            return;
-        };
-        if !produced_by.iter().any(|existing| existing == &producer) {
-            produced_by.push(producer);
+        if !item
+            .produced_by
+            .iter()
+            .any(|existing| existing == &producer)
+        {
+            item.produced_by.push(producer);
         }
     }
 
-    fn remove_conversation_item_producer(&mut self, producer: Value) {
+    fn remove_conversation_item_producer(&mut self, producer: ProducerRef) {
         for item in self.trace.conversation_items.values_mut() {
-            let Some(produced_by) = item.get_mut("produced_by").and_then(Value::as_array_mut)
-            else {
-                continue;
-            };
-            produced_by.retain(|existing| existing != &producer);
+            item.produced_by.retain(|existing| existing != &producer);
         }
     }
 
@@ -1235,30 +1175,15 @@ impl Reducer<'_> {
         for (tool_call_id, tool) in &self.trace.tool_calls {
             let raw_payload_ids = tool_raw_payload_ids(tool);
             let mut item_ids = Vec::new();
-            for field in [
-                "model_visible_call_item_ids",
-                "model_visible_output_item_ids",
-            ] {
-                if let Some(tool_item_ids) = tool.get(field).and_then(Value::as_array) {
-                    for item_id in tool_item_ids.iter().filter_map(Value::as_str) {
-                        push_unique(&mut item_ids, item_id);
-                    }
-                }
-            }
+            extend_unique(&mut item_ids, &tool.model_visible_call_item_ids);
+            extend_unique(&mut item_ids, &tool.model_visible_output_item_ids);
             tool_payloads.insert(tool_call_id.clone(), (raw_payload_ids, item_ids));
         }
         for edge in self.trace.interaction_edges.values_mut() {
-            let mut raw_payload_ids = string_array_field(edge, "carried_raw_payload_ids");
-            let mut item_ids = string_array_field(edge, "carried_item_ids");
-            for anchor_name in ["source", "target"] {
-                let Some(tool_call_id) = edge
-                    .get(anchor_name)
-                    .and_then(Value::as_object)
-                    .filter(|anchor| {
-                        anchor.get("type").and_then(Value::as_str) == Some("tool_call")
-                    })
-                    .and_then(|anchor| anchor.get("tool_call_id").and_then(Value::as_str))
-                else {
+            let mut raw_payload_ids = edge.carried_raw_payload_ids.clone();
+            let mut item_ids = edge.carried_item_ids.clone();
+            for anchor in [&edge.source, &edge.target] {
+                let TraceAnchor::ToolCall { tool_call_id } = anchor else {
                     continue;
                 };
                 if let Some((tool_raw_payload_ids, tool_item_ids)) = tool_payloads.get(tool_call_id)
@@ -1267,8 +1192,8 @@ impl Reducer<'_> {
                     push_unique_all(&mut item_ids, tool_item_ids);
                 }
             }
-            edge["carried_raw_payload_ids"] = json!(raw_payload_ids);
-            edge["carried_item_ids"] = json!(item_ids);
+            edge.carried_raw_payload_ids = raw_payload_ids;
+            edge.carried_item_ids = item_ids;
         }
     }
 }
@@ -1278,95 +1203,111 @@ fn normalize_conversation_item(
     thread_id: &str,
     first_seen_at_unix_ms: i64,
     item: &Value,
-    produced_by: Vec<Value>,
+    produced_by: Vec<ProducerRef>,
     raw_payload_id: &str,
-) -> Value {
+) -> ConversationItem {
     let kind = item.get("type").and_then(Value::as_str).unwrap_or("other");
-    let role = item
-        .get("role")
-        .and_then(Value::as_str)
-        .unwrap_or(match kind {
-            "function_call" | "custom_tool_call" | "local_shell_call" | "tool_search_call" => {
-                "assistant"
-            }
-            "function_call_output" | "custom_tool_call_output" | "tool_search_output" => "tool",
-            _ => "",
-        });
+    let role = conversation_role(
+        item.get("role")
+            .and_then(Value::as_str)
+            .unwrap_or(match kind {
+                "function_call" | "custom_tool_call" | "local_shell_call" | "tool_search_call" => {
+                    "assistant"
+                }
+                "function_call_output" | "custom_tool_call_output" | "tool_search_output" => "tool",
+                _ => "assistant",
+            }),
+    );
     let call_id = item
         .get("call_id")
         .and_then(Value::as_str)
         .or_else(|| item.get("id").and_then(Value::as_str))
-        .unwrap_or("");
-    let channel = if role == "assistant" && kind == "message" {
-        "final"
+        .map(str::to_string);
+    let channel = if role == ConversationRole::Assistant && kind == "message" {
+        Some(ConversationChannel::Final)
     } else {
-        ""
+        None
     };
-    json!({
-        "item_id": item_id,
-        "thread_id": thread_id,
-        "role": role,
-        "channel": channel,
-        "kind": kind,
-        "call_id": empty_string(call_id),
-        "first_seen_at_unix_ms": first_seen_at_unix_ms,
-        "body": normalize_body(kind, item, raw_payload_id),
-        "produced_by": produced_by,
-    })
+    ConversationItem {
+        item_id: item_id.to_string(),
+        thread_id: thread_id.to_string(),
+        codex_turn_id: None,
+        first_seen_at_unix_ms,
+        role,
+        channel,
+        kind: conversation_item_kind(kind),
+        body: normalize_body(kind, item, raw_payload_id),
+        call_id,
+        produced_by,
+    }
 }
 
-fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> Value {
+fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> ConversationBody {
     match kind {
         "message" => {
-            let parts = item
-                .get("content")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|content| {
-                    content
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(|text| json!({ "type": "text", "text": text }))
-                })
-                .collect::<Vec<_>>();
-            json!({ "parts": parts })
+            let parts =
+                item.get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|content| {
+                        content.get("text").and_then(Value::as_str).map(|text| {
+                            ConversationPart::Text {
+                                text: text.to_string(),
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+            ConversationBody { parts }
         }
-        "custom_tool_call" => json!({
-            "parts": [{
-                "type": if item.get("name").and_then(Value::as_str) == Some("exec") { "code" } else { "text" },
-                "language": "javascript",
-                "source": item.get("input").and_then(Value::as_str).unwrap_or(""),
-                "text": item.get("input").and_then(Value::as_str).unwrap_or(""),
-            }]
-        }),
-        "function_call" => json!({
-            "parts": [{
-                "type": "json",
-                "summary": item.get("name").and_then(Value::as_str).unwrap_or("function_call"),
-                "raw_payload_id": raw_payload_id,
-            }]
-        }),
-        "function_call_output" | "custom_tool_call_output" => json!({
-            "parts": [{
-                "type": "text",
-                "text": tool_output_text(item.get("output")),
-            }]
-        }),
-        "reasoning" => json!({
-            "parts": [{
-                "type": "payload_ref",
-                "label": "reasoning",
-                "raw_payload_id": raw_payload_id,
-            }]
-        }),
-        _ => json!({
-            "parts": [{
-                "type": "json",
-                "summary": kind,
-                "raw_payload_id": raw_payload_id,
-            }]
-        }),
+        "custom_tool_call" => {
+            let input = item.get("input").and_then(Value::as_str).unwrap_or("");
+            let part = if item.get("name").and_then(Value::as_str) == Some("exec") {
+                ConversationPart::Code {
+                    language: "javascript".to_string(),
+                    source: input.to_string(),
+                }
+            } else {
+                ConversationPart::Text {
+                    text: input.to_string(),
+                }
+            };
+            ConversationBody { parts: vec![part] }
+        }
+        "function_call"
+        | "tool_search_call"
+        | "web_search_call"
+        | "image_generation_call"
+        | "local_shell_call" => ConversationBody {
+            parts: vec![ConversationPart::Json {
+                summary: item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("function_call")
+                    .to_string(),
+                raw_payload_id: raw_payload_id.to_string(),
+            }],
+        },
+        "function_call_output"
+        | "custom_tool_call_output"
+        | "tool_search_output"
+        | "mcp_tool_call_output" => ConversationBody {
+            parts: vec![ConversationPart::Text {
+                text: tool_output_text(item.get("output")),
+            }],
+        },
+        "reasoning" => ConversationBody {
+            parts: vec![ConversationPart::PayloadRef {
+                label: "reasoning".to_string(),
+                raw_payload_id: raw_payload_id.to_string(),
+            }],
+        },
+        _ => ConversationBody {
+            parts: vec![ConversationPart::Json {
+                summary: kind.to_string(),
+                raw_payload_id: raw_payload_id.to_string(),
+            }],
+        },
     }
 }
 
@@ -1374,16 +1315,54 @@ fn reduced_code_cell_id(model_visible_call_id: &str) -> String {
     format!("code_cell:{model_visible_call_id}")
 }
 
-fn tool_call_kind(tool_name: &str) -> Value {
+fn conversation_role(role: &str) -> ConversationRole {
+    match role {
+        "system" => ConversationRole::System,
+        "developer" => ConversationRole::Developer,
+        "user" => ConversationRole::User,
+        "tool" => ConversationRole::Tool,
+        _ => ConversationRole::Assistant,
+    }
+}
+
+fn conversation_item_kind(kind: &str) -> ConversationItemKind {
+    match kind {
+        "reasoning" => ConversationItemKind::Reasoning,
+        "function_call"
+        | "tool_search_call"
+        | "web_search_call"
+        | "image_generation_call"
+        | "local_shell_call" => ConversationItemKind::FunctionCall,
+        "function_call_output" | "tool_search_output" | "mcp_tool_call_output" => {
+            ConversationItemKind::FunctionCallOutput
+        }
+        "custom_tool_call" => ConversationItemKind::CustomToolCall,
+        "custom_tool_call_output" => ConversationItemKind::CustomToolCallOutput,
+        "compaction_marker" => ConversationItemKind::CompactionMarker,
+        _ => ConversationItemKind::Message,
+    }
+}
+
+fn tool_call_kind(tool_name: &str) -> ToolCallKind {
     if is_terminal_tool(tool_name) {
-        return json!({ "type": terminal_operation_kind(tool_name) });
+        return match terminal_operation_kind(tool_name) {
+            TerminalOperationKind::WriteStdin => ToolCallKind::WriteStdin,
+            TerminalOperationKind::ExecCommand => ToolCallKind::ExecCommand,
+        };
     }
 
     match tool_name {
-        "exec" => json!({ "type": "code_cell" }),
-        "spawn_agent" | "send_message" | "followup_task" | "wait_agent" | "close_agent"
-        | "list_agents" => json!({ "type": "agent_interaction", "name": tool_name }),
-        _ => json!({ "type": "other", "name": tool_name }),
+        "apply_patch" => ToolCallKind::ApplyPatch,
+        "web" => ToolCallKind::Web,
+        "image_generation" => ToolCallKind::ImageGeneration,
+        "spawn_agent" => ToolCallKind::SpawnAgent,
+        "followup_task" => ToolCallKind::AssignAgentTask,
+        "send_message" => ToolCallKind::SendMessage,
+        "wait_agent" => ToolCallKind::WaitAgent,
+        "close_agent" => ToolCallKind::CloseAgent,
+        _ => ToolCallKind::Other {
+            name: tool_name.to_string(),
+        },
     }
 }
 
@@ -1394,15 +1373,17 @@ fn is_terminal_tool(tool_name: &str) -> bool {
     )
 }
 
-fn terminal_operation_kind(tool_name: &str) -> &'static str {
+fn terminal_operation_kind(tool_name: &str) -> TerminalOperationKind {
     match tool_name {
-        "write_stdin" => "write_stdin",
-        "exec_command" | "local_shell" | "shell" | "shell_command" => "exec_command",
-        _ => "terminal",
+        "write_stdin" => TerminalOperationKind::WriteStdin,
+        "exec_command" | "local_shell" | "shell" | "shell_command" => {
+            TerminalOperationKind::ExecCommand
+        }
+        _ => TerminalOperationKind::ExecCommand,
     }
 }
 
-fn terminal_request_from_invocation(invocation: &Value) -> Value {
+fn terminal_request_from_invocation(invocation: &Value) -> TerminalRequest {
     let tool_name = invocation
         .get("tool_name")
         .and_then(Value::as_str)
@@ -1419,28 +1400,62 @@ fn terminal_request_from_invocation(invocation: &Value) -> Value {
         }
         Some("local_shell") => {
             let command = payload.get("command").cloned().unwrap_or_else(|| json!([]));
-            json!({
-                "type": "exec_command",
-                "command": command,
-                "display_command": display_command(&command),
-                "cwd": payload.get("workdir").and_then(Value::as_str).unwrap_or(""),
-                "timeout_ms": payload.get("timeout_ms").cloned().unwrap_or(Value::Null),
-            })
+            TerminalRequest::ExecCommand {
+                command: string_vec(&command),
+                display_command: display_command(&command),
+                cwd: payload
+                    .get("workdir")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            }
         }
-        _ => json!({
-            "type": terminal_operation_kind(tool_name),
-            "raw_payload": payload,
-        }),
+        _ => TerminalRequest::ExecCommand {
+            command: Vec::new(),
+            display_command: terminal_operation_kind_label(terminal_operation_kind(tool_name))
+                .to_string(),
+            cwd: String::new(),
+            yield_time_ms: None,
+            max_output_tokens: None,
+        },
     }
 }
 
-fn terminal_request_from_arguments(tool_name: &str, arguments: &Map<String, Value>) -> Value {
+fn terminal_id_from_invocation_payload(invocation: &Value) -> Option<String> {
+    invocation
+        .get("payload")
+        .and_then(|payload| payload.get("arguments"))
+        .and_then(Value::as_str)
+        .and_then(parse_json_object)
+        .and_then(|arguments| {
+            arguments.get("session_id").and_then(|session_id| {
+                session_id
+                    .as_u64()
+                    .map(|id| id.to_string())
+                    .or_else(|| session_id.as_str().map(str::to_string))
+            })
+        })
+}
+
+fn terminal_request_from_arguments(
+    tool_name: &str,
+    arguments: &Map<String, Value>,
+) -> TerminalRequest {
     if tool_name == "write_stdin" {
-        return json!({
-            "type": "write_stdin",
-            "session_id": arguments.get("session_id").cloned().unwrap_or(Value::Null),
-            "chars": arguments.get("chars").and_then(Value::as_str).unwrap_or(""),
-        });
+        return TerminalRequest::WriteStdin {
+            stdin: arguments
+                .get("chars")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            yield_time_ms: arguments.get("yield_time_ms").and_then(Value::as_u64),
+            max_output_tokens: arguments
+                .get("max_output_tokens")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok()),
+        };
     }
 
     let command = arguments
@@ -1448,18 +1463,21 @@ fn terminal_request_from_arguments(tool_name: &str, arguments: &Map<String, Valu
         .cloned()
         .or_else(|| arguments.get("cmd").map(|cmd| json!([cmd])))
         .unwrap_or_else(|| json!([]));
-    json!({
-        "type": "exec_command",
-        "command": command,
-        "display_command": display_command(&command),
-        "cwd": arguments
+    TerminalRequest::ExecCommand {
+        command: string_vec(&command),
+        display_command: display_command(&command),
+        cwd: arguments
             .get("workdir")
             .or_else(|| arguments.get("cwd"))
             .and_then(Value::as_str)
-            .unwrap_or(""),
-        "yield_time_ms": arguments.get("yield_time_ms").cloned().unwrap_or(Value::Null),
-        "max_output_tokens": arguments.get("max_output_tokens").cloned().unwrap_or(Value::Null),
-    })
+            .unwrap_or("")
+            .to_string(),
+        yield_time_ms: arguments.get("yield_time_ms").and_then(Value::as_u64),
+        max_output_tokens: arguments
+            .get("max_output_tokens")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok()),
+    }
 }
 
 fn parse_json_object(raw: &str) -> Option<Map<String, Value>> {
@@ -1505,96 +1523,57 @@ fn terminal_id_from_result_payload(payload: &Value, operation_id: &str) -> Optio
         .and_then(|_| (!operation_id.is_empty()).then(|| format!("terminal:{operation_id}")))
 }
 
-fn terminal_id_from_operation_request(operation: &Value) -> Option<String> {
-    // Continuation calls such as `write_stdin` already name the runtime
-    // session in their request. Completed chunks may omit that id from the
-    // result payload, so falling back to the request keeps all operations in
-    // the same terminal session instead of inventing a synthetic one.
-    operation
-        .get("request")
-        .and_then(terminal_id_from_terminal_request)
-}
-
-fn terminal_id_from_terminal_request(request: &Value) -> Option<String> {
-    request.get("session_id").and_then(|session_id| {
-        session_id
-            .as_u64()
-            .map(|id| id.to_string())
-            .or_else(|| session_id.as_str().map(str::to_string))
-    })
-}
-
-fn tool_raw_payload_ids(tool: &Value) -> Vec<String> {
+fn tool_raw_payload_ids(tool: &ToolCall) -> Vec<String> {
     let mut raw_payload_ids = Vec::new();
-    for field in ["raw_invocation_payload_id", "raw_result_payload_id"] {
-        if let Some(raw_payload_id) = tool.get(field).and_then(Value::as_str) {
-            push_unique(&mut raw_payload_ids, raw_payload_id);
-        }
-    }
-    for raw_payload_id in tool
-        .get("raw_runtime_payload_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
+    for raw_payload_id in [
+        tool.raw_invocation_payload_id.as_deref(),
+        tool.raw_result_payload_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         push_unique(&mut raw_payload_ids, raw_payload_id);
     }
+    push_unique_all(&mut raw_payload_ids, &tool.raw_runtime_payload_ids);
     raw_payload_ids
 }
 
-fn terminal_result_from_payload(payload: &Value, output_preview: Option<&str>) -> Value {
+fn terminal_result_from_payload(payload: &Value, output_preview: Option<&str>) -> TerminalResult {
     let code_mode_result = payload.get("code_mode_result").unwrap_or(&Value::Null);
-    json!({
-        "output_preview": output_preview.unwrap_or(""),
-        "output": code_mode_result
+    TerminalResult {
+        exit_code: code_mode_result
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok()),
+        stdout: code_mode_result
             .get("output")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| payload.get("output_preview").and_then(Value::as_str).unwrap_or("")),
-        "chunk_id": code_mode_result.get("chunk_id").cloned().unwrap_or(Value::Null),
-        "exit_code": code_mode_result.get("exit_code").cloned().unwrap_or(Value::Null),
-        "wall_time_seconds": code_mode_result
-            .get("wall_time_seconds")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "original_token_count": code_mode_result
+            .unwrap_or_else(|| {
+                payload
+                    .get("output_preview")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            })
+            .to_string(),
+        stderr: String::new(),
+        formatted_output: output_preview.map(str::to_string),
+        original_token_count: code_mode_result
             .get("original_token_count")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "success": payload.get("success").cloned().unwrap_or(Value::Null),
-    })
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok()),
+        chunk_id: code_mode_result
+            .get("chunk_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
 }
 
-fn code_cell_execution_status(runtime_status: &str) -> &'static str {
+fn code_cell_execution_status(runtime_status: &str) -> ExecutionStatus {
     match runtime_status {
-        "completed" => "completed",
-        "failed" => "failed",
-        "terminated" => "cancelled",
-        "yielded" | "running" => "running",
-        _ => "completed",
-    }
-}
-
-fn non_empty_array(value: &str) -> Value {
-    if value.is_empty() {
-        json!([])
-    } else {
-        json!([value])
-    }
-}
-
-fn push_unique_json_string(object: &mut Value, key: &str, value: &str) {
-    if value.is_empty() {
-        return;
-    }
-    let Some(array) = object.get_mut(key).and_then(Value::as_array_mut) else {
-        return;
-    };
-    if !array
-        .iter()
-        .any(|existing| existing.as_str() == Some(value))
-    {
-        array.push(Value::String(value.to_string()));
+        "failed" => ExecutionStatus::Failed,
+        "terminated" => ExecutionStatus::Cancelled,
+        "yielded" | "running" => ExecutionStatus::Running,
+        _ => ExecutionStatus::Completed,
     }
 }
 
@@ -1696,33 +1675,42 @@ fn interaction_edge_id(kind: &str, tool_call_id: &str) -> String {
     format!("edge:{kind}:{tool_call_id}")
 }
 
+fn interaction_edge_kind(kind: &str) -> InteractionEdgeKind {
+    match kind {
+        "spawn_agent" => InteractionEdgeKind::SpawnAgent,
+        "assign_agent_task" | "followup_task" => InteractionEdgeKind::AssignAgentTask,
+        "agent_result" => InteractionEdgeKind::AgentResult,
+        "close_agent" => InteractionEdgeKind::CloseAgent,
+        _ => InteractionEdgeKind::SendMessage,
+    }
+}
+
 fn agent_result_edge_id(tool_call_id: &str, thread_id: &str) -> String {
     format!("edge:agent_result:{tool_call_id}:{thread_id}")
 }
 
-fn thread_anchor(thread_id: &str) -> Value {
-    if thread_id.is_empty() {
-        Value::Null
-    } else {
-        json!({ "type": "thread", "thread_id": thread_id })
-    }
+fn thread_anchor(thread_id: &str) -> Option<TraceAnchor> {
+    (!thread_id.is_empty()).then(|| TraceAnchor::Thread {
+        thread_id: thread_id.to_string(),
+    })
 }
 
-fn string_array_field(object: &Value, key: &str) -> Vec<String> {
-    object
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect()
+fn task_name_from_agent_path(agent_path: &str) -> String {
+    agent_path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(agent_path)
+        .to_string()
 }
 
 fn push_unique_all(values: &mut Vec<String>, new_values: &[String]) {
     for value in new_values {
         push_unique(values, value);
     }
+}
+
+fn extend_unique(values: &mut Vec<String>, new_values: &[String]) {
+    push_unique_all(values, new_values);
 }
 
 fn push_unique(values: &mut Vec<String>, value: &str) {
@@ -1750,84 +1738,148 @@ fn field_str<'a>(event: &'a CapturedEvent, name: &str) -> Option<&'a str> {
     event.fields.get(name).and_then(Value::as_str)
 }
 
-fn execution(value: &Value) -> Option<&Value> {
-    value.get("execution")
+fn set_execution_start(execution: &mut ExecutionWindow, started_at_unix_ms: i64, started_seq: u64) {
+    execution.started_at_unix_ms = started_at_unix_ms;
+    execution.started_seq = started_seq;
 }
 
-fn set_string(object: &mut Value, key: &str, value: &str) {
-    object[key] = Value::String(value.to_string());
+fn set_execution_end(
+    execution: &mut ExecutionWindow,
+    ended_at_unix_ms: i64,
+    ended_seq: u64,
+    status: ExecutionStatus,
+) {
+    execution.ended_at_unix_ms = Some(ended_at_unix_ms);
+    execution.ended_seq = Some(ended_seq);
+    execution.status = status;
 }
 
-fn set_execution_start(object: &mut Value, started_at_unix_ms: i64, started_seq: u64) {
-    object["execution"]["started_at_unix_ms"] = started_at_unix_ms.into();
-    object["execution"]["started_seq"] = started_seq.into();
-}
-
-fn set_execution_end(object: &mut Value, ended_at_unix_ms: i64, ended_seq: u64, status: &str) {
-    object["execution"]["ended_at_unix_ms"] = ended_at_unix_ms.into();
-    object["execution"]["ended_seq"] = ended_seq.into();
-    object["execution"]["status"] = Value::String(status.to_string());
-}
-
-fn execution_json(
+fn execution_window(
     started_at_unix_ms: i64,
     ended_at_unix_ms: Option<i64>,
-    status: &str,
+    status: ExecutionStatus,
     started_seq: u64,
     ended_seq: Option<u64>,
-) -> Value {
-    json!({
-        "started_at_unix_ms": started_at_unix_ms,
-        "ended_at_unix_ms": ended_at_unix_ms,
-        "status": status,
-        "started_seq": started_seq,
-        "ended_seq": ended_seq,
+) -> ExecutionWindow {
+    ExecutionWindow {
+        started_at_unix_ms,
+        started_seq,
+        ended_at_unix_ms,
+        ended_seq,
+        status,
+    }
+}
+
+fn execution_status(status: &str) -> ExecutionStatus {
+    match status {
+        "failed" => ExecutionStatus::Failed,
+        "cancelled" | "terminated" => ExecutionStatus::Cancelled,
+        "aborted" => ExecutionStatus::Aborted,
+        "running" | "yielded" => ExecutionStatus::Running,
+        _ => ExecutionStatus::Completed,
+    }
+}
+
+fn code_cell_runtime_status(status: &str) -> CodeCellRuntimeStatus {
+    match status {
+        "starting" => CodeCellRuntimeStatus::Starting,
+        "running" => CodeCellRuntimeStatus::Running,
+        "yielded" => CodeCellRuntimeStatus::Yielded,
+        "failed" => CodeCellRuntimeStatus::Failed,
+        "terminated" => CodeCellRuntimeStatus::Terminated,
+        _ => CodeCellRuntimeStatus::Completed,
+    }
+}
+
+fn raw_payload_kind(kind: &str) -> RawPayloadKind {
+    match kind {
+        "inference_request" => RawPayloadKind::InferenceRequest,
+        "inference_response" | "inference_response_summary" => RawPayloadKind::InferenceResponse,
+        "compaction_request" => RawPayloadKind::CompactionRequest,
+        "compaction_checkpoint" => RawPayloadKind::CompactionCheckpoint,
+        "compaction_response" => RawPayloadKind::CompactionResponse,
+        "tool_invocation" => RawPayloadKind::ToolInvocation,
+        "tool_result" => RawPayloadKind::ToolResult,
+        "tool_runtime_event" => RawPayloadKind::ToolRuntimeEvent,
+        "terminal_runtime_event" => RawPayloadKind::TerminalRuntimeEvent,
+        "session_metadata" => RawPayloadKind::SessionMetadata,
+        "agent_result" => RawPayloadKind::AgentResult,
+        "code_cell_invocation" | "code_cell_result" => RawPayloadKind::ToolRuntimeEvent,
+        _ => RawPayloadKind::ProtocolEvent,
+    }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn non_empty_vec(value: &str) -> Vec<String> {
+    if value.is_empty() {
+        Vec::new()
+    } else {
+        vec![value.to_string()]
+    }
+}
+
+fn string_vec(value: &Value) -> Vec<String> {
+    value
+        .as_str()
+        .map(|text| vec![text.to_string()])
+        .unwrap_or_else(|| {
+            value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+}
+
+fn terminal_operation_kind_label(kind: TerminalOperationKind) -> &'static str {
+    match kind {
+        TerminalOperationKind::ExecCommand => "exec_command",
+        TerminalOperationKind::WriteStdin => "write_stdin",
+    }
+}
+
+fn token_usage_from_value(value: Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        input_tokens: value
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cached_input_tokens: value
+            .get("cached_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output_tokens: value
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning_output_tokens: value
+            .get("reasoning_output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     })
-}
-
-fn extend_array_unique<'a>(
-    object: &mut Value,
-    key: &str,
-    values: impl IntoIterator<Item = &'a String>,
-) {
-    let Some(array) = object.get_mut(key).and_then(Value::as_array_mut) else {
-        return;
-    };
-    for value in values {
-        if !array
-            .iter()
-            .any(|existing| existing.as_str() == Some(value))
-        {
-            array.push(Value::String(value.clone()));
-        }
-    }
-}
-
-fn empty_to_null(value: &str) -> Value {
-    if value.is_empty() {
-        Value::Null
-    } else {
-        Value::String(value.to_string())
-    }
-}
-
-fn empty_string(value: &str) -> Value {
-    if value.is_empty() {
-        Value::Null
-    } else {
-        Value::String(value.to_string())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::Path;
 
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::reduce_bundle;
+
+    fn reduce_bundle_json(bundle_dir: &Path) -> anyhow::Result<serde_json::Value> {
+        // Tests assert the public `state.json` contract instead of private Rust
+        // field access. That catches serde-shape drift from PR 17982's model.
+        Ok(serde_json::to_value(reduce_bundle(bundle_dir)?)?)
+    }
 
     #[test]
     fn reduces_inference_and_tool_events() -> anyhow::Result<()> {
@@ -1951,16 +2003,16 @@ mod tests {
                 "raw_payload.request.kind": "inference_request"
             }),
         )?;
-        let trace = reduce_bundle(temp.path())?;
+        let trace = reduce_bundle_json(temp.path())?;
 
         assert_eq!(
             json!({
-                "thread_count": trace.threads.len(),
-                "inference_count": trace.inference_calls.len(),
-                "conversation_item_count": trace.conversation_items.len(),
-                "thread_item_ids": trace.threads["thread-1"]["conversation_item_ids"].clone(),
-                "second_request_item_ids": trace.inference_calls["inf-2"]["request_item_ids"].clone(),
-                "tool_call_item_ids": trace.tool_calls["tool-1"]["model_visible_call_item_ids"].clone(),
+                "thread_count": trace["threads"].as_object().unwrap().len(),
+                "inference_count": trace["inference_calls"].as_object().unwrap().len(),
+                "conversation_item_count": trace["conversation_items"].as_object().unwrap().len(),
+                "thread_item_ids": trace["threads"]["thread-1"]["conversation_item_ids"].clone(),
+                "second_request_item_ids": trace["inference_calls"]["inf-2"]["request_item_ids"].clone(),
+                "tool_call_item_ids": trace["tool_calls"]["tool-1"]["model_visible_call_item_ids"].clone(),
             }),
             json!({
                 "thread_count": 1,
@@ -2027,7 +2079,8 @@ mod tests {
             "codex.thread.started",
             json!({
                 "thread.id": "thread-child",
-                "parent_thread.id": "thread-parent"
+                "parent_thread.id": "thread-parent",
+                "agent.path": "/root/worker"
             }),
         )?;
         write_event(
@@ -2102,13 +2155,13 @@ mod tests {
             }),
         )?;
 
-        let trace = reduce_bundle(temp.path())?;
+        let trace = reduce_bundle_json(temp.path())?;
 
         assert_eq!(
-            trace.interaction_edges["edge:spawn_agent:tool:call-spawn"],
+            trace["interaction_edges"]["edge:spawn_agent:tool:call-spawn"],
             json!({
-                "interaction_edge_id": "edge:spawn_agent:tool:call-spawn",
-                "kind": { "type": "spawn_agent" },
+                "edge_id": "edge:spawn_agent:tool:call-spawn",
+                "kind": "spawn_agent",
                 "source": { "type": "tool_call", "tool_call_id": "tool:call-spawn" },
                 "target": { "type": "thread", "thread_id": "thread-child" },
                 "started_at_unix_ms": 1776420000000i64,
@@ -2120,16 +2173,27 @@ mod tests {
                 ],
             })
         );
-        assert_eq!(trace.threads["thread-child"]["nickname"], json!("Euclid"));
         assert_eq!(
-            trace.threads["thread-child"]["origin"]["agent_role"],
+            trace["threads"]["thread-child"]["nickname"],
+            json!("Euclid")
+        );
+        assert_eq!(
+            trace["threads"]["thread-child"]["origin"]["agent_role"],
             json!("worker")
         );
         assert_eq!(
-            trace.interaction_edges["edge:agent_result:tool:call-wait:thread-child"],
+            trace["threads"]["thread-child"]["origin"]["spawn_edge_id"],
+            json!("edge:spawn_agent:tool:call-spawn")
+        );
+        assert_eq!(
+            trace["threads"]["thread-child"]["origin"]["task_name"],
+            json!("worker")
+        );
+        assert_eq!(
+            trace["interaction_edges"]["edge:agent_result:tool:call-wait:thread-child"],
             json!({
-                "interaction_edge_id": "edge:agent_result:tool:call-wait:thread-child",
-                "kind": { "type": "agent_result" },
+                "edge_id": "edge:agent_result:tool:call-wait:thread-child",
+                "kind": "agent_result",
                 "source": { "type": "thread", "thread_id": "thread-child" },
                 "target": { "type": "tool_call", "tool_call_id": "tool:call-wait" },
                 "started_at_unix_ms": 1776420000000i64,
@@ -2369,10 +2433,10 @@ mod tests {
             }),
         )?;
 
-        let trace = reduce_bundle(temp.path())?;
+        let trace = reduce_bundle_json(temp.path())?;
 
         assert_eq!(
-            trace.code_cells["code_cell:call-code"],
+            trace["code_cells"]["code_cell:call-code"],
             json!({
                 "code_cell_id": "code_cell:call-code",
                 "model_visible_call_id": "call-code",
@@ -2389,26 +2453,28 @@ mod tests {
                     "ended_seq": 9,
                 },
                 "runtime_status": "completed",
+                "initial_response_at_unix_ms": null,
+                "initial_response_seq": null,
+                "yielded_at_unix_ms": null,
+                "yielded_seq": null,
                 "source_js": "await tools.exec_command({ cmd: \"find . -type f | wc -l\" });",
                 "nested_tool_call_ids": ["tool:nested-exec"],
                 "wait_tool_call_ids": [],
-                "raw_payload_ids": ["raw_payload:3", "raw_payload:6"],
             })
         );
         assert_eq!(
             json!({
-                "has_outer_exec_tool": trace.tool_calls.contains_key("tool:call-code"),
-                "nested_tool": trace.tool_calls["tool:nested-exec"].clone(),
-                "terminal_operation": trace.terminal_operations["terminal_operation:1"].clone(),
-                "terminal_session": trace.terminal_sessions["55007"].clone(),
-                "output_producers": trace.conversation_items["item:3"]["produced_by"].clone(),
+                "has_outer_exec_tool": trace["tool_calls"].as_object().unwrap().contains_key("tool:call-code"),
+                "nested_tool": trace["tool_calls"]["tool:nested-exec"].clone(),
+                "terminal_operation": trace["terminal_operations"]["terminal_operation:1"].clone(),
+                "terminal_session": trace["terminal_sessions"]["55007"].clone(),
+                "output_producers": trace["conversation_items"]["item:3"]["produced_by"].clone(),
             }),
             json!({
                 "has_outer_exec_tool": false,
                 "nested_tool": {
                     "tool_call_id": "tool:nested-exec",
                     "thread_id": "thread-1",
-                    "codex_turn_id": "turn-1",
                     "started_by_codex_turn_id": "turn-1",
                     "model_visible_call_id": null,
                     "code_mode_runtime_tool_id": "runtime-tool-1",
@@ -2417,13 +2483,12 @@ mod tests {
                     "requester": {
                         "type": "code_cell",
                         "code_cell_id": "code_cell:call-code",
-                        "runtime_cell_id": "runtime-cell-1",
                     },
                     "kind": { "type": "exec_command" },
                     "terminal_operation_id": "terminal_operation:1",
                     "summary": {
-                        "input_preview": "",
-                        "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
+                        "type": "terminal",
+                        "operation_id": "terminal_operation:1",
                     },
                     "execution": {
                         "started_at_unix_ms": 1776420000000i64,
@@ -2457,13 +2522,12 @@ mod tests {
                         "max_output_tokens": 200,
                     },
                     "result": {
-                        "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
-                        "output": "",
-                        "chunk_id": "chunk-1",
                         "exit_code": null,
-                        "wall_time_seconds": 1.0,
+                        "stdout": "",
+                        "stderr": "",
+                        "formatted_output": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
                         "original_token_count": 0,
-                        "success": true,
+                        "chunk_id": "chunk-1",
                     },
                     "model_observations": [{
                         "call_item_ids": ["item:2"],
@@ -2644,23 +2708,17 @@ mod tests {
             }),
         )?;
 
-        let trace = reduce_bundle(temp.path())?;
+        let trace = reduce_bundle_json(temp.path())?;
 
         assert_eq!(
             json!({
-                "output_item_ids": trace.code_cells["code_cell:call-code"]["output_item_ids"].clone(),
-                "wait_tool_call_ids": trace.code_cells["code_cell:call-code"]["wait_tool_call_ids"].clone(),
-                "raw_payload_ids": trace.code_cells["code_cell:call-code"]["raw_payload_ids"].clone(),
-                "wait_output_producers": trace.conversation_items["item:4"]["produced_by"].clone(),
+                "output_item_ids": trace["code_cells"]["code_cell:call-code"]["output_item_ids"].clone(),
+                "wait_tool_call_ids": trace["code_cells"]["code_cell:call-code"]["wait_tool_call_ids"].clone(),
+                "wait_output_producers": trace["conversation_items"]["item:4"]["produced_by"].clone(),
             }),
             json!({
                 "output_item_ids": ["item:2", "item:4"],
                 "wait_tool_call_ids": ["tool:call-wait"],
-                "raw_payload_ids": [
-                    "raw_payload:code-cell-invocation",
-                    "raw_payload:wait-invocation",
-                    "raw_payload:wait-result",
-                ],
                 "wait_output_producers": [
                     { "type": "tool", "tool_call_id": "tool:call-wait" },
                     { "type": "code_cell", "code_cell_id": "code_cell:call-code" },
@@ -2752,17 +2810,17 @@ mod tests {
             }),
         )?;
 
-        let trace = reduce_bundle(temp.path())?;
+        let trace = reduce_bundle_json(temp.path())?;
 
         // `write_stdin` is a continuation of an existing terminal session. The
         // final result can omit `session_id`, so the reducer must preserve the
         // request-side id instead of creating a one-shot synthetic session.
         assert_eq!(
-            trace.terminal_operations["terminal_operation:1"]["terminal_id"],
+            trace["terminal_operations"]["terminal_operation:1"]["terminal_id"],
             json!("12121")
         );
         assert_eq!(
-            trace.terminal_sessions["12121"],
+            trace["terminal_sessions"]["12121"],
             json!({
                 "terminal_id": "12121",
                 "thread_id": "thread-1",
@@ -2778,8 +2836,9 @@ mod tests {
             })
         );
         assert!(
-            !trace
-                .terminal_sessions
+            !trace["terminal_sessions"]
+                .as_object()
+                .unwrap()
                 .contains_key("terminal:terminal_operation:1")
         );
         Ok(())
