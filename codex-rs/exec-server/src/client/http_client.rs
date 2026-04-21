@@ -44,13 +44,6 @@ pub struct HttpResponseBodyStream {
     closed: bool,
 }
 
-/// Active route registration owned while `http_request_stream` awaits headers.
-struct HttpBodyStreamRegistration {
-    inner: Arc<Inner>,
-    request_id: String,
-    active: bool,
-}
-
 impl HttpBodyStreamRoute {
     /// Creates an active route that delivers body deltas to the caller.
     fn active(
@@ -219,6 +212,13 @@ impl Drop for HttpResponseBodyStream {
         self.closed = true;
         spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
     }
+}
+
+/// Active route registration owned while `http_request_stream` awaits headers.
+struct HttpBodyStreamRegistration {
+    inner: Arc<Inner>,
+    request_id: String,
+    active: bool,
 }
 
 impl Drop for HttpBodyStreamRegistration {
