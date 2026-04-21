@@ -51,12 +51,12 @@ impl HttpResponseBodyStream {
         }
 
         let Some(delta) = self.rx.recv().await else {
-            if let Some(error) = self
+            let error = self
                 .failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .take()
-            {
+                .take();
+            if let Some(error) = error {
                 self.finish().await;
                 return Err(ExecServerError::Protocol(format!(
                     "http response stream `{}` failed: {error}",
