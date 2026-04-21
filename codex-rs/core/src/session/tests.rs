@@ -130,6 +130,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
