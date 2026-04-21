@@ -43,7 +43,7 @@ fn build_permissions_update_item(
     }
 
     let prev = previous?;
-    if prev.sandbox_policy == *next.sandbox_policy.get()
+    if prev.permission_profile() == next.permission_profile()
         && prev.approval_policy == next.approval_policy.value()
     {
         return None;
