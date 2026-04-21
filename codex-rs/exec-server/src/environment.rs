@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::client::LazyRemoteExecServerClient;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -196,10 +197,9 @@ impl Environment {
         exec_server_url: String,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let exec_backend: Arc<dyn ExecBackend> =
-            Arc::new(RemoteProcess::new(exec_server_url.clone()));
-        let filesystem: Arc<dyn ExecutorFileSystem> =
-            Arc::new(RemoteFileSystem::new(exec_server_url.clone()));
+        let client = LazyRemoteExecServerClient::new(exec_server_url.clone());
+        let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
+        let filesystem: Arc<dyn ExecutorFileSystem> = Arc::new(RemoteFileSystem::new(client));
 
         Self {
             exec_server_url: Some(exec_server_url),
