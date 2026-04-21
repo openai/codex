@@ -327,7 +327,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
 }
 
 #[test]
-fn test_merge_configured_model_providers_ignores_amazon_bedrock_non_default_fields() {
+fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fields() {
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
         ModelProviderInfo {
@@ -339,20 +339,15 @@ fn test_merge_configured_model_providers_ignores_amazon_bedrock_non_default_fiel
         },
     )]);
 
-    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
-    expected
-        .get_mut(AMAZON_BEDROCK_PROVIDER_ID)
-        .expect("Amazon Bedrock provider should be built in")
-        .aws = Some(ModelProviderAwsAuthInfo {
-        profile: Some("codex-bedrock".to_string()),
-    });
-
     assert_eq!(
         merge_configured_model_providers(
             built_in_model_providers(/*openai_base_url*/ None),
             configured_model_providers,
         ),
-        Ok(expected)
+        Err(
+            "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+                .to_string()
+        )
     );
 }
 

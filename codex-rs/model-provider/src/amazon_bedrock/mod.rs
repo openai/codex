@@ -9,8 +9,12 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::Result;
 
 use crate::provider::ModelProvider;
+use auth::resolve_provider_auth;
+use auth::resolve_region;
+use mantle::base_url;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
 #[derive(Clone, Debug)]
@@ -33,15 +37,15 @@ impl ModelProvider for AmazonBedrockModelProvider {
         None
     }
 
-    async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
-        let region = auth::resolve_region(&self.aws).await?;
+    async fn api_provider(&self) -> Result<Provider> {
+        let region = resolve_region(&self.aws).await?;
         let mut api_provider_info = self.info.clone();
-        api_provider_info.base_url = Some(mantle::base_url(&region)?);
+        api_provider_info.base_url = Some(base_url(&region)?);
         api_provider_info.to_api_provider(/*auth_mode*/ None)
     }
 
-    async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
-        auth::resolve_provider_auth(&self.aws).await
+    async fn api_auth(&self) -> Result<SharedAuthProvider> {
+        resolve_provider_auth(&self.aws).await
     }
 }
 
@@ -68,7 +72,7 @@ mod tests {
         let region = region_from_bedrock_bearer_token(&token).expect("bearer token should resolve");
         let mut api_provider_info =
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        api_provider_info.base_url = Some(mantle::base_url(&region).expect("supported region"));
+        api_provider_info.base_url = Some(base_url(&region).expect("supported region"));
         let api_provider = api_provider_info
             .to_api_provider(/*auth_mode*/ None)
             .expect("api provider should build");

@@ -13,48 +13,62 @@ use codex_client::RequestBody;
 use codex_client::RequestCompression;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 use http::HeaderMap;
-use http::HeaderValue;
 use tokio::sync::OnceCell;
 
-use super::mantle;
+use crate::BearerAuthProvider;
+
+use super::mantle::aws_auth_config;
 
 const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const LEGACY_SESSION_ID_HEADER: &str = "session_id";
 
-pub(super) async fn resolve_provider_auth(
-    aws: &ModelProviderAwsAuthInfo,
-) -> codex_protocol::error::Result<SharedAuthProvider> {
+enum BedrockAuthMethod {
+    EnvBearerToken {
+        token: String,
+        region: String,
+    },
+    AwsSdkAuth {
+        config: AwsAuthConfig,
+        context: AwsAuthContext,
+    },
+}
+
+async fn resolve_auth_method(aws: &ModelProviderAwsAuthInfo) -> Result<BedrockAuthMethod> {
     if let Some(token) = bearer_token_from_env() {
-        return resolve_bearer_auth(token);
+        let region =
+            region_from_bedrock_bearer_token(&token).map_err(aws_auth_error_to_codex_error)?;
+        return Ok(BedrockAuthMethod::EnvBearerToken { token, region });
     }
 
-    let config = mantle::aws_auth_config(aws);
+    let config = aws_auth_config(aws);
     let context = AwsAuthContext::load(config.clone())
         .await
         .map_err(aws_auth_error_to_codex_error)?;
-    Ok(Arc::new(BedrockMantleSigV4AuthProvider::with_context(
-        config, context,
-    )))
+    Ok(BedrockAuthMethod::AwsSdkAuth { config, context })
 }
 
-pub(super) async fn resolve_region(
+pub(super) async fn resolve_provider_auth(
     aws: &ModelProviderAwsAuthInfo,
-) -> codex_protocol::error::Result<String> {
-    if let Some(token) = bearer_token_from_env() {
-        return region_from_bedrock_bearer_token(&token).map_err(aws_auth_error_to_codex_error);
+) -> Result<SharedAuthProvider> {
+    match resolve_auth_method(aws).await? {
+        BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
+            token: Some(token),
+            account_id: None,
+            is_fedramp_account: false,
+        })),
+        BedrockAuthMethod::AwsSdkAuth { config, context } => Ok(Arc::new(
+            BedrockMantleSigV4AuthProvider::with_context(config, context),
+        )),
     }
-
-    let context = AwsAuthContext::load(mantle::aws_auth_config(aws))
-        .await
-        .map_err(aws_auth_error_to_codex_error)?;
-    Ok(context.region().to_string())
 }
 
-fn resolve_bearer_auth(token: String) -> codex_protocol::error::Result<SharedAuthProvider> {
-    let _region =
-        region_from_bedrock_bearer_token(&token).map_err(aws_auth_error_to_codex_error)?;
-    Ok(Arc::new(BedrockBearerAuthProvider::new(token)))
+pub(super) async fn resolve_region(aws: &ModelProviderAwsAuthInfo) -> Result<String> {
+    match resolve_auth_method(aws).await? {
+        BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
+        BedrockAuthMethod::AwsSdkAuth { context, .. } => Ok(context.region().to_string()),
+    }
 }
 
 fn bearer_token_from_env() -> Option<String> {
@@ -66,6 +80,21 @@ fn bearer_token_from_env() -> Option<String> {
 
 fn aws_auth_error_to_codex_error(error: AwsAuthError) -> CodexErr {
     CodexErr::Fatal(format!("failed to resolve Amazon Bedrock auth: {error}"))
+}
+
+fn aws_auth_error_to_auth_error(error: AwsAuthError) -> AuthError {
+    if error.is_retryable() {
+        AuthError::Transient(error.to_string())
+    } else {
+        AuthError::Build(error.to_string())
+    }
+}
+
+fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
+    // The Bedrock Mantle front door does not preserve this legacy OpenAI header
+    // for SigV4 verification. Signing it makes the richer Codex agent request
+    // fail even though raw Responses requests work.
+    headers.remove(LEGACY_SESSION_ID_HEADER);
 }
 
 /// AWS SigV4 auth provider for Bedrock Mantle OpenAI-compatible requests.
@@ -85,7 +114,7 @@ impl BedrockMantleSigV4AuthProvider {
         }
     }
 
-    async fn context(&self) -> Result<&AwsAuthContext, AuthError> {
+    async fn context(&self) -> std::result::Result<&AwsAuthContext, AuthError> {
         self.context
             .get_or_try_init(|| AwsAuthContext::load(self.config.clone()))
             .await
@@ -93,41 +122,11 @@ impl BedrockMantleSigV4AuthProvider {
     }
 }
 
-/// Amazon Bedrock bearer-token auth provider for OpenAI-compatible requests.
-#[derive(Debug)]
-struct BedrockBearerAuthProvider {
-    token: String,
-}
-
-impl BedrockBearerAuthProvider {
-    fn new(token: String) -> Self {
-        Self { token }
-    }
-}
-
-#[async_trait::async_trait]
-impl AuthProvider for BedrockBearerAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        let token = &self.token;
-        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
-            let _ = headers.insert(http::header::AUTHORIZATION, header);
-        }
-    }
-}
-
-fn aws_auth_error_to_auth_error(error: AwsAuthError) -> AuthError {
-    if error.is_retryable() {
-        AuthError::Transient(error.to_string())
-    } else {
-        AuthError::Build(error.to_string())
-    }
-}
-
 #[async_trait::async_trait]
 impl AuthProvider for BedrockMantleSigV4AuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
-    async fn apply_auth(&self, mut request: Request) -> Result<Request, AuthError> {
+    async fn apply_auth(&self, mut request: Request) -> std::result::Result<Request, AuthError> {
         remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
         let prepared = request.prepare_body_for_send().map_err(AuthError::Build)?;
         let context = self.context().await?;
@@ -149,16 +148,10 @@ impl AuthProvider for BedrockMantleSigV4AuthProvider {
     }
 }
 
-fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
-    // The Bedrock Mantle front door does not preserve this legacy OpenAI header
-    // for SigV4 verification. Signing it makes the richer Codex agent request
-    // fail even though raw Responses requests work.
-    headers.remove(LEGACY_SESSION_ID_HEADER);
-}
-
 #[cfg(test)]
 mod tests {
     use codex_api::AuthProvider;
+    use http::HeaderValue;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -174,28 +167,17 @@ mod tests {
     }
 
     #[test]
-    fn bedrock_bearer_auth_adds_header() {
-        let provider = BedrockBearerAuthProvider::new("bedrock-token".to_string());
-        let mut headers = HeaderMap::new();
-
-        provider.add_auth_headers(&mut headers);
-
-        assert_eq!(
-            headers
-                .get(http::header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok()),
-            Some("Bearer bedrock-token")
-        );
-    }
-
-    #[test]
-    fn resolve_bedrock_bearer_auth_uses_token_region_and_header() {
+    fn bedrock_bearer_auth_uses_token_region_and_header() {
         let token = bedrock_token_for_region("us-west-2");
         let region = region_from_bedrock_bearer_token(&token).expect("bearer token should resolve");
-        let resolved = resolve_bearer_auth(token).expect("bearer auth should resolve");
+        let provider = BearerAuthProvider {
+            token: Some(token),
+            account_id: None,
+            is_fedramp_account: false,
+        };
         let mut headers = http::HeaderMap::new();
 
-        resolved.add_auth_headers(&mut headers);
+        provider.add_auth_headers(&mut headers);
 
         assert_eq!(region, "us-west-2");
         assert!(

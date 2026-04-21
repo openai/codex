@@ -10,7 +10,6 @@ use codex_model_provider_info::ModelProviderInfo;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
-use crate::auth::resolve_api_provider;
 use crate::auth::resolve_provider_auth;
 
 /// Runtime provider abstraction used by model execution.
@@ -37,13 +36,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns provider configuration adapted for the API client.
     async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
         let auth = self.auth().await;
-        resolve_api_provider(auth.as_ref(), self.info()).await
+        self.info()
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
     }
 
     /// Returns the auth provider used to attach request credentials.
     async fn api_auth(&self) -> codex_protocol::error::Result<SharedAuthProvider> {
         let auth = self.auth().await;
-        resolve_provider_auth(auth.as_ref(), self.info()).await
+        resolve_provider_auth(auth.as_ref(), self.info())
     }
 }
 

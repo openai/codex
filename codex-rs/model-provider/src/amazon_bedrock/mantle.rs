@@ -1,6 +1,7 @@
 use codex_aws_auth::AwsAuthConfig;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 
 const BEDROCK_MANTLE_SERVICE_NAME: &str = "bedrock-mantle";
 const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
@@ -25,7 +26,7 @@ pub(super) fn aws_auth_config(aws: &ModelProviderAwsAuthInfo) -> AwsAuthConfig {
     }
 }
 
-pub(super) fn base_url(region: &str) -> codex_protocol::error::Result<String> {
+pub(super) fn base_url(region: &str) -> Result<String> {
     if BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) {
         Ok(format!("https://bedrock-mantle.{region}.api.aws/v1"))
     } else {

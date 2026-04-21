@@ -56,16 +56,9 @@ fn bearer_auth_provider_from_auth(
     }
 }
 
-pub(crate) async fn resolve_provider_auth(
+pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
     Ok(Arc::new(bearer_auth_provider_from_auth(auth, provider)?))
-}
-
-pub(crate) async fn resolve_api_provider(
-    auth: Option<&CodexAuth>,
-    provider: &ModelProviderInfo,
-) -> codex_protocol::error::Result<codex_api::Provider> {
-    provider.to_api_provider(auth.map(CodexAuth::auth_mode))
 }

@@ -427,9 +427,17 @@ pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
-    for (key, provider) in configured_model_providers {
+    for (key, mut provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
-            if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
+            let aws_override = provider.aws.take();
+            if provider != ModelProviderInfo::default() {
+                return Err(format!(
+                    "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
+`aws.profile`; other non-default provider fields are not supported"
+                ));
+            }
+
+            if let Some(profile) = aws_override.and_then(|aws| aws.profile)
                 && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
                 && let Some(aws) = built_in.aws.as_mut()
             {
