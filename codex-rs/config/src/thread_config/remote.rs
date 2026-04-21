@@ -41,7 +41,7 @@ impl RemoteThreadConfigLoader {
             .map_err(|err| {
                 ThreadConfigLoadError::new(
                     ThreadConfigLoadErrorCode::RequestFailed,
-                    None,
+                    /*status_code*/ None,
                     format!("failed to connect to remote thread config loader: {err}"),
                 )
             })
@@ -98,7 +98,7 @@ fn remote_status_to_error(status: tonic::Status) -> ThreadConfigLoadError {
     };
     ThreadConfigLoadError::new(
         code,
-        None,
+        /*status_code*/ None,
         format!("remote thread config request failed: {status}"),
     )
 }
@@ -278,7 +278,11 @@ fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
 }
 
 fn parse_error(message: impl Into<String>) -> ThreadConfigLoadError {
-    ThreadConfigLoadError::new(ThreadConfigLoadErrorCode::Parse, None, message.into())
+    ThreadConfigLoadError::new(
+        ThreadConfigLoadErrorCode::Parse,
+        /*status_code*/ None,
+        message.into(),
+    )
 }
 
 #[cfg(test)]
