@@ -10,12 +10,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
 use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
 use crate::legacy_core::config::resolve_oss_provider;
-use crate::legacy_core::config_loader::CloudRequirementsLoader;
-use crate::legacy_core::config_loader::ConfigLoadError;
-use crate::legacy_core::config_loader::LoaderOverrides;
-use crate::legacy_core::config_loader::format_config_error_with_source;
 use crate::legacy_core::format_exec_policy_error_with_source;
-use crate::legacy_core::path_utils;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
@@ -36,6 +31,10 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLoadError;
+use codex_config::LoaderOverrides;
+use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
@@ -57,6 +56,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
+use codex_utils_path as path_utils;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdPromptOutcome;
@@ -1387,10 +1387,11 @@ async fn run_ratatui_app(
 
     let Cli {
         prompt,
-        images,
+        shared,
         no_alt_screen,
         ..
     } = cli;
+    let images = shared.into_inner().images;
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);

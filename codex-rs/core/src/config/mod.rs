@@ -21,6 +21,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -64,6 +65,7 @@ use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -90,6 +92,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -527,6 +530,10 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+
+    /// Experimental / do not use. When set, app-server uses a remote thread
+    /// store at this endpoint instead of the local filesystem/SQLite store.
+    pub experimental_thread_store_endpoint: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -642,13 +649,14 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -678,6 +686,14 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn thread_config_loader(
+        mut self,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    ) -> Self {
+        self.thread_config_loader = Some(thread_config_loader);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
@@ -690,6 +706,7 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             fallback_cwd,
         } = self;
         let codex_home = match codex_home {
@@ -712,6 +729,9 @@ impl ConfigBuilder {
             &cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader
+                .as_deref()
+                .unwrap_or(&codex_config::NoopThreadConfigLoader),
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -890,6 +910,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         &cli_overrides,
         loader_overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
@@ -1061,6 +1082,7 @@ pub async fn load_global_mcp_servers(
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();
@@ -1800,11 +1822,9 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
-        let mut model_providers = built_in_model_providers(openai_base_url);
-        // Merge user-defined providers into the built-in list.
-        for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
-        }
+        let model_providers =
+            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
+                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
@@ -2273,6 +2293,7 @@ impl Config {
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
+            experimental_thread_store_endpoint: cfg.experimental_thread_store_endpoint,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,

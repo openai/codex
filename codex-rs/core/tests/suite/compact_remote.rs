@@ -2130,8 +2130,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let previous_model = "gpt-5.1-codex-max";
-    let next_model = "gpt-5.2-codex";
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.3-codex";
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())

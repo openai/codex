@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }

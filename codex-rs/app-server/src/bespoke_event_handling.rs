@@ -40,6 +40,7 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -509,7 +510,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
-                    RealtimeEvent::ConversationItemDone { .. } => {}
+                    RealtimeEvent::ConversationItemDone { .. }
+                    | RealtimeEvent::NoopRequested(_) => {}
                     RealtimeEvent::HandoffRequested(handoff) => {
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
@@ -1635,6 +1637,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
             }
+        }
+        EventMsg::PatchApplyUpdated(event) => {
+            let notification = FileChangePatchUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id: event.call_id,
+                changes: convert_patch_changes(&event.changes),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::FileChangePatchUpdated(notification))
+                .await;
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem
