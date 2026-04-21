@@ -53,8 +53,8 @@ use codex_shell_escalation::EscalationPolicy;
 use codex_shell_escalation::EscalationSession;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
-use codex_shell_escalation::Permissions as EscalatedPermissions;
 use codex_shell_escalation::PreparedExec;
+use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -369,13 +369,17 @@ impl CoreShellActionProvider {
                 .map(|_| {
                     // Shell request additional permissions were already normalized and
                     // merged into the first-attempt sandbox policy.
-                    EscalationExecution::Permissions(EscalationPermissions::Permissions(
-                        EscalatedPermissions {
-                            sandbox_policy: sandbox_policy.clone(),
-                            file_system_sandbox_policy: file_system_sandbox_policy.clone(),
-                            network_sandbox_policy,
-                        },
-                    ))
+                    EscalationExecution::Permissions(
+                        EscalationPermissions::ResolvedPermissionProfile(
+                            ResolvedPermissionProfile {
+                                permission_profile: PermissionProfile::from_runtime_permissions(
+                                    file_system_sandbox_policy,
+                                    network_sandbox_policy,
+                                ),
+                                sandbox_policy: sandbox_policy.clone(),
+                            },
+                        ),
+                    )
                 })
                 .unwrap_or(EscalationExecution::TurnDefault),
         }
@@ -841,9 +845,9 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     additional_permissions: None,
                 })?
             }
-            EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-                permission_profile,
-            )) => {
+            EscalationExecution::Permissions(
+                EscalationPermissions::AdditionalPermissionProfile(permission_profile),
+            ) => {
                 // Merge additive permissions into the existing turn/request sandbox policy.
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
@@ -855,15 +859,19 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     additional_permissions: Some(permission_profile),
                 })?
             }
-            EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
-                // Use a fully specified sandbox policy instead of merging into the turn policy.
+            EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
+                permissions,
+            )) => {
+                // Use a fully specified permission profile instead of merging into the turn policy.
+                let (file_system_sandbox_policy, network_sandbox_policy) =
+                    permissions.permission_profile.to_runtime_permissions();
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
                     env,
                     sandbox_policy: &permissions.sandbox_policy,
-                    file_system_sandbox_policy: &permissions.file_system_sandbox_policy,
-                    network_sandbox_policy: permissions.network_sandbox_policy,
+                    file_system_sandbox_policy: &file_system_sandbox_policy,
+                    network_sandbox_policy,
                     additional_permissions: None,
                 })?
             }

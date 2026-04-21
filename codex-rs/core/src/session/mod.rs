@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -113,6 +114,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
@@ -269,6 +271,7 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
+use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -791,7 +794,6 @@ pub(crate) fn session_loop_termination_from_handle(
     .boxed()
     .shared()
 }
-
 async fn thread_title_from_state_db(
     state_db: Option<&state_db::StateDbHandle>,
     codex_home: &AbsolutePathBuf,
@@ -1901,15 +1903,33 @@ impl Session {
         rx_approve
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub async fn request_permissions(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd(
+            turn_context,
+            call_id,
+            args,
+            turn_context.cwd.clone(),
+            cancellation_token,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
+    pub(crate) async fn request_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
@@ -1933,8 +1953,9 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        let requested_permissions = args.permissions;
+
         if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
-            let requested_permissions = args.permissions;
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
                 active.as_ref().map(|active| Arc::clone(&active.turn_state))
@@ -1964,19 +1985,19 @@ impl Session {
             let response = match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
-                        permissions: requested_permissions,
+                        permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                     }
                 }
                 ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
-                    permissions: requested_permissions,
+                    permissions: requested_permissions.clone(),
                     scope: PermissionGrantScope::Session,
                 },
                 ReviewDecision::NetworkPolicyAmendment {
                     network_policy_amendment,
                 } => match network_policy_amendment.action {
                     NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
-                        permissions: requested_permissions,
+                        permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
                     },
                     NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
@@ -1991,6 +2012,11 @@ impl Session {
                     }
                 }
             };
+            let response = Self::normalize_request_permissions_response(
+                requested_permissions,
+                response,
+                cwd.as_path(),
+            );
             self.record_granted_request_permissions_for_turn(
                 &response,
                 originating_turn_state.as_ref(),
@@ -2005,7 +2031,14 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_request_permissions(call_id.clone(), tx_response)
+                    ts.insert_pending_request_permissions(
+                        call_id.clone(),
+                        PendingRequestPermissions {
+                            tx_response,
+                            requested_permissions: requested_permissions.clone(),
+                            cwd: cwd.clone(),
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2018,7 +2051,8 @@ impl Session {
             call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: requested_permissions,
+            cwd: Some(cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
@@ -2121,20 +2155,43 @@ impl Session {
                 None => (None, None),
             }
         };
-        if entry.is_some() {
-            self.record_granted_request_permissions_for_turn(
-                &response,
-                originating_turn_state.as_ref(),
-            )
-            .await;
-        }
         match entry {
-            Some(tx_response) => {
-                tx_response.send(response).ok();
+            Some(entry) => {
+                let response = Self::normalize_request_permissions_response(
+                    entry.requested_permissions,
+                    response,
+                    entry.cwd.as_path(),
+                );
+                self.record_granted_request_permissions_for_turn(
+                    &response,
+                    originating_turn_state.as_ref(),
+                )
+                .await;
+                entry.tx_response.send(response).ok();
             }
             None => {
                 warn!("No pending request_permissions found for call_id: {call_id}");
             }
+        }
+    }
+
+    fn normalize_request_permissions_response(
+        requested_permissions: RequestPermissionProfile,
+        response: RequestPermissionsResponse,
+        cwd: &Path,
+    ) -> RequestPermissionsResponse {
+        if response.permissions.is_empty() {
+            return response;
+        }
+
+        RequestPermissionsResponse {
+            permissions: intersect_permission_profiles(
+                requested_permissions.into(),
+                response.permissions.into(),
+                cwd,
+            )
+            .into(),
+            scope: response.scope,
         }
     }
 
