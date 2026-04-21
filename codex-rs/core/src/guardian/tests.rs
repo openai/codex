@@ -992,6 +992,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         request_reasoning_effort
     );
     assert_eq!(metadata.had_prior_review_context, Some(false));
+    assert!(
+        metadata.time_to_first_token_ms.is_some(),
+        "guardian review metadata should capture TTFT when the nested turn completes"
+    );
 
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
