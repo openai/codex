@@ -54,7 +54,7 @@ pub(crate) enum GuardianAssessmentOutcome {
 }
 
 /// Structured output contract that the guardian reviewer must satisfy.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
