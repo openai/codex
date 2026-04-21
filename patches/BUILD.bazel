@@ -5,6 +5,7 @@ exports_files([
     "aws-lc-sys_windows_msvc_memcmp_probe.patch",
     "bzip2_windows_stack_args.patch",
     "llvm_windows_symlink_extract.patch",
+    "rules_rs_build_script_target_deps.patch",
     "rules_rust_windows_bootstrap_process_wrapper_linker.patch",
     "rules_rust_windows_build_script_runner_paths.patch",
     "rules_rust_windows_exec_bin_target.patch",

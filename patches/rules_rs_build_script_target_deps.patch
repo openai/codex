@@ -1,0 +1,83 @@
+diff --git a/rs/private/repository_utils.bzl b/rs/private/repository_utils.bzl
+--- a/rs/private/repository_utils.bzl
++++ b/rs/private/repository_utils.bzl
+@@ -138,7 +138,8 @@ rust_crate(
+     build_script_data = {build_script_data},
+     build_deps = [
+         {build_deps}
+-    ]{conditional_build_deps},
++    ],
++    build_deps_by_platform = {build_deps_by_platform},
+     build_script_env = {build_script_env}{conditional_build_script_env},
+     build_script_toolchains = {build_script_toolchains},
+     build_script_tools = {build_script_tools}{conditional_build_script_tools},
+@@ -161,7 +162,7 @@ def generate_build_file(rctx, cargo_toml, purl_qualifiers = {}):
+         {platform: _exclude_deps_from_features(features) for platform, features in attr.crate_features_select.items()},
+     )
+     use_experimental_platforms = rctx.attr.use_experimental_platforms
+-    build_deps, conditional_build_deps = render_select(attr.build_script_deps, attr.build_script_deps_select, use_experimental_platforms)
++    build_deps, build_deps_by_platform = compute_select(attr.build_script_deps, attr.build_script_deps_select)
+     build_script_data, conditional_build_script_data = render_select(attr.build_script_data, attr.build_script_data_select, use_experimental_platforms)
+     build_script_tools, conditional_build_script_tools = render_select(attr.build_script_tools, attr.build_script_tools_select, use_experimental_platforms)
+     rustc_flags, conditional_rustc_flags = render_select(attr.rustc_flags, attr.rustc_flags_select, use_experimental_platforms)
+@@ -199,7 +200,7 @@ def generate_build_file(rctx, cargo_toml, purl_qualifiers = {}):
+         build_script_data = repr([str(t) for t in build_script_data]),
+         conditional_build_script_data = " + " + conditional_build_script_data if conditional_build_script_data else "",
+         build_deps = ",\n        ".join(['"%s"' % d for d in sorted(build_deps)]),
+-        conditional_build_deps = " + " + conditional_build_deps if conditional_build_deps else "",
++        build_deps_by_platform = repr(build_deps_by_platform),
+         build_script_env = repr(attr.build_script_env),
+         conditional_build_script_env = " | " + conditional_build_script_env if conditional_build_script_env else "",
+         build_script_toolchains = repr([str(t) for t in attr.build_script_toolchains]),
+diff --git a/rs/rust_crate.bzl b/rs/rust_crate.bzl
+--- a/rs/rust_crate.bzl
++++ b/rs/rust_crate.bzl
+@@ -29,6 +29,7 @@ def rust_crate(
+         build_script,
+         build_script_data,
+         build_deps,
++        build_deps_by_platform,
+         build_script_env,
+         build_script_toolchains,
+         build_script_tools,
+@@ -74,7 +75,6 @@ def rust_crate(
+ 
+     if build_script:
+         build_script_kwargs = dict(
+-            deps = build_deps,
+             aliases = aliases,
+             compile_data = compile_data,
+             crate_name = "build_script_build",
+@@ -96,17 +96,21 @@ def rust_crate(
+             version = version,
+         )
+ 
+-        if conditional_crate_features:
++        if conditional_crate_features or build_deps_by_platform:
+             branches = {}
+ 
+-            # The build script is cfg-exec, but the features must be selected according to the target.
+-            # Only stamp out one target per triple when there are per-platform feature deltas.
++            # The build script is cfg-exec, but per-target features and
++            # build-dependencies must be selected according to the target.
++            # Stamp out one target per triple whenever those inputs vary by
++            # platform so the exec-configuration rust_binary does not
++            # re-evaluate target selects against the exec platform.
+             for triple in triples:
+                 build_script_name = "_bs_" + triple
+                 branches[_platform(triple, use_experimental_platforms)] = build_script_name
+ 
+                 cargo_build_script(
+                     name = build_script_name,
++                    deps = build_deps + build_deps_by_platform.get(triple, []),
+                     crate_features = crate_features + conditional_crate_features.get(triple, []),
+                     **build_script_kwargs
+                 )
+@@ -120,6 +124,7 @@ def rust_crate(
+         else:
+             cargo_build_script(
+                 name = "_bs",
++                deps = build_deps,
+                 crate_features = crate_features,
+                 **build_script_kwargs
+             )

@@ -86,6 +86,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = [
+        "//patches:rules_rs_build_script_target_deps.patch",
         "//patches:rules_rs_windows_gnullvm_exec.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
