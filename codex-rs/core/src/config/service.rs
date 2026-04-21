@@ -431,6 +431,7 @@ impl ConfigService {
             &self.cli_overrides,
             self.loader_overrides.clone(),
             self.cloud_requirements.clone(),
+            &codex_config::NoopThreadConfigLoader,
         )
         .await
     }

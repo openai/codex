@@ -558,6 +558,7 @@ mod tests {
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
+                        glob_scan_max_depth: None,
                         entries: None,
                     }),
                 },

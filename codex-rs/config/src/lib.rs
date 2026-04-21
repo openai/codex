@@ -18,6 +18,7 @@ pub mod schema;
 pub mod shell_environment;
 mod skills_config;
 mod state;
+mod thread_config;
 pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
@@ -93,5 +94,14 @@ pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
+pub use thread_config::NoopThreadConfigLoader;
+pub use thread_config::SessionThreadConfig;
+pub use thread_config::StaticThreadConfigLoader;
+pub use thread_config::ThreadConfigContext;
+pub use thread_config::ThreadConfigLoadError;
+pub use thread_config::ThreadConfigLoadErrorCode;
+pub use thread_config::ThreadConfigLoader;
+pub use thread_config::ThreadConfigSource;
+pub use thread_config::UserThreadConfig;
 
 pub use codex_app_server_protocol::ConfigLayerSource;

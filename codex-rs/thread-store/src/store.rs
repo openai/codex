@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use async_trait::async_trait;
 
 use crate::AppendThreadItemsParams;
@@ -16,7 +18,11 @@ use crate::UpdateThreadMetadataParams;
 
 /// Storage-neutral thread persistence boundary.
 #[async_trait]
-pub trait ThreadStore: Send + Sync {
+pub trait ThreadStore: Any + Send + Sync {
+    /// Return this store as [`Any`] so callers at API boundaries can reject requests that only
+    /// make sense for a concrete store implementation.
+    fn as_any(&self) -> &dyn Any;
+
     /// Creates a new thread and returns a live recorder for future appends.
     async fn create_thread(
         &self,

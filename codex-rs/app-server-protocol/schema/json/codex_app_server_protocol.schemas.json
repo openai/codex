@@ -16,6 +16,14 @@
             "null"
           ]
         },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "read": {
           "items": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
@@ -9677,7 +9685,10 @@
             "type": "string"
           },
           "threadId": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "uri": {
             "type": "string"
@@ -9685,7 +9696,6 @@
         },
         "required": [
           "server",
-          "threadId",
           "uri"
         ],
         "title": "McpResourceReadParams",
