@@ -40,6 +40,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::SpanData;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -99,11 +100,6 @@ fn init_test_tracing() -> &'static TestTracing {
 fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
     serde_json::from_value(serde_json::to_value(request).expect("serialize client request"))
         .expect("client request should convert to JSON-RPC")
-}
-
-fn tracing_test_guard() -> &'static tokio::sync::Mutex<()> {
-    static GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    GUARD.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 struct TracingHarness {
@@ -505,12 +501,8 @@ where
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test serializes access to global tracing state for its full duration"
-)]
+#[serial(app_server_tracing)]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
 
     let RemoteTrace {
@@ -588,12 +580,8 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "test serializes access to global tracing state for its full duration"
-)]
+#[serial(app_server_tracing)]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
     let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();
