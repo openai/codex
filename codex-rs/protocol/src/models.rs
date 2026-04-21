@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -119,6 +120,7 @@ impl SandboxPermissions {
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
 pub struct FileSystemPermissions {
     pub entries: Vec<FileSystemSandboxEntry>,
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 pub type LegacyReadWriteRoots = (Option<Vec<AbsolutePathBuf>>, Option<Vec<AbsolutePathBuf>>);
@@ -145,7 +147,10 @@ impl FileSystemPermissions {
                 access: FileSystemAccessMode::Write,
             }));
         }
-        Self { entries }
+        Self {
+            entries,
+            glob_scan_max_depth: None,
+        }
     }
 
     pub fn explicit_path_entries(
@@ -163,6 +168,10 @@ impl FileSystemPermissions {
     }
 
     fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
+        if self.glob_scan_max_depth.is_some() {
+            return None;
+        }
+
         let mut read = Vec::new();
         let mut write = Vec::new();
 
@@ -198,6 +207,8 @@ struct LegacyFileSystemPermissions {
 struct CanonicalFileSystemPermissions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +228,7 @@ impl Serialize for FileSystemPermissions {
         } else {
             CanonicalFileSystemPermissions {
                 entries: self.entries.clone(),
+                glob_scan_max_depth: self.glob_scan_max_depth,
             }
             .serialize(serializer)
         }
@@ -229,9 +241,13 @@ impl<'de> Deserialize<'de> for FileSystemPermissions {
         D: Deserializer<'de>,
     {
         match FileSystemPermissionsDe::deserialize(deserializer)? {
-            FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions { entries }) => {
-                Ok(Self { entries })
-            }
+            FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            }) => Ok(Self {
+                entries,
+                glob_scan_max_depth,
+            }),
             FileSystemPermissionsDe::Legacy(LegacyFileSystemPermissions { read, write }) => {
                 Ok(Self::from_read_write_roots(read, write))
             }
@@ -325,13 +341,18 @@ impl From<&FileSystemSandboxPolicy> for FileSystemPermissions {
                 }]
             }
         };
-        Self { entries }
+        Self {
+            entries,
+            glob_scan_max_depth: value.glob_scan_max_depth.and_then(NonZeroUsize::new),
+        }
     }
 }
 
 impl From<&FileSystemPermissions> for FileSystemSandboxPolicy {
     fn from(value: &FileSystemPermissions) -> Self {
-        FileSystemSandboxPolicy::restricted(value.entries.clone())
+        let mut policy = FileSystemSandboxPolicy::restricted(value.entries.clone());
+        policy.glob_scan_max_depth = value.glob_scan_max_depth.map(usize::from);
+        policy
     }
 }
 
@@ -1431,6 +1452,69 @@ mod tests {
             file_system: None,
         };
         assert_eq!(permission_profile.is_empty(), false);
+    }
+
+    #[test]
+    fn permission_profile_round_trip_preserves_glob_scan_max_depth() {
+        let mut file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::None,
+            }]);
+        file_system_sandbox_policy.glob_scan_max_depth = Some(2);
+
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &file_system_sandbox_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(
+            permission_profile.file_system_sandbox_policy(),
+            file_system_sandbox_policy
+        );
+    }
+
+    #[test]
+    fn file_system_permissions_with_glob_scan_depth_uses_canonical_json() -> Result<()> {
+        let path = AbsolutePathBuf::try_from(PathBuf::from(if cfg!(windows) {
+            r"C:\tmp\allowed"
+        } else {
+            "/tmp/allowed"
+        }))
+        .expect("absolute path");
+        let file_system_permissions = FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: FileSystemAccessMode::Read,
+            }],
+            glob_scan_max_depth: NonZeroUsize::new(2),
+        };
+
+        let serialized = serde_json::to_value(&file_system_permissions)?;
+
+        assert_eq!(serialized.get("read"), None);
+        assert_eq!(serialized.get("write"), None);
+        assert_eq!(
+            serialized.get("glob_scan_max_depth"),
+            Some(&serde_json::json!(2))
+        );
+        assert!(serialized.get("entries").is_some());
+        assert_eq!(
+            serde_json::from_value::<FileSystemPermissions>(serialized)?,
+            file_system_permissions
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<FileSystemPermissions>(serde_json::json!({
+            "entries": [],
+            "glob_scan_max_depth": 0,
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
     }
 
     #[test]

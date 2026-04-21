@@ -5,55 +5,12 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AdditionalFileSystemPermissions": {
-      "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/FileSystemSandboxEntry"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "read": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "write": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AdditionalNetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "AdditionalPermissionProfile": {
       "properties": {
         "fileSystem": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+              "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
             },
             {
               "type": "null"
@@ -63,7 +20,7 @@
         "network": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
+              "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
             },
             {
               "type": "null"
@@ -2260,217 +2217,6 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
-    "FileSystemAccessMode": {
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "PathFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "title": "GlobPatternFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "title": "SpecialFileSystemPath",
-          "type": "object"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      },
-      "required": [
-        "access",
-        "path"
-      ],
-      "type": "object"
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "root"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "RootFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "minimal"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "current_working_directory"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "project_roots"
-              ],
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "tmpdir"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "TmpdirFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "SlashTmpFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "unknown"
-              ],
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "FuzzyFileSearchMatchType": {
       "enum": [
         "file",
@@ -2603,7 +2349,7 @@
         "fileSystem": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+              "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
             },
             {
               "type": "null"
@@ -2613,7 +2359,7 @@
         "network": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
+              "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
             },
             {
               "type": "null"
@@ -3612,7 +3358,7 @@
           "type": "string"
         },
         "permissions": {
-          "$ref": "#/definitions/RequestPermissionProfile"
+          "$ref": "#/definitions/v2/RequestPermissionProfile"
         },
         "reason": {
           "type": [
@@ -3669,32 +3415,6 @@
         }
       ],
       "title": "RequestId"
-    },
-    "RequestPermissionProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "ReviewDecision": {
       "description": "User's decision in response to an ExecApprovalRequest.",
@@ -5404,6 +5124,57 @@
           "cooldown_active"
         ],
         "type": "string"
+      },
+      "AdditionalFileSystemPermissions": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "globScanMaxDepth": {
+            "format": "uint",
+            "minimum": 1.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "read": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "write": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AdditionalNetworkPermissions": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -8033,6 +7804,217 @@
         "title": "FileChangePatchUpdatedNotification",
         "type": "object"
       },
+      "FileSystemAccessMode": {
+        "enum": [
+          "read",
+          "write",
+          "none"
+        ],
+        "type": "string"
+      },
+      "FileSystemPath": {
+        "oneOf": [
+          {
+            "properties": {
+              "path": {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              "type": {
+                "enum": [
+                  "path"
+                ],
+                "title": "PathFileSystemPathType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "type"
+            ],
+            "title": "PathFileSystemPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "glob_pattern"
+                ],
+                "title": "GlobPatternFileSystemPathType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern",
+              "type"
+            ],
+            "title": "GlobPatternFileSystemPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "special"
+                ],
+                "title": "SpecialFileSystemPathType",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/definitions/v2/FileSystemSpecialPath"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "title": "SpecialFileSystemPath",
+            "type": "object"
+          }
+        ]
+      },
+      "FileSystemSandboxEntry": {
+        "properties": {
+          "access": {
+            "$ref": "#/definitions/v2/FileSystemAccessMode"
+          },
+          "path": {
+            "$ref": "#/definitions/v2/FileSystemPath"
+          }
+        },
+        "required": [
+          "access",
+          "path"
+        ],
+        "type": "object"
+      },
+      "FileSystemSpecialPath": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "root"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "RootFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "minimal"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "MinimalFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "current_working_directory"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "project_roots"
+                ],
+                "type": "string"
+              },
+              "subpath": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "KindFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "tmpdir"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "TmpdirFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "slash_tmp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "SlashTmpFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "subpath": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "FileUpdateChange": {
         "properties": {
           "diff": {
@@ -8825,6 +8807,32 @@
               "type"
             ],
             "title": "McpToolCallGuardianApprovalReviewAction",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "permissions": {
+                "$ref": "#/definitions/v2/RequestPermissionProfile"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "requestPermissions"
+                ],
+                "title": "RequestPermissionsGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "permissions",
+              "type"
+            ],
+            "title": "RequestPermissionsGuardianApprovalReviewAction",
             "type": "object"
           }
         ]
@@ -9677,7 +9685,10 @@
             "type": "string"
           },
           "threadId": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "uri": {
             "type": "string"
@@ -9685,7 +9696,6 @@
         },
         "required": [
           "server",
-          "threadId",
           "uri"
         ],
         "title": "McpResourceReadParams",
@@ -11630,6 +11640,32 @@
             "type": "integer"
           }
         ]
+      },
+      "RequestPermissionProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "fileSystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "ResidencyRequirement": {
         "enum": [

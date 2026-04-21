@@ -258,6 +258,10 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "review session selection and trunk spawning must stay serialized"
+    )]
     pub(crate) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
@@ -762,8 +766,8 @@ pub(crate) fn build_guardian_review_session_config(
             )
         })?;
         if guardian_config.features.enabled(feature) {
-            anyhow::bail!(
-                "guardian review session requires `features.{}` to be disabled",
+            warn!(
+                "guardian review session could not disable `features.{}`; continuing with the feature enabled",
                 feature.key()
             );
         }

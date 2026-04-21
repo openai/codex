@@ -449,7 +449,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1372,7 +1372,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.1",
 ]
 
 [[package]]
@@ -1877,7 +1877,10 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "dns-lookup",
  "futures",
+ "gethostname",
+ "libc",
  "multimap",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1892,6 +1895,7 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "wildmatch",
+ "winapi-util",
 ]
 
 [[package]]
@@ -4314,6 +4318,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e39034cee21a2f5bbb66ba0e3689819c4bb5d00382a282006e802a7ffa6c41d"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2 0.6.2",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4537,7 +4553,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5099,7 +5115,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5543,7 +5559,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5629,7 +5645,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -6049,7 +6065,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7539,7 +7555,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8226,7 +8242,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8263,9 +8279,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9107,7 +9123,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10566,7 +10582,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
