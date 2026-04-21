@@ -3432,6 +3432,9 @@
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "cwd": {
+          "$ref": "#/definitions/v2/AbsolutePathBuf"
+        },
         "itemId": {
           "type": "string"
         },
@@ -3452,6 +3455,7 @@
         }
       },
       "required": [
+        "cwd",
         "itemId",
         "permissions",
         "threadId",

@@ -76,6 +76,7 @@ async fn request_permissions_round_trip() -> Result<()> {
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
+    assert!(params.cwd.as_path().is_absolute());
     assert_eq!(params.reason, Some("Select a workspace root".to_string()));
     let requested_writes = params
         .permissions

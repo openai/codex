@@ -6826,6 +6826,7 @@ pub struct PermissionsRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    pub cwd: AbsolutePathBuf,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
 }
@@ -7260,6 +7261,7 @@ mod tests {
             "threadId": "thr_123",
             "turnId": "turn_123",
             "itemId": "call_123",
+            "cwd": absolute_path_string("repo"),
             "reason": "Select a workspace root",
             "permissions": {
                 "network": {
@@ -7273,6 +7275,7 @@ mod tests {
         }))
         .expect("permissions request should deserialize");
 
+        assert_eq!(params.cwd, absolute_path("repo"));
         assert_eq!(
             params.permissions,
             RequestPermissionProfile {
@@ -7320,6 +7323,7 @@ mod tests {
             "threadId": "thr_123",
             "turnId": "turn_123",
             "itemId": "call_123",
+            "cwd": absolute_path_string("repo"),
             "reason": "Select a workspace root",
             "permissions": {
                 "network": null,
