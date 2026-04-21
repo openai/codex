@@ -24,7 +24,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::realtime_conversation::RealtimeConversationManager;
+use crate::realtime::RealtimeConversationManager;
 use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
