@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::ContextualUserFragment;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ResponseItem;
@@ -20,10 +21,9 @@ fn detects_agents_instructions_fragment() {
 
 #[test]
 fn detects_subagent_notification_fragment_case_insensitively() {
-    assert!(
-        SUBAGENT_NOTIFICATION_FRAGMENT
-            .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
-    );
+    assert!(SubagentNotification::matches_text(
+        "<SUBAGENT_NOTIFICATION>{}</subagent_notification>"
+    ));
 }
 
 #[test]

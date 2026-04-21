@@ -494,6 +494,10 @@ async fn execute_mcp_tool_call(
     )
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP sandbox metadata reads through the session-owned manager guard"
+)]
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1068,6 +1072,10 @@ fn mcp_tool_approval_callsite_mode(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP approval metadata reads through the session-owned manager guard"
+)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1150,6 +1158,10 @@ fn get_mcp_app_resource_uri(
     })
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP app metadata reads through the session-owned manager guard"
+)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,

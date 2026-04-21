@@ -3,13 +3,15 @@ use crate::shell::ShellType;
 use super::*;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
-fn fake_shell() -> Shell {
-    Shell {
+fn fake_shell_name() -> String {
+    let shell = crate::shell::Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-    }
+    };
+    shell.name().to_string()
 }
 
 #[test]
@@ -17,7 +19,7 @@ fn serialize_workspace_write_environment_context() {
     let cwd = test_path_buf("/repo");
     let context = EnvironmentContext::new(
         Some(cwd.clone()),
-        fake_shell(),
+        fake_shell_name(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -34,18 +36,18 @@ fn serialize_workspace_write_environment_context() {
         cwd = cwd.display(),
     );
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render(), expected);
 }
 
 #[test]
 fn serialize_environment_context_with_network() {
-    let network = NetworkContext {
-        allowed_domains: vec!["api.example.com".to_string(), "*.openai.com".to_string()],
-        denied_domains: vec!["blocked.example.com".to_string()],
-    };
+    let network = NetworkContext::new(
+        vec!["api.example.com".to_string(), "*.openai.com".to_string()],
+        vec!["blocked.example.com".to_string()],
+    );
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
-        fake_shell(),
+        fake_shell_name(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         Some(network),
@@ -67,14 +69,14 @@ fn serialize_environment_context_with_network() {
         test_path_buf("/repo").display()
     );
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render(), expected);
 }
 
 #[test]
 fn serialize_read_only_environment_context() {
     let context = EnvironmentContext::new(
         /*cwd*/ None,
-        fake_shell(),
+        fake_shell_name(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -87,74 +89,14 @@ fn serialize_read_only_environment_context() {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-    assert_eq!(context.serialize_to_xml(), expected);
-}
-
-#[test]
-fn serialize_external_sandbox_environment_context() {
-    let context = EnvironmentContext::new(
-        /*cwd*/ None,
-        fake_shell(),
-        Some("2026-02-26".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-
-    let expected = r#"<environment_context>
-  <shell>bash</shell>
-  <current_date>2026-02-26</current_date>
-  <timezone>America/Los_Angeles</timezone>
-</environment_context>"#;
-
-    assert_eq!(context.serialize_to_xml(), expected);
-}
-
-#[test]
-fn serialize_external_sandbox_with_restricted_network_environment_context() {
-    let context = EnvironmentContext::new(
-        /*cwd*/ None,
-        fake_shell(),
-        Some("2026-02-26".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-
-    let expected = r#"<environment_context>
-  <shell>bash</shell>
-  <current_date>2026-02-26</current_date>
-  <timezone>America/Los_Angeles</timezone>
-</environment_context>"#;
-
-    assert_eq!(context.serialize_to_xml(), expected);
-}
-
-#[test]
-fn serialize_full_access_environment_context() {
-    let context = EnvironmentContext::new(
-        /*cwd*/ None,
-        fake_shell(),
-        Some("2026-02-26".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-
-    let expected = r#"<environment_context>
-  <shell>bash</shell>
-  <current_date>2026-02-26</current_date>
-  <timezone>America/Los_Angeles</timezone>
-</environment_context>"#;
-
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render(), expected);
 }
 
 #[test]
 fn equals_except_shell_compares_cwd() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        fake_shell(),
+        fake_shell_name(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -162,34 +104,12 @@ fn equals_except_shell_compares_cwd() {
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        fake_shell(),
+        fake_shell_name(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
         /*subagents*/ None,
     );
-    assert!(context1.equals_except_shell(&context2));
-}
-
-#[test]
-fn equals_except_shell_ignores_sandbox_policy() {
-    let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        /*current_date*/ None,
-        /*timezone*/ None,
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-    let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        /*current_date*/ None,
-        /*timezone*/ None,
-        /*network*/ None,
-        /*subagents*/ None,
-    );
-
     assert!(context1.equals_except_shell(&context2));
 }
 
@@ -197,7 +117,7 @@ fn equals_except_shell_ignores_sandbox_policy() {
 fn equals_except_shell_compares_cwd_differences() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo1")),
-        fake_shell(),
+        fake_shell_name(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -205,7 +125,7 @@ fn equals_except_shell_compares_cwd_differences() {
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo2")),
-        fake_shell(),
+        fake_shell_name(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -219,11 +139,7 @@ fn equals_except_shell_compares_cwd_differences() {
 fn equals_except_shell_ignores_shell() {
     let context1 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        Shell {
-            shell_type: ShellType::Bash,
-            shell_path: "/bin/bash".into(),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        },
+        "bash".to_string(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -231,11 +147,7 @@ fn equals_except_shell_ignores_shell() {
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
-        Shell {
-            shell_type: ShellType::Zsh,
-            shell_path: "/bin/zsh".into(),
-            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-        },
+        "zsh".to_string(),
         /*current_date*/ None,
         /*timezone*/ None,
         /*network*/ None,
@@ -249,7 +161,7 @@ fn equals_except_shell_ignores_shell() {
 fn serialize_environment_context_with_subagents() {
     let context = EnvironmentContext::new(
         Some(test_path_buf("/repo")),
-        fake_shell(),
+        fake_shell_name(),
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         /*network*/ None,
@@ -270,5 +182,5 @@ fn serialize_environment_context_with_subagents() {
         test_path_buf("/repo").display()
     );
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render(), expected);
 }

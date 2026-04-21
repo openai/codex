@@ -1,34 +1,40 @@
-use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use serde::Deserialize;
-use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename = "environment_context", rename_all = "snake_case")]
+use super::ContextualUserFragment;
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvironmentContext {
-    pub cwd: Option<PathBuf>,
-    pub shell: Shell,
-    pub current_date: Option<String>,
-    pub timezone: Option<String>,
-    pub network: Option<NetworkContext>,
-    pub subagents: Option<String>,
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) shell: String,
+    pub(crate) current_date: Option<String>,
+    pub(crate) timezone: Option<String>,
+    pub(crate) network: Option<NetworkContext>,
+    pub(crate) subagents: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct NetworkContext {
     allowed_domains: Vec<String>,
     denied_domains: Vec<String>,
 }
 
+impl NetworkContext {
+    pub(crate) fn new(allowed_domains: Vec<String>, denied_domains: Vec<String>) -> Self {
+        Self {
+            allowed_domains,
+            denied_domains,
+        }
+    }
+}
+
 impl EnvironmentContext {
-    pub fn new(
+    pub(crate) fn new(
         cwd: Option<PathBuf>,
-        shell: Shell,
+        shell: String,
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
@@ -47,7 +53,7 @@ impl EnvironmentContext {
     /// Compares two environment contexts, ignoring the shell. Useful when
     /// comparing turn to turn, since the initial environment_context will
     /// include the shell, and then it is not configurable from turn to turn.
-    pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
+    pub(crate) fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
         let EnvironmentContext {
             cwd,
             current_date,
@@ -63,39 +69,34 @@ impl EnvironmentContext {
             && self.subagents == *subagents
     }
 
-    pub fn diff_from_turn_context_item(
+    pub(crate) fn diff_from_turn_context_item(
         before: &TurnContextItem,
-        after: &TurnContext,
-        shell: &Shell,
+        after: &EnvironmentContext,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
-        let after_network = Self::network_from_turn_context(after);
-        let cwd = if before.cwd.as_path() != after.cwd.as_path() {
-            Some(after.cwd.to_path_buf())
-        } else {
-            None
+        let cwd = match &after.cwd {
+            Some(cwd) if before.cwd.as_path() != cwd.as_path() => Some(cwd.clone()),
+            _ => None,
         };
-        let current_date = after.current_date.clone();
-        let timezone = after.timezone.clone();
-        let network = if before_network != after_network {
-            after_network
+        let network = if before_network != after.network {
+            after.network.clone()
         } else {
             before_network
         };
         EnvironmentContext::new(
             cwd,
-            shell.clone(),
-            current_date,
-            timezone,
+            after.shell.clone(),
+            after.current_date.clone(),
+            after.timezone.clone(),
             network,
             /*subagents*/ None,
         )
     }
 
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.to_path_buf()),
-            shell.clone(),
+            shell.name().to_string(),
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
@@ -103,10 +104,13 @@ impl EnvironmentContext {
         )
     }
 
-    pub fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Self {
+    pub(crate) fn from_turn_context_item(
+        turn_context_item: &TurnContextItem,
+        shell: String,
+    ) -> Self {
         Self::new(
             Some(turn_context_item.cwd.clone()),
-            shell.clone(),
+            shell,
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
@@ -114,7 +118,7 @@ impl EnvironmentContext {
         )
     }
 
-    pub fn with_subagents(mut self, subagents: String) -> Self {
+    pub(crate) fn with_subagents(mut self, subagents: String) -> Self {
         if !subagents.is_empty() {
             self.subagents = Some(subagents);
         }
@@ -129,18 +133,18 @@ impl EnvironmentContext {
             .network
             .as_ref()?;
 
-        Some(NetworkContext {
-            allowed_domains: network
+        Some(NetworkContext::new(
+            network
                 .domains
                 .as_ref()
                 .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
                 .unwrap_or_default(),
-            denied_domains: network
+            network
                 .domains
                 .as_ref()
                 .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
                 .unwrap_or_default(),
-        })
+        ))
     }
 
     fn network_from_turn_context_item(
@@ -150,40 +154,33 @@ impl EnvironmentContext {
             allowed_domains,
             denied_domains,
         } = turn_context_item.network.as_ref()?;
-        Some(NetworkContext {
-            allowed_domains: allowed_domains.clone(),
-            denied_domains: denied_domains.clone(),
-        })
+        Some(NetworkContext::new(
+            allowed_domains.clone(),
+            denied_domains.clone(),
+        ))
     }
 }
 
-impl EnvironmentContext {
-    /// Serializes the environment context to XML. Libraries like `quick-xml`
-    /// require custom macros to handle Enums with newtypes, so we just do it
-    /// manually, to keep things simple. Output looks like:
-    ///
-    /// ```xml
-    /// <environment_context>
-    ///   <cwd>...</cwd>
-    ///   <shell>...</shell>
-    /// </environment_context>
-    /// ```
-    pub fn serialize_to_xml(self) -> String {
+impl ContextualUserFragment for EnvironmentContext {
+    const ROLE: &'static str = "user";
+    const START_MARKER: &'static str = codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+    const END_MARKER: &'static str = codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+
+    fn body(&self) -> String {
         let mut lines = Vec::new();
-        if let Some(cwd) = self.cwd {
+        if let Some(cwd) = &self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
-        let shell_name = self.shell.name();
-        lines.push(format!("  <shell>{shell_name}</shell>"));
-        if let Some(current_date) = self.current_date {
+        lines.push(format!("  <shell>{}</shell>", self.shell));
+        if let Some(current_date) = &self.current_date {
             lines.push(format!("  <current_date>{current_date}</current_date>"));
         }
-        if let Some(timezone) = self.timezone {
+        if let Some(timezone) = &self.timezone {
             lines.push(format!("  <timezone>{timezone}</timezone>"));
         }
-        match self.network {
-            Some(ref network) => {
+        match &self.network {
+            Some(network) => {
                 lines.push("  <network enabled=\"true\">".to_string());
                 for allowed in &network.allowed_domains {
                     lines.push(format!("    <allowed>{allowed}</allowed>"));
@@ -198,18 +195,12 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        if let Some(subagents) = self.subagents {
+        if let Some(subagents) = &self.subagents {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
             lines.push("  </subagents>".to_string());
         }
-        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
-    }
-}
-
-impl From<EnvironmentContext> for ResponseItem {
-    fn from(ec: EnvironmentContext) -> Self {
-        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
+        format!("\n{}", lines.join("\n"))
     }
 }
 
