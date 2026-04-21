@@ -32,6 +32,21 @@ async fn apps_enabled(config: &Config) -> bool {
         .features
         .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
 }
+
+async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+    let auth = auth_manager
+        .auth()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
+    anyhow::ensure!(
+        auth.uses_codex_backend(),
+        "ChatGPT connectors require Codex backend auth"
+    );
+    Ok(auth)
+}
+
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
@@ -59,12 +74,7 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
         return Some(Vec::new());
     }
 
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
-    let auth = auth_manager.auth().await?;
-    if !auth.uses_codex_backend() {
-        return Some(Vec::new());
-    }
+    let auth = connector_auth(config).await.ok()?;
     let cache_key = all_connectors_cache_key(config, &auth);
     let connectors = codex_connectors::cached_all_connectors(&cache_key)?;
     let connectors = merge_plugin_connectors(
@@ -87,16 +97,7 @@ pub async fn list_all_connectors_with_options(
     if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
-    let auth = auth_manager
-        .auth()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
-    anyhow::ensure!(
-        auth.uses_codex_backend(),
-        "ChatGPT connectors require Codex backend auth"
-    );
+    let auth = connector_auth(config).await?;
     let cache_key = all_connectors_cache_key(config, &auth);
     let connectors = codex_connectors::list_all_connectors_with_options(
         cache_key,

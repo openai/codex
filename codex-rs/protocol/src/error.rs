@@ -472,40 +472,44 @@ impl std::fmt::Display for UsageLimitReachedError {
         }
 
         let message = match self.plan_type.as_ref() {
-            Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
-                retry_suffix_after_or(self.resets_at.as_ref())
-            ),
-            Some(PlanType::Known(
+            Some(PlanType::Known(plan)) => match plan {
+                KnownPlan::Plus => format!(
+                    "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                    retry_suffix_after_or(self.resets_at.as_ref())
+                ),
+                plan if plan.is_team_like() || plan.is_business_like() => {
+                    format!(
+                        "You've hit your usage limit. To get more access now, send a request to your admin{}",
+                        retry_suffix_after_or(self.resets_at.as_ref())
+                    )
+                }
+                KnownPlan::Free | KnownPlan::Go => {
+                    format!(
+                        "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus),{}",
+                        retry_suffix_after_or(self.resets_at.as_ref())
+                    )
+                }
+                KnownPlan::Pro | KnownPlan::ProLite => format!(
+                    "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                    retry_suffix_after_or(self.resets_at.as_ref())
+                ),
+                KnownPlan::Enterprise | KnownPlan::Edu => format!(
+                    "You've hit your usage limit.{}",
+                    retry_suffix(self.resets_at.as_ref())
+                ),
                 KnownPlan::Team
                 | KnownPlan::SelfServeBusinessUsageBased
                 | KnownPlan::Business
-                | KnownPlan::EnterpriseCbpUsageBased,
-            )) => {
+                | KnownPlan::EnterpriseCbpUsageBased => {
+                    unreachable!("team-like and business-like plans are handled above")
+                }
+            },
+            Some(PlanType::Unknown(_)) | None => {
                 format!(
-                    "You've hit your usage limit. To get more access now, send a request to your admin{}",
-                    retry_suffix_after_or(self.resets_at.as_ref())
+                    "You've hit your usage limit.{}",
+                    retry_suffix(self.resets_at.as_ref())
                 )
             }
-            Some(PlanType::Known(KnownPlan::Free)) | Some(PlanType::Known(KnownPlan::Go)) => {
-                format!(
-                    "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus),{}",
-                    retry_suffix_after_or(self.resets_at.as_ref())
-                )
-            }
-            Some(PlanType::Known(KnownPlan::Pro | KnownPlan::ProLite)) => format!(
-                "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
-                retry_suffix_after_or(self.resets_at.as_ref())
-            ),
-            Some(PlanType::Known(KnownPlan::Enterprise))
-            | Some(PlanType::Known(KnownPlan::Edu)) => format!(
-                "You've hit your usage limit.{}",
-                retry_suffix(self.resets_at.as_ref())
-            ),
-            Some(PlanType::Unknown(_)) | None => format!(
-                "You've hit your usage limit.{}",
-                retry_suffix(self.resets_at.as_ref())
-            ),
         };
 
         write!(f, "{message}")

@@ -540,8 +540,8 @@ impl ModelsManager {
         let uses_codex_backend = self
             .provider
             .auth_manager()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.uses_codex_backend());
+            .as_deref()
+            .is_some_and(AuthManager::current_auth_uses_codex_backend);
         presets = ModelPreset::filter_by_auth(presets, uses_codex_backend);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
