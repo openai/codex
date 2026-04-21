@@ -34,7 +34,7 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// fragments also provide start/end markers used to recognize injected context
 /// later; unmarked fragments should leave both markers empty, in which case the
 /// default helpers render only the body and never match arbitrary text.
-pub(crate) trait ContextualUserFragment {
+pub trait ContextualUserFragment {
     const ROLE: &'static str;
     const START_MARKER: &'static str;
     const END_MARKER: &'static str;

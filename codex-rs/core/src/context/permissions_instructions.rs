@@ -51,12 +51,14 @@ struct PermissionsPromptConfig<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct PermissionsInstructions {
+/// Developer instructions that describe the active sandbox and approval policy.
+pub struct PermissionsInstructions {
     text: String,
 }
 
 impl PermissionsInstructions {
-    pub(crate) fn from_policy(
+    /// Builds permissions instructions from the effective sandbox and approval policy.
+    pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
         approvals_reviewer: ApprovalsReviewer,

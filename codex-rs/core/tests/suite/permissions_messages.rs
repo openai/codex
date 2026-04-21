@@ -1,6 +1,9 @@
 use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::PermissionsInstructions;
+use codex_execpolicy::Policy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -547,42 +550,16 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
 
     let permissions = permissions_texts(&req.single_request());
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
-    let sandbox_text =
-        include_str!("../../src/context/prompts/permissions/sandbox_mode/workspace_write.md")
-            .trim_end()
-            .replace("{{network_access}}", "restricted");
-    let approval_text =
-        include_str!("../../src/context/prompts/permissions/approval_policy/on_request.md");
-    let writable_roots = sandbox_policy.get_writable_roots_with_cwd(test.config.cwd.as_path());
-    let writable_roots_text = if writable_roots.is_empty() {
-        None
-    } else {
-        let roots_list: Vec<String> = writable_roots
-            .iter()
-            .map(|root| format!("`{}`", root.root.to_string_lossy()))
-            .collect();
-        Some(if roots_list.len() == 1 {
-            format!(" The writable root is {}.", roots_list[0])
-        } else {
-            format!(" The writable roots are {}.", roots_list.join(", "))
-        })
-    };
-    let append_section = |text: &mut String, section: &str| {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(section);
-    };
-    let mut expected = String::new();
-    append_section(&mut expected, &sandbox_text);
-    append_section(&mut expected, approval_text);
-    if let Some(writable_roots_text) = writable_roots_text {
-        append_section(&mut expected, &writable_roots_text);
-    }
-    if expected.ends_with('\n') {
-        expected.pop();
-    }
-    let expected = format!("<permissions instructions>{expected}\n</permissions instructions>");
+    let expected = PermissionsInstructions::from_policy(
+        &sandbox_policy,
+        AskForApproval::OnRequest,
+        test.config.approvals_reviewer,
+        &Policy::empty(),
+        test.config.cwd.as_path(),
+        /*exec_permission_approvals_enabled*/ false,
+        /*request_permissions_tool_enabled*/ false,
+    )
+    .render();
     let expected_normalized = normalize_line_endings(&expected);
     let actual_normalized: Vec<String> = permissions
         .iter()

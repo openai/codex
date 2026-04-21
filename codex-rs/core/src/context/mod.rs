@@ -1,3 +1,5 @@
+//! Context fragments injected into model input.
+
 mod approved_command_prefix_saved;
 mod collaboration_mode_instructions;
 mod contextual_user_message;
@@ -27,7 +29,7 @@ pub(crate) use contextual_user_message::is_contextual_user_fragment;
 pub(crate) use contextual_user_message::is_memory_excluded_contextual_user_fragment;
 pub(crate) use contextual_user_message::parse_visible_hook_prompt_message;
 pub(crate) use environment_context::EnvironmentContext;
-pub(crate) use fragment::ContextualUserFragment;
+pub use fragment::ContextualUserFragment;
 pub(crate) use fragment::FragmentRegistration;
 pub(crate) use fragment::FragmentRegistrationProxy;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;
@@ -35,7 +37,7 @@ pub(crate) use hook_additional_context::HookAdditionalContext;
 pub(crate) use image_generation_instructions::ImageGenerationInstructions;
 pub(crate) use model_switch_instructions::ModelSwitchInstructions;
 pub(crate) use network_rule_saved::NetworkRuleSaved;
-pub(crate) use permissions_instructions::PermissionsInstructions;
+pub use permissions_instructions::PermissionsInstructions;
 pub(crate) use personality_spec_instructions::PersonalitySpecInstructions;
 pub(crate) use plugin_instructions::PluginInstructions;
 pub(crate) use realtime_end_instructions::RealtimeEndInstructions;
