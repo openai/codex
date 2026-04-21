@@ -2945,7 +2945,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default()),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     )
     .await;
@@ -3102,7 +3102,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3257,7 +3257,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default()),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     )
     .await?;
@@ -4188,7 +4188,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),

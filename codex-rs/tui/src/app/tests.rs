@@ -3577,7 +3577,7 @@ async fn make_test_app() -> App {
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         remote_app_server_url: None,
         remote_app_server_auth_token: None,
@@ -3636,7 +3636,7 @@ async fn make_test_app_with_channels() -> (
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default(),
+                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
             )),
             remote_app_server_url: None,
             remote_app_server_auth_token: None,

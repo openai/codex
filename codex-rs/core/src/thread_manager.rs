@@ -302,7 +302,7 @@ impl ThreadManager {
             provider,
             codex_home.clone(),
             Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default(),
+                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
             )),
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });

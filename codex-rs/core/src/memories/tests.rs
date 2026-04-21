@@ -492,7 +492,7 @@ mod phase2 {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
-                    codex_exec_server::EnvironmentManagerArgs::default(),
+                    codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
                 )),
             );
             let (mut session, _turn_context) = make_session_and_context().await;

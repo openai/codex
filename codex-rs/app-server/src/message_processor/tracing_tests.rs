@@ -280,7 +280,7 @@ fn build_test_processor(
         config,
         config_manager,
         environment_manager: Arc::new(EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         feedback: CodexFeedback::new(),
         log_db: None,
