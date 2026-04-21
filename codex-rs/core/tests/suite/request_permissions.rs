@@ -1586,17 +1586,17 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         .unwrap_or_else(|| panic!("expected filesystem permissions"));
     let (approval_reads, approval_writes) = approval_file_system
         .legacy_read_write_roots()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("expected legacy-compatible permissions"));
     assert!(approval_reads.as_ref().is_none_or(Vec::is_empty));
 
     let mut approval_writes = approval_writes.unwrap_or_default();
     approval_writes.sort_by_key(|path| path.display().to_string());
 
-    let (_expected_reads, expected_writes) = merged_permissions
+    let (_, expected_writes) = merged_permissions
         .file_system
         .unwrap_or_else(|| panic!("expected merged filesystem permissions"))
         .legacy_read_write_roots()
-        .unwrap_or_default();
+        .unwrap_or_else(|| panic!("expected legacy-compatible permissions"));
     let mut expected_writes = expected_writes.unwrap_or_default();
     expected_writes.sort_by_key(|path| path.display().to_string());
 
