@@ -14,7 +14,6 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::MessagePhase;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
@@ -322,8 +321,9 @@ pub struct CodexResponsesApiCallInput {
     pub started_at: u64,
     pub completed_at: Option<u64>,
     pub duration_ms: Option<u64>,
-    pub input_items: Vec<ResponseItem>,
-    pub output_items: Vec<ResponseItem>,
+    pub input_item_count: usize,
+    pub output_item_count: usize,
+    pub items: Vec<CodexResponsesApiItemMetadata>,
     pub token_usage: Option<TokenUsage>,
 }
 
