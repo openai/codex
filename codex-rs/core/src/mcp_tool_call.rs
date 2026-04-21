@@ -15,7 +15,6 @@ use crate::arc_monitor::monitor_action;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::load_global_mcp_servers;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
@@ -1637,8 +1636,7 @@ async fn persist_custom_mcp_tool_approval(
     {
         ConfigEditsBuilder::new(&project_config_folder)
     } else {
-        let servers = load_global_mcp_servers(&config.codex_home).await?;
-        if !servers.contains_key(server) {
+        if !user_mcp_server_is_configured(config, server)? {
             anyhow::bail!("MCP server `{server}` is not configured in config.toml");
         }
         ConfigEditsBuilder::for_config(config)
@@ -1657,6 +1655,21 @@ async fn persist_custom_mcp_tool_approval(
         }])
         .apply()
         .await
+}
+
+fn user_mcp_server_is_configured(config: &Config, server: &str) -> anyhow::Result<bool> {
+    let Some(mcp_servers_toml) = config
+        .config_layer_stack
+        .effective_user_config()
+        .as_ref()
+        .and_then(|user_config| user_config.get("mcp_servers"))
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let servers =
+        HashMap::<String, codex_config::types::McpServerConfig>::deserialize(mcp_servers_toml)?;
+    Ok(servers.contains_key(server))
 }
 
 fn project_mcp_tool_approval_config_folder(

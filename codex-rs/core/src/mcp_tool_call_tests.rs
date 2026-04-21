@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use crate::config_loader::LoaderOverrides;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
@@ -1149,6 +1150,46 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
         }
     );
     assert!(contents.contains("[mcp_servers.docs.tools.search]"));
+}
+
+#[tokio::test]
+async fn persist_custom_mcp_tool_approval_accepts_profile_scoped_server() {
+    let tmp = tempdir().expect("tempdir");
+    let profile_config = tmp.path().join("work.config.toml");
+    std::fs::write(
+        &profile_config,
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed profile config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(tmp.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(profile_config.clone()),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await
+        .expect("load profile config");
+
+    persist_custom_mcp_tool_approval(&config, "docs", "search")
+        .await
+        .expect("persist approval");
+
+    let contents = std::fs::read_to_string(&profile_config).expect("read profile config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse profile config");
+    let tool = parsed
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("search"))
+        .expect("docs/search tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+    assert!(!tmp.path().join(CONFIG_TOML_FILE).exists());
 }
 
 #[tokio::test]

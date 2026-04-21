@@ -515,7 +515,6 @@ struct ListenerTaskContext {
     fallback_model_provider: String,
     codex_home: PathBuf,
     loader_overrides: LoaderOverrides,
-    thread_config_loader: Arc<dyn ThreadConfigLoader>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2442,6 +2441,7 @@ impl CodexMessageProcessor {
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
+        let thread_config_loader = Arc::clone(&self.thread_config_loader);
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
@@ -2456,7 +2456,6 @@ impl CodexMessageProcessor {
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let thread_config_loader = Arc::clone(&self.thread_config_loader);
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
@@ -8155,7 +8154,6 @@ impl CodexMessageProcessor {
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
                 loader_overrides: self.loader_overrides.clone(),
-                thread_config_loader: Arc::clone(&self.thread_config_loader),
             },
             conversation_id,
             connection_id,
@@ -8275,7 +8273,6 @@ impl CodexMessageProcessor {
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
                 loader_overrides: self.loader_overrides.clone(),
-                thread_config_loader: Arc::clone(&self.thread_config_loader),
             },
             conversation_id,
             conversation,
@@ -8326,7 +8323,6 @@ impl CodexMessageProcessor {
             fallback_model_provider,
             codex_home,
             loader_overrides: _,
-            thread_config_loader: _,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {

@@ -1418,7 +1418,7 @@ async fn run_ratatui_app(
             arg0_paths,
             config.clone(),
             cli_kv_overrides.clone(),
-            loader_overrides,
+            loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),

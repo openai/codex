@@ -445,6 +445,7 @@ async fn write_value_defaults_to_selected_user_config_path() {
         vec![],
         loader_overrides,
         CloudRequirementsLoader::default(),
+        /*host_name*/ None,
     );
     service
         .write_value(ConfigValueWriteParams {
