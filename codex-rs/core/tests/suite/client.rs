@@ -912,6 +912,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("responses stream to start");
@@ -2259,6 +2260,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("responses stream to start");

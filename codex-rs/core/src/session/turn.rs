@@ -1881,7 +1881,7 @@ async fn try_run_sampling_request(
         turn_context.provider.info().name.as_str(),
     );
     let mut stream = client_session
-        .stream_with_trace(
+        .stream(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,

@@ -1473,42 +1473,15 @@ impl ModelClientSession {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// Streams a single model request without rollout tracing.
+    /// Streams a single model request within the current turn.
     ///
-    /// This is the public client API. It routes through the same transport code
-    /// as traced Codex turns, but supplies a disabled trace context so tracing
-    /// does not leak into callers that only need model streaming.
+    /// The caller is responsible for passing per-turn settings explicitly (model selection,
+    /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
+    /// Responses WebSocket transport when the provider supports it and it remains healthy, and will
+    /// fall back to the HTTP Responses API transport otherwise. The trace context may be enabled or
+    /// disabled, but is always explicit so transport paths do not need separate trace/no-trace
+    /// branches.
     pub async fn stream(
-        &mut self,
-        prompt: &Prompt,
-        model_info: &ModelInfo,
-        session_telemetry: &SessionTelemetry,
-        effort: Option<ReasoningEffortConfig>,
-        summary: ReasoningSummaryConfig,
-        service_tier: Option<ServiceTier>,
-        turn_metadata_header: Option<&str>,
-    ) -> Result<ResponseStream> {
-        let disabled_trace = InferenceTraceContext::disabled();
-        self.stream_with_trace(
-            prompt,
-            model_info,
-            session_telemetry,
-            effort,
-            summary,
-            service_tier,
-            turn_metadata_header,
-            &disabled_trace,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Streams a model request with an explicit rollout trace context.
-    ///
-    /// The context may be enabled or disabled. Transport code records against it
-    /// unconditionally so HTTP, WebSocket, retry, and fallback paths do not need
-    /// separate trace/no-trace branches.
-    pub(crate) async fn stream_with_trace(
         &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
