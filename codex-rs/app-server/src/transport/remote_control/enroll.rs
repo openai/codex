@@ -2,6 +2,9 @@ use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
+use chrono::DateTime;
+use chrono::Duration;
+use chrono::Utc;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -13,6 +16,8 @@ use tracing::warn;
 
 const REMOTE_CONTROL_ENROLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
+const REMOTE_CONTROL_SERVER_WEBSOCKET_SCOPE: &str = "remote_control_server_websocket";
+const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
@@ -26,6 +31,24 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) environment_id: String,
     pub(super) server_id: String,
     pub(super) server_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RemoteControlServerToken {
+    pub(super) bearer_token: String,
+    pub(super) expires_at: DateTime<Utc>,
+}
+
+impl RemoteControlServerToken {
+    pub(super) fn expires_soon(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now + Duration::seconds(REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECONDS)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RemoteControlEnrollmentResult {
+    pub(super) enrollment: RemoteControlEnrollment,
+    pub(super) server_token: RemoteControlServerToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,7 +214,8 @@ pub(crate) fn format_headers(headers: &HeaderMap) -> String {
 pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
-) -> io::Result<RemoteControlEnrollment> {
+    existing_enrollment: Option<&RemoteControlEnrollment>,
+) -> io::Result<RemoteControlEnrollmentResult> {
     let enroll_url = &remote_control_target.enroll_url;
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let request = EnrollRemoteServerRequest {
@@ -199,6 +223,8 @@ pub(super) async fn enroll_remote_control_server(
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
+        server_id: existing_enrollment.map(|enrollment| enrollment.server_id.clone()),
+        environment_id: existing_enrollment.map(|enrollment| enrollment.environment_id.clone()),
     };
     let client = build_reqwest_client();
     let mut http_request = client
@@ -246,11 +272,43 @@ pub(super) async fn enroll_remote_control_server(
         ))
     })?;
 
-    Ok(RemoteControlEnrollment {
-        account_id: auth.account_id.clone(),
-        environment_id: enrollment.environment_id,
-        server_id: enrollment.server_id,
-        server_name,
+    let server_token = remote_control_server_token_from_response(&enrollment)?;
+    Ok(RemoteControlEnrollmentResult {
+        enrollment: RemoteControlEnrollment {
+            account_id: auth.account_id.clone(),
+            environment_id: enrollment.environment_id,
+            server_id: enrollment.server_id,
+            server_name,
+        },
+        server_token,
+    })
+}
+
+fn remote_control_server_token_from_response(
+    enrollment: &EnrollRemoteServerResponse,
+) -> io::Result<RemoteControlServerToken> {
+    if !enrollment
+        .scopes
+        .iter()
+        .any(|scope| scope == REMOTE_CONTROL_SERVER_WEBSOCKET_SCOPE)
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "remote control enrollment response token is missing server websocket scope",
+        ));
+    }
+    let expires_at = DateTime::parse_from_rfc3339(&enrollment.expires_at)
+        .map_err(|err| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("invalid remote control token expires_at: {err}"),
+            )
+        })?
+        .with_timezone(&Utc);
+
+    Ok(RemoteControlServerToken {
+        bearer_token: enrollment.remote_control_token.clone(),
+        expires_at,
     })
 }
 
@@ -258,6 +316,8 @@ pub(super) async fn enroll_remote_control_server(
 mod tests {
     use super::*;
     use crate::transport::remote_control::protocol::normalize_remote_control_url;
+    use chrono::DateTime;
+    use chrono::Utc;
     use codex_state::StateRuntime;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -423,6 +483,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn remote_control_server_token_from_response_parses_scoped_token() {
+        let server_token = remote_control_server_token_from_response(&EnrollRemoteServerResponse {
+            server_id: "srv_e_test".to_string(),
+            environment_id: "env_test".to_string(),
+            remote_control_token: "remote-control-token".to_string(),
+            expires_at: "2026-04-09T12:00:00Z".to_string(),
+            scopes: vec!["remote_control_server_websocket".to_string()],
+        })
+        .expect("token response should parse");
+
+        assert_eq!(server_token.bearer_token, "remote-control-token");
+        assert!(
+            !server_token.expires_soon(
+                DateTime::parse_from_rfc3339("2026-04-09T11:58:30Z")
+                    .expect("timestamp should parse")
+                    .with_timezone(&Utc)
+            )
+        );
+        assert!(
+            server_token.expires_soon(
+                DateTime::parse_from_rfc3339("2026-04-09T11:59:30Z")
+                    .expect("timestamp should parse")
+                    .with_timezone(&Utc)
+            )
+        );
+    }
+
     #[tokio::test]
     async fn enroll_remote_control_server_parse_failure_includes_response_body() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -454,6 +542,7 @@ mod tests {
                 account_id: "account_id".to_string(),
                 is_fedramp_account: false,
             },
+            /*existing_enrollment*/ None,
         )
         .await
         .expect_err("invalid response should fail to parse");
