@@ -66,6 +66,7 @@ pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::GuardianAssessmentAction;
 pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
+pub use crate::approvals::GuardianAssessmentOutcome;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
 pub use crate::approvals::GuardianRiskLevel;
@@ -329,6 +330,12 @@ pub struct RealtimeHandoffRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeNoopRequested {
+    pub call_id: String,
+    pub item_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeInputAudioSpeechStarted {
     pub item_id: Option<String>,
 }
@@ -368,6 +375,7 @@ pub enum RealtimeEvent {
         item_id: String,
     },
     HandoffRequested(RealtimeHandoffRequested),
+    NoopRequested(RealtimeNoopRequested),
     Error(String),
 }
 

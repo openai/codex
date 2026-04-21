@@ -302,6 +302,10 @@ pub struct ConfigToml {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+
+    /// Experimental / do not use. When set, app-server uses a remote thread
+    /// store at this endpoint instead of the local filesystem/SQLite store.
+    pub experimental_thread_store_endpoint: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.

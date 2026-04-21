@@ -2110,6 +2110,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         &Vec::new(),
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
     let cfg =
@@ -2244,6 +2245,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         &[("model".to_string(), TomlValue::String("cli".to_string()))],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
@@ -4887,6 +4889,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
+            experimental_thread_store_endpoint: None,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5038,6 +5041,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5187,6 +5191,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5321,6 +5326,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_thread_store_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
