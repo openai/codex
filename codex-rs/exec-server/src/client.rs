@@ -750,7 +750,7 @@ async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
 /// Fails all in-flight work that depends on the shared JSON-RPC transport.
 async fn fail_all_in_flight_work(inner: &Arc<Inner>, message: String) {
     fail_all_sessions(inner, message.clone()).await;
-    http_client::fail_all_http_body_streams(inner, message).await;
+    inner.fail_all_http_body_streams(message).await;
 }
 
 async fn handle_server_notification(
@@ -804,7 +804,9 @@ async fn handle_server_notification(
             }
         }
         HTTP_REQUEST_BODY_DELTA_METHOD => {
-            http_client::handle_http_body_delta_notification(inner, notification.params).await?;
+            inner
+                .handle_http_body_delta_notification(notification.params)
+                .await?;
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");

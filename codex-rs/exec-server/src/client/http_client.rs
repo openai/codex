@@ -51,6 +51,29 @@ struct HttpBodyStreamRegistration {
     active: bool,
 }
 
+impl HttpBodyStreamRoute {
+    /// Creates an active route that delivers body deltas to the caller.
+    fn active(
+        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
+        failure: Arc<StdMutex<Option<String>>>,
+    ) -> Self {
+        Self { tx, failure }
+    }
+
+    /// Sends one body delta to the caller.
+    fn try_send(
+        &self,
+        delta: HttpRequestBodyDeltaNotification,
+    ) -> Result<(), TrySendError<HttpRequestBodyDeltaNotification>> {
+        self.tx.try_send(delta)
+    }
+
+    /// Records a terminal failure that the stream sees after queued chunks.
+    fn set_failure(&self, message: String) {
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
+    }
+}
+
 impl ExecServerClient {
     /// Performs an executor-side HTTP request and buffers the response body.
     pub async fn http_request(
@@ -198,54 +221,65 @@ impl Drop for HttpResponseBodyStream {
     }
 }
 
-/// Routes one streamed HTTP body notification into its request-local receiver.
-pub(super) async fn handle_http_body_delta_notification(
-    inner: &Arc<Inner>,
-    params: Option<Value>,
-) -> Result<(), ExecServerError> {
-    let params: HttpRequestBodyDeltaNotification = from_value(params.unwrap_or(Value::Null))?;
-    // Unknown request ids are ignored intentionally: a stream may have already
-    // reached EOF and released its route.
-    if let Some(route) = inner.get_http_body_stream(&params.request_id) {
-        let request_id = params.request_id.clone();
-        let terminal_delta = params.done || params.error.is_some();
-        match route.try_send(params) {
-            Ok(()) => {
-                if terminal_delta {
-                    inner.remove_http_body_stream(&request_id).await;
-                }
-            }
-            Err(TrySendError::Closed(_)) => {
-                inner.remove_http_body_stream(&request_id).await;
-                debug!("http response stream receiver dropped before body delta delivery");
-            }
-            Err(TrySendError::Full(_)) => {
-                route.set_failure("body delta channel filled before delivery".to_string());
-                inner.remove_http_body_stream(&request_id).await;
-                debug!("closing http response stream `{request_id}` after body delta backpressure");
-            }
+impl Drop for HttpBodyStreamRegistration {
+    /// Removes the route if the stream request future is cancelled before headers return.
+    fn drop(&mut self) {
+        if self.active {
+            spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
         }
-    }
-    Ok(())
-}
-
-/// Fails active streamed HTTP bodies so callers do not wait forever after a
-/// transport disconnect or notification handling failure.
-pub(super) async fn fail_all_http_body_streams(inner: &Arc<Inner>, message: String) {
-    let streams = inner.take_all_http_body_streams().await;
-    for (request_id, route) in streams {
-        route.set_failure(message.clone());
-        let _ = route.try_send(HttpRequestBodyDeltaNotification {
-            request_id,
-            seq: 1,
-            delta: Vec::new().into(),
-            done: true,
-            error: Some(message.clone()),
-        });
     }
 }
 
 impl Inner {
+    /// Routes one streamed HTTP body notification into its request-local receiver.
+    pub(super) async fn handle_http_body_delta_notification(
+        &self,
+        params: Option<Value>,
+    ) -> Result<(), ExecServerError> {
+        let params: HttpRequestBodyDeltaNotification = from_value(params.unwrap_or(Value::Null))?;
+        // Unknown request ids are ignored intentionally: a stream may have already
+        // reached EOF and released its route.
+        if let Some(route) = self.get_http_body_stream(&params.request_id) {
+            let request_id = params.request_id.clone();
+            let terminal_delta = params.done || params.error.is_some();
+            match route.try_send(params) {
+                Ok(()) => {
+                    if terminal_delta {
+                        self.remove_http_body_stream(&request_id).await;
+                    }
+                }
+                Err(TrySendError::Closed(_)) => {
+                    self.remove_http_body_stream(&request_id).await;
+                    debug!("http response stream receiver dropped before body delta delivery");
+                }
+                Err(TrySendError::Full(_)) => {
+                    route.set_failure("body delta channel filled before delivery".to_string());
+                    self.remove_http_body_stream(&request_id).await;
+                    debug!(
+                        "closing http response stream `{request_id}` after body delta backpressure"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fails active streamed HTTP bodies so callers do not wait forever after a
+    /// transport disconnect or notification handling failure.
+    pub(super) async fn fail_all_http_body_streams(&self, message: String) {
+        let streams = self.take_all_http_body_streams().await;
+        for (request_id, route) in streams {
+            route.set_failure(message.clone());
+            let _ = route.try_send(HttpRequestBodyDeltaNotification {
+                request_id,
+                seq: 1,
+                delta: Vec::new().into(),
+                done: true,
+                error: Some(message.clone()),
+            });
+        }
+    }
+
     /// Allocates a connection-local streamed HTTP response id.
     fn next_http_body_stream_request_id(&self) -> String {
         let id = self
@@ -297,38 +331,6 @@ impl Inner {
         let removed_streams = streams.as_ref().clone();
         self.http_body_streams.store(Arc::new(HashMap::new()));
         removed_streams
-    }
-}
-
-impl HttpBodyStreamRoute {
-    /// Creates an active route that delivers body deltas to the caller.
-    fn active(
-        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
-        failure: Arc<StdMutex<Option<String>>>,
-    ) -> Self {
-        Self { tx, failure }
-    }
-
-    /// Sends one body delta to the caller.
-    fn try_send(
-        &self,
-        delta: HttpRequestBodyDeltaNotification,
-    ) -> Result<(), TrySendError<HttpRequestBodyDeltaNotification>> {
-        self.tx.try_send(delta)
-    }
-
-    /// Records a terminal failure that the stream sees after queued chunks.
-    fn set_failure(&self, message: String) {
-        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
-    }
-}
-
-impl Drop for HttpBodyStreamRegistration {
-    /// Removes the route if the stream request future is cancelled before headers return.
-    fn drop(&mut self) {
-        if self.active {
-            spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
-        }
     }
 }
 
