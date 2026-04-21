@@ -3041,7 +3041,7 @@ impl Session {
         self.get_pending_turn_input()
             .await
             .into_iter()
-            .map(PendingTurnInput::into_response_input_item)
+            .map(ResponseInputItem::from)
             .collect()
     }
 

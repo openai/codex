@@ -78,16 +78,20 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
+/// Input queued for ordered transcript recording during an active turn.
+///
+/// User prompts keep the original `UserInput` so client-visible turn items can
+/// preserve UI-only spans such as `text_elements`; model-only response input
+/// items can stay in their serialized Responses API form.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PendingTurnInput {
     UserInput(Vec<UserInput>),
     ResponseInputItem(ResponseInputItem),
 }
 
-impl PendingTurnInput {
-    #[cfg(test)]
-    pub(crate) fn into_response_input_item(self) -> ResponseInputItem {
-        match self {
+impl From<PendingTurnInput> for ResponseInputItem {
+    fn from(value: PendingTurnInput) -> Self {
+        match value {
             PendingTurnInput::UserInput(input) => input.into(),
             PendingTurnInput::ResponseInputItem(input) => input,
         }

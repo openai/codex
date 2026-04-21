@@ -350,19 +350,11 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     assert!(duration_ms.is_some());
 
     let history = sess.clone_history().await;
-    let prompt_idx = history.raw_items().iter().position(|item| {
-        matches!(
-            item,
-            ResponseItem::Message {
-                role,
-                content,
-                ..
-            } if role == "user"
-                && content == &[ContentItem::InputText {
-                    text: "first prompt".to_string()
-                }]
-        )
-    });
+    let expected_prompt = user_message("first prompt");
+    let prompt_idx = history
+        .raw_items()
+        .iter()
+        .position(|item| item == &expected_prompt);
     let aborted_idx = history.raw_items().iter().position(|item| {
         let ResponseItem::Message { role, content, .. } = item else {
             return false;
@@ -375,13 +367,13 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
                 TurnAborted::matches_text(text)
             })
     });
-    assert!(
-        prompt_idx.is_some_and(|prompt_idx| {
-            aborted_idx.is_some_and(|aborted_idx| prompt_idx < aborted_idx)
-        }),
-        "expected prompt to be recorded before the interrupted-turn marker: {:?}",
-        history.raw_items()
-    );
+    let (Some(prompt_idx), Some(aborted_idx)) = (prompt_idx, aborted_idx) else {
+        panic!(
+            "expected prompt and interrupted-turn marker in history: {:?}",
+            history.raw_items()
+        );
+    };
+    assert!(prompt_idx < aborted_idx);
 }
 
 fn test_model_client_session() -> crate::client::ModelClientSession {
