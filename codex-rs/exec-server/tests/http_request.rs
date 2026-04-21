@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCError;
@@ -338,7 +339,11 @@ async fn exec_server_http_request_honors_nullable_timeout() -> anyhow::Result<()
         "unexpected timeout error: {}",
         error.message
     );
-    delayed_timeout_response.await??;
+    match delayed_timeout_response.await? {
+        Ok(()) => {}
+        Err(err) if is_expected_peer_disconnect(&err) => {}
+        Err(err) => return Err(err),
+    }
 
     server.shutdown().await?;
     Ok(())
@@ -460,6 +465,19 @@ async fn respond_with_status_and_headers(
     stream.write_all(body).await?;
     stream.flush().await?;
     Ok(())
+}
+
+fn is_expected_peer_disconnect(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| {
+                matches!(
+                    io_err.kind(),
+                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+                )
+            })
+    })
 }
 
 /// Writes a chunked HTTP response so reqwest must drive the streaming path.
