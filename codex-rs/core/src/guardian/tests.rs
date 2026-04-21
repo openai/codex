@@ -15,6 +15,7 @@ use crate::config_loader::Sourced;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
@@ -706,6 +707,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
                 .to_string(),
         },
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::MainTurn,
         cancel_token,
     )
     .await;
@@ -921,7 +923,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         /*external_cancel*/ None,
     )
     .await;
-    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+    let (GuardianReviewOutcome::Completed(assessment), _) = outcome else {
         panic!("expected guardian assessment");
     };
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
@@ -1130,13 +1132,14 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+    let (GuardianReviewOutcome::Completed(first_assessment), _) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+    let (GuardianReviewOutcome::Completed(second_assessment), _) = second_outcome
+    else {
         panic!("expected second guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(third_assessment)) = third_outcome else {
+    let (GuardianReviewOutcome::Completed(third_assessment), _) = third_outcome else {
         panic!("expected third guardian assessment");
     };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
