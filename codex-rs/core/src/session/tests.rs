@@ -6539,6 +6539,105 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_goal_mutation_accounts_active_turn_before_status_change() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    sess.account_thread_goal_before_external_mutation().await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(70, goal.tokens_used);
+
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Complete),
+                token_budget: None,
+                expected_goal_id: Some(goal.goal_id),
+            },
+        )
+        .await?
+        .expect("goal status update should succeed");
+    sess.clear_stopped_thread_goal_runtime_state().await;
+    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+        .await;
+
+    assert!(!sess.has_active_turn().await);
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
+    assert_eq!(70, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn clearing_goal_removes_queued_continuation_without_dropping_other_input()
+-> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    let mut queued = sess
+        .goal_continuation_items_if_active()
+        .await
+        .expect("active goal should produce continuation input");
+    let user_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "keep this queued user input".to_string(),
+        }],
+    };
+    queued.push(user_item.clone());
+    sess.queue_response_items_for_next_turn(queued).await;
+
+    sess.clear_cached_thread_goal_after_delete().await;
+
+    assert_eq!(
+        vec![user_item],
+        sess.take_queued_response_items_for_next_turn().await
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_response()
 -> anyhow::Result<()> {
     let server = start_mock_server().await;

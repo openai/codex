@@ -21,7 +21,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(super) mailbox: Mailbox,
     pub(super) mailbox_rx: Mutex<MailboxReceiver>,
-    pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    pub(crate) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) thread_goal_state_db: Mutex<Option<state_db::StateDbHandle>>,
     pub(crate) thread_goal_may_exist: AtomicBool,
     pub(crate) thread_goal_cache: Mutex<Option<codex_protocol::protocol::ThreadGoal>>,
