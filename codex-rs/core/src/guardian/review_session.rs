@@ -5,8 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -23,6 +26,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::codex_delegate::run_codex_thread_interactive;
+use crate::compact::InitialContextInjection;
+use crate::compact::run_inline_auto_compact_task;
+use crate::compact::should_use_remote_compact_task;
+use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ManagedFeatures;
@@ -42,9 +49,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
-use super::prompt::GuardianPromptMode;
 use super::prompt::GuardianTranscriptCursor;
-use super::prompt::build_guardian_prompt_items;
+use super::prompt::build_guardian_approval_request_items;
+use super::prompt::build_guardian_transcript_sync_items;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
 
@@ -70,6 +77,13 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) external_cancel: Option<CancellationToken>,
 }
 
+pub(crate) struct GuardianTrunkSyncParams {
+    pub(crate) parent_session: Arc<Session>,
+    pub(crate) parent_turn: Arc<TurnContext>,
+    pub(crate) spawn_config: Config,
+    pub(crate) external_cancel: Option<CancellationToken>,
+}
+
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
@@ -92,6 +106,7 @@ struct GuardianReviewSession {
 struct GuardianReviewState {
     prior_review_count: usize,
     last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
+    last_synced_transcript_cursor: Option<GuardianTranscriptCursor>,
     last_committed_fork_snapshot: Option<GuardianReviewForkSnapshot>,
 }
 
@@ -105,6 +120,7 @@ struct GuardianReviewForkSnapshot {
     initial_history: InitialHistory,
     prior_review_count: usize,
     last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
+    last_synced_transcript_cursor: Option<GuardianTranscriptCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,10 +204,12 @@ impl GuardianReviewSession {
                 let mut state = self.state.lock().await;
                 let prior_review_count = state.prior_review_count;
                 let last_reviewed_transcript_cursor = state.last_reviewed_transcript_cursor;
+                let last_synced_transcript_cursor = state.last_synced_transcript_cursor;
                 state.last_committed_fork_snapshot = Some(GuardianReviewForkSnapshot {
                     initial_history: InitialHistory::Forked(items),
                     prior_review_count,
                     last_reviewed_transcript_cursor,
+                    last_synced_transcript_cursor,
                 });
             }
             Ok(Some(_)) => {}
@@ -262,6 +280,110 @@ impl GuardianReviewSessionManager {
         clippy::await_holding_invalid_type,
         reason = "review session selection and trunk spawning must stay serialized"
     )]
+    pub(crate) async fn sync_trunk(&self, params: GuardianTrunkSyncParams) {
+        let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
+        let mut stale_trunk_to_shutdown = None;
+        let trunk_candidate = match run_before_review_deadline(
+            deadline,
+            params.external_cancel.as_ref(),
+            self.state.lock(),
+        )
+        .await
+        {
+            Ok(mut state) => {
+                if let Some(trunk) = state.trunk.as_ref()
+                    && trunk.reuse_key != next_reuse_key
+                    && trunk.review_lock.try_acquire().is_ok()
+                {
+                    stale_trunk_to_shutdown = state.trunk.take();
+                }
+
+                if state.trunk.is_none() {
+                    let spawn_cancel_token = CancellationToken::new();
+                    let review_session = match run_before_review_deadline_with_cancel(
+                        deadline,
+                        params.external_cancel.as_ref(),
+                        &spawn_cancel_token,
+                        Box::pin(spawn_guardian_review_session(
+                            Arc::clone(&params.parent_session),
+                            Arc::clone(&params.parent_turn),
+                            params.spawn_config.clone(),
+                            next_reuse_key.clone(),
+                            spawn_cancel_token.clone(),
+                            /*fork_snapshot*/ None,
+                        )),
+                    )
+                    .await
+                    {
+                        Ok(Ok(review_session)) => Arc::new(review_session),
+                        Ok(Err(err)) => {
+                            warn!("failed to spawn guardian trunk for transcript sync: {err}");
+                            return;
+                        }
+                        Err(outcome) => {
+                            warn!(
+                                "guardian transcript sync did not spawn before deadline: {outcome:?}"
+                            );
+                            return;
+                        }
+                    };
+                    state.trunk = Some(Arc::clone(&review_session));
+                }
+
+                state.trunk.as_ref().cloned()
+            }
+            Err(outcome) => {
+                warn!(
+                    "guardian transcript sync did not acquire manager state before deadline: {outcome:?}"
+                );
+                return;
+            }
+        };
+
+        if let Some(review_session) = stale_trunk_to_shutdown {
+            review_session.shutdown_in_background();
+        }
+
+        let Some(trunk) = trunk_candidate else {
+            warn!("guardian transcript sync had no trunk after spawn");
+            return;
+        };
+        if trunk.reuse_key != next_reuse_key {
+            return;
+        }
+        let Ok(trunk_guard) = trunk.review_lock.try_acquire() else {
+            return;
+        };
+
+        let sync_result = run_before_review_deadline(
+            deadline,
+            params.external_cancel.as_ref(),
+            Box::pin(sync_parent_transcript_to_session(
+                trunk.as_ref(),
+                params.parent_session.as_ref(),
+            )),
+        )
+        .await;
+        drop(trunk_guard);
+
+        match sync_result {
+            Ok(Ok(synced)) => {
+                if synced {
+                    trunk.refresh_last_committed_fork_snapshot().await;
+                }
+            }
+            Ok(Err(err)) => warn!("guardian transcript sync failed: {err}"),
+            Err(outcome) => {
+                warn!("guardian transcript sync did not finish before deadline: {outcome:?}");
+            }
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "review session selection and trunk spawning must stay serialized"
+    )]
     pub(crate) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
@@ -291,7 +413,8 @@ impl GuardianReviewSessionManager {
                         params.external_cancel.as_ref(),
                         &spawn_cancel_token,
                         Box::pin(spawn_guardian_review_session(
-                            &params,
+                            Arc::clone(&params.parent_session),
+                            Arc::clone(&params.parent_turn),
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -377,6 +500,7 @@ impl GuardianReviewSessionManager {
             state: Mutex::new(GuardianReviewState {
                 prior_review_count: 0,
                 last_reviewed_transcript_cursor: None,
+                last_synced_transcript_cursor: None,
                 last_committed_fork_snapshot: None,
             }),
         }));
@@ -399,6 +523,7 @@ impl GuardianReviewSessionManager {
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
+                    last_synced_transcript_cursor: None,
                     last_committed_fork_snapshot: None,
                 }),
             }));
@@ -466,7 +591,8 @@ impl GuardianReviewSessionManager {
             params.external_cancel.as_ref(),
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
-                &params,
+                Arc::clone(&params.parent_session),
+                Arc::clone(&params.parent_turn),
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -499,26 +625,33 @@ impl GuardianReviewSessionManager {
 }
 
 async fn spawn_guardian_review_session(
-    params: &GuardianReviewSessionParams,
+    parent_session: Arc<Session>,
+    parent_turn: Arc<TurnContext>,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
     fork_snapshot: Option<GuardianReviewForkSnapshot>,
 ) -> anyhow::Result<GuardianReviewSession> {
-    let (initial_history, prior_review_count, initial_transcript_cursor) = match fork_snapshot {
+    let (
+        initial_history,
+        prior_review_count,
+        initial_reviewed_transcript_cursor,
+        initial_synced_transcript_cursor,
+    ) = match fork_snapshot {
         Some(fork_snapshot) => (
             Some(fork_snapshot.initial_history),
             fork_snapshot.prior_review_count,
             fork_snapshot.last_reviewed_transcript_cursor,
+            fork_snapshot.last_synced_transcript_cursor,
         ),
-        None => (None, 0, None),
+        None => (None, 0, None, None),
     };
     let codex = Box::pin(run_codex_thread_interactive(
         spawn_config,
-        params.parent_session.services.auth_manager.clone(),
-        params.parent_session.services.models_manager.clone(),
-        Arc::clone(&params.parent_session),
-        Arc::clone(&params.parent_turn),
+        parent_session.services.auth_manager.clone(),
+        parent_session.services.models_manager.clone(),
+        Arc::clone(&parent_session),
+        Arc::clone(&parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -532,7 +665,8 @@ async fn spawn_guardian_review_session(
         review_lock: Semaphore::new(/*permits*/ 1),
         state: Mutex::new(GuardianReviewState {
             prior_review_count,
-            last_reviewed_transcript_cursor: initial_transcript_cursor,
+            last_reviewed_transcript_cursor: initial_reviewed_transcript_cursor,
+            last_synced_transcript_cursor: initial_synced_transcript_cursor,
             last_committed_fork_snapshot: None,
         }),
     })
@@ -543,19 +677,9 @@ async fn run_review_on_session(
     params: &GuardianReviewSessionParams,
     deadline: tokio::time::Instant,
 ) -> (GuardianReviewSessionOutcome, bool) {
-    let (send_followup_reminder, prompt_mode) = {
+    let send_followup_reminder = {
         let state = review_session.state.lock().await;
-
-        let send_followup_reminder = state.prior_review_count == 1;
-        let prompt_mode = if state.prior_review_count == 0 {
-            GuardianPromptMode::Full
-        } else if let Some(cursor) = state.last_reviewed_transcript_cursor {
-            GuardianPromptMode::Delta { cursor }
-        } else {
-            GuardianPromptMode::Full
-        };
-
-        (send_followup_reminder, prompt_mode)
+        state.prior_review_count == 1
     };
     if send_followup_reminder {
         append_guardian_followup_reminder(review_session).await;
@@ -574,18 +698,18 @@ async fn run_review_on_session(
                 )
                 .await;
 
-            let prompt_items = build_guardian_prompt_items(
+            sync_parent_transcript_to_session(review_session, params.parent_session.as_ref())
+                .await?;
+            let prompt_items = build_guardian_approval_request_items(
                 params.parent_session.as_ref(),
                 params.retry_reason.clone(),
                 params.request.clone(),
-                prompt_mode,
-            )
-            .await?;
+            )?;
 
             review_session
                 .codex
                 .submit(Op::UserTurn {
-                    items: prompt_items.items,
+                    items: prompt_items,
                     cwd: params.parent_turn.cwd.to_path_buf(),
                     approval_policy: AskForApproval::Never,
                     approvals_reviewer: None,
@@ -600,7 +724,7 @@ async fn run_review_on_session(
                 })
                 .await?;
 
-            Ok::<GuardianTranscriptCursor, anyhow::Error>(prompt_items.transcript_cursor)
+            Ok::<(), anyhow::Error>(())
         }),
     )
     .await;
@@ -608,21 +732,119 @@ async fn run_review_on_session(
         Ok(submit_result) => submit_result,
         Err(outcome) => return (outcome, false),
     };
-    let transcript_cursor = match submit_result {
-        Ok(transcript_cursor) => transcript_cursor,
+    match submit_result {
+        Ok(()) => {}
         Err(err) => {
             return (GuardianReviewSessionOutcome::Completed(Err(err)), false);
         }
-    };
+    }
 
     let outcome =
         wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
     if matches!(outcome.0, GuardianReviewSessionOutcome::Completed(_)) {
         let mut state = review_session.state.lock().await;
         state.prior_review_count = state.prior_review_count.saturating_add(1);
-        state.last_reviewed_transcript_cursor = Some(transcript_cursor);
+        state.last_reviewed_transcript_cursor = state.last_synced_transcript_cursor;
     }
     outcome
+}
+
+async fn sync_parent_transcript_to_session(
+    review_session: &GuardianReviewSession,
+    parent_session: &Session,
+) -> anyhow::Result<bool> {
+    let last_synced_transcript_cursor = {
+        let state = review_session.state.lock().await;
+        state.last_synced_transcript_cursor
+    };
+    let prompt_mode = last_synced_transcript_cursor
+        .map_or(super::prompt::GuardianPromptMode::Full, |cursor| {
+            super::prompt::GuardianPromptMode::Delta { cursor }
+        });
+    let prompt_items = build_guardian_transcript_sync_items(parent_session, prompt_mode).await;
+    if Some(prompt_items.transcript_cursor) == last_synced_transcript_cursor {
+        return Ok(false);
+    }
+    let mutated_trunk = prompt_items.has_transcript_update
+        || Some(prompt_items.transcript_cursor) != last_synced_transcript_cursor;
+
+    let message = response_item_from_text_inputs(prompt_items.items);
+    let turn_context = review_session.codex.session.new_default_turn().await;
+    review_session
+        .codex
+        .session
+        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&message))
+        .await;
+
+    {
+        let mut state = review_session.state.lock().await;
+        state.last_synced_transcript_cursor = Some(prompt_items.transcript_cursor);
+    }
+
+    maybe_compact_guardian_trunk(review_session, turn_context).await?;
+    Ok(mutated_trunk)
+}
+
+fn response_item_from_text_inputs(
+    items: Vec<codex_protocol::user_input::UserInput>,
+) -> ResponseItem {
+    let content = items
+        .into_iter()
+        .filter_map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. } => {
+                Some(ContentItem::InputText { text })
+            }
+            codex_protocol::user_input::UserInput::Image { .. } => None,
+            codex_protocol::user_input::UserInput::LocalImage { .. } => None,
+            codex_protocol::user_input::UserInput::Skill { .. } => None,
+            codex_protocol::user_input::UserInput::Mention { .. } => None,
+            _ => None,
+        })
+        .collect();
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content,
+        end_turn: None,
+        phase: None,
+    }
+}
+
+async fn maybe_compact_guardian_trunk(
+    review_session: &GuardianReviewSession,
+    turn_context: Arc<TurnContext>,
+) -> anyhow::Result<()> {
+    let session = Arc::clone(&review_session.codex.session);
+    session.recompute_token_usage(turn_context.as_ref()).await;
+    let total_usage_tokens = session.get_total_token_usage().await;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    if total_usage_tokens < auto_compact_limit {
+        return Ok(());
+    }
+
+    if should_use_remote_compact_task(turn_context.provider.info()) {
+        run_inline_remote_auto_compact_task(
+            session,
+            turn_context,
+            InitialContextInjection::DoNotInject,
+            CompactionReason::ContextLimit,
+            CompactionPhase::PreTurn,
+        )
+        .await?;
+    } else {
+        run_inline_auto_compact_task(
+            session,
+            turn_context,
+            InitialContextInjection::DoNotInject,
+            CompactionReason::ContextLimit,
+            CompactionPhase::PreTurn,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {

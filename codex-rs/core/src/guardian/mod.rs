@@ -26,6 +26,7 @@ use serde::Serialize;
 pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::guardian_approval_request_to_json;
+pub(crate) use review::enqueue_proactive_guardian_trunk_sync;
 pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
@@ -77,6 +78,8 @@ use prompt::GuardianTranscriptCursor;
 use prompt::GuardianTranscriptEntry;
 #[cfg(test)]
 use prompt::GuardianTranscriptEntryKind;
+#[cfg(test)]
+use prompt::build_guardian_approval_request_items;
 #[cfg(test)]
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
