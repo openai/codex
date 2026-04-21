@@ -791,7 +791,6 @@ pub(crate) fn session_loop_termination_from_handle(
     .boxed()
     .shared()
 }
-
 async fn thread_title_from_state_db(
     state_db: Option<&state_db::StateDbHandle>,
     codex_home: &AbsolutePathBuf,
@@ -1912,6 +1911,24 @@ impl Session {
         args: RequestPermissionsArgs,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
+        self.request_permissions_for_cwd(
+            turn_context,
+            call_id,
+            args,
+            turn_context.cwd.clone(),
+            cancellation_token,
+        )
+        .await
+    }
+
+    pub(crate) async fn request_permissions_for_cwd(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        call_id: String,
+        args: RequestPermissionsArgs,
+        cwd: AbsolutePathBuf,
+        cancellation_token: CancellationToken,
+    ) -> Option<RequestPermissionsResponse> {
         match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
@@ -2019,6 +2036,7 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
+            cwd: Some(cwd),
         });
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {

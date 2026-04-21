@@ -244,7 +244,7 @@ fn intersect_permission_profiles_preserves_explicit_empty_requested_reads() {
     let granted = requested.clone();
 
     assert_eq!(
-        intersect_permission_profiles(requested.clone(), granted),
+        intersect_permission_profiles(requested.clone(), granted, temp_dir.path()),
         requested
     );
 }
@@ -265,7 +265,7 @@ fn intersect_permission_profiles_drops_ungranted_nonempty_path_requests() {
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, PermissionProfile::default()),
+        intersect_permission_profiles(requested, PermissionProfile::default(), temp_dir.path()),
         PermissionProfile::default()
     );
 }
@@ -286,13 +286,82 @@ fn intersect_permission_profiles_drops_explicit_empty_reads_without_grant() {
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, PermissionProfile::default()),
+        intersect_permission_profiles(requested, PermissionProfile::default(), temp_dir.path()),
+        PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_accepts_child_path_granted_for_requested_cwd() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let child = cwd.join("child");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![child]),
+        )),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted.clone(), cwd.as_path()),
+        granted
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_drops_broader_cwd_grant_for_requested_child_path() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let child = cwd.join("child");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![child]),
+        )),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
         PermissionProfile::default()
     );
 }
 
 #[test]
 fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
+    let cwd = std::env::current_dir().expect("current dir");
     let deny_env_files = FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
@@ -315,7 +384,7 @@ fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, granted),
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
         PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 entries: vec![deny_env_files],
@@ -328,6 +397,7 @@ fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
 
 #[test]
 fn intersect_permission_profiles_uses_granted_unbounded_glob_scan_depth() {
+    let cwd = std::env::current_dir().expect("current dir");
     let deny_env_files = FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
@@ -350,7 +420,7 @@ fn intersect_permission_profiles_uses_granted_unbounded_glob_scan_depth() {
     };
 
     assert_eq!(
-        intersect_permission_profiles(requested, granted),
+        intersect_permission_profiles(requested, granted, cwd.as_path()),
         PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 entries: vec![deny_env_files],
