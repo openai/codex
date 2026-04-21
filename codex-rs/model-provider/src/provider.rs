@@ -8,7 +8,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 
-use crate::amazon_bedrock_provider::AmazonBedrockModelProvider;
+use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_api_provider;
 use crate::auth::resolve_provider_auth;

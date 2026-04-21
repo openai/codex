@@ -1,6 +1,5 @@
-mod amazon_bedrock_provider;
+mod amazon_bedrock;
 mod auth;
-mod aws_auth_provider;
 mod bearer_auth_provider;
 mod provider;
 
