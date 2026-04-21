@@ -144,6 +144,9 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
+        Ok(proto::WireApi::Unspecified) => {
+            return Err(parse_error("remote thread config omitted wire_api"));
+        }
         Err(_) => {
             return Err(parse_error(format!(
                 "remote thread config returned unknown wire_api: {}",
