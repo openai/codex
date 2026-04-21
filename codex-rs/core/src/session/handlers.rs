@@ -545,6 +545,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             empty_cli_overrides,
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            &codex_config::NoopThreadConfigLoader,
         )
         .await
         {

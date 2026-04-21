@@ -217,6 +217,7 @@ pub struct RealtimeWebsocketEvents {
 #[derive(Default)]
 struct ActiveTranscriptState {
     entries: Vec<RealtimeTranscriptEntry>,
+    last_handoff_entry_count: usize,
     new_input_entry: bool,
     new_output_entry: bool,
 }
@@ -459,7 +460,10 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 append_handoff_input(&mut active_transcript.entries, &handoff.input_transcript);
-                handoff.active_transcript = active_transcript.entries.clone();
+                handoff.active_transcript = active_transcript.entries
+                    [active_transcript.last_handoff_entry_count..]
+                    .to_vec();
+                active_transcript.last_handoff_entry_count = active_transcript.entries.len();
                 active_transcript.new_input_entry = true;
                 active_transcript.new_output_entry = true;
             }

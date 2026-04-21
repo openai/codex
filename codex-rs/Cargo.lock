@@ -1464,6 +1464,7 @@ dependencies = [
  "codex-git-utils",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider-info",
  "codex-models-manager",
  "codex-otel",
  "codex-protocol",
@@ -1518,6 +1519,7 @@ dependencies = [
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-arg0",
+ "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-feedback",
@@ -1866,6 +1868,7 @@ name = "codex-config"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "codex-app-server-protocol",
  "codex-execpolicy",
  "codex-features",
@@ -2891,10 +2894,11 @@ name = "codex-stdio-to-uds"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-uds",
  "codex-utils-cargo-bin",
  "pretty_assertions",
  "tempfile",
- "uds_windows",
+ "tokio",
 ]
 
 [[package]]
@@ -3056,6 +3060,18 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.52.0",
  "winsplit",
+]
+
+[[package]]
+name = "codex-uds"
+version = "0.0.0"
+dependencies = [
+ "async-io",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uds_windows",
 ]
 
 [[package]]
@@ -10970,6 +10986,7 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "futures-util",
  "pin-project-lite",

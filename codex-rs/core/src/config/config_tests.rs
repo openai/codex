@@ -2212,6 +2212,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         &Vec::new(),
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
     let cfg =
@@ -2346,6 +2347,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         &[("model".to_string(), TomlValue::String("cli".to_string()))],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
     )
     .await?;
 
