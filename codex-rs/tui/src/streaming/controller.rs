@@ -24,6 +24,13 @@ use std::time::Instant;
 
 use super::StreamState;
 
+/// Shared source-retaining stream state for assistant and plan output.
+///
+/// `raw_source` is the markdown source that has crossed a newline boundary and can be rendered
+/// deterministically. `rendered_lines` is the current-width render of that source. `enqueued_len`
+/// tracks how much of that render has been offered to the commit queue, while `emitted_len` tracks
+/// how much has actually reached history cells. Keeping those counters separate lets width changes
+/// rebuild pending output without duplicating lines that are already visible.
 struct StreamCore {
     state: StreamState,
     width: Option<usize>,
@@ -166,6 +173,11 @@ impl StreamCore {
         );
     }
 
+    /// Append newly rendered lines to the live queue without replaying already queued rows.
+    ///
+    /// Width changes can make the rendered line count smaller than the previous queue boundary; in
+    /// that case the only safe option is rebuilding the queue from `emitted_len`, because slicing
+    /// from the stale `enqueued_len` would skip pending source.
     fn sync_queue_to_render(&mut self) -> bool {
         let target_len = self.rendered_lines.len().max(self.emitted_len);
         if target_len < self.enqueued_len {
@@ -183,6 +195,10 @@ impl StreamCore {
         true
     }
 
+    /// Rebuild the pending live queue from the current render and current emitted position.
+    ///
+    /// This is used when resize invalidates queued wrapping. It must never enqueue rows before
+    /// `emitted_len`, because those rows have already been inserted into terminal history.
     fn rebuild_queue_from_render(&mut self) {
         self.state.clear_queue();
         let target_len = self.rendered_lines.len().max(self.emitted_len);

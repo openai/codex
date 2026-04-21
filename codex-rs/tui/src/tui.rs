@@ -444,9 +444,16 @@ fn set_panic_hook() {
 
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    /// A terminal key event after focus, paste, and protocol bookkeeping has been handled.
     Key(KeyEvent),
+    /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// A terminal size notification that should be handled as resize-sensitive draw work.
+    ///
+    /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
+    /// changing the default draw path for scheduled frames.
     Resize,
+    /// A scheduled repaint that does not necessarily correspond to a terminal size change.
     Draw,
 }
 
@@ -456,6 +463,8 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    // Reflowed transcript rows are written through a separate queue so the feature-on draw path can
+    // preserve the inline viewport while the legacy queue keeps its pre-feature insertion behavior.
     pending_reflow_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
@@ -742,7 +751,8 @@ impl Tui {
     /// Resize the inline viewport for the resize-reflow path.
     ///
     /// Unlike the legacy draw path, this path does not scroll rows above the viewport when the
-    /// terminal shrinks. Resize reflow owns rebuilding those rows from transcript source.
+    /// terminal shrinks. Resize reflow owns rebuilding those rows from transcript source, so
+    /// scrolling here would move the viewport once and then replay history into the wrong row.
     fn update_inline_viewport_for_resize_reflow(
         terminal: &mut Terminal,
         height: u16,
@@ -807,6 +817,11 @@ impl Tui {
         Ok(is_zellij)
     }
 
+    /// Write reflowed transcript rows without moving the inline viewport.
+    ///
+    /// These rows come from a source-backed rebuild after Codex has already decided which
+    /// transcript cells should be visible at the new width. Sending them through the legacy
+    /// insertion helper would preserve old scroll behavior and undo the resize-reflow invariant.
     fn flush_pending_reflow_history_lines(
         terminal: &mut Terminal,
         pending_reflow_history_lines: &mut Vec<Line<'static>>,
@@ -885,6 +900,11 @@ impl Tui {
         })?
     }
 
+    /// Draw a frame using the resize-reflow viewport and history insertion rules.
+    ///
+    /// This is the feature-gated counterpart to `draw`. It intentionally skips
+    /// `pending_viewport_area`, whose cursor-position heuristic is part of the legacy path, and
+    /// instead lets transcript reflow rebuild scrollback before the frame is rendered.
     pub fn draw_with_resize_reflow(
         &mut self,
         height: u16,

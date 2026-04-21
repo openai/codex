@@ -1,3 +1,11 @@
+//! Inserts finalized history rows into terminal scrollback.
+//!
+//! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
+//! cell is an escape-sequence operation rather than a normal ratatui render. The legacy insertion
+//! path may move the inline viewport when new history arrives. The resize-reflow insertion path is
+//! deliberately separate because it is replaying already-owned transcript rows after a resize and
+//! must preserve the viewport position chosen by the reflow draw path.
+
 use std::fmt;
 use std::io;
 use std::io::Write;

@@ -10759,6 +10759,11 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
+    /// Return the markdown body width available to an active stream.
+    ///
+    /// Streaming controllers render only the message body, while history cells add bullets,
+    /// gutters, or plan padding around that body. Callers pass the reserved columns for that
+    /// wrapper so live output uses the same width that finalized cells will use during reflow.
     fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
         self.last_rendered_width.get().and_then(|width| {
             if width == 0 {
@@ -10769,6 +10774,11 @@ impl ChatWidget {
         })
     }
 
+    /// Update resize-sensitive chat widget state after the terminal width changes.
+    ///
+    /// The app calls this even when terminal resize reflow is disabled so live stream wrapping
+    /// remains consistent with the current viewport. Finalized transcript rebuilding stays gated at
+    /// the app layer.
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
         let had_rendered_width = self.last_rendered_width.get().is_some();
         self.last_rendered_width.set(Some(width as usize));
@@ -10790,6 +10800,7 @@ impl ChatWidget {
         self.stream_controller.is_some()
     }
 
+    /// Whether a proposed-plan stream is active.
     pub(crate) fn has_active_plan_stream(&self) -> bool {
         self.plan_stream_controller.is_some()
     }
