@@ -35,6 +35,7 @@ use codex_windows_sandbox::ipc_framed::write_frame;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::read_handle_loop;
+use codex_windows_sandbox::sanitize_windows_profile_env;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use std::ffi::c_void;
@@ -189,6 +190,8 @@ fn spawn_ipc_process(
 ) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
+    let mut child_env = req.env.clone();
+    sanitize_windows_profile_env(&mut child_env);
     log_note(
         &format!(
             "runner start cwd={} cmd={:?} real_codex_home={}",
@@ -257,7 +260,7 @@ fn spawn_ipc_process(
             h_token,
             &req.command,
             &effective_cwd,
-            &req.env,
+            &child_env,
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
@@ -287,7 +290,7 @@ fn spawn_ipc_process(
             h_token,
             &req.command,
             &effective_cwd,
-            &req.env,
+            &child_env,
             stdin_mode,
             StderrMode::Separate,
             /*use_private_desktop*/ false,
