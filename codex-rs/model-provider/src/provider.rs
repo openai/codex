@@ -5,8 +5,10 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 
+use crate::amazon_bedrock_provider::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_api_provider;
 use crate::auth::resolve_provider_auth;
@@ -53,6 +55,17 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
+    if provider_info.is_amazon_bedrock() {
+        let aws = provider_info
+            .aws
+            .clone()
+            .unwrap_or(ModelProviderAwsAuthInfo { profile: None });
+        return Arc::new(AmazonBedrockModelProvider {
+            info: provider_info,
+            aws,
+        });
+    }
+
     let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
     Arc::new(ConfiguredModelProvider {
         info: provider_info,
@@ -126,9 +139,24 @@ mod tests {
     }
 
     #[test]
-    fn create_model_provider_does_not_use_openai_auth_manager_for_aws_provider() {
+    fn create_model_provider_does_not_use_openai_auth_manager_for_amazon_bedrock_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
+                profile: Some("codex-bedrock".to_string()),
+            })),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert!(provider.auth_manager().is_none());
+    }
+
+    #[test]
+    fn create_model_provider_does_not_select_bedrock_provider_for_custom_aws_provider() {
         let provider = create_model_provider(
             ModelProviderInfo {
+                name: "Custom".to_string(),
                 aws: Some(ModelProviderAwsAuthInfo {
                     profile: Some("codex-bedrock".to_string()),
                 }),
@@ -136,10 +164,10 @@ mod tests {
                 ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
             },
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-                "openai-api-key",
+                "custom-api-key",
             ))),
         );
 
-        assert!(provider.auth_manager().is_none());
+        assert!(provider.auth_manager().is_some());
     }
 }

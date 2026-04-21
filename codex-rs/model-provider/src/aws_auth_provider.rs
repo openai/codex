@@ -9,6 +9,8 @@ use http::HeaderMap;
 use http::HeaderValue;
 use tokio::sync::OnceCell;
 
+const LEGACY_SESSION_ID_HEADER: &str = "session_id";
+
 /// AWS SigV4 auth provider for OpenAI-compatible model-provider requests.
 #[derive(Debug)]
 pub(crate) struct AwsSigV4AuthProvider {
@@ -69,6 +71,7 @@ impl AuthProvider for AwsSigV4AuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
     async fn apply_auth(&self, mut request: Request) -> Result<Request, AuthError> {
+        remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
         let body = request.prepare_body_for_send().map_err(AuthError::Build)?;
         let context = self.context().await?;
         let signed = context
@@ -85,6 +88,13 @@ impl AuthProvider for AwsSigV4AuthProvider {
         request.headers = signed.headers;
         Ok(request)
     }
+}
+
+fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
+    // The Bedrock Mantle front door does not preserve this legacy OpenAI header
+    // for SigV4 verification. Signing it makes the richer Codex agent request
+    // fail even though raw Responses requests work.
+    headers.remove(LEGACY_SESSION_ID_HEADER);
 }
 
 #[cfg(test)]
@@ -105,6 +115,29 @@ mod tests {
                 .get(http::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer bedrock-token")
+        );
+    }
+
+    #[test]
+    fn bedrock_mantle_sigv4_strips_legacy_session_id_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            LEGACY_SESSION_ID_HEADER,
+            HeaderValue::from_static("019dae79-15c3-70c3-8736-3219b8602b37"),
+        );
+        headers.insert(
+            "x-client-request-id",
+            HeaderValue::from_static("request-id"),
+        );
+
+        remove_headers_not_preserved_by_bedrock_mantle(&mut headers);
+
+        assert!(!headers.contains_key(LEGACY_SESSION_ID_HEADER));
+        assert_eq!(
+            headers
+                .get("x-client-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("request-id")
         );
     }
 }
