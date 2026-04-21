@@ -33,7 +33,7 @@ impl ContextualUserFragment for UserShellCommand {
 
     fn body(&self) -> String {
         format!(
-            "\n<command>\n{}\n</command>\n<result>\nExit code: {}\nDuration: {:.4} seconds\nOutput:\n{}\n</result>",
+            "\n<command>\n{}\n</command>\n<result>\nExit code: {}\nDuration: {:.4} seconds\nOutput:\n{}\n</result>\n",
             self.command, self.exit_code, self.duration_seconds, self.output,
         )
     }

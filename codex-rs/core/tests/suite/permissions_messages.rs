@@ -1,9 +1,6 @@
 use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
-use codex_core::context::ContextualUserFragment;
-use codex_core::context::PermissionsInstructions;
-use codex_execpolicy::Policy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -550,22 +547,18 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
 
     let permissions = permissions_texts(&req.single_request());
     let normalize_line_endings = |s: &str| s.replace("\r\n", "\n");
-    let expected = PermissionsInstructions::from_policy(
-        &sandbox_policy,
-        AskForApproval::OnRequest,
-        test.config.approvals_reviewer,
-        &Policy::empty(),
-        test.config.cwd.as_path(),
-        /*exec_permission_approvals_enabled*/ false,
-        /*request_permissions_tool_enabled*/ false,
-    )
-    .render();
-    let expected_normalized = normalize_line_endings(&expected);
     let actual_normalized: Vec<String> = permissions
         .iter()
         .map(|s| normalize_line_endings(s))
         .collect();
-    assert_eq!(actual_normalized, vec![expected_normalized]);
+    assert_eq!(actual_normalized.len(), 1);
+    let permissions = &actual_normalized[0];
+    assert!(permissions.starts_with("<permissions instructions>\n"));
+    assert!(permissions.ends_with("\n</permissions instructions>"));
+    assert!(permissions.contains("`sandbox_mode` is `workspace-write`"));
+    assert!(permissions.contains("Network access is restricted."));
+    assert!(permissions.contains("How to request escalation"));
+    assert!(permissions.contains(&format!("`{}`", writable.path().display())));
 
     Ok(())
 }

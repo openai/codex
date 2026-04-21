@@ -24,7 +24,7 @@ impl ContextualUserFragment for RealtimeEndInstructions {
 
     fn body(&self) -> String {
         format!(
-            "\n{}\n\nReason: {}",
+            "\n{}\n\nReason: {}\n",
             REALTIME_END_INSTRUCTIONS.trim(),
             self.reason
         )

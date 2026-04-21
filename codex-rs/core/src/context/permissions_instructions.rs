@@ -118,8 +118,8 @@ impl PermissionsInstructions {
         if let Some(writable_roots) = writable_roots_text(writable_roots) {
             append_section(&mut text, &writable_roots);
         }
-        if text.ends_with('\n') {
-            text.pop();
+        if !text.ends_with('\n') {
+            text.push('\n');
         }
         Self { text }
     }

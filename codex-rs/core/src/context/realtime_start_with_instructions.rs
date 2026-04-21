@@ -21,6 +21,6 @@ impl ContextualUserFragment for RealtimeStartWithInstructions {
     const END_MARKER: &'static str = REALTIME_CONVERSATION_CLOSE_TAG;
 
     fn body(&self) -> String {
-        format!("\n{}", self.instructions)
+        format!("\n{}\n", self.instructions)
     }
 }
