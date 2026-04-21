@@ -6533,6 +6533,27 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
     assert_eq!(25, goal.tokens_used);
 
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 30,
+            cached_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 40,
+        },
+    )
+    .await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::BudgetLimitSteering::Suppressed)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after follow-up accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(40, goal.tokens_used);
+
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     Ok(())
