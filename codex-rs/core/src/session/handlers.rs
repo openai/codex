@@ -468,6 +468,10 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP tool listing reads through the session-owned manager guard"
+)]
 pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let auth = sess.services.auth_manager.auth().await;

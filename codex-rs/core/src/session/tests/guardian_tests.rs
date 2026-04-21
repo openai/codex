@@ -489,6 +489,10 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
 
 #[tokio::test]
 #[cfg(unix)]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test mutates active turn state directly to seed granted permissions"
+)]
 async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_permissions_feature() {
     let (mut session, turn_context_raw) = make_session_and_context().await;
     session
