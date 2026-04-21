@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
@@ -32,7 +30,6 @@ pub struct HttpResponseBodyStream {
     request_id: String,
     next_seq: u64,
     rx: mpsc::Receiver<HttpRequestBodyDeltaNotification>,
-    failure: Arc<StdMutex<Option<String>>>,
     // Terminal frames can carry a final chunk; return that once, then EOF.
     pending_eof: bool,
     closed: bool,
@@ -51,18 +48,6 @@ impl HttpResponseBodyStream {
         }
 
         let Some(delta) = self.rx.recv().await else {
-            let error = self
-                .failure
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if let Some(error) = error {
-                self.finish().await;
-                return Err(ExecServerError::Protocol(format!(
-                    "http response stream `{}` failed: {error}",
-                    self.request_id
-                )));
-            }
             self.finish().await;
             return Ok(None);
         };
@@ -114,35 +99,6 @@ impl Drop for HttpResponseBodyStream {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct HttpBodyStreamRoute {
-    tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
-    failure: Arc<StdMutex<Option<String>>>,
-}
-
-impl HttpBodyStreamRoute {
-    /// Creates an active route that delivers body deltas to the caller.
-    fn active(
-        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
-        failure: Arc<StdMutex<Option<String>>>,
-    ) -> Self {
-        Self { tx, failure }
-    }
-
-    /// Sends one body delta to the caller.
-    fn try_send(
-        &self,
-        delta: HttpRequestBodyDeltaNotification,
-    ) -> Result<(), TrySendError<HttpRequestBodyDeltaNotification>> {
-        self.tx.try_send(delta)
-    }
-
-    /// Records a terminal failure that the stream sees after queued chunks.
-    fn set_failure(&self, message: String) {
-        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
-    }
-}
-
 /// Active route registration owned while `http_request_stream` awaits headers.
 struct HttpBodyStreamRegistration {
     inner: Arc<Inner>,
@@ -183,12 +139,8 @@ impl ExecServerClient {
         let request_id = self.inner.next_http_body_stream_request_id();
         params.request_id = Some(request_id.clone());
         let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
-        let failure = Arc::new(StdMutex::new(None));
         self.inner
-            .insert_http_body_stream(
-                request_id.clone(),
-                HttpBodyStreamRoute::active(tx, Arc::clone(&failure)),
-            )
+            .insert_http_body_stream(request_id.clone(), tx)
             .await?;
         let mut registration = HttpBodyStreamRegistration {
             inner: Arc::clone(&self.inner),
@@ -211,7 +163,6 @@ impl ExecServerClient {
                 request_id,
                 next_seq: 1,
                 rx,
-                failure,
                 pending_eof: false,
                 closed: false,
             },
@@ -247,7 +198,6 @@ impl Inner {
                     debug!("http response stream receiver dropped before body delta delivery");
                 }
                 Err(TrySendError::Full(_)) => {
-                    route.set_failure("body delta channel filled before delivery".to_string());
                     self.remove_http_body_stream(&request_id).await;
                     debug!(
                         "closing http response stream `{request_id}` after body delta backpressure"
@@ -265,9 +215,8 @@ impl Inner {
         let streams = self.http_body_streams.load();
         let streams = streams.as_ref().clone();
         self.http_body_streams.store(Arc::new(HashMap::new()));
-        for (request_id, route) in streams {
-            route.set_failure(message.clone());
-            let _ = route.try_send(HttpRequestBodyDeltaNotification {
+        for (request_id, tx) in streams {
+            let _ = tx.try_send(HttpRequestBodyDeltaNotification {
                 request_id,
                 seq: 1,
                 delta: Vec::new().into(),
@@ -289,7 +238,7 @@ impl Inner {
     async fn insert_http_body_stream(
         &self,
         request_id: String,
-        route: HttpBodyStreamRoute,
+        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
     ) -> Result<(), ExecServerError> {
         let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
         let streams = self.http_body_streams.load();
@@ -299,13 +248,16 @@ impl Inner {
             )));
         }
         let mut next_streams = streams.as_ref().clone();
-        next_streams.insert(request_id, route);
+        next_streams.insert(request_id, tx);
         self.http_body_streams.store(Arc::new(next_streams));
         Ok(())
     }
 
     /// Removes a request id after EOF, terminal error, or request failure.
-    async fn remove_http_body_stream(&self, request_id: &str) -> Option<HttpBodyStreamRoute> {
+    async fn remove_http_body_stream(
+        &self,
+        request_id: &str,
+    ) -> Option<mpsc::Sender<HttpRequestBodyDeltaNotification>> {
         let _streams_write_guard = self.http_body_streams_write_lock.lock().await;
         let streams = self.http_body_streams.load();
         let stream = streams.get(request_id).cloned();

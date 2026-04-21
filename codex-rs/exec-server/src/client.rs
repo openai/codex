@@ -153,7 +153,7 @@ struct Inner {
     // because they share the same connection-global notification channel as
     // process output. Keep the routing table local to the client so higher
     // layers can consume body chunks like a normal byte stream.
-    http_body_streams: ArcSwap<HashMap<String, http_client::HttpBodyStreamRoute>>,
+    http_body_streams: ArcSwap<HashMap<String, mpsc::Sender<HttpRequestBodyDeltaNotification>>>,
     http_body_streams_write_lock: Mutex<()>,
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
