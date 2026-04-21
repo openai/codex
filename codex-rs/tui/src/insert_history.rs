@@ -51,6 +51,86 @@ impl InsertHistoryMode {
     }
 }
 
+/// Insert `lines` above the viewport without changing the viewport's logical row.
+///
+/// This is used by terminal resize reflow after Codex has cleared and rebuilt its owned
+/// scrollback from transcript source. Keep this path separate from `insert_history_lines_with_mode`
+/// so the default history insertion behavior remains the pre-reflow implementation.
+pub fn insert_history_lines_preserving_viewport<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    is_zellij: bool,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
+    let area = terminal.viewport_area;
+    let last_cursor_pos = terminal.last_known_cursor_pos;
+    let writer = terminal.backend_mut();
+
+    let wrap_width = area.width.max(1) as usize;
+    let mut wrapped = Vec::new();
+    let mut wrapped_rows = 0usize;
+
+    for line in &lines {
+        let line_wrapped =
+            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
+                vec![line.clone()]
+            } else {
+                adaptive_wrap_line(line, RtOptions::new(wrap_width))
+            };
+        wrapped_rows += line_wrapped
+            .iter()
+            .map(|wrapped_line| wrapped_line.width().max(1).div_ceil(wrap_width))
+            .sum::<usize>();
+        wrapped.extend(line_wrapped);
+    }
+    let wrapped_lines = wrapped_rows as u16;
+
+    if is_zellij {
+        let zellij_start = wrapped.len().saturating_sub(area.top() as usize);
+        let zellij_lines = &wrapped[zellij_start..];
+        let cursor_top = area.top().saturating_sub(zellij_lines.len() as u16);
+        queue!(writer, MoveTo(0, cursor_top))?;
+
+        for (i, line) in zellij_lines.iter().enumerate() {
+            if i > 0 {
+                queue!(writer, Print("\r\n"))?;
+            }
+            write_history_line(writer, line, wrap_width)?;
+        }
+    } else if area.top() > 0 {
+        let cursor_top = area.top().saturating_sub(1);
+
+        // Limit the scroll region to rows above the viewport, then write the rebuilt transcript
+        // into that region without treating free space below the viewport as room for live output.
+        queue!(writer, SetScrollRegion(1..area.top()))?;
+        queue!(writer, MoveTo(0, cursor_top))?;
+
+        let scroll_bottom = area.top().saturating_sub(1);
+        let mut advance_row = cursor_top;
+        for line in &wrapped {
+            // Anchor each advance to avoid wrap-pending drift when the previous row reached the
+            // right edge while replaying source-backed history.
+            queue!(writer, MoveTo(0, advance_row), Print("\n"))?;
+            if advance_row < scroll_bottom {
+                advance_row += 1;
+            }
+            write_history_line(writer, line, wrap_width)?;
+        }
+
+        queue!(writer, ResetScrollRegion)?;
+    }
+
+    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+
+    let _ = writer;
+    if wrapped_lines > 0 {
+        terminal.note_history_rows_inserted(wrapped_lines);
+    }
+    Ok(())
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(

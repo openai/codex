@@ -159,6 +159,7 @@ mod terminal_title;
 mod text_formatting;
 mod theme_picker;
 mod tooltips;
+mod transcript_reflow;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
@@ -168,6 +169,7 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
+mod width;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
