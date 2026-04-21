@@ -113,12 +113,12 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
 }
 
 /// Creates a Streamable HTTP RMCP client that sends traffic through exec-server.
-pub(crate) async fn create_environment_client(
+pub(crate) async fn create_remote_client(
     base_url: &str,
     exec_client: ExecServerClient,
 ) -> anyhow::Result<RmcpClient> {
-    let client = RmcpClient::new_environment_streamable_http_client(
-        "test-streamable-http-environment",
+    let client = RmcpClient::new_remote_streamable_http_client(
+        "test-streamable-http-remote",
         &format!("{base_url}/mcp"),
         Some("test-bearer".to_string()),
         /*http_headers*/ None,
@@ -196,7 +196,7 @@ pub(crate) async fn spawn_streamable_http_server() -> anyhow::Result<(Child, Str
     Ok((child, base_url))
 }
 
-/// Owns the exec-server process used by the environment-client integration test.
+/// Owns the exec-server process used by the remote-client integration test.
 pub(crate) struct ExecServerProcess {
     _codex_home: TempDir,
     child: Child,
@@ -225,7 +225,7 @@ pub(crate) async fn spawn_exec_server() -> anyhow::Result<ExecServerProcess> {
     let websocket_url = read_exec_server_listen_url(&mut child).await?;
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
         websocket_url,
-        "rmcp-client-environment-http-test".to_string(),
+        "rmcp-client-remote-http-test".to_string(),
     ))
     .await?;
 

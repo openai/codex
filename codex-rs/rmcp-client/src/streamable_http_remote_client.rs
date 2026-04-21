@@ -2,7 +2,7 @@
 //!
 //! RMCP still owns the MCP protocol state machine, session recovery, and OAuth
 //! decisions. This adapter only translates RMCP's HTTP operations into the
-//! executor HTTP request protocol so remote environments resolve network
+//! executor HTTP request protocol so remote executors resolve network
 //! addresses, headers, and streaming bodies from the executor side.
 
 use std::io;
@@ -48,14 +48,14 @@ const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 /// The client is deliberately small: it translates HTTP operations to
 /// executor protocol calls and lets RMCP own MCP session and recovery behavior.
 #[derive(Clone)]
-pub(crate) struct EnvironmentStreamableHttpClient {
+pub(crate) struct RemoteStreamableHttpClient {
     exec_client: ExecServerClient,
     default_headers: HeaderMap,
 }
 
 /// Errors introduced by executor-backed Streamable HTTP transport.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum EnvironmentStreamableHttpClientError {
+pub(crate) enum RemoteStreamableHttpClientError {
     /// Existing MCP session id was rejected with 404.
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
@@ -67,7 +67,7 @@ pub(crate) enum EnvironmentStreamableHttpClientError {
     Header(String),
 }
 
-impl EnvironmentStreamableHttpClient {
+impl RemoteStreamableHttpClient {
     /// Creates an adapter with shared executor client and static default headers.
     pub(crate) fn new(exec_client: ExecServerClient, default_headers: HeaderMap) -> Self {
         Self {
@@ -77,8 +77,8 @@ impl EnvironmentStreamableHttpClient {
     }
 }
 
-impl StreamableHttpClient for EnvironmentStreamableHttpClient {
-    type Error = EnvironmentStreamableHttpClientError;
+impl StreamableHttpClient for RemoteStreamableHttpClient {
+    type Error = RemoteStreamableHttpClientError;
 
     /// Sends a JSON-RPC message to the MCP server over executor HTTP.
     async fn post_message(
@@ -123,7 +123,7 @@ impl StreamableHttpClient for EnvironmentStreamableHttpClient {
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
-                EnvironmentStreamableHttpClientError::SessionExpired404,
+                RemoteStreamableHttpClientError::SessionExpired404,
             ));
         }
         if response.status == StatusCode::UNAUTHORIZED.as_u16()
@@ -256,7 +256,7 @@ impl StreamableHttpClient for EnvironmentStreamableHttpClient {
         }
         if response.status == StatusCode::NOT_FOUND.as_u16() {
             return Err(StreamableHttpError::Client(
-                EnvironmentStreamableHttpClientError::SessionExpired404,
+                RemoteStreamableHttpClientError::SessionExpired404,
             ));
         }
         if !status_is_success(response.status) {
@@ -283,24 +283,20 @@ impl StreamableHttpClient for EnvironmentStreamableHttpClient {
     }
 }
 
-impl EnvironmentStreamableHttpClient {
+impl RemoteStreamableHttpClient {
     /// Returns the configured default headers for one outgoing HTTP operation.
     fn request_headers(&self) -> HeaderMap {
         self.default_headers.clone()
     }
 
     /// Wraps executor transport errors in the RMCP Streamable HTTP error type.
-    fn error(error: ExecServerError) -> StreamableHttpError<EnvironmentStreamableHttpClientError> {
-        StreamableHttpError::Client(EnvironmentStreamableHttpClientError::from(error))
+    fn error(error: ExecServerError) -> StreamableHttpError<RemoteStreamableHttpClientError> {
+        StreamableHttpError::Client(RemoteStreamableHttpClientError::from(error))
     }
 
     /// Wraps invalid header construction in the RMCP Streamable HTTP error type.
-    fn header_error(
-        error: impl ToString,
-    ) -> StreamableHttpError<EnvironmentStreamableHttpClientError> {
-        StreamableHttpError::Client(EnvironmentStreamableHttpClientError::Header(
-            error.to_string(),
-        ))
+    fn header_error(error: impl ToString) -> StreamableHttpError<RemoteStreamableHttpClientError> {
+        StreamableHttpError::Client(RemoteStreamableHttpClientError::Header(error.to_string()))
     }
 }
 
@@ -309,9 +305,8 @@ fn insert_static_header(
     headers: &mut HeaderMap,
     name: HeaderName,
     value: String,
-) -> std::result::Result<(), StreamableHttpError<EnvironmentStreamableHttpClientError>> {
-    let value =
-        HeaderValue::from_str(&value).map_err(EnvironmentStreamableHttpClient::header_error)?;
+) -> std::result::Result<(), StreamableHttpError<RemoteStreamableHttpClientError>> {
+    let value = HeaderValue::from_str(&value).map_err(RemoteStreamableHttpClient::header_error)?;
     headers.insert(name, value);
     Ok(())
 }
@@ -320,7 +315,7 @@ fn insert_static_header(
 fn insert_auth_header(
     headers: &mut HeaderMap,
     auth_token: Option<String>,
-) -> std::result::Result<(), StreamableHttpError<EnvironmentStreamableHttpClientError>> {
+) -> std::result::Result<(), StreamableHttpError<RemoteStreamableHttpClientError>> {
     if let Some(auth_token) = auth_token {
         insert_static_header(headers, AUTHORIZATION, format!("Bearer {auth_token}"))?;
     }
@@ -357,12 +352,12 @@ fn status_is_success(status: u16) -> bool {
 /// Collects an executor response-body stream into one byte vector.
 async fn collect_body(
     body_stream: &mut HttpResponseBodyStream,
-) -> std::result::Result<Vec<u8>, StreamableHttpError<EnvironmentStreamableHttpClientError>> {
+) -> std::result::Result<Vec<u8>, StreamableHttpError<RemoteStreamableHttpClientError>> {
     let mut body = Vec::new();
     while let Some(chunk) = body_stream
         .recv()
         .await
-        .map_err(EnvironmentStreamableHttpClient::error)?
+        .map_err(RemoteStreamableHttpClient::error)?
     {
         body.extend_from_slice(&chunk);
     }

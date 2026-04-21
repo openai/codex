@@ -76,8 +76,8 @@ use crate::oauth::StoredOAuthTokens;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::streamable_http_environment_client::EnvironmentStreamableHttpClient;
-use crate::streamable_http_environment_client::EnvironmentStreamableHttpClientError;
+use crate::streamable_http_remote_client::RemoteStreamableHttpClient;
+use crate::streamable_http_remote_client::RemoteStreamableHttpClientError;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -110,12 +110,51 @@ fn build_http_client(default_headers: &HeaderMap) -> Result<reqwest::Client> {
     Ok(build_reqwest_client_with_custom_ca(builder)?)
 }
 
+fn build_streamable_http_client(
+    default_headers: HeaderMap,
+    placement: StreamableHttpClientPlacement,
+) -> Result<StreamableHttpTransportClient> {
+    match placement {
+        StreamableHttpClientPlacement::Local => {
+            let http_client = build_http_client(&default_headers)?;
+            Ok(StreamableHttpTransportClient::Local(
+                StreamableHttpResponseClient::new(http_client),
+            ))
+        }
+        StreamableHttpClientPlacement::Remote { exec_client } => {
+            Ok(StreamableHttpTransportClient::Remote(
+                RemoteStreamableHttpClient::new(exec_client, default_headers),
+            ))
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum StreamableHttpResponseClientError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+}
+
+#[derive(Clone)]
+enum StreamableHttpClientPlacement {
+    Local,
+    Remote { exec_client: ExecServerClient },
+}
+
+#[derive(Clone)]
+enum StreamableHttpTransportClient {
+    Local(StreamableHttpResponseClient),
+    Remote(RemoteStreamableHttpClient),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum StreamableHttpTransportClientError {
+    #[error(transparent)]
+    Local(#[from] StreamableHttpResponseClientError),
+    #[error(transparent)]
+    Remote(#[from] RemoteStreamableHttpClientError),
 }
 
 impl StreamableHttpClient for StreamableHttpResponseClient {
@@ -306,22 +345,127 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
     }
 }
 
+impl StreamableHttpClient for StreamableHttpTransportClient {
+    type Error = StreamableHttpTransportClientError;
+
+    async fn post_message(
+        &self,
+        uri: Arc<str>,
+        message: rmcp::model::ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        match self {
+            Self::Local(client) => client
+                .post_message(uri, message, session_id, auth_token)
+                .await
+                .map_err(map_local_streamable_http_error),
+            Self::Remote(client) => client
+                .post_message(uri, message, session_id, auth_token)
+                .await
+                .map_err(map_remote_streamable_http_error),
+        }
+    }
+
+    async fn delete_session(
+        &self,
+        uri: Arc<str>,
+        session: Arc<str>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
+        match self {
+            Self::Local(client) => client
+                .delete_session(uri, session, auth_token)
+                .await
+                .map_err(map_local_streamable_http_error),
+            Self::Remote(client) => client
+                .delete_session(uri, session, auth_token)
+                .await
+                .map_err(map_remote_streamable_http_error),
+        }
+    }
+
+    async fn get_stream(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_token: Option<String>,
+    ) -> std::result::Result<
+        BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
+        StreamableHttpError<Self::Error>,
+    > {
+        match self {
+            Self::Local(client) => client
+                .get_stream(uri, session_id, last_event_id, auth_token)
+                .await
+                .map_err(map_local_streamable_http_error),
+            Self::Remote(client) => client
+                .get_stream(uri, session_id, last_event_id, auth_token)
+                .await
+                .map_err(map_remote_streamable_http_error),
+        }
+    }
+}
+
+fn map_local_streamable_http_error(
+    error: StreamableHttpError<StreamableHttpResponseClientError>,
+) -> StreamableHttpError<StreamableHttpTransportClientError> {
+    map_streamable_http_error(error, StreamableHttpTransportClientError::Local)
+}
+
+fn map_remote_streamable_http_error(
+    error: StreamableHttpError<RemoteStreamableHttpClientError>,
+) -> StreamableHttpError<StreamableHttpTransportClientError> {
+    map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
+}
+
+fn map_streamable_http_error<FromError, ToError>(
+    error: StreamableHttpError<FromError>,
+    map_client_error: fn(FromError) -> ToError,
+) -> StreamableHttpError<ToError>
+where
+    FromError: std::error::Error + Send + Sync + 'static,
+    ToError: std::error::Error + Send + Sync + 'static,
+{
+    match error {
+        StreamableHttpError::Sse(error) => StreamableHttpError::Sse(error),
+        StreamableHttpError::Io(error) => StreamableHttpError::Io(error),
+        StreamableHttpError::Client(error) => StreamableHttpError::Client(map_client_error(error)),
+        StreamableHttpError::UnexpectedEndOfStream => StreamableHttpError::UnexpectedEndOfStream,
+        StreamableHttpError::UnexpectedServerResponse(error) => {
+            StreamableHttpError::UnexpectedServerResponse(error)
+        }
+        StreamableHttpError::UnexpectedContentType(error) => {
+            StreamableHttpError::UnexpectedContentType(error)
+        }
+        StreamableHttpError::ServerDoesNotSupportSse => {
+            StreamableHttpError::ServerDoesNotSupportSse
+        }
+        StreamableHttpError::ServerDoesNotSupportDeleteSession => {
+            StreamableHttpError::ServerDoesNotSupportDeleteSession
+        }
+        StreamableHttpError::TokioJoinError(error) => StreamableHttpError::TokioJoinError(error),
+        StreamableHttpError::Deserialize(error) => StreamableHttpError::Deserialize(error),
+        StreamableHttpError::TransportChannelClosed => StreamableHttpError::TransportChannelClosed,
+        StreamableHttpError::MissingSessionIdInResponse => {
+            StreamableHttpError::MissingSessionIdInResponse
+        }
+        #[cfg(feature = "auth")]
+        StreamableHttpError::Auth(error) => StreamableHttpError::Auth(error),
+        StreamableHttpError::AuthRequired(error) => StreamableHttpError::AuthRequired(error),
+    }
+}
+
 enum PendingTransport {
     Stdio {
         transport: StdioServerTransport,
     },
     StreamableHttp {
-        transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
-    },
-    EnvironmentStreamableHttp {
-        transport: StreamableHttpClientTransport<EnvironmentStreamableHttpClient>,
+        transport: StreamableHttpClientTransport<StreamableHttpTransportClient>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
-        oauth_persistor: OAuthPersistor,
-    },
-    EnvironmentStreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<EnvironmentStreamableHttpClient>>,
+        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -349,15 +493,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-    },
-    EnvironmentStreamableHttp {
-        server_name: String,
-        url: String,
-        bearer_token: Option<String>,
-        http_headers: Option<HashMap<String, String>>,
-        env_http_headers: Option<HashMap<String, String>>,
-        store_mode: OAuthCredentialsStoreMode,
-        exec_client: ExecServerClient,
+        placement: StreamableHttpClientPlacement,
     },
 }
 
@@ -556,34 +692,20 @@ impl RmcpClient {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
-        let transport_recipe = TransportRecipe::StreamableHttp {
-            server_name: server_name.to_string(),
-            url: url.to_string(),
+        Self::new_streamable_http_client_with_placement(
+            server_name,
+            url,
             bearer_token,
             http_headers,
             env_http_headers,
             store_mode,
-        };
-        let transport = Self::create_pending_transport(&transport_recipe).await?;
-        Ok(Self {
-            state: Mutex::new(ClientState::Connecting {
-                transport: Some(transport),
-            }),
-            transport_recipe,
-            initialize_context: Mutex::new(None),
-            session_recovery_lock: Semaphore::new(/*permits*/ 1),
-            elicitation_pause_state: ElicitationPauseState::new(),
-        })
+            StreamableHttpClientPlacement::Local,
+        )
+        .await
     }
 
-    /// Creates a Streamable HTTP MCP client whose HTTP requests run through an
-    /// exec-server connection.
-    ///
-    /// This keeps MCP protocol handling local to this crate while letting the
-    /// executor environment own DNS resolution, network reachability, and
-    /// response-body streaming for remote MCP servers.
     #[allow(clippy::too_many_arguments)]
-    pub async fn new_environment_streamable_http_client(
+    pub async fn new_remote_streamable_http_client(
         server_name: &str,
         url: &str,
         bearer_token: Option<String>,
@@ -592,14 +714,36 @@ impl RmcpClient {
         store_mode: OAuthCredentialsStoreMode,
         exec_client: ExecServerClient,
     ) -> Result<Self> {
-        let transport_recipe = TransportRecipe::EnvironmentStreamableHttp {
+        Self::new_streamable_http_client_with_placement(
+            server_name,
+            url,
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
+            StreamableHttpClientPlacement::Remote { exec_client },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_streamable_http_client_with_placement(
+        server_name: &str,
+        url: &str,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        placement: StreamableHttpClientPlacement,
+    ) -> Result<Self> {
+        let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
             url: url.to_string(),
             bearer_token,
             http_headers,
             env_http_headers,
             store_mode,
-            exec_client,
+            placement,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -951,6 +1095,7 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                placement,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
@@ -975,6 +1120,7 @@ impl RmcpClient {
                         initial_tokens.clone(),
                         *store_mode,
                         default_headers.clone(),
+                        placement.clone(),
                     )
                     .await
                     {
@@ -1001,9 +1147,8 @@ impl RmcpClient {
                             let http_config =
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
-                            let http_client = build_http_client(&default_headers)?;
                             let transport = StreamableHttpClientTransport::with_client(
-                                StreamableHttpResponseClient::new(http_client),
+                                build_streamable_http_client(default_headers, placement.clone())?,
                                 http_config,
                             );
                             Ok(PendingTransport::StreamableHttp { transport })
@@ -1017,97 +1162,11 @@ impl RmcpClient {
                         http_config = http_config.auth_header(bearer_token);
                     }
 
-                    let http_client = build_http_client(&default_headers)?;
-
                     let transport = StreamableHttpClientTransport::with_client(
-                        StreamableHttpResponseClient::new(http_client),
+                        build_streamable_http_client(default_headers, placement.clone())?,
                         http_config,
                     );
                     Ok(PendingTransport::StreamableHttp { transport })
-                }
-            }
-            TransportRecipe::EnvironmentStreamableHttp {
-                server_name,
-                url,
-                bearer_token,
-                http_headers,
-                env_http_headers,
-                store_mode,
-                exec_client,
-            } => {
-                let default_headers =
-                    build_default_headers(http_headers.clone(), env_http_headers.clone())?;
-
-                let initial_oauth_tokens =
-                    if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
-                        match load_oauth_tokens(server_name, url, *store_mode) {
-                            Ok(tokens) => tokens,
-                            Err(err) => {
-                                warn!("failed to read tokens for server `{server_name}`: {err}");
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                if let Some(initial_tokens) = initial_oauth_tokens.clone() {
-                    match create_environment_oauth_transport_and_runtime(
-                        server_name,
-                        url,
-                        initial_tokens.clone(),
-                        *store_mode,
-                        default_headers.clone(),
-                        exec_client.clone(),
-                    )
-                    .await
-                    {
-                        Ok((transport, oauth_persistor)) => {
-                            Ok(PendingTransport::EnvironmentStreamableHttpWithOAuth {
-                                transport,
-                                oauth_persistor,
-                            })
-                        }
-                        Err(err)
-                            if err.downcast_ref::<AuthError>().is_some_and(|auth_err| {
-                                matches!(auth_err, AuthError::NoAuthorizationSupport)
-                            }) =>
-                        {
-                            let access_token = initial_tokens
-                                .token_response
-                                .0
-                                .access_token()
-                                .secret()
-                                .to_string();
-                            warn!(
-                                "OAuth metadata discovery is unavailable for MCP server `{server_name}`; falling back to stored bearer token authentication"
-                            );
-                            let http_config =
-                                StreamableHttpClientTransportConfig::with_uri(url.clone())
-                                    .auth_header(access_token);
-                            let transport = StreamableHttpClientTransport::with_client(
-                                EnvironmentStreamableHttpClient::new(
-                                    exec_client.clone(),
-                                    default_headers,
-                                ),
-                                http_config,
-                            );
-                            Ok(PendingTransport::EnvironmentStreamableHttp { transport })
-                        }
-                        Err(err) => Err(err),
-                    }
-                } else {
-                    let mut http_config =
-                        StreamableHttpClientTransportConfig::with_uri(url.clone());
-                    if let Some(bearer_token) = bearer_token.clone() {
-                        http_config = http_config.auth_header(bearer_token);
-                    }
-
-                    let transport = StreamableHttpClientTransport::with_client(
-                        EnvironmentStreamableHttpClient::new(exec_client.clone(), default_headers),
-                        http_config,
-                    );
-                    Ok(PendingTransport::EnvironmentStreamableHttp { transport })
                 }
             }
         }
@@ -1130,18 +1189,7 @@ impl RmcpClient {
                 service::serve_client(client_service, transport).boxed(),
                 None,
             ),
-            PendingTransport::EnvironmentStreamableHttp { transport } => (
-                service::serve_client(client_service, transport).boxed(),
-                None,
-            ),
             PendingTransport::StreamableHttpWithOAuth {
-                transport,
-                oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
-            PendingTransport::EnvironmentStreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
             } => (
@@ -1235,26 +1283,19 @@ impl RmcpClient {
 
         error
             .error
-            .downcast_ref::<StreamableHttpError<StreamableHttpResponseClientError>>()
+            .downcast_ref::<StreamableHttpError<StreamableHttpTransportClientError>>()
             .is_some_and(|error| {
                 matches!(
                     error,
                     StreamableHttpError::Client(
-                        StreamableHttpResponseClientError::SessionExpired404
+                        StreamableHttpTransportClientError::Local(
+                            StreamableHttpResponseClientError::SessionExpired404
+                        ) | StreamableHttpTransportClientError::Remote(
+                            RemoteStreamableHttpClientError::SessionExpired404
+                        )
                     )
                 )
             })
-            || error
-                .error
-                .downcast_ref::<StreamableHttpError<EnvironmentStreamableHttpClientError>>()
-                .is_some_and(|error| {
-                    matches!(
-                        error,
-                        StreamableHttpError::Client(
-                            EnvironmentStreamableHttpClientError::SessionExpired404
-                        )
-                    )
-                })
     }
 
     async fn reinitialize_after_session_expiry(
@@ -1318,11 +1359,15 @@ async fn create_oauth_transport_and_runtime(
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
+    placement: StreamableHttpClientPlacement,
 ) -> Result<(
-    StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
+    StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
     OAuthPersistor,
 )> {
     let http_client = build_http_client(&default_headers)?;
+    // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
+    // local/remote placement abstraction instead of always creating the local
+    // reqwest metadata client here.
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state
@@ -1340,59 +1385,8 @@ async fn create_oauth_transport_and_runtime(
         }
     };
 
-    let auth_client = AuthClient::new(StreamableHttpResponseClient::new(http_client), manager);
-    let auth_manager = auth_client.auth_manager.clone();
-
-    let transport = StreamableHttpClientTransport::with_client(
-        auth_client,
-        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
-    );
-
-    let runtime = OAuthPersistor::new(
-        server_name.to_string(),
-        url.to_string(),
-        auth_manager,
-        credentials_store,
-        Some(initial_tokens),
-    );
-
-    Ok((transport, runtime))
-}
-
-/// Builds an executor-backed Streamable HTTP transport with stored OAuth tokens.
-async fn create_environment_oauth_transport_and_runtime(
-    server_name: &str,
-    url: &str,
-    initial_tokens: StoredOAuthTokens,
-    credentials_store: OAuthCredentialsStoreMode,
-    default_headers: HeaderMap,
-    exec_client: ExecServerClient,
-) -> Result<(
-    StreamableHttpClientTransport<AuthClient<EnvironmentStreamableHttpClient>>,
-    OAuthPersistor,
-)> {
-    // OAuth discovery still runs from the orchestrator because credentials are
-    // persisted locally, while MCP traffic after auth goes through exec-server.
-    let metadata_client = build_http_client(&default_headers)?;
-    let mut oauth_state = OAuthState::new(url.to_string(), Some(metadata_client)).await?;
-
-    oauth_state
-        .set_credentials(
-            &initial_tokens.client_id,
-            initial_tokens.token_response.0.clone(),
-        )
-        .await?;
-
-    let manager = match oauth_state {
-        OAuthState::Authorized(manager) => manager,
-        OAuthState::Unauthorized(manager) => manager,
-        OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
-            return Err(anyhow!("unexpected OAuth state during client setup"));
-        }
-    };
-
     let auth_client = AuthClient::new(
-        EnvironmentStreamableHttpClient::new(exec_client, default_headers),
+        build_streamable_http_client(default_headers, placement)?,
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
