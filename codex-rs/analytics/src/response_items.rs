@@ -13,7 +13,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 
-pub fn response_items_metadata(
+pub(crate) fn response_items_metadata(
     phase: CodexResponsesApiItemPhase,
     items: &[ResponseItem],
 ) -> Vec<CodexResponsesApiItemMetadata> {
@@ -24,7 +24,7 @@ pub fn response_items_metadata(
         .collect()
 }
 
-fn response_item_metadata(
+pub(crate) fn response_item_metadata(
     item_phase: CodexResponsesApiItemPhase,
     item_index: usize,
     item: &ResponseItem,

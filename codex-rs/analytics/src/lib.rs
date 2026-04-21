@@ -4,6 +4,7 @@ mod facts;
 mod reducer;
 mod response_items;
 
+use codex_protocol::models::ResponseItem;
 use serde::Serialize;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -22,6 +23,7 @@ pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;
 pub use facts::CodexResponsesApiCallInput;
 pub use facts::CodexResponsesApiCallStatus;
+pub use facts::CodexResponsesApiItemMetadata;
 pub use facts::CodexTurnSteerEvent;
 pub use facts::CompactionImplementation;
 pub use facts::CompactionPhase;
@@ -52,6 +54,23 @@ pub fn now_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+pub fn responses_api_input_items_metadata(
+    items: &[ResponseItem],
+) -> Vec<CodexResponsesApiItemMetadata> {
+    response_items::response_items_metadata(facts::CodexResponsesApiItemPhase::Input, items)
+}
+
+pub fn responses_api_output_item_metadata(
+    item_index: usize,
+    item: &ResponseItem,
+) -> CodexResponsesApiItemMetadata {
+    response_items::response_item_metadata(
+        facts::CodexResponsesApiItemPhase::Output,
+        item_index,
+        item,
+    )
 }
 
 pub(crate) fn serialized_string<T: Serialize>(value: &T) -> Option<String> {
