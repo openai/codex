@@ -73,8 +73,11 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let thread_state = thread_state.lock().await;
+        let listener_command_tx = {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let thread_state = thread_state.lock().await;
+            thread_state.listener_command_tx()
+        };
         let status = params.status.map(thread_goal_status_to_state);
 
         let goal = if let Some(objective) = params.objective {
@@ -167,7 +170,7 @@ impl CodexMessageProcessor {
                 ThreadGoalSetResponse { goal: goal.clone() },
             )
             .await;
-        self.emit_thread_goal_updated_ordered(thread_id, goal, thread_state.listener_command_tx())
+        self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
     }
 
@@ -282,8 +285,11 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let thread_state = thread_state.lock().await;
+        let listener_command_tx = {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let thread_state = thread_state.lock().await;
+            thread_state.listener_command_tx()
+        };
         let cleared = match state_db.delete_thread_goal(thread_id).await {
             Ok(cleared) => cleared,
             Err(err) => {
@@ -297,7 +303,7 @@ impl CodexMessageProcessor {
             .send_response(request_id, ThreadGoalClearResponse { cleared })
             .await;
         if cleared {
-            self.emit_thread_goal_cleared_ordered(thread_id, thread_state.listener_command_tx())
+            self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
                 .await;
         }
     }
@@ -346,9 +352,11 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let thread_state = thread_state.lock().await;
-        let listener_command_tx = thread_state.listener_command_tx();
+        let listener_command_tx = {
+            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+            let thread_state = thread_state.lock().await;
+            thread_state.listener_command_tx()
+        };
         match state_db.get_thread_goal(thread_id).await {
             Ok(Some(goal)) => {
                 self.emit_thread_goal_updated_ordered(
