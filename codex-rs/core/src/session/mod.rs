@@ -14,12 +14,15 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_identity::AgentIdentityManager;
-use crate::apps::render_apps_section;
+use crate::build_available_skills;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
+use crate::context::AppsInstructions;
+use crate::context::AvailablePluginsInstructions;
+use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
@@ -31,7 +34,6 @@ use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
@@ -261,7 +263,6 @@ use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::plugins::render_plugins_section;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -2473,8 +2474,10 @@ impl Session {
                     &turn_context.config,
                 )
                 .await;
-            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
-                developer_sections.push(apps_section);
+            if let Some(apps_instructions) =
+                AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
+            {
+                developer_sections.push(apps_instructions.render());
             }
         }
         if turn_context.config.include_skill_instructions {
@@ -2482,15 +2485,17 @@ impl Session {
                 .turn_skills
                 .outcome
                 .allowed_skills_for_implicit_invocation();
-            let rendered_skills = render_skills_section(
+            let available_skills = build_available_skills(
                 &implicit_skills,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
                 },
             );
-            if let Some(rendered_skills) = rendered_skills {
-                if rendered_skills.emit_warning {
+            if let Some(available_skills) = available_skills {
+                let emit_warning = available_skills.emit_warning;
+                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
+                if emit_warning {
                     self.send_event_raw(Event {
                         id: String::new(),
                         msg: EventMsg::Warning(WarningEvent {
@@ -2499,7 +2504,7 @@ impl Session {
                     })
                     .await;
                 }
-                developer_sections.push(rendered_skills.text);
+                developer_sections.push(skills_instructions.render());
             }
         }
         let loaded_plugins = self
@@ -2507,9 +2512,10 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&turn_context.config)
             .await;
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
+        if let Some(plugin_instructions) =
+            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
-            developer_sections.push(plugin_section);
+            developer_sections.push(plugin_instructions.render());
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(

@@ -5025,7 +5025,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
-    let rendered = render_skills_section(
+    let rendered = build_available_skills(
         &[SkillMetadata {
             name: "repo-skill".to_string(),
             description: "desc".to_string(),

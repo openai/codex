@@ -1,6 +1,9 @@
 //! Context fragments injected into model input.
 
 mod approved_command_prefix_saved;
+mod apps_instructions;
+mod available_plugins_instructions;
+mod available_skills_instructions;
 mod collaboration_mode_instructions;
 mod contextual_user_message;
 mod environment_context;
@@ -24,6 +27,9 @@ mod user_instructions;
 mod user_shell_command;
 
 pub(crate) use approved_command_prefix_saved::ApprovedCommandPrefixSaved;
+pub(crate) use apps_instructions::AppsInstructions;
+pub(crate) use available_plugins_instructions::AvailablePluginsInstructions;
+pub(crate) use available_skills_instructions::AvailableSkillsInstructions;
 pub(crate) use collaboration_mode_instructions::CollaborationModeInstructions;
 pub(crate) use contextual_user_message::is_contextual_user_fragment;
 pub(crate) use contextual_user_message::is_memory_excluded_contextual_user_fragment;

@@ -58,7 +58,6 @@ pub use marketplace_remove::MarketplaceRemoveOutcome;
 pub use marketplace_remove::MarketplaceRemoveRequest;
 pub use marketplace_remove::remove_marketplace;
 pub(crate) use render::render_explicit_plugin_instructions;
-pub(crate) use render::render_plugins_section;
 pub(crate) use startup_sync::curated_plugins_repo_path;
 pub(crate) use startup_sync::read_curated_plugins_sha;
 pub(crate) use startup_sync::sync_openai_plugins_repo;
