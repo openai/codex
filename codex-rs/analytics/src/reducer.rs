@@ -171,14 +171,14 @@ impl AnalyticsReducer {
                     rpc_transport,
                 );
             }
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id,
                 request_id,
                 request,
             } => {
                 self.ingest_request(connection_id, request_id, *request);
             }
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id,
                 response,
             } => {
@@ -195,6 +195,14 @@ impl AnalyticsReducer {
             AnalyticsFact::Notification(notification) => {
                 self.ingest_notification(*notification, out);
             }
+            AnalyticsFact::ServerRequest {
+                connection_id: _connection_id,
+                request: _request,
+            } => {}
+            AnalyticsFact::ServerResponse {
+                connection_id: _connection_id,
+                response: _response,
+            } => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SubAgentThreadStarted(input) => {
                     self.ingest_subagent_thread_started(input, out);
