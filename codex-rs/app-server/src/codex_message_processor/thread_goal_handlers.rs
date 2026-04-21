@@ -200,11 +200,29 @@ impl CodexMessageProcessor {
         if self.config.features.enabled(Feature::Goals)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
-            let should_continue_active_goal =
-                replacing_goal || previous_status != Some(codex_state::ThreadGoalStatus::Active);
-            thread
-                .apply_goal_set_runtime_effects(goal_status.to_core(), should_continue_active_goal)
-                .await;
+            let runtime_effect = match goal_status {
+                ThreadGoalStatus::Active => {
+                    let continuation = if replacing_goal
+                        || previous_status != Some(codex_state::ThreadGoalStatus::Active)
+                    {
+                        GoalActiveContinuation::StartIfIdle
+                    } else {
+                        GoalActiveContinuation::Preserve
+                    };
+                    GoalSetRuntimeEffect::Active(continuation)
+                }
+                ThreadGoalStatus::BudgetLimited => GoalSetRuntimeEffect::BudgetLimited,
+                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
+                    let transition =
+                        if previous_status == Some(codex_state::ThreadGoalStatus::Active) {
+                            StoppedGoalTransition::NewlyStopped
+                        } else {
+                            StoppedGoalTransition::AlreadyStopped
+                        };
+                    GoalSetRuntimeEffect::Stopped(transition)
+                }
+            };
+            thread.apply_goal_set_runtime_effects(runtime_effect).await;
         }
     }
 

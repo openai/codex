@@ -20,7 +20,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
-use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -59,6 +58,25 @@ pub struct CodexThread {
     _watch_registration: WatchRegistration,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoalActiveContinuation {
+    StartIfIdle,
+    Preserve,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoppedGoalTransition {
+    NewlyStopped,
+    AlreadyStopped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoalSetRuntimeEffect {
+    Active(GoalActiveContinuation),
+    BudgetLimited,
+    Stopped(StoppedGoalTransition),
+}
+
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
@@ -95,29 +113,23 @@ impl CodexThread {
             .session
             .activate_paused_thread_goal_after_resume()
             .await?;
-        self.continue_active_goal_if_idle().await;
         Ok(())
     }
 
-    pub async fn apply_goal_set_runtime_effects(
-        &self,
-        goal_status: ThreadGoalStatus,
-        should_continue_active_goal: bool,
-    ) {
-        match goal_status {
-            ThreadGoalStatus::Active => {
-                if should_continue_active_goal {
-                    self.codex
-                        .session
-                        .goal_continuation_suppressed
-                        .store(false, Ordering::SeqCst);
-                    self.codex
-                        .session
-                        .maybe_start_turn_for_active_goal_continuation()
-                        .await;
-                }
+    pub async fn apply_goal_set_runtime_effects(&self, effect: GoalSetRuntimeEffect) {
+        match effect {
+            GoalSetRuntimeEffect::Active(GoalActiveContinuation::StartIfIdle) => {
+                self.codex
+                    .session
+                    .goal_continuation_suppressed
+                    .store(false, Ordering::SeqCst);
+                self.codex
+                    .session
+                    .maybe_start_turn_for_active_goal_continuation()
+                    .await;
             }
-            ThreadGoalStatus::BudgetLimited => {
+            GoalSetRuntimeEffect::Active(GoalActiveContinuation::Preserve) => {}
+            GoalSetRuntimeEffect::BudgetLimited => {
                 if !self.codex.session.has_active_turn().await {
                     self.codex
                         .session
@@ -125,11 +137,17 @@ impl CodexThread {
                         .await;
                 }
             }
-            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
+            GoalSetRuntimeEffect::Stopped(StoppedGoalTransition::NewlyStopped) => {
                 self.codex
                     .session
                     .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
                     .await;
+                self.codex
+                    .session
+                    .clear_stopped_thread_goal_runtime_state()
+                    .await;
+            }
+            GoalSetRuntimeEffect::Stopped(StoppedGoalTransition::AlreadyStopped) => {
                 self.codex
                     .session
                     .clear_stopped_thread_goal_runtime_state()
