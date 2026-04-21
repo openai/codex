@@ -3,6 +3,7 @@ use codex_shell_command::shell_detect::ShellType as DetectedShellType;
 use codex_shell_command::shell_detect::detect_shell_type as detect_known_shell_type;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -89,7 +90,7 @@ impl PartialEq for Shell {
 
 impl Eq for Shell {}
 
-fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
     match detect_known_shell_type(shell_path)? {
         DetectedShellType::Zsh => Some(ShellType::Zsh),
         DetectedShellType::Bash => Some(ShellType::Bash),
