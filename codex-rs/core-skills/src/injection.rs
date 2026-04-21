@@ -10,17 +10,22 @@ use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
 use codex_exec_server::LOCAL_FS;
-use codex_instructions::SkillInstructions;
 use codex_otel::SessionTelemetry;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 #[derive(Debug, Default)]
 pub struct SkillInjections {
-    pub items: Vec<ResponseItem>,
+    pub items: Vec<SkillInjection>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillInjection {
+    pub name: String,
+    pub path: String,
+    pub contents: String,
 }
 
 pub async fn build_skill_injections(
@@ -56,11 +61,11 @@ pub async fn build_skill_injections(
                     skill_path: skill.path_to_skills_md.to_path_buf(),
                     invocation_type: InvocationType::Explicit,
                 });
-                result.items.push(ResponseItem::from(SkillInstructions {
+                result.items.push(SkillInjection {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
                     contents,
-                }));
+                });
             }
             Err(err) => {
                 emit_skill_injected_metric(otel, skill, "error");

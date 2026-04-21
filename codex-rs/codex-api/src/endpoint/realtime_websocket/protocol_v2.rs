@@ -7,15 +7,16 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
-use codex_protocol::protocol::RealtimeTranscriptDone;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
 
 const BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
+const SILENCE_TOOL_NAME: &str = "remain_silent";
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 1;
 const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
@@ -38,6 +39,13 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
         }
+        "response.output_text.done" => {
+            parse_transcript_done_event(&parsed, "text").map(RealtimeEvent::OutputTranscriptDone)
+        }
+        "response.output_audio_transcript.done" => {
+            parse_transcript_done_event(&parsed, "transcript")
+                .map(RealtimeEvent::OutputTranscriptDone)
+        }
         "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
             RealtimeInputAudioSpeechStarted {
                 item_id: parsed
@@ -46,7 +54,7 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
                     .map(str::to_string),
             },
         )),
-        "conversation.item.added" => parsed
+        "conversation.item.added" | "conversation.item.created" => parsed
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
@@ -121,42 +129,14 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
     if let Some(handoff) = parse_handoff_requested_event(item) {
         return Some(handoff);
     }
-
-    if let Some(transcript_done) = parse_item_done_transcript(item) {
-        return Some(transcript_done);
+    if let Some(noop) = parse_noop_requested_event(item) {
+        return Some(noop);
     }
 
     item.get("id")
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|item_id| RealtimeEvent::ConversationItemDone { item_id })
-}
-
-fn parse_item_done_transcript(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
-    let role = item.get("role").and_then(Value::as_str)?;
-    let text = item
-        .get("content")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(item_content_text)
-        .collect::<String>();
-    if text.is_empty() {
-        return None;
-    }
-
-    let done = RealtimeTranscriptDone { text };
-    match role {
-        "user" => Some(RealtimeEvent::InputTranscriptDone(done)),
-        "assistant" => Some(RealtimeEvent::OutputTranscriptDone(done)),
-        _ => None,
-    }
-}
-
-fn item_content_text(content: &Value) -> Option<&str> {
-    content
-        .get("text")
-        .or_else(|| content.get("transcript"))
-        .and_then(Value::as_str)
 }
 
 fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
@@ -182,6 +162,29 @@ fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<Realti
         item_id,
         input_transcript: extract_input_transcript(arguments),
         active_transcript: Vec::new(),
+    }))
+}
+
+fn parse_noop_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
+    let item_type = item.get("type").and_then(Value::as_str);
+    let item_name = item.get("name").and_then(Value::as_str);
+    if item_type != Some("function_call") || item_name != Some(SILENCE_TOOL_NAME) {
+        return None;
+    }
+
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("id").and_then(Value::as_str))?;
+    let item_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(call_id)
+        .to_string();
+
+    Some(RealtimeEvent::NoopRequested(RealtimeNoopRequested {
+        call_id: call_id.to_string(),
+        item_id,
     }))
 }
 

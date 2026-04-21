@@ -225,6 +225,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-41".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
@@ -250,6 +251,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
             tool_name: codex_tools::ToolName::plain("shell_command"),

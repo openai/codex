@@ -31,7 +31,6 @@ members = [
     "core-plugins",
     "core-skills",
     "hooks",
-    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -90,6 +89,7 @@ members = [
     "terminal-detection",
     "test-binary-support",
     "thread-store",
+    "uds",
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
@@ -142,7 +142,6 @@ codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
-codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -175,6 +174,7 @@ codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
+codex-uds = { path = "uds" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -212,6 +212,7 @@ arc-swap = "1.9.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
+async-io = "2.6.0"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 axum = { version = "0.8", default-features = false }
@@ -233,6 +234,7 @@ deno_core_icudata = "0.77.0"
 derive_more = "2"
 diffy = "0.4.2"
 dirs = "6"
+dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
@@ -370,6 +372,7 @@ webbrowser = "1.0"
 which = "8"
 whoami = "1.6.1"
 wildmatch = "2.6.1"
+winapi-util = "0.1.11"
 zip = "2.4.2"
 zstd = "0.13"
 

@@ -26,6 +26,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -40,6 +41,7 @@ pub enum ToolCallSource {
 pub struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
+    pub cancellation_token: CancellationToken,
     pub tracker: SharedTurnDiffTracker,
     pub call_id: String,
     pub tool_name: ToolName,

@@ -458,7 +458,10 @@ fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let responses_server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("delegated")?,
+    ])
+    .await;
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.updated",
@@ -488,6 +491,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             json!({
                 "type": "response.output_text.delta",
                 "delta": "working"
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "text": "working on it"
             }),
             json!({
                 "type": "conversation.item.done",
@@ -677,7 +684,13 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         handoff_item_added.item["input_transcript"],
         json!("delegate now")
     );
-    assert_eq!(handoff_item_added.item["active_transcript"], json!([]));
+    assert_eq!(
+        handoff_item_added.item["active_transcript"],
+        json!([
+            {"role": "user", "text": "delegate now"},
+            {"role": "assistant", "text": "working on it"}
+        ])
+    );
 
     let realtime_error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
@@ -1142,7 +1155,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"transcription":{"model":"gpt-4o-mini-transcribe"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}},{"type":"function","name":"remain_silent","description":"Call this when the best response is to say nothing. Use it instead of speaking after hidden system/control messages, after background agent updates in silent modes, or whenever acknowledging aloud would be distracting. This tool has no user-visible effect.","parameters":{"type":"object","properties":{},"additionalProperties":false}}]}"#;
     let session = normalized_json_string(session)?;
     assert_eq!(
         body,
@@ -1241,8 +1254,16 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
             vec![
                 session_updated("sess_v1_handoff"),
                 json!({
-                    "type": "conversation.input_transcript.delta",
-                    "delta": "delegate from v1"
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "delegate from v1"
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "the secret word is "
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "kumquat"
                 }),
                 json!({
                     "type": "conversation.handoff.requested",
@@ -1258,6 +1279,12 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    assert_call_create_multipart(
+        harness.call_capture.single_request(),
+        "v=offer\r\n",
+        v1_session_create_json(),
+    )?;
+    assert_v1_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
 
     // Phase 2: wait for the delegated background agent turn that is launched by the handoff request.
     let turn_started = harness
@@ -1274,11 +1301,13 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
-        response_request_contains_text(&requests[0], "user: delegate from v1"),
-        "delegated Responses request should contain realtime text: {}",
+        response_request_contains_text(
+            &requests[0],
+            "<realtime_delegation>\n  <input>delegate from v1</input>\n  <transcript_delta>user: delegate from v1\nassistant: the secret word is kumquat</transcript_delta>\n</realtime_delegation>",
+        ),
+        "delegated Responses request should contain realtime delegation envelope: {}",
         requests[0]
     );
-
     let handoff_append = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_eq!(
         handoff_append,
@@ -1526,7 +1555,34 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_tool"),
-                v2_background_agent_tool_call("call_v2", "delegate from v2"),
+                json!({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "Hi how are you"
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.done",
+                    "transcript": "Doing well, what can I help you with?"
+                }),
+                json!({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "The secret word is strawberry"
+                }),
+                json!({
+                    "type": "conversation.item.created",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "<realtime_collaboration_update><voice_policy>silent_delegate</voice_policy></realtime_collaboration_update>"
+                        }]
+                    }
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "Got it-strawberry. What's next on the menu?"
+                }),
+                v2_background_agent_tool_call("call_v2", "run ls"),
             ],
             vec![],
             vec![],
@@ -1553,8 +1609,16 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
-        response_request_contains_text(&requests[0], "delegate from v2"),
-        "delegated Responses request should contain tool prompt: {}",
+        response_request_contains_text(
+            &requests[0],
+            "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: Hi how are you\nassistant: Doing well, what can I help you with?\nuser: The secret word is strawberry\nassistant: Got it-strawberry. What's next on the menu?\nuser: run ls</transcript_delta>\n</realtime_delegation>",
+        ),
+        "delegated Responses request should contain realtime delegation envelope: {}",
+        requests[0]
+    );
+    assert!(
+        !response_request_contains_text(&requests[0], "<realtime_collaboration_update>"),
+        "delegated Responses request should not include realtime control injects: {}",
         requests[0]
     );
 
@@ -2068,7 +2132,16 @@ async fn responses_requests(server: &MockServer) -> Result<Vec<Value>> {
 }
 
 fn response_request_contains_text(request: &Value, text: &str) -> bool {
-    request.to_string().contains(text)
+    match request {
+        Value::String(value) => value.contains(text),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Object(map) => map
+            .values()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 fn realtime_tool_ok_command() -> Vec<String> {
@@ -2186,6 +2259,14 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
     assert_eq!(
         request["session"]["tools"][0]["name"].as_str(),
         Some("background_agent")
+    );
+    assert_eq!(
+        request["session"]["tools"][1]["name"].as_str(),
+        Some("remain_silent")
+    );
+    assert_eq!(
+        request["session"]["audio"]["input"]["transcription"]["model"].as_str(),
+        Some("gpt-4o-mini-transcribe")
     );
     Ok(())
 }
