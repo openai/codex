@@ -141,7 +141,7 @@ impl ConfigService {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
-            requirements_hostname: None,
+            requirements_hostname: codex_config::requirements_hostname(),
         }
     }
 

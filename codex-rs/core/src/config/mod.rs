@@ -648,7 +648,7 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
@@ -658,6 +658,21 @@ pub struct ConfigBuilder {
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
     requirements_hostname: Option<String>,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self {
+            codex_home: None,
+            cli_overrides: None,
+            harness_overrides: None,
+            loader_overrides: None,
+            cloud_requirements: CloudRequirementsLoader::default(),
+            thread_config_loader: None,
+            fallback_cwd: None,
+            requirements_hostname: codex_config::requirements_hostname(),
+        }
+    }
 }
 
 impl ConfigBuilder {

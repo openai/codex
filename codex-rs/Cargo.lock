@@ -1483,12 +1483,10 @@ dependencies = [
  "codex-utils-rustls-provider",
  "constant_time_eq 0.3.1",
  "core_test_support",
- "dns-lookup",
  "futures",
  "gethostname",
  "hmac",
  "jsonwebtoken",
- "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "owo-colors",
@@ -1511,7 +1509,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "winapi-util",
  "wiremock",
 ]
 
@@ -1880,7 +1877,10 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "dns-lookup",
  "futures",
+ "gethostname",
+ "libc",
  "multimap",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1895,6 +1895,7 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "wildmatch",
+ "winapi-util",
 ]
 
 [[package]]

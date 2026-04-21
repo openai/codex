@@ -2,7 +2,6 @@ use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
-use crate::config_api::app_server_requirements_hostname;
 use crate::config_api::apply_runtime_feature_enablement;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
@@ -768,7 +767,7 @@ impl CodexMessageProcessor {
             .cli_overrides(self.current_cli_overrides())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
-            .requirements_hostname(app_server_requirements_hostname())
+            .requirements_hostname(codex_config::requirements_hostname())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -6541,7 +6540,7 @@ impl CodexMessageProcessor {
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
                 self.thread_config_loader.as_ref(),
-                app_server_requirements_hostname().as_deref(),
+                codex_config::requirements_hostname().as_deref(),
             )
             .await
             {
@@ -9441,7 +9440,7 @@ async fn sync_default_client_residency_requirement(
     match codex_core::config::ConfigBuilder::default()
         .cli_overrides(cli_overrides.to_vec())
         .cloud_requirements(loader)
-        .requirements_hostname(app_server_requirements_hostname())
+        .requirements_hostname(codex_config::requirements_hostname())
         .build()
         .await
     {
@@ -9488,7 +9487,7 @@ async fn derive_config_from_params(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
-        .requirements_hostname(app_server_requirements_hostname())
+        .requirements_hostname(codex_config::requirements_hostname())
         .thread_config_loader(thread_config_loader)
         .build()
         .await?;
@@ -9522,7 +9521,7 @@ async fn derive_config_for_cwd(
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
         .cloud_requirements(cloud_requirements.clone())
-        .requirements_hostname(app_server_requirements_hostname())
+        .requirements_hostname(codex_config::requirements_hostname())
         .build()
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
