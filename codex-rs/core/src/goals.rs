@@ -22,6 +22,7 @@ use codex_rollout::state_db::reconcile_rollout;
 use codex_utils_template::Template;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -60,6 +61,26 @@ const GOAL_CONTINUATION_PROMPT_PREFIX: &str = "Continue working toward the activ
 pub(crate) enum BudgetLimitSteering {
     Allowed,
     Suppressed,
+}
+
+pub(crate) struct GoalRuntimeState {
+    pub(crate) state_db: Mutex<Option<StateDbHandle>>,
+    pub(crate) budget_limit_reported_goal_id: Mutex<Option<String>>,
+    pub(crate) wall_clock_accounting: GoalWallClockAccountingState,
+    pub(crate) continuation_lock: Semaphore,
+    pub(crate) continuation_suppressed: AtomicBool,
+}
+
+impl GoalRuntimeState {
+    pub(crate) fn new() -> Self {
+        Self {
+            state_db: Mutex::new(None),
+            budget_limit_reported_goal_id: Mutex::new(None),
+            wall_clock_accounting: GoalWallClockAccountingState::new(),
+            continuation_lock: Semaphore::new(/*permits*/ 1),
+            continuation_suppressed: AtomicBool::new(false),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -224,10 +245,6 @@ impl Session {
             .get_thread_goal(self.conversation_id)
             .await?
             .map(protocol_goal_from_state);
-        if goal.is_some() {
-            self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-        }
-        *self.thread_goal_cache.lock().await = goal.clone();
         Ok(goal)
     }
 
@@ -336,10 +353,10 @@ impl Session {
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.goal_continuation_suppressed
+        self.goal_runtime
+            .continuation_suppressed
             .store(false, Ordering::SeqCst);
-        self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-        *self.thread_goal_cache.lock().await = Some(goal.clone());
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         let newly_active_goal = goal_status == codex_state::ThreadGoalStatus::Active
             && (replacing_goal
                 || previous_status
@@ -351,7 +368,8 @@ impl Session {
                 turn_accounting.reset_baseline(current_token_usage);
                 turn_accounting.mark_active_goal(goal_id.clone());
             }
-            self.thread_goal_wall_clock_accounting
+            self.goal_runtime
+                .wall_clock_accounting
                 .lock()
                 .await
                 .mark_active_goal(goal_id);
@@ -412,10 +430,10 @@ impl Session {
 
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.goal_continuation_suppressed
+        self.goal_runtime
+            .continuation_suppressed
             .store(false, Ordering::SeqCst);
-        self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-        *self.thread_goal_cache.lock().await = Some(goal.clone());
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
 
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
         {
@@ -423,7 +441,8 @@ impl Session {
             turn_accounting.reset_baseline(current_token_usage);
             turn_accounting.mark_active_goal(goal_id.clone());
         }
-        self.thread_goal_wall_clock_accounting
+        self.goal_runtime
+            .wall_clock_accounting
             .lock()
             .await
             .mark_active_goal(goal_id);
@@ -441,14 +460,15 @@ impl Session {
     }
 
     pub(crate) async fn clear_cached_thread_goal_after_delete(&self) {
-        self.thread_goal_may_exist.store(false, Ordering::SeqCst);
-        *self.thread_goal_cache.lock().await = None;
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         self.clear_stopped_thread_goal_runtime_state().await;
     }
 
     pub(crate) async fn clear_stopped_thread_goal_runtime_state(&self) {
-        self.goal_continuation_suppressed
+        self.goal_runtime
+            .continuation_suppressed
             .store(false, Ordering::SeqCst);
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         if let Some(turn_context) = self.active_turn_context().await {
             turn_context
                 .goal_accounting
@@ -456,7 +476,8 @@ impl Session {
                 .await
                 .clear_active_goal();
         }
-        self.thread_goal_wall_clock_accounting
+        self.goal_runtime
+            .wall_clock_accounting
             .lock()
             .await
             .clear_active_goal();
@@ -480,7 +501,8 @@ impl Session {
             .lock()
             .await
             .clear_active_goal();
-        self.thread_goal_wall_clock_accounting
+        self.goal_runtime
+            .wall_clock_accounting
             .lock()
             .await
             .clear_active_goal();
@@ -522,20 +544,20 @@ impl Session {
         };
         match state_db.get_thread_goal(self.conversation_id).await {
             Ok(Some(goal)) if goal.status == codex_state::ThreadGoalStatus::Active => {
-                self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-                *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal.clone()));
                 turn_context
                     .goal_accounting
                     .lock()
                     .await
                     .mark_active_goal(goal.goal_id.clone());
-                self.thread_goal_wall_clock_accounting
+                self.goal_runtime
+                    .wall_clock_accounting
                     .lock()
                     .await
                     .mark_active_goal(goal.goal_id);
             }
             Ok(Some(_)) | Ok(None) => {
-                self.thread_goal_wall_clock_accounting
+                self.goal_runtime
+                    .wall_clock_accounting
                     .lock()
                     .await
                     .clear_active_goal();
@@ -562,7 +584,8 @@ impl Session {
         };
         let _turn_accounting_permit = turn_context.goal_accounting.accounting_permit().await?;
         let _wall_clock_accounting_permit = self
-            .thread_goal_wall_clock_accounting
+            .goal_runtime
+            .wall_clock_accounting
             .accounting_permit()
             .await?;
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
@@ -577,15 +600,13 @@ impl Session {
             )
         };
         let time_delta_seconds = {
-            self.thread_goal_wall_clock_accounting
+            self.goal_runtime
+                .wall_clock_accounting
                 .lock()
                 .await
                 .time_delta_since_last_accounting()
         };
         if time_delta_seconds == 0 && token_delta <= 0 {
-            if let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? {
-                *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
-            }
             return Ok(());
         }
         let outcome = state_db
@@ -597,12 +618,12 @@ impl Session {
                 expected_goal_id.as_deref(),
             )
             .await?;
-        let budget_limit_was_already_reported = self
-            .thread_goal_cache
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited);
+        let budget_limit_was_already_reported = {
+            let reported_goal_id = self.goal_runtime.budget_limit_reported_goal_id.lock().await;
+            expected_goal_id
+                .as_deref()
+                .is_some_and(|goal_id| reported_goal_id.as_deref() == Some(goal_id))
+        };
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
                 let clear_active_goal = match goal.status {
@@ -622,7 +643,7 @@ impl Session {
                 }
                 {
                     let mut wall_clock_accounting =
-                        self.thread_goal_wall_clock_accounting.lock().await;
+                        self.goal_runtime.wall_clock_accounting.lock().await;
                     wall_clock_accounting.mark_accounted();
                     if clear_active_goal {
                         wall_clock_accounting.clear_active_goal();
@@ -630,19 +651,18 @@ impl Session {
                 }
                 goal
             }
-            codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
-                if let Some(goal) = goal {
-                    *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
-                }
-                return Ok(());
-            }
+            codex_state::ThreadGoalAccountingOutcome::Unchanged(_) => return Ok(()),
         };
         let should_steer_budget_limit =
             matches!(budget_limit_steering, BudgetLimitSteering::Allowed)
                 && goal.status == codex_state::ThreadGoalStatus::BudgetLimited
                 && !budget_limit_was_already_reported;
+        let goal_status = goal.status;
+        let goal_id = goal.goal_id.clone();
+        if goal_status != codex_state::ThreadGoalStatus::BudgetLimited {
+            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+        }
         let goal = protocol_goal_from_state(goal);
-        *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.send_event(
             turn_context,
             EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
@@ -657,6 +677,7 @@ impl Session {
             if self.inject_response_items(vec![item]).await.is_err() {
                 tracing::debug!("skipping budget-limit goal steering because no turn is active");
             }
+            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = Some(goal_id);
         }
         Ok(())
     }
@@ -688,11 +709,12 @@ impl Session {
         mode: codex_state::ThreadGoalAccountingMode,
     ) -> anyhow::Result<Option<ThreadGoal>> {
         let _accounting_permit = self
-            .thread_goal_wall_clock_accounting
+            .goal_runtime
+            .wall_clock_accounting
             .accounting_permit()
             .await?;
         let (time_delta_seconds, expected_goal_id) = {
-            let wall_clock_accounting = self.thread_goal_wall_clock_accounting.lock().await;
+            let wall_clock_accounting = self.goal_runtime.wall_clock_accounting.lock().await;
             (
                 wall_clock_accounting.time_delta_since_last_accounting(),
                 wall_clock_accounting.active_goal_id(),
@@ -713,24 +735,23 @@ impl Session {
             .await?
         {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
-                self.thread_goal_wall_clock_accounting
+                self.goal_runtime
+                    .wall_clock_accounting
                     .lock()
                     .await
                     .mark_accounted();
                 let goal = protocol_goal_from_state(goal);
-                *self.thread_goal_cache.lock().await = Some(goal.clone());
                 Ok(Some(goal))
             }
             codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
                 {
                     let mut wall_clock_accounting =
-                        self.thread_goal_wall_clock_accounting.lock().await;
+                        self.goal_runtime.wall_clock_accounting.lock().await;
                     wall_clock_accounting.reset_baseline();
                     wall_clock_accounting.clear_active_goal();
                 }
                 if let Some(goal) = goal {
                     let goal = protocol_goal_from_state(goal);
-                    *self.thread_goal_cache.lock().await = Some(goal.clone());
                     return Ok(Some(goal));
                 }
                 Ok(None)
@@ -749,7 +770,8 @@ impl Session {
         }
 
         let _continuation_guard = self
-            .goal_continuation_lock
+            .goal_runtime
+            .continuation_lock
             .acquire()
             .await
             .context("goal continuation semaphore closed")?;
@@ -768,8 +790,9 @@ impl Session {
             return Ok(());
         };
         let goal = protocol_goal_from_state(goal);
-        *self.thread_goal_cache.lock().await = Some(goal.clone());
-        self.thread_goal_wall_clock_accounting
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+        self.goal_runtime
+            .wall_clock_accounting
             .lock()
             .await
             .clear_active_goal();
@@ -797,7 +820,8 @@ impl Session {
         }
 
         let _continuation_guard = self
-            .goal_continuation_lock
+            .goal_runtime
+            .continuation_lock
             .acquire()
             .await
             .context("goal continuation semaphore closed")?;
@@ -805,9 +829,9 @@ impl Session {
             return Ok(false);
         };
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
-            self.thread_goal_may_exist.store(false, Ordering::SeqCst);
-            *self.thread_goal_cache.lock().await = None;
-            self.thread_goal_wall_clock_accounting
+            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+            self.goal_runtime
+                .wall_clock_accounting
                 .lock()
                 .await
                 .clear_active_goal();
@@ -816,16 +840,15 @@ impl Session {
         if goal.status != codex_state::ThreadGoalStatus::Paused {
             let goal_id = goal.goal_id.clone();
             let is_active = goal.status == codex_state::ThreadGoalStatus::Active;
-            let goal = protocol_goal_from_state(goal);
-            self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-            *self.thread_goal_cache.lock().await = Some(goal);
             if is_active {
-                self.thread_goal_wall_clock_accounting
+                self.goal_runtime
+                    .wall_clock_accounting
                     .lock()
                     .await
                     .mark_active_goal(goal_id);
             } else {
-                self.thread_goal_wall_clock_accounting
+                self.goal_runtime
+                    .wall_clock_accounting
                     .lock()
                     .await
                     .clear_active_goal();
@@ -844,9 +867,9 @@ impl Session {
             )
             .await?
         else {
-            self.thread_goal_may_exist.store(false, Ordering::SeqCst);
-            *self.thread_goal_cache.lock().await = None;
-            self.thread_goal_wall_clock_accounting
+            *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+            self.goal_runtime
+                .wall_clock_accounting
                 .lock()
                 .await
                 .clear_active_goal();
@@ -854,11 +877,12 @@ impl Session {
         };
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
-        self.goal_continuation_suppressed
+        self.goal_runtime
+            .continuation_suppressed
             .store(false, Ordering::SeqCst);
-        self.thread_goal_may_exist.store(true, Ordering::SeqCst);
-        *self.thread_goal_cache.lock().await = Some(goal.clone());
-        self.thread_goal_wall_clock_accounting
+        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
+        self.goal_runtime
+            .wall_clock_accounting
             .lock()
             .await
             .mark_active_goal(goal_id);
@@ -898,7 +922,11 @@ impl Session {
             );
             return None;
         }
-        if self.goal_continuation_suppressed.load(Ordering::SeqCst) {
+        if self
+            .goal_runtime
+            .continuation_suppressed
+            .load(Ordering::SeqCst)
+        {
             tracing::debug!(
                 "skipping active goal continuation because the last continuation made no tool calls"
             );
@@ -968,7 +996,7 @@ impl Session {
 
         let state_db = if let Some(state_db) = self.state_db() {
             state_db
-        } else if let Some(state_db) = self.thread_goal_state_db.lock().await.clone() {
+        } else if let Some(state_db) = self.goal_runtime.state_db.lock().await.clone() {
             state_db
         } else {
             codex_state::StateRuntime::init(
@@ -992,7 +1020,7 @@ impl Session {
             .await;
         }
 
-        *self.thread_goal_state_db.lock().await = Some(state_db.clone());
+        *self.goal_runtime.state_db.lock().await = Some(state_db.clone());
         Ok(Some(state_db))
     }
 

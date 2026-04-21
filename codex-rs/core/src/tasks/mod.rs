@@ -300,18 +300,19 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (startup_pending_input, started_from_goal_continuation) = match startup_input {
+        let startup_pending_input = match startup_input {
             TurnStartupInput::PendingWork => {
                 let mut startup_pending_input =
                     self.take_queued_response_items_for_next_turn().await;
                 startup_pending_input.extend(self.get_pending_input().await);
                 if !input.is_empty() || !startup_pending_input.is_empty() {
-                    self.goal_continuation_suppressed
+                    self.goal_runtime
+                        .continuation_suppressed
                         .store(false, Ordering::SeqCst);
                 }
-                (startup_pending_input, started_from_goal_continuation)
+                startup_pending_input
             }
-            TurnStartupInput::GoalContinuation(items) => (items, started_from_goal_continuation),
+            TurnStartupInput::GoalContinuation(items) => items,
         };
         let mut active = self.active_turn.lock().await;
         let Some(turn) = (if started_from_goal_continuation {
@@ -427,42 +428,19 @@ impl Session {
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
     pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+        self.maybe_start_idle_regular_turn_with_sub_id(
+            uuid::Uuid::new_v4().to_string(),
+            /*allow_goal_continuation*/ false,
+        )
+        .await;
     }
 
     /// Starts queued user/mailbox work first; if that leaves the session idle, starts a goal
-    /// continuation turn directly.
+    /// continuation turn using the same queued-input startup path.
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
-        self.maybe_start_turn_for_pending_work().await;
-        self.maybe_start_turn_for_active_goal_continuation().await;
-    }
-
-    /// Starts a regular turn for an active goal if the session is idle.
-    pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
-        let Ok(_continuation_guard) = self.goal_continuation_lock.acquire().await else {
-            warn!("goal continuation semaphore closed");
-            return;
-        };
-        let Some(items) = self.goal_continuation_items_if_active().await else {
-            return;
-        };
-        {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            *active_turn = Some(ActiveTurn::default());
-        }
-
-        let turn_context = self.new_default_turn().await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        self.start_task(
-            turn_context,
-            Vec::new(),
-            RegularTask::new(),
-            TurnStartupInput::GoalContinuation(items),
+        self.maybe_start_idle_regular_turn_with_sub_id(
+            uuid::Uuid::new_v4().to_string(),
+            /*allow_goal_continuation*/ true,
         )
         .await;
     }
@@ -476,11 +454,36 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.has_queued_response_items_for_next_turn().await
-            && !self.has_trigger_turn_mailbox_items().await
-        {
-            return;
-        }
+        self.maybe_start_idle_regular_turn_with_sub_id(
+            sub_id, /*allow_goal_continuation*/ false,
+        )
+        .await;
+    }
+
+    async fn maybe_start_idle_regular_turn_with_sub_id(
+        self: &Arc<Self>,
+        sub_id: String,
+        allow_goal_continuation: bool,
+    ) {
+        let has_pending_work = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
+        let mut continuation_guard = None;
+        let startup_input = if has_pending_work {
+            TurnStartupInput::PendingWork
+        } else {
+            if !allow_goal_continuation {
+                return;
+            }
+            let Ok(guard) = self.goal_runtime.continuation_lock.acquire().await else {
+                warn!("goal continuation semaphore closed");
+                return;
+            };
+            continuation_guard = Some(guard);
+            let Some(items) = self.goal_continuation_items_if_active().await else {
+                return;
+            };
+            TurnStartupInput::GoalContinuation(items)
+        };
 
         {
             let mut active_turn = self.active_turn.lock().await;
@@ -489,17 +492,12 @@ impl Session {
             }
             *active_turn = Some(ActiveTurn::default());
         }
-
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(
-            turn_context,
-            Vec::new(),
-            RegularTask::new(),
-            TurnStartupInput::PendingWork,
-        )
-        .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new(), startup_input)
+            .await;
+        drop(continuation_guard);
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -510,33 +508,28 @@ impl Session {
     }
 
     pub(crate) async fn abort_all_tasks_without_restart(self: &Arc<Self>, reason: TurnAbortReason) {
-        let active_tasks: Vec<_> = {
+        let (turn_context, cancellation_tokens): (Option<Arc<TurnContext>>, Vec<_>) = {
             let active = self.active_turn.lock().await;
             active
                 .as_ref()
                 .map(|active_turn| {
-                    active_turn
+                    let turn_context = active_turn
+                        .tasks
+                        .first()
+                        .map(|(_, task)| Arc::clone(&task.turn_context));
+                    let cancellation_tokens = active_turn
                         .tasks
                         .values()
-                        .map(|task| {
-                            (
-                                Arc::clone(&task.turn_context),
-                                task.cancellation_token.clone(),
-                            )
-                        })
-                        .collect()
+                        .map(|task| task.cancellation_token.clone())
+                        .collect();
+                    (turn_context, cancellation_tokens)
                 })
                 .unwrap_or_default()
         };
-
-        for (_, cancellation_token) in &active_tasks {
+        for cancellation_token in cancellation_tokens {
             cancellation_token.cancel();
         }
-
-        self.abort_all_tasks_without_goal_accounting(reason.clone())
-            .await;
-
-        if let Some((turn_context, _)) = active_tasks.first()
+        if let Some(turn_context) = turn_context
             && let Err(err) = self
                 .account_thread_goal_progress(
                     turn_context.as_ref(),
@@ -552,21 +545,19 @@ impl Session {
         {
             warn!("failed to pause active thread goal after interrupt: {err}");
         }
+
+        self.abort_all_tasks_draining(reason).await;
     }
 
-    /// Performs abort cleanup without recording goal usage for the drained tasks.
-    async fn abort_all_tasks_without_goal_accounting(self: &Arc<Self>, reason: TurnAbortReason) {
+    async fn abort_all_tasks_draining(self: &Arc<Self>, reason: TurnAbortReason) {
         let active_turn = {
             let mut active = self.active_turn.lock().await;
-            active.as_mut().map(|active_turn| {
-                (
-                    active_turn.drain_tasks(),
-                    Arc::clone(&active_turn.turn_state),
-                )
-            })
+            active.take()
         };
 
-        if let Some((tasks, turn_state)) = active_turn {
+        if let Some(mut active_turn) = active_turn {
+            let turn_state = Arc::clone(&active_turn.turn_state);
+            let tasks = active_turn.drain_tasks();
             let startup_pending_input = if tasks.is_empty() {
                 turn_state.lock().await.take_pending_input()
             } else {
@@ -580,12 +571,10 @@ impl Session {
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            let mut active = self.active_turn.lock().await;
             match turn_state.try_lock() {
                 Ok(mut turn_state) => turn_state.clear_pending(),
                 Err(err) => warn!("turn state was locked while aborting tasks: {err}"),
             }
-            *active = None;
         }
     }
 
@@ -752,7 +741,8 @@ impl Session {
             warn!("failed to account thread goal progress at turn end: {err}");
         }
         if started_from_goal_continuation && turn_tool_calls == 0 {
-            self.goal_continuation_suppressed
+            self.goal_runtime
+                .continuation_suppressed
                 .store(true, Ordering::SeqCst);
         }
         {
