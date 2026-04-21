@@ -193,6 +193,28 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    // TODO: Wire callers that already own an EnvironmentManager into
+    // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
+    // of constructing a temporary manager here.
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
+    list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        config,
+        force_refetch,
+        &environment_manager,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: &EnvironmentManager,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
@@ -237,12 +259,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-        config.codex_self_exe.clone(),
-        config.codex_linux_sandbox_exe.clone(),
-    )?;
-    let environment_manager =
-        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
     let environment = environment_manager
         .default_environment()
         .unwrap_or_else(|| environment_manager.local_environment());

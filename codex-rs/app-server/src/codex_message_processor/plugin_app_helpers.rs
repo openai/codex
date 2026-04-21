@@ -5,11 +5,13 @@ use codex_app_server_protocol::AppSummary;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::plugins::AppConnectorId;
+use codex_exec_server::EnvironmentManager;
 use tracing::warn;
 
 pub(super) async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[AppConnectorId],
+    environment_manager: &EnvironmentManager,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -29,8 +31,10 @@ pub(super) async fn load_plugin_app_summaries(
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
     let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config, /*force_refetch*/ false,
+        match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+            config,
+            /*force_refetch*/ false,
+            environment_manager,
         )
         .await
         {
