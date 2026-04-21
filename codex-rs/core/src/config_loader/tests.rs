@@ -876,7 +876,7 @@ async fn system_remote_sandbox_config_keeps_cloud_sandbox_modes() -> anyhow::Res
         &requirements_file,
         r#"
 [[remote_sandbox_config]]
-hostname_pattern = ["runner-*.ci"]
+hostname_pattern = ["runner-*.ci.example.com"]
 allowed_sandbox_modes = ["read-only", "workspace-write"]
 "#,
     )
@@ -896,7 +896,7 @@ allowed_sandbox_modes = ["read-only"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &AbsolutePathBuf::try_from(requirements_file)?,
-        Some("runner-01.ci"),
+        Some("runner-01.ci.example.com"),
     )
     .await?;
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
@@ -1096,7 +1096,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
             allowed_sandbox_modes = ["read-only"]
 
             [[remote_sandbox_config]]
-            hostname_pattern = ["runner-*.ci"]
+            hostname_pattern = ["runner-*.ci.example.com"]
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#,
     )?;
@@ -1109,7 +1109,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
         LoaderOverrides::default(),
         cloud_requirements,
         &codex_config::NoopThreadConfigLoader,
-        Some("runner-01.ci"),
+        Some("runner-01.ci.example.com"),
     )
     .await?;
 

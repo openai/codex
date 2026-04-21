@@ -2060,16 +2060,16 @@ allowed_approvals_reviewers = ["user"]
                 allowed_sandbox_modes = ["read-only"]
             "#,
         )?;
-        high_precedence.apply_remote_sandbox_config(Some("runner-01.ci"));
+        high_precedence.apply_remote_sandbox_config(Some("runner-01.ci.example.com"));
 
         let mut low_precedence: ConfigRequirementsToml = from_str(
             r#"
                 [[remote_sandbox_config]]
-                hostname_pattern = ["runner-*.ci"]
+                hostname_pattern = ["runner-*.ci.example.com"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,
         )?;
-        low_precedence.apply_remote_sandbox_config(Some("runner-01.ci"));
+        low_precedence.apply_remote_sandbox_config(Some("runner-01.ci.example.com"));
 
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(high_source.clone(), high_precedence);
