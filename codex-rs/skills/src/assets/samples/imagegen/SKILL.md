@@ -242,7 +242,7 @@ The fallback CLI defaults to `gpt-image-2`.
 - If the user explicitly asks for transparent output, use `gpt-image-1.5` and explain that transparent backgrounds are not supported in `gpt-image-2`, the latest model.
 - `gpt-image-2` always uses high fidelity for image inputs; do not set `input_fidelity` with this model.
 - `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
-- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `auto`, `medium`, or `high` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
 - Square images are typically fastest to generate. Use `1024x1024` for fast square drafts.
 - If the user asks for 4K-style output, use `3824x2160` for landscape or `2160x3824` for portrait. Do not use `3840x2160`, because the maximum edge length must be less than `3840px`.
 - `gpt-image-2` size may be `auto` or `WIDTHxHEIGHT` if all constraints hold: max edge `< 3840px`, both edges multiples of `16px`, long-to-short ratio `<= 3:1`, total pixels between `655,360` and `8,294,400`.

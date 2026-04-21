@@ -79,7 +79,7 @@ Model-specific note for `input_fidelity`:
 - Use the edits endpoint when the user requests changes to an existing image.
 - Masking is prompt-guided; exact shapes are not guaranteed.
 - Large sizes and high quality increase latency and cost.
-- Use `quality=low` for fast drafts, thumbnails, and quick iterations. Use `medium` or `high` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Use `quality=low` for fast drafts, thumbnails, and quick iterations. Use `auto`, `medium`, or `high` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
 - High `input_fidelity` can materially increase input token usage on models that support it.
 - If a request fails because a specific option is unsupported by the selected GPT Image model, retry manually without that option only when the option is not required by the user. If transparent output is required, switch to `gpt-image-1.5` instead of dropping `background=transparent`.
 

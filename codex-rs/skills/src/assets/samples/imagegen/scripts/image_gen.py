@@ -24,7 +24,7 @@ from io import BytesIO
 
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "auto"
-DEFAULT_QUALITY = "medium"
+DEFAULT_QUALITY = "auto"
 DEFAULT_OUTPUT_FORMAT = "png"
 DEFAULT_CONCURRENCY = 5
 DEFAULT_DOWNSCALE_SUFFIX = "-web"

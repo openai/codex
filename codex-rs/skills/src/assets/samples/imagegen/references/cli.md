@@ -64,7 +64,7 @@ python "$IMAGE_GEN" edit \
 - Model: `gpt-image-2`
 - Supported model family for this CLI: GPT Image models (`gpt-image-*`)
 - Size: `auto`
-- Quality: `medium`
+- Quality: `auto`
 - Output format: `png`
 - Default one-off output path: `output/imagegen/output.png`
 - Background: unspecified unless `--background` is set
@@ -74,7 +74,7 @@ python "$IMAGE_GEN" edit \
 `gpt-image-2` is the default model for new CLI fallback work.
 
 - Use `--quality low` for fast drafts, thumbnails, and quick iterations.
-- Use `--quality medium`, `--quality high`, or `--quality auto` for final assets, dense text, diagrams, identity-sensitive edits, and high-resolution outputs.
+- Use `--quality auto`, `--quality medium`, or `--quality high` for final assets, dense text, diagrams, identity-sensitive edits, and high-resolution outputs.
 - Square images are typically fastest. Use `--size 1024x1024` for quick square drafts.
 - If the user asks for 4K-style output, use `--size 3824x2160` for landscape or `--size 2160x3824` for portrait.
 - Do not pass `--input-fidelity` with `gpt-image-2`; this model always uses high fidelity for image inputs.
