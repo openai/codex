@@ -446,7 +446,9 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
 
     let _child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && body_contains(req, "<spawned_agent_context>")
+        },
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_completed("resp-child-1"),
@@ -457,7 +459,9 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
     let _turn1_followup = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<spawned_agent_context>")
+            body_contains(req, "function_call_output")
+                && body_contains(req, "/root/worker")
+                && !body_contains(req, "<spawned_agent_context>")
         },
         sse(vec![
             ev_response_created("resp-turn1-2"),
@@ -538,7 +542,9 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
 
     let _child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && body_contains(req, "<spawned_agent_context>")
+        },
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_completed("resp-child-1"),
@@ -549,7 +555,9 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
     let _turn1_followup = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "<spawned_agent_context>")
+            body_contains(req, "function_call_output")
+                && body_contains(req, "/root/worker")
+                && !body_contains(req, "<spawned_agent_context>")
         },
         sse(vec![
             ev_response_created("resp-turn1-2"),
