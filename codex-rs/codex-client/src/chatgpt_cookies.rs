@@ -57,7 +57,7 @@ pub fn with_chatgpt_cloudflare_cookie_store(
 
 fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
     match url.scheme() {
-        "http" | "https" => {}
+        "https" => {}
         _ => return false,
     }
 
@@ -132,11 +132,23 @@ mod tests {
 
         store.set_cookies(&mut [&cfuvid, &clearance].into_iter(), &url);
 
+        let mut cookies = store
+            .cookies(&url)
+            .and_then(|value| value.to_str().ok().map(str::to_string))
+            .map(|header| {
+                header
+                    .split("; ")
+                    .map(str::to_string)
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+        cookies.sort();
         assert_eq!(
-            store
-                .cookies(&url)
-                .and_then(|value| value.to_str().ok().map(str::to_string)),
-            Some("_cfuvid=visitor; cf_clearance=clearance".to_string())
+            cookies,
+            vec![
+                "_cfuvid=visitor".to_string(),
+                "cf_clearance=clearance".to_string()
+            ]
         );
     }
 
@@ -196,7 +208,26 @@ mod tests {
     }
 
     #[test]
-    fn only_allows_http_and_https_urls() {
+    fn rejects_plain_http_chatgpt_cookie_urls() {
+        let store = ChatGptCloudflareCookieStore::default();
+        let http_url = reqwest::Url::parse("http://chatgpt.com/backend-api/codex/responses")
+            .expect("URL should parse");
+        let https_url = reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses")
+            .expect("URL should parse");
+        let set_cookie = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
+
+        store.set_cookies(&mut std::iter::once(&set_cookie), &http_url);
+
+        assert_eq!(store.cookies(&http_url), None);
+        assert_eq!(store.cookies(&https_url), None);
+    }
+
+    #[test]
+    fn only_allows_https_urls() {
+        let url = reqwest::Url::parse("http://chatgpt.com/backend-api/codex/responses").unwrap();
+
+        assert!(!is_chatgpt_cookie_url(&url));
+
         let url = reqwest::Url::parse("wss://chatgpt.com/backend-api/codex/responses").unwrap();
 
         assert!(!is_chatgpt_cookie_url(&url));

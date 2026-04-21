@@ -1468,7 +1468,6 @@ dependencies = [
  "codex-arg0",
  "codex-backend-client",
  "codex-chatgpt",
- "codex-client",
  "codex-cloud-requirements",
  "codex-config",
  "codex-core",

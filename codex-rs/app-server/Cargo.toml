@@ -45,7 +45,6 @@ codex-utils-pty = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
-codex-client = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp = { workspace = true }
 codex-models-manager = { workspace = true }
