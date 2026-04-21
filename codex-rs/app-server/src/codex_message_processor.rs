@@ -2778,6 +2778,7 @@ impl CodexMessageProcessor {
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
+                    permission_profile: config_snapshot.permission_profile.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
                 if listener_task_context.general_analytics_enabled {
@@ -4509,6 +4510,7 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
+                let permission_profile = codex_thread.config_snapshot().await.permission_profile;
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4520,6 +4522,7 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
+                    permission_profile: permission_profile.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
                 if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -5163,6 +5166,7 @@ impl CodexMessageProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        let permission_profile = forked_thread.config_snapshot().await.permission_profile;
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5174,6 +5178,7 @@ impl CodexMessageProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
+            permission_profile: permission_profile.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
         if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -9033,6 +9038,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile,
         cwd,
         reasoning_effort,
         ..
@@ -9048,6 +9054,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
+        permission_profile: permission_profile.into(),
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
