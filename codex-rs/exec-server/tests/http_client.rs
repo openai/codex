@@ -759,7 +759,7 @@ async fn http_response_body_stream_reports_disconnect_when_queue_is_full() -> Re
                 url: "https://example.test/mcp/disconnect-full-queue".to_string(),
                 headers: Vec::new(),
                 body: None,
-                timeout_ms: None,
+                timeout_ms: HttpRequestTimeout::Default,
                 request_id: Some("http-1".to_string()),
                 stream_response: true,
             }
@@ -796,7 +796,7 @@ async fn http_response_body_stream_reports_disconnect_when_queue_is_full() -> Re
             url: "https://example.test/mcp/disconnect-full-queue".to_string(),
             headers: Vec::new(),
             body: None,
-            timeout_ms: None,
+            timeout_ms: HttpRequestTimeout::Default,
             request_id: Some("caller-stream-id".to_string()),
             stream_response: false,
         }),
