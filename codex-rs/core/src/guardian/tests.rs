@@ -1293,17 +1293,23 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         1,
         "follow-up reminder should be persisted for guardian forks"
     );
-    let second_user_message = requests[1]
-        .message_input_text_groups("user")
-        .last()
-        .expect("follow-up guardian user message")
+    let second_user_messages = requests[1].message_input_text_groups("user");
+    let second_transcript_delta = second_user_messages
+        .iter()
+        .find(|message| message.join("").contains(">>> TRANSCRIPT DELTA START\n"))
+        .expect("follow-up guardian transcript delta message")
         .join("");
-    assert!(second_user_message.contains(">>> TRANSCRIPT DELTA START\n"));
-    assert!(second_user_message.contains("[5] user: Please push the second docs fix too."));
+    assert!(second_transcript_delta.contains("[5] user: Please push the second docs fix too."));
     assert!(
-        second_user_message.contains("[6] assistant: I need approval for the second docs fix.")
+        second_transcript_delta.contains("[6] assistant: I need approval for the second docs fix.")
     );
-    assert!(!second_user_message.contains("[1] user: Please check the repo visibility"));
+    assert!(!second_transcript_delta.contains("[1] user: Please check the repo visibility"));
+    let second_approval_message = second_user_messages
+        .last()
+        .expect("follow-up guardian approval request message")
+        .join("");
+    assert!(second_approval_message.contains(">>> APPROVAL REQUEST START\n"));
+    assert!(!second_approval_message.contains(">>> TRANSCRIPT DELTA START\n"));
 
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
@@ -1338,25 +1344,37 @@ async fn proactive_guardian_sync_compacts_trunk_before_review_request() -> anyho
 
     let server = start_mock_server().await;
     let compact_summary = "GUARDIAN_COMPACT_SUMMARY";
-    let guardian_assessment = serde_json::json!({
+    let first_guardian_assessment = serde_json::json!({
         "risk_level": "low",
         "user_authorization": "high",
         "outcome": "allow",
-        "rationale": "The action is narrow and explicitly requested.",
+        "rationale": "The first action is narrow and explicitly requested.",
+    })
+    .to_string();
+    let second_guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The second action is narrow and explicitly requested.",
     })
     .to_string();
     let request_log = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
+                ev_response_created("resp-guardian-first-review"),
+                ev_assistant_message("msg-guardian-first-review", &first_guardian_assessment),
+                ev_completed("resp-guardian-first-review"),
+            ]),
+            sse(vec![
                 ev_response_created("resp-guardian-compact"),
                 ev_assistant_message("msg-guardian-compact", compact_summary),
                 ev_completed_with_tokens("resp-guardian-compact", /*total_tokens*/ 10),
             ]),
             sse(vec![
-                ev_response_created("resp-guardian-review"),
-                ev_assistant_message("msg-guardian-review", &guardian_assessment),
-                ev_completed("resp-guardian-review"),
+                ev_response_created("resp-guardian-second-review"),
+                ev_assistant_message("msg-guardian-second-review", &second_guardian_assessment),
+                ev_completed("resp-guardian-second-review"),
             ]),
         ],
     )
@@ -1373,25 +1391,87 @@ async fn proactive_guardian_sync_compacts_trunk_before_review_request() -> anyho
         .await;
     seed_guardian_parent_history(&session, &turn).await;
 
+    let first_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-before-proactive-compact".to_string(),
+            command: vec!["git".to_string(), "status".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to inspect the repo before pushing.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+        panic!("expected first guardian assessment");
+    };
+    assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
+
+    let initial_requests = request_log.requests();
+    assert_eq!(
+        initial_requests.len(),
+        1,
+        "fresh guardian trunk should use its first normal turn before proactive sync mutates history"
+    );
+    assert!(
+        initial_requests[0].body_contains_text(">>> TRANSCRIPT START"),
+        "initial review should include the full transcript in the policy-bearing first turn"
+    );
+    assert!(
+        !initial_requests[0].body_contains_text(SUMMARIZATION_PROMPT),
+        "initial review should not compact before the guardian policy has been injected"
+    );
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Please push the docs fix now.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "I need approval to push the docs fix.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
     proactively_sync_guardian_trunk(&session, &turn).await;
 
     let sync_requests = request_log.requests();
     assert_eq!(
         sync_requests.len(),
-        1,
-        "proactive transcript sync should compact before any approval review request"
+        2,
+        "proactive transcript sync should compact after the first guardian turn and before the next approval review request"
     );
     assert!(
-        sync_requests[0].body_contains_text(SUMMARIZATION_PROMPT),
+        sync_requests[1].body_contains_text(SUMMARIZATION_PROMPT),
         "proactive sync should trigger a compact request"
     );
     assert!(
-        sync_requests[0]
+        sync_requests[1]
             .body_contains_text("Transcript sync only. No approval decision is requested"),
         "compact request should include the synced guardian transcript"
     );
 
-    let outcome = run_guardian_review_session_for_test(
+    let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         GuardianApprovalRequest::Shell {
@@ -1407,19 +1487,19 @@ async fn proactive_guardian_sync_compacts_trunk_before_review_request() -> anyho
         /*external_cancel*/ None,
     )
     .await;
-    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
-        panic!("expected guardian assessment");
+    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+        panic!("expected second guardian assessment");
     };
-    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        2,
-        "expected exactly one proactive compact request and one later guardian review request"
+        3,
+        "expected initial review, one proactive compact request, and one later guardian review request"
     );
-    let compact_request = &requests[0];
-    let review_request = &requests[1];
+    let compact_request = &requests[1];
+    let review_request = &requests[2];
     assert!(compact_request.body_contains_text(SUMMARIZATION_PROMPT));
     assert!(
         review_request.body_contains_text(compact_summary),

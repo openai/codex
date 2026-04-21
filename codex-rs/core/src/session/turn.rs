@@ -367,12 +367,10 @@ pub(crate) async fn run_turn(
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;
-        crate::guardian::enqueue_proactive_guardian_trunk_sync(&sess, &turn_context);
     }
     if !plugin_items.is_empty() {
         sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
-        crate::guardian::enqueue_proactive_guardian_trunk_sync(&sess, &turn_context);
     }
 
     track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;

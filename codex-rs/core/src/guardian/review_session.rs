@@ -51,6 +51,7 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_approval_request_items;
+use super::prompt::build_guardian_initial_approval_request_items;
 use super::prompt::build_guardian_transcript_sync_items;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
@@ -698,13 +699,30 @@ async fn run_review_on_session(
                 )
                 .await;
 
-            sync_parent_transcript_to_session(review_session, params.parent_session.as_ref())
+            let initial_turn = {
+                let state = review_session.state.lock().await;
+                state.prior_review_count == 0 && state.last_synced_transcript_cursor.is_none()
+            };
+            let (prompt_items, initial_transcript_cursor) = if initial_turn {
+                let prompt_items = build_guardian_initial_approval_request_items(
+                    params.parent_session.as_ref(),
+                    params.retry_reason.clone(),
+                    params.request.clone(),
+                )
                 .await?;
-            let prompt_items = build_guardian_approval_request_items(
-                params.parent_session.as_ref(),
-                params.retry_reason.clone(),
-                params.request.clone(),
-            )?;
+                (prompt_items.items, Some(prompt_items.transcript_cursor))
+            } else {
+                sync_parent_transcript_to_session(review_session, params.parent_session.as_ref())
+                    .await?;
+                (
+                    build_guardian_approval_request_items(
+                        params.parent_session.as_ref(),
+                        params.retry_reason.clone(),
+                        params.request.clone(),
+                    )?,
+                    None,
+                )
+            };
 
             review_session
                 .codex
@@ -723,6 +741,11 @@ async fn run_review_on_session(
                     personality: params.personality,
                 })
                 .await?;
+
+            if let Some(transcript_cursor) = initial_transcript_cursor {
+                let mut state = review_session.state.lock().await;
+                state.last_synced_transcript_cursor = Some(transcript_cursor);
+            }
 
             Ok::<(), anyhow::Error>(())
         }),
@@ -755,6 +778,9 @@ async fn sync_parent_transcript_to_session(
 ) -> anyhow::Result<bool> {
     let last_synced_transcript_cursor = {
         let state = review_session.state.lock().await;
+        if state.prior_review_count == 0 && state.last_synced_transcript_cursor.is_none() {
+            return Ok(false);
+        }
         state.last_synced_transcript_cursor
     };
     let prompt_mode = last_synced_transcript_cursor
