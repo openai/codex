@@ -36,6 +36,9 @@ pub(crate) fn select_handlers_for_matcher_inputs(
     event_name: HookEventName,
     matcher_inputs: &[&str],
 ) -> Vec<ConfiguredHandler> {
+    // Check each configured handler once, even when several compatibility names
+    // match the same regex. A hook like `apply_patch|Write|Edit` should run a
+    // single time for one tool call, not once per matching alias.
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
