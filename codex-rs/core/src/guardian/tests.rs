@@ -1721,7 +1721,7 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_rejects_pinned_collab_feature() {
+async fn guardian_review_session_config_allows_pinned_disabled_feature() {
     let mut parent_config = test_config().await;
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
@@ -1734,18 +1734,17 @@ async fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_review_session_config_for_test(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
     )
-    .expect_err("guardian config should fail when collab is pinned on");
+    .expect("guardian config should continue when a disabled feature is pinned on");
 
-    assert!(
-        err.to_string()
-            .contains("guardian review session requires `features.multi_agent` to be disabled")
-    );
+    assert!(guardian_config.features.enabled(Feature::Collab));
+    assert!(guardian_config.mcp_servers.get().is_empty());
+    assert!(!guardian_config.include_apps_instructions);
 }
 
 #[tokio::test]
