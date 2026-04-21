@@ -10507,6 +10507,53 @@
           }
         ]
       },
+      "PermissionProfile": {
+        "properties": {
+          "fileSystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PermissionProfileFileSystemPermissions": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+            },
+            "type": "array"
+          },
+          "globScanMaxDepth": {
+            "format": "uint",
+            "minimum": 1.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
       "Personality": {
         "enum": [
           "none",
@@ -13652,6 +13699,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -13685,6 +13735,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
@@ -15036,6 +15087,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15069,6 +15123,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
@@ -15335,6 +15390,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15368,6 +15426,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
