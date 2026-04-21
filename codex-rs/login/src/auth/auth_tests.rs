@@ -193,6 +193,7 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
         dir.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
     );
     let managed = UnauthorizedRecovery {
         manager: Arc::clone(&manager),

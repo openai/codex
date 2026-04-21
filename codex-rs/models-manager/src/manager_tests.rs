@@ -707,6 +707,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
     ));
     let provider = provider_for(server.uri());
     let manager = ModelsManager::with_provider_for_tests(

@@ -521,6 +521,7 @@ pub async fn logout_with_revoke(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         auth_credentials_store_mode,
+        /*chatgpt_base_url*/ None,
     )
     .logout_with_revoke()
     .await
@@ -1231,9 +1232,7 @@ pub trait AuthManagerConfig {
     fn forced_chatgpt_workspace_id(&self) -> Option<String>;
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
-    fn chatgpt_base_url(&self) -> Option<String> {
-        None
-    }
+    fn chatgpt_base_url(&self) -> String;
 }
 
 impl Debug for AuthManager {
@@ -1265,6 +1264,7 @@ impl AuthManager {
         codex_home: PathBuf,
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
     ) -> Self {
         let (auth_state_tx, _) = watch::channel(());
         let managed_auth = load_auth(
@@ -1283,7 +1283,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            chatgpt_base_url: RwLock::new(None),
+            chatgpt_base_url: RwLock::new(chatgpt_base_url),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
             auth_state_tx,
@@ -1530,6 +1530,9 @@ impl AuthManager {
             .and_then(|guard| guard.clone())
     }
 
+    /// Sets the ChatGPT backend URL override for future auth runtime initialization.
+    /// Passing `None` clears the override and returns future initialization to the
+    /// default backend URL.
     pub fn set_chatgpt_backend_base_url(&self, chatgpt_base_url: Option<String>) {
         if let Ok(mut guard) = self.chatgpt_base_url.write()
             && *guard != chatgpt_base_url
@@ -1594,11 +1597,13 @@ impl AuthManager {
         codex_home: PathBuf,
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self::new(
             codex_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
+            chatgpt_base_url,
         ))
     }
 
@@ -1611,9 +1616,10 @@ impl AuthManager {
             config.codex_home(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode(),
+            Some(config.chatgpt_base_url()),
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
-        auth_manager.set_chatgpt_backend_base_url(config.chatgpt_base_url());
+        auth_manager.set_chatgpt_backend_base_url(Some(config.chatgpt_base_url()));
         auth_manager
     }
 
