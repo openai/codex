@@ -139,7 +139,8 @@ pub async fn load_config_layers_state(
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
-    if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
+    if let Some(mut requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
+        requirements.apply_remote_sandbox_config(requirements_hostname);
         config_requirements_toml
             .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
     }
@@ -150,12 +151,19 @@ pub async fn load_config_layers_state(
         overrides
             .macos_managed_config_requirements_base64
             .as_deref(),
+        requirements_hostname,
     )
     .await?;
 
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;
-    load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
+    load_requirements_toml(
+        fs,
+        &mut config_requirements_toml,
+        &requirements_toml_file,
+        requirements_hostname,
+    )
+    .await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -164,9 +172,9 @@ pub async fn load_config_layers_state(
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
+        requirements_hostname,
     )
     .await?;
-    config_requirements_toml.apply_remote_sandbox_config(requirements_hostname);
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,
@@ -417,6 +425,7 @@ async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
+    requirements_hostname: Option<&str>,
 ) -> io::Result<()> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
@@ -433,8 +442,8 @@ async fn load_requirements_toml(
                 )
             })?;
             let _guard = AbsolutePathBufGuard::new(requirements_parent.as_path());
-            let requirements_config: ConfigRequirementsToml =
-                toml::from_str(&contents).map_err(|e| {
+            let mut requirements_config: ConfigRequirementsToml = toml::from_str(&contents)
+                .map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
@@ -443,6 +452,7 @@ async fn load_requirements_toml(
                         ),
                     )
                 })?;
+            requirements_config.apply_remote_sandbox_config(requirements_hostname);
             config_requirements_toml.merge_unset_fields(
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_toml_file.clone(),
@@ -562,6 +572,7 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
 async fn load_requirements_from_legacy_scheme(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     loaded_config_layers: LoadedConfigLayers,
+    requirements_hostname: Option<&str>,
 ) -> io::Result<()> {
     // In this implementation, earlier layers cannot be overwritten by later
     // layers, so list managed_config_from_mdm first because it has the highest
@@ -594,7 +605,8 @@ async fn load_requirements_from_legacy_scheme(
                 )
             })?;
 
-        let new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
+        let mut new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
+        new_requirements_toml.apply_remote_sandbox_config(requirements_hostname);
         config_requirements_toml.merge_unset_fields(source, new_requirements_toml);
     }
 

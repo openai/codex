@@ -363,7 +363,7 @@ pub(crate) fn apply_runtime_feature_enablement(
     }
 }
 
-fn app_server_requirements_hostname() -> Option<String> {
+pub(crate) fn app_server_requirements_hostname() -> Option<String> {
     let hostname = gethostname::gethostname();
     let hostname = hostname.to_string_lossy().trim().to_string();
     (!hostname.is_empty()).then_some(hostname)

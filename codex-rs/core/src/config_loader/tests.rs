@@ -672,6 +672,7 @@ personality = true
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*requirements_hostname*/ None,
     )
     .await?;
 
@@ -845,6 +846,7 @@ allowed_approval_policies = ["on-request"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &AbsolutePathBuf::try_from(requirements_file)?,
+        /*requirements_hostname*/ None,
     )
     .await?;
 
@@ -861,6 +863,54 @@ allowed_approval_policies = ["on-request"]
             .as_ref()
             .map(|sourced| sourced.source.clone()),
         Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn system_remote_sandbox_config_keeps_cloud_sandbox_modes() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[[remote_sandbox_config]]
+hostname_pattern = ["runner-*.ci"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+"#,
+    )
+    .await?;
+
+    let cloud_source = RequirementSource::CloudRequirements;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    config_requirements_toml.merge_unset_fields(
+        cloud_source.clone(),
+        toml::from_str(
+            r#"
+allowed_sandbox_modes = ["read-only"]
+"#,
+        )?,
+    );
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &AbsolutePathBuf::try_from(requirements_file)?,
+        Some("runner-01.ci"),
+    )
+    .await?;
+    let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
+
+    assert_eq!(
+        config_requirements
+            .sandbox_policy
+            .can_set(&SandboxPolicy::new_workspace_write_policy()),
+        Err(ConstraintError::InvalidValue {
+            field_name: "sandbox_mode",
+            candidate: "WorkspaceWrite".into(),
+            allowed: "[ReadOnly]".into(),
+            requirement_source: cloud_source,
+        })
     );
 
     Ok(())
@@ -887,6 +937,7 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*requirements_hostname*/ None,
     )
     .await?;
 
@@ -941,6 +992,7 @@ deny_read = ["./sensitive/**/*.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*requirements_hostname*/ None,
     )
     .await?;
 

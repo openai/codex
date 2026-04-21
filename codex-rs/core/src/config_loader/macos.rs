@@ -64,6 +64,7 @@ fn load_managed_admin_config() -> io::Result<Option<ManagedAdminConfigLayer>> {
 pub(crate) async fn load_managed_admin_requirements_toml(
     target: &mut ConfigRequirementsWithSources,
     override_base64: Option<&str>,
+    requirements_hostname: Option<&str>,
 ) -> io::Result<()> {
     if let Some(encoded) = override_base64 {
         let trimmed = encoded.trim();
@@ -71,16 +72,16 @@ pub(crate) async fn load_managed_admin_requirements_toml(
             return Ok(());
         }
 
-        target.merge_unset_fields(
-            managed_preferences_requirements_source(),
-            parse_managed_requirements_base64(trimmed)?,
-        );
+        let mut requirements = parse_managed_requirements_base64(trimmed)?;
+        requirements.apply_remote_sandbox_config(requirements_hostname);
+        target.merge_unset_fields(managed_preferences_requirements_source(), requirements);
         return Ok(());
     }
 
     match task::spawn_blocking(load_managed_admin_requirements).await {
         Ok(result) => {
-            if let Some(requirements) = result? {
+            if let Some(mut requirements) = result? {
+                requirements.apply_remote_sandbox_config(requirements_hostname);
                 target.merge_unset_fields(managed_preferences_requirements_source(), requirements);
             }
             Ok(())

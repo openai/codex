@@ -668,7 +668,6 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
-    pub remote_sandbox_config: Option<Sourced<Vec<RemoteSandboxConfigToml>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -730,7 +729,6 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
-                remote_sandbox_config,
                 allowed_web_search_modes,
                 feature_requirements,
                 mcp_servers,
@@ -751,32 +749,11 @@ impl ConfigRequirementsWithSources {
         }
     }
 
-    pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
-        let Some(hostname) = hostname.and_then(normalize_hostname) else {
-            return;
-        };
-        let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
-            return;
-        };
-        let Some(matched_config) = remote_sandbox_config
-            .value
-            .iter()
-            .find(|config| hostname_matches_any_pattern(&hostname, &config.hostname_pattern))
-        else {
-            return;
-        };
-        self.allowed_sandbox_modes = Some(Sourced::new(
-            matched_config.allowed_sandbox_modes.clone(),
-            remote_sandbox_config.source.clone(),
-        ));
-    }
-
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            remote_sandbox_config,
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
@@ -791,7 +768,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
-            remote_sandbox_config: remote_sandbox_config.map(|sourced| sourced.value),
+            remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -852,6 +829,22 @@ pub enum ResidencyRequirement {
 }
 
 impl ConfigRequirementsToml {
+    pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
+        let Some(hostname) = hostname.and_then(normalize_hostname) else {
+            return;
+        };
+        let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
+            return;
+        };
+        let Some(matched_config) = remote_sandbox_config
+            .iter()
+            .find(|config| hostname_matches_any_pattern(&hostname, &config.hostname_pattern))
+        else {
+            return;
+        };
+        self.allowed_sandbox_modes = Some(matched_config.allowed_sandbox_modes.clone());
+    }
+
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
@@ -886,7 +879,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            remote_sandbox_config: _remote_sandbox_config,
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
@@ -1147,7 +1139,7 @@ mod tests {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            remote_sandbox_config,
+            remote_sandbox_config: _,
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
@@ -1164,8 +1156,6 @@ mod tests {
             allowed_approvals_reviewers: allowed_approvals_reviewers
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            remote_sandbox_config: remote_sandbox_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1238,7 +1228,6 @@ mod tests {
                     source.clone(),
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
-                remote_sandbox_config: None,
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
                     enforce_source.clone(),
@@ -1282,7 +1271,6 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
-                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
@@ -1328,7 +1316,6 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
-                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
@@ -1977,7 +1964,7 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
         let source = RequirementSource::CloudRequirements;
-        let requirements_toml: ConfigRequirementsToml = from_str(
+        let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
 
@@ -1990,9 +1977,9 @@ allowed_approvals_reviewers = ["user"]
                 allowed_sandbox_modes = ["read-only", "danger-full-access"]
             "#,
         )?;
+        requirements_toml.apply_remote_sandbox_config(Some("BUILD-01.EXAMPLE.COM."));
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), requirements_toml);
-        requirements_with_sources.apply_remote_sandbox_config(Some("BUILD-01.EXAMPLE.COM."));
 
         assert_eq!(
             requirements_with_sources
@@ -2036,7 +2023,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_non_match_preserves_top_level() -> Result<()> {
-        let requirements_toml: ConfigRequirementsToml = from_str(
+        let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
 
@@ -2045,9 +2032,9 @@ allowed_approvals_reviewers = ["user"]
                 allowed_sandbox_modes = ["read-only", "workspace-write"]
             "#,
         )?;
+        requirements_toml.apply_remote_sandbox_config(Some("laptop.example.com"));
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(RequirementSource::Unknown, requirements_toml);
-        requirements_with_sources.apply_remote_sandbox_config(Some("laptop.example.com"));
         let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
 
         assert_eq!(
@@ -2059,6 +2046,45 @@ allowed_approvals_reviewers = ["user"]
                 candidate: "DangerFullAccess".into(),
                 allowed: "[ReadOnly]".into(),
                 requirement_source: RequirementSource::Unknown,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
+        let high_source = RequirementSource::CloudRequirements;
+        let mut high_precedence: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_sandbox_modes = ["read-only"]
+            "#,
+        )?;
+        high_precedence.apply_remote_sandbox_config(Some("runner-01.ci"));
+
+        let mut low_precedence: ConfigRequirementsToml = from_str(
+            r#"
+                [[remote_sandbox_config]]
+                hostname_pattern = ["runner-*.ci"]
+                allowed_sandbox_modes = ["read-only", "workspace-write"]
+            "#,
+        )?;
+        low_precedence.apply_remote_sandbox_config(Some("runner-01.ci"));
+
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(high_source.clone(), high_precedence);
+        requirements_with_sources.merge_unset_fields(RequirementSource::Unknown, low_precedence);
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+
+        assert_eq!(
+            requirements
+                .sandbox_policy
+                .can_set(&SandboxPolicy::new_workspace_write_policy()),
+            Err(ConstraintError::InvalidValue {
+                field_name: "sandbox_mode",
+                candidate: "WorkspaceWrite".into(),
+                allowed: "[ReadOnly]".into(),
+                requirement_source: high_source,
             })
         );
 

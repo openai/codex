@@ -2,6 +2,7 @@ use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
+use crate::config_api::app_server_requirements_hostname;
 use crate::config_api::apply_runtime_feature_enablement;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
@@ -6532,7 +6533,6 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let requirements_hostname = app_server_requirements_hostname();
             let config_layer_stack = match load_config_layers_state(
                 LOCAL_FS.as_ref(),
                 &self.config.codex_home,
@@ -6541,7 +6541,7 @@ impl CodexMessageProcessor {
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
                 self.thread_config_loader.as_ref(),
-                requirements_hostname.as_deref(),
+                app_server_requirements_hostname().as_deref(),
             )
             .await
             {
@@ -9527,12 +9527,6 @@ async fn derive_config_for_cwd(
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
-}
-
-fn app_server_requirements_hostname() -> Option<String> {
-    let hostname = gethostname::gethostname();
-    let hostname = hostname.to_string_lossy().trim().to_string();
-    (!hostname.is_empty()).then_some(hostname)
 }
 
 async fn read_history_cwd_from_state_db(
