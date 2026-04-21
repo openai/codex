@@ -31,15 +31,7 @@ pub(super) async fn read_thread(
         && (params.include_archived || metadata.archived_at.is_none())
     {
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
-        if params.include_history {
-            let Some(path) = thread.rollout_path.clone() else {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("failed to locate rollout for thread {thread_id}"),
-                });
-            };
-            let items = load_history_items(&path).await?;
-            thread.history = Some(StoredThreadHistory { thread_id, items });
-        }
+        attach_history_if_requested(&mut thread, params.include_history).await?;
         return Ok(thread);
     }
 
@@ -49,17 +41,58 @@ pub(super) async fn read_thread(
             message: format!("no rollout found for thread id {thread_id}"),
         })?;
 
-    let mut thread = read_thread_from_rollout_path(store, thread_id, path).await?;
-    if params.include_history {
-        let Some(path) = thread.rollout_path.clone() else {
-            return Err(ThreadStoreError::Internal {
-                message: format!("failed to load thread history for thread {thread_id}"),
-            });
-        };
-        let items = load_history_items(&path).await?;
-        thread.history = Some(StoredThreadHistory { thread_id, items });
-    }
+    let mut thread = read_thread_from_rollout_path(store, path).await?;
+    attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
+}
+
+pub(super) async fn read_thread_by_rollout_path(
+    store: &LocalThreadStore,
+    rollout_path: std::path::PathBuf,
+    include_archived: bool,
+    include_history: bool,
+) -> ThreadStoreResult<StoredThread> {
+    let path = resolve_requested_rollout_path(store, rollout_path)?;
+    let mut thread = read_thread_from_rollout_path(store, path).await?;
+    if !include_archived && thread.archived_at.is_some() {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!("thread {} is archived", thread.thread_id),
+        });
+    }
+    attach_history_if_requested(&mut thread, include_history).await?;
+    Ok(thread)
+}
+
+fn resolve_requested_rollout_path(
+    store: &LocalThreadStore,
+    rollout_path: std::path::PathBuf,
+) -> ThreadStoreResult<std::path::PathBuf> {
+    let path = if rollout_path.is_relative() {
+        store.config.codex_home.join(rollout_path)
+    } else {
+        rollout_path
+    };
+    std::fs::canonicalize(&path).map_err(|err| ThreadStoreError::InvalidRequest {
+        message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
+    })
+}
+
+async fn attach_history_if_requested(
+    thread: &mut StoredThread,
+    include_history: bool,
+) -> ThreadStoreResult<()> {
+    if !include_history {
+        return Ok(());
+    }
+    let thread_id = thread.thread_id;
+    let Some(path) = thread.rollout_path.clone() else {
+        return Err(ThreadStoreError::Internal {
+            message: format!("failed to load thread history for thread {thread_id}"),
+        });
+    };
+    let items = load_history_items(&path).await?;
+    thread.history = Some(StoredThreadHistory { thread_id, items });
+    Ok(())
 }
 
 async fn resolve_rollout_path(
@@ -94,7 +127,6 @@ async fn resolve_rollout_path(
 
 async fn read_thread_from_rollout_path(
     store: &LocalThreadStore,
-    thread_id: codex_protocol::ThreadId,
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {
     let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
@@ -116,7 +148,7 @@ async fn read_thread_from_rollout_path(
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id);
     if let Ok(Some(title)) =
-        find_thread_name_by_id(store.config.codex_home.as_path(), &thread_id).await
+        find_thread_name_by_id(store.config.codex_home.as_path(), &thread.thread_id).await
     {
         set_thread_name_from_title(&mut thread, title);
     }
@@ -346,6 +378,36 @@ mod tests {
             thread.history.expect("history should load").thread_id,
             thread_id
         );
+    }
+
+    #[tokio::test]
+    async fn read_thread_returns_rollout_path_summary() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(211);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let relative_path = active_path
+            .strip_prefix(home.path())
+            .expect("path should be under codex home")
+            .to_path_buf();
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                relative_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(
+            thread.rollout_path,
+            Some(std::fs::canonicalize(active_path).expect("canonical path"))
+        );
+        assert_eq!(thread.preview, "Hello from user");
     }
 
     #[tokio::test]
