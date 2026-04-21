@@ -66,7 +66,7 @@ pub(crate) async fn run_http_request(
             HttpRequestTimeout::Default => {
                 reqwest::Client::builder().timeout(DEFAULT_HTTP_REQUEST_TIMEOUT)
             }
-            HttpRequestTimeout::None => reqwest::Client::builder(),
+            HttpRequestTimeout::Disabled => reqwest::Client::builder(),
             HttpRequestTimeout::Millis(timeout_ms) => {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }

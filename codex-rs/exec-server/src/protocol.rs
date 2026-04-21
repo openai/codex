@@ -268,15 +268,15 @@ pub struct HttpHeader {
     pub value: String,
 }
 
-/// Nullable timeout value for executor-owned HTTP requests.
+/// Tri-state timeout value for executor-owned HTTP requests.
 ///
-/// Omitted means "use the executor default", `null` means "no timeout", and a
-/// number means "use exactly this many milliseconds".
+/// Omitted means "use the executor default", `null` means "disable the
+/// timeout", and a number means "use exactly this many milliseconds".
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum HttpRequestTimeout {
     #[default]
     Default,
-    None,
+    Disabled,
     Millis(u64),
 }
 
@@ -292,7 +292,7 @@ impl Serialize for HttpRequestTimeout {
         S: serde::Serializer,
     {
         match self {
-            Self::Default | Self::None => serializer.serialize_none(),
+            Self::Default | Self::Disabled => serializer.serialize_none(),
             Self::Millis(timeout_ms) => serializer.serialize_u64(*timeout_ms),
         }
     }
@@ -305,7 +305,7 @@ impl<'de> Deserialize<'de> for HttpRequestTimeout {
     {
         Ok(match Option::<u64>::deserialize(deserializer)? {
             Some(timeout_ms) => Self::Millis(timeout_ms),
-            None => Self::None,
+            None => Self::Disabled,
         })
     }
 }
@@ -464,7 +464,7 @@ mod tests {
         .expect("numeric timeout should deserialize");
 
         assert_eq!(omitted.timeout_ms, HttpRequestTimeout::Default);
-        assert_eq!(null_timeout.timeout_ms, HttpRequestTimeout::None);
+        assert_eq!(null_timeout.timeout_ms, HttpRequestTimeout::Disabled);
         assert_eq!(
             explicit_timeout.timeout_ms,
             HttpRequestTimeout::Millis(1234)
