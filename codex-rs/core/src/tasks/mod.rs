@@ -630,7 +630,9 @@ impl Session {
 
         // The startup prompt queue is serialized by the regular turn itself. If an interrupt
         // lands while that serialization is in progress, wait for the shared drain to finish
-        // before force-aborting the task so history cannot be left half-written.
+        // before force-aborting the task so history cannot be left half-written. This can wait
+        // on turn-start hooks, but it keeps hook policy and hook-added context ahead of the
+        // model-visible interrupt marker.
         if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
             let has_turn_start_transcript_input = {
                 let inputs = task.turn_context.lock_turn_start_transcript_inputs();
