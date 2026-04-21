@@ -416,7 +416,7 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                // TODO jif simlpify
+                // Do not commit if we lost the lock
                 match db
                     .heartbeat_global_phase2_job(&claim.token, phase_two::JOB_LEASE_SECONDS)
                     .await
