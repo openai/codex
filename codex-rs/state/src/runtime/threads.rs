@@ -56,7 +56,7 @@ WHERE threads.id = ?
     ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
         let rows = sqlx::query(
             r#"
-SELECT name, description, input_schema, defer_loading
+SELECT namespace, name, description, input_schema, defer_loading
 FROM thread_dynamic_tools
 WHERE thread_id = ?
 ORDER BY position ASC
@@ -73,6 +73,7 @@ ORDER BY position ASC
             let input_schema: String = row.try_get("input_schema")?;
             let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
             tools.push(DynamicToolSpec {
+                namespace: row.try_get("namespace")?,
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 input_schema,
@@ -142,6 +143,17 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         status: crate::DirectionalThreadSpawnEdgeStatus,
     ) -> anyhow::Result<Vec<ThreadId>> {
         self.list_thread_spawn_descendants_matching(root_thread_id, Some(status))
+            .await
+    }
+
+    /// List all spawned descendants of `root_thread_id`.
+    ///
+    /// Descendants are returned breadth-first by depth, then by thread id for stable ordering.
+    pub async fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        self.list_thread_spawn_descendants_matching(root_thread_id, /*status*/ None)
             .await
     }
 
@@ -767,16 +779,18 @@ ON CONFLICT(id) DO UPDATE SET
 INSERT INTO thread_dynamic_tools (
     thread_id,
     position,
+    namespace,
     name,
     description,
     input_schema,
     defer_loading
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
             .bind(thread_id.as_str())
             .bind(position)
+            .bind(tool.namespace.as_deref())
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
@@ -954,7 +968,8 @@ SELECT
 pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicToolSpec>>> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
-        RolloutItem::ResponseItem(_)
+        RolloutItem::SessionState(_)
+        | RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -964,7 +979,8 @@ pub(super) fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<
 pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
     items.iter().rev().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-        RolloutItem::ResponseItem(_)
+        RolloutItem::SessionState(_)
+        | RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
@@ -1759,5 +1775,11 @@ mod tests {
             .await
             .expect("open descendants from child should load");
         assert_eq!(open_descendants_from_child, vec![grandchild_thread_id]);
+
+        let all_descendants = runtime
+            .list_thread_spawn_descendants(parent_thread_id)
+            .await
+            .expect("all descendants should load");
+        assert_eq!(all_descendants, vec![child_thread_id, grandchild_thread_id]);
     }
 }

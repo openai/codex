@@ -72,8 +72,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -97,6 +99,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 core_test_support = { workspace = true }
+codex-model-provider-info = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

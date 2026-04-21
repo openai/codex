@@ -127,6 +127,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             dynamic_tools: Some(vec![DynamicToolSpec {
+                namespace: None,
                 name: tool_name.to_string(),
                 description: "Deterministic wait tool".to_string(),
                 input_schema: json!({
@@ -194,6 +195,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
             thread_id: thread_id.clone(),
             turn_id: started.turn_id,
             call_id: call_id.to_string(),
+            namespace: None,
             tool: tool_name.to_string(),
             arguments: tool_args,
         }

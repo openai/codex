@@ -1,8 +1,10 @@
 #![cfg(not(target_os = "windows"))]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -19,7 +21,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use wiremock::MockServer;
 
@@ -44,11 +46,15 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut builder = test_codex()
         .with_auth(auth)
-        .with_model("gpt-5")
+        .with_model("gpt-5.2")
         .with_config(|config| {
             // Keep this test deterministic: no request retries, and a small stream retry budget.
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(1);
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("test config should allow feature update");
         });
 
     let test = builder.build(&server).await?;
@@ -113,7 +119,12 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         })
         .await?;
 
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let _ = wait_for_event_with_timeout(
+        &codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(30),
+    )
+    .await;
 
     // Assert /models was refreshed exactly once after the X-Models-Etag mismatch.
     assert_eq!(refresh_models_mock.requests().len(), 1);

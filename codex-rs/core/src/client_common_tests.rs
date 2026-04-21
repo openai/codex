@@ -13,7 +13,7 @@ fn serializes_text_verbosity_when_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -57,7 +57,7 @@ fn serializes_text_schema_with_strict_format() {
             .expect("text controls");
 
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -95,7 +95,7 @@ fn omits_text_when_not_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -118,7 +118,7 @@ fn omits_text_when_not_set() {
 #[test]
 fn serializes_flex_service_tier_when_set() {
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input: vec![],
         tools: vec![],

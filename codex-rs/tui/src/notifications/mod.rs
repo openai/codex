@@ -1,11 +1,13 @@
 mod bel;
 mod osc9;
 
-use std::env;
 use std::io;
 
 use bel::BelBackend;
 use codex_config::types::NotificationMethod;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use osc9::Osc9Backend;
 
 #[derive(Debug)]
@@ -18,13 +20,13 @@ impl DesktopNotificationBackend {
     pub fn for_method(method: NotificationMethod) -> Self {
         match method {
             NotificationMethod::Auto => {
-                if supports_osc9() {
-                    Self::Osc9(Osc9Backend)
+                if supports_osc9(&terminal_info()) {
+                    Self::Osc9(Osc9Backend::new())
                 } else {
                     Self::Bel(BelBackend)
                 }
             }
-            NotificationMethod::Osc9 => Self::Osc9(Osc9Backend),
+            NotificationMethod::Osc9 => Self::Osc9(Osc9Backend::new()),
             NotificationMethod::Bel => Self::Bel(BelBackend),
         }
     }
@@ -48,67 +50,33 @@ pub fn detect_backend(method: NotificationMethod) -> DesktopNotificationBackend 
     DesktopNotificationBackend::for_method(method)
 }
 
-fn supports_osc9() -> bool {
-    if env::var_os("WT_SESSION").is_some() {
-        return false;
-    }
-    // Prefer TERM_PROGRAM when present, but keep fallbacks for shells/launchers
-    // that don't set it (e.g., tmux/ssh) to avoid regressing OSC 9 support.
-    if matches!(
-        env::var("TERM_PROGRAM").ok().as_deref(),
-        Some("WezTerm" | "WarpTerminal" | "ghostty")
-    ) {
-        return true;
-    }
-    // iTerm still provides a strong session signal even when TERM_PROGRAM is missing.
-    if env::var_os("ITERM_SESSION_ID").is_some() {
-        return true;
-    }
-    // TERM-based hints cover kitty/wezterm setups without TERM_PROGRAM.
+fn supports_osc9(terminal: &TerminalInfo) -> bool {
     matches!(
-        env::var("TERM").ok().as_deref(),
-        Some("xterm-kitty" | "wezterm" | "wezterm-mux")
+        terminal.name,
+        TerminalName::Ghostty
+            | TerminalName::Iterm2
+            | TerminalName::Kitty
+            | TerminalName::WarpTerminal
+            | TerminalName::WezTerm
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::detect_backend;
+    use super::supports_osc9;
     use codex_config::types::NotificationMethod;
-    use serial_test::serial;
-    use std::ffi::OsString;
+    use codex_terminal_detection::TerminalInfo;
+    use codex_terminal_detection::TerminalName;
+    use pretty_assertions::assert_eq;
 
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let original = std::env::var_os(key);
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.original {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
+    fn test_terminal(name: TerminalName) -> TerminalInfo {
+        TerminalInfo {
+            name,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
         }
     }
 
@@ -129,28 +97,39 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn auto_prefers_bel_without_hints() {
-        let _term = EnvVarGuard::remove("TERM");
-        let _term_program = EnvVarGuard::remove("TERM_PROGRAM");
-        let _iterm = EnvVarGuard::remove("ITERM_SESSION_ID");
-        let _wt = EnvVarGuard::remove("WT_SESSION");
-        assert!(matches!(
-            detect_backend(NotificationMethod::Auto),
-            super::DesktopNotificationBackend::Bel(_)
-        ));
+    fn supports_osc9_for_supported_terminals() {
+        for name in [
+            TerminalName::Ghostty,
+            TerminalName::Iterm2,
+            TerminalName::Kitty,
+            TerminalName::WarpTerminal,
+            TerminalName::WezTerm,
+        ] {
+            assert!(
+                supports_osc9(&test_terminal(name)),
+                "{name:?} should support OSC 9"
+            );
+        }
     }
 
     #[test]
-    #[serial]
-    fn auto_uses_osc9_for_iterm() {
-        let _term = EnvVarGuard::remove("TERM");
-        let _term_program = EnvVarGuard::remove("TERM_PROGRAM");
-        let _iterm = EnvVarGuard::set("ITERM_SESSION_ID", "abc");
-        let _wt = EnvVarGuard::remove("WT_SESSION");
-        assert!(matches!(
-            detect_backend(NotificationMethod::Auto),
-            super::DesktopNotificationBackend::Osc9(_)
-        ));
+    fn supports_osc9_for_unsupported_terminals() {
+        for name in [
+            TerminalName::AppleTerminal,
+            TerminalName::Alacritty,
+            TerminalName::Dumb,
+            TerminalName::GnomeTerminal,
+            TerminalName::Konsole,
+            TerminalName::Unknown,
+            TerminalName::VsCode,
+            TerminalName::Vte,
+            TerminalName::WindowsTerminal,
+        ] {
+            assert_eq!(
+                supports_osc9(&test_terminal(name)),
+                false,
+                "{name:?} should not support OSC 9"
+            );
+        }
     }
 }

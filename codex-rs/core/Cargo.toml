@@ -48,7 +48,6 @@ codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
-codex-instructions = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
@@ -105,7 +104,6 @@ sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
-test-log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -167,6 +165,7 @@ opentelemetry_sdk = { workspace = true, features = [
 ] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
