@@ -501,13 +501,23 @@ impl Reducer<'_> {
         };
         if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
             let runtime_status = field_str(event, "status").unwrap_or("completed");
-            set_execution_end(
-                &mut cell.execution,
-                event.wall_time_unix_ms,
-                event.seq,
-                code_cell_execution_status(runtime_status),
-            );
             cell.runtime_status = code_cell_runtime_status(runtime_status);
+            if matches!(cell.runtime_status, CodeCellRuntimeStatus::Yielded) {
+                // Yielding is a partial result: the model-visible custom
+                // `exec` call has returned a cell id, but the runtime cell is
+                // still alive and may later complete through `wait`.
+                cell.initial_response_at_unix_ms = Some(event.wall_time_unix_ms);
+                cell.initial_response_seq = Some(event.seq);
+                cell.yielded_at_unix_ms = Some(event.wall_time_unix_ms);
+                cell.yielded_seq = Some(event.seq);
+            } else {
+                set_execution_end(
+                    &mut cell.execution,
+                    event.wall_time_unix_ms,
+                    event.seq,
+                    code_cell_execution_status(runtime_status),
+                );
+            }
             if let Some(wait_call_id) = trace_field_str(event, "model_visible_wait_call", "id")
                 .filter(|call_id| !call_id.is_empty())
             {
@@ -2893,6 +2903,14 @@ mod tests {
             serde_json::to_vec(&json!({ "source_js": code_call["input"] }))?,
         )?;
         std::fs::write(
+            temp.path().join("payloads/code-cell-yielded.json"),
+            serde_json::to_vec(&json!({
+                "cell_id": "runtime-cell-1",
+                "status": "yielded",
+                "content_items": [{ "type": "input_text", "text": "Execution yielded. Call wait." }]
+            }))?,
+        )?;
+        std::fs::write(
             temp.path().join("payloads/wait-invocation.json"),
             serde_json::to_vec(&json!({
                 "call_id": "call-wait",
@@ -2948,9 +2966,25 @@ mod tests {
                 "raw_payload.invocation.kind": "code_cell_invocation"
             }),
         )?;
+        // The initial custom `exec` call can return before the cell finishes.
+        // This event records that yield point without closing the full runtime
+        // execution window.
         write_event(
             &mut events,
             4,
+            "codex.code_cell.ended",
+            json!({
+                "thread.id": "thread-1",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "status": "yielded",
+                "raw_payload.result.id": "raw_payload:code-cell-yielded",
+                "raw_payload.result.path": "payloads/code-cell-yielded.json",
+                "raw_payload.result.kind": "code_cell_result"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            5,
             "codex.tool.started",
             json!({
                 "thread.id": "thread-1",
@@ -2966,7 +3000,7 @@ mod tests {
         )?;
         write_event(
             &mut events,
-            5,
+            6,
             "codex.tool.ended",
             json!({
                 "tool.call_id": "tool:call-wait",
@@ -2979,7 +3013,7 @@ mod tests {
         )?;
         write_event(
             &mut events,
-            6,
+            7,
             "codex.code_cell.ended",
             json!({
                 "thread.id": "thread-1",
@@ -2990,7 +3024,7 @@ mod tests {
         )?;
         write_event(
             &mut events,
-            7,
+            8,
             "codex.inference.started",
             json!({
                 "thread.id": "thread-1",
@@ -3006,11 +3040,29 @@ mod tests {
 
         assert_eq!(
             json!({
+                "execution": trace["code_cells"]["code_cell:call-code"]["execution"].clone(),
+                "runtime_status": trace["code_cells"]["code_cell:call-code"]["runtime_status"].clone(),
+                "initial_response_at_unix_ms": trace["code_cells"]["code_cell:call-code"]["initial_response_at_unix_ms"].clone(),
+                "initial_response_seq": trace["code_cells"]["code_cell:call-code"]["initial_response_seq"].clone(),
+                "yielded_at_unix_ms": trace["code_cells"]["code_cell:call-code"]["yielded_at_unix_ms"].clone(),
+                "yielded_seq": trace["code_cells"]["code_cell:call-code"]["yielded_seq"].clone(),
                 "output_item_ids": trace["code_cells"]["code_cell:call-code"]["output_item_ids"].clone(),
                 "wait_tool_call_ids": trace["code_cells"]["code_cell:call-code"]["wait_tool_call_ids"].clone(),
                 "wait_output_producers": trace["conversation_items"]["item:4"]["produced_by"].clone(),
             }),
             json!({
+                "execution": {
+                    "started_at_unix_ms": 1776420000000i64,
+                    "ended_at_unix_ms": 1776420000000i64,
+                    "status": "completed",
+                    "started_seq": 3,
+                    "ended_seq": 7,
+                },
+                "runtime_status": "completed",
+                "initial_response_at_unix_ms": 1776420000000i64,
+                "initial_response_seq": 4,
+                "yielded_at_unix_ms": 1776420000000i64,
+                "yielded_seq": 4,
                 "output_item_ids": ["item:2", "item:4"],
                 "wait_tool_call_ids": ["tool:call-wait"],
                 "wait_output_producers": [

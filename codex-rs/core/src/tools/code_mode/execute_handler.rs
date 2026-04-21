@@ -78,19 +78,18 @@ impl CodeModeExecuteHandler {
                 return Err(FunctionCallError::RespondToModel(err));
             }
         };
-        if !matches!(&response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
-            let result_payload = codex_trace::write_payload(
-                "code_cell_result",
-                &code_cell_response_payload(&response),
-            );
-            emit_code_cell_ended(
-                &exec,
-                &runtime_cell_id,
-                &response,
-                /*model_visible_wait_call_id*/ None,
-                result_payload.as_ref(),
-            );
-        }
+        let result_payload =
+            codex_trace::write_payload("code_cell_result", &code_cell_response_payload(&response));
+        // A yielded response is the end of the model-visible custom `exec`
+        // call, not the end of the runtime cell. Emit it anyway so the trace
+        // can distinguish "the model got a cell id" from "the JS finished".
+        emit_code_cell_ended(
+            &exec,
+            &runtime_cell_id,
+            &response,
+            /*model_visible_wait_call_id*/ None,
+            result_payload.as_ref(),
+        );
         handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await
             .map_err(FunctionCallError::RespondToModel)
