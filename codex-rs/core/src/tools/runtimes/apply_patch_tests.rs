@@ -58,6 +58,7 @@ fn guardian_review_request_includes_patch_context() {
             },
         )]),
         exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            execpolicy_matched: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         },
@@ -95,6 +96,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
         exec_approval_requirement: ExecApprovalRequirement::Skip {
+            execpolicy_matched: false,
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         },
@@ -151,6 +153,7 @@ fn file_system_sandbox_context_omits_legacy_equivalent_policy() {
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
         exec_approval_requirement: ExecApprovalRequirement::Skip {
+            execpolicy_matched: false,
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         },
@@ -192,6 +195,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
         exec_approval_requirement: ExecApprovalRequirement::Skip {
+            execpolicy_matched: false,
             bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         },

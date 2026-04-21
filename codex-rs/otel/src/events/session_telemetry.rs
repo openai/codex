@@ -867,6 +867,7 @@ impl SessionTelemetry {
         call_id: &str,
         decision: &ReviewDecision,
         source: ToolDecisionSource,
+        execpolicy_matched: Option<bool>,
     ) {
         log_event!(
             self,
@@ -875,6 +876,9 @@ impl SessionTelemetry {
             call_id = %call_id,
             decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
+            execpolicy_matched = %execpolicy_matched
+                .map(|matched| matched.to_string())
+                .unwrap_or_default(),
         );
     }
 
