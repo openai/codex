@@ -16,6 +16,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
+STAGE_STANDALONE_INSTALLER_ARCHIVES = (
+    REPO_ROOT / "scripts" / "stage_standalone_installer_archives.py"
+)
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
 GITHUB_REPO = "openai/codex"
 
@@ -52,6 +55,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory where npm tarballs should be written (default: dist/npm).",
+    )
+    parser.add_argument(
+        "--standalone-output-dir",
+        type=Path,
+        default=None,
+        help="Directory where standalone installer archives should be written.",
     )
     parser.add_argument(
         "--keep-staging-dirs",
@@ -130,6 +139,24 @@ def run_command(cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
+def stage_standalone_installer_archives(
+    release_version: str,
+    vendor_src: Path,
+    output_dir: Path,
+) -> None:
+    run_command(
+        [
+            str(STAGE_STANDALONE_INSTALLER_ARCHIVES),
+            "--release-version",
+            release_version,
+            "--vendor-src",
+            str(vendor_src),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+
 def tarball_name_for_package(package: str, version: str) -> str:
     if package in CODEX_PLATFORM_PACKAGES:
         platform = package.removeprefix("codex-")
@@ -192,6 +219,24 @@ def main() -> int:
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
             final_messages.append(f"Staged {package} at {pack_output}")
+
+        if args.standalone_output_dir is not None:
+            if vendor_src is None:
+                raise RuntimeError(
+                    "--standalone-output-dir requires staged native binaries, but no selected "
+                    "package installed native components."
+                )
+
+            standalone_output_dir = args.standalone_output_dir
+            standalone_output_dir.mkdir(parents=True, exist_ok=True)
+            stage_standalone_installer_archives(
+                args.release_version,
+                vendor_src,
+                standalone_output_dir,
+            )
+            final_messages.append(
+                f"Staged standalone installer archives in {standalone_output_dir}"
+            )
     finally:
         if vendor_temp_root is not None and not args.keep_staging_dirs:
             shutil.rmtree(vendor_temp_root, ignore_errors=True)
