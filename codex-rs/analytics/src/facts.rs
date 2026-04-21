@@ -7,6 +7,8 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
@@ -271,12 +273,12 @@ pub(crate) enum AnalyticsFact {
         runtime: CodexRuntimeMetadata,
         rpc_transport: AppServerRpcTransport,
     },
-    Request {
+    ClientRequest {
         connection_id: u64,
         request_id: RequestId,
         request: Box<ClientRequest>,
     },
-    Response {
+    ClientResponse {
         connection_id: u64,
         response: Box<ClientResponse>,
     },
@@ -286,7 +288,17 @@ pub(crate) enum AnalyticsFact {
         error: JSONRPCErrorError,
         error_type: Option<AnalyticsJsonRpcError>,
     },
-    Notification(Box<ServerNotification>),
+    ServerRequest {
+        connection_id: u64,
+        request: Box<ServerRequest>,
+    },
+    ServerResponse {
+        response: Box<ServerResponse>,
+    },
+    Notification {
+        connection_id: u64,
+        notification: Box<ServerNotification>,
+    },
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),

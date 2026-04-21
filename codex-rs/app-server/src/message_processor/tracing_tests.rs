@@ -1,6 +1,7 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
+use crate::analytics_events::analytics_events_client_from_config;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::AppServerTransport;
@@ -234,11 +235,17 @@ fn build_test_processor(
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
-    let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let outgoing = Arc::new(OutgoingMessageSender::new(
+        outgoing_tx,
+        codex_analytics::AnalyticsEventsClient::disabled(),
+    ));
     let auth_manager =
         AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false);
+    let analytics_events_client =
+        analytics_events_client_from_config(Arc::clone(&auth_manager), config.as_ref());
     let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
         outgoing,
+        analytics_events_client,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
