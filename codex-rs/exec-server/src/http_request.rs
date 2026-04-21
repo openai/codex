@@ -20,7 +20,6 @@ use crate::protocol::HttpHeader;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::HttpRequestResponse;
-use crate::protocol::HttpRequestTimeout;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
@@ -63,11 +62,9 @@ pub(crate) async fn run_http_request(
     let headers = build_headers(params.headers)?;
     let client = {
         let client_builder = match params.timeout_ms {
-            HttpRequestTimeout::Default => {
-                reqwest::Client::builder().timeout(DEFAULT_HTTP_REQUEST_TIMEOUT)
-            }
-            HttpRequestTimeout::Disabled => reqwest::Client::builder(),
-            HttpRequestTimeout::Millis(timeout_ms) => {
+            None => reqwest::Client::builder().timeout(DEFAULT_HTTP_REQUEST_TIMEOUT),
+            Some(None) => reqwest::Client::builder(),
+            Some(Some(timeout_ms)) => {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
         };

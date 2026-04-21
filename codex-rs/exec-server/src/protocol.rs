@@ -268,48 +268,6 @@ pub struct HttpHeader {
     pub value: String,
 }
 
-/// Tri-state timeout value for executor-owned HTTP requests.
-///
-/// Omitted means "use the executor default", `null` means "disable the
-/// timeout", and a number means "use exactly this many milliseconds".
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum HttpRequestTimeout {
-    #[default]
-    Default,
-    Disabled,
-    Millis(u64),
-}
-
-impl HttpRequestTimeout {
-    fn is_default(timeout: &Self) -> bool {
-        matches!(timeout, Self::Default)
-    }
-}
-
-impl Serialize for HttpRequestTimeout {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Default | Self::Disabled => serializer.serialize_none(),
-            Self::Millis(timeout_ms) => serializer.serialize_u64(*timeout_ms),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for HttpRequestTimeout {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(match Option::<u64>::deserialize(deserializer)? {
-            Some(timeout_ms) => Self::Millis(timeout_ms),
-            None => Self::Disabled,
-        })
-    }
-}
-
 /// Executor-side HTTP request envelope.
 ///
 /// This intentionally stays transport-shaped rather than MCP-shaped so callers
@@ -332,8 +290,8 @@ pub struct HttpRequestParams {
     ///
     /// Omitted uses the executor default, `null` disables the timeout, and a
     /// number applies that exact millisecond deadline.
-    #[serde(default, skip_serializing_if = "HttpRequestTimeout::is_default")]
-    pub timeout_ms: HttpRequestTimeout,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<Option<u64>>,
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
@@ -440,7 +398,6 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::HttpRequestParams;
-    use super::HttpRequestTimeout;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -463,11 +420,8 @@ mod tests {
         }))
         .expect("numeric timeout should deserialize");
 
-        assert_eq!(omitted.timeout_ms, HttpRequestTimeout::Default);
-        assert_eq!(null_timeout.timeout_ms, HttpRequestTimeout::Disabled);
-        assert_eq!(
-            explicit_timeout.timeout_ms,
-            HttpRequestTimeout::Millis(1234)
-        );
+        assert_eq!(omitted.timeout_ms, None);
+        assert_eq!(null_timeout.timeout_ms, Some(None));
+        assert_eq!(explicit_timeout.timeout_ms, Some(Some(1234)));
     }
 }

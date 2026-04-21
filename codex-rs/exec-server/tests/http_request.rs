@@ -15,7 +15,6 @@ use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestBodyDeltaNotification;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
-use codex_exec_server::HttpRequestTimeout;
 use codex_exec_server::InitializeParams;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
@@ -63,7 +62,7 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
                     value: "buffered".to_string(),
                 }],
                 body: Some(b"request-body".to_vec().into()),
-                timeout_ms: HttpRequestTimeout::Millis(5_000),
+                timeout_ms: Some(Some(5_000)),
                 request_id: None,
                 stream_response: false,
             })?,
@@ -132,7 +131,7 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
                     value: "text/event-stream".to_string(),
                 }],
                 body: None,
-                timeout_ms: HttpRequestTimeout::Millis(5_000),
+                timeout_ms: Some(Some(5_000)),
                 request_id: Some("stream-1".to_string()),
                 stream_response: true,
             })?,
@@ -218,7 +217,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 url: url.clone(),
                 headers: Vec::new(),
                 body: None,
-                timeout_ms: HttpRequestTimeout::Disabled,
+                timeout_ms: Some(None),
                 request_id: Some("stream-dup".to_string()),
                 stream_response: true,
             })?,
@@ -241,7 +240,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 url,
                 headers: Vec::new(),
                 body: None,
-                timeout_ms: HttpRequestTimeout::Default,
+                timeout_ms: None,
                 request_id: Some("stream-dup".to_string()),
                 stream_response: true,
             })?,
@@ -295,7 +294,7 @@ async fn exec_server_http_request_honors_nullable_timeout() -> anyhow::Result<()
                 url: delayed_url.clone(),
                 headers: Vec::new(),
                 body: None,
-                timeout_ms: HttpRequestTimeout::Disabled,
+                timeout_ms: Some(None),
                 request_id: None,
                 stream_response: false,
             })?,
@@ -320,7 +319,7 @@ async fn exec_server_http_request_honors_nullable_timeout() -> anyhow::Result<()
                 url: delayed_url,
                 headers: Vec::new(),
                 body: None,
-                timeout_ms: HttpRequestTimeout::Millis(10),
+                timeout_ms: Some(Some(10)),
                 request_id: None,
                 stream_response: false,
             })?,

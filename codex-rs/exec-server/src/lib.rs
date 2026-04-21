@@ -70,7 +70,6 @@ pub use protocol::HttpHeader;
 pub use protocol::HttpRequestBodyDeltaNotification;
 pub use protocol::HttpRequestParams;
 pub use protocol::HttpRequestResponse;
-pub use protocol::HttpRequestTimeout;
 pub use protocol::InitializeParams;
 pub use protocol::InitializeResponse;
 pub use protocol::ProcessOutputChunk;
