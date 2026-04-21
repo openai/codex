@@ -1,5 +1,7 @@
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 
@@ -9,8 +11,6 @@ use super::config::HooksFile;
 use super::config::MatcherGroup;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
-use codex_config::ConfigLayerSource;
-use codex_protocol::protocol::HookSource;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,

@@ -103,15 +103,43 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
-        shell,
-        matched,
-        input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
-        parse_completed,
+    let mut results = Vec::new();
+    let mut tiers = dispatcher::select_handlers_by_trust_precedence(
+        &matched,
+        HookEventName::PreToolUse,
+        Some(&request.tool_name),
     )
-    .await;
+    .into_iter()
+    .peekable();
+    while let Some(tier) = tiers.next() {
+        let tier_results = dispatcher::execute_handlers(
+            shell,
+            tier,
+            input_json.clone(),
+            request.cwd.as_path(),
+            Some(request.turn_id.clone()),
+            parse_completed,
+        )
+        .await;
+        let tier_should_block = tier_results.iter().any(|result| result.data.should_block);
+        results.extend(tier_results);
+        if tier_should_block {
+            let skipped_message =
+                "skipped because a higher-precedence PreToolUse hook blocked the command"
+                    .to_string();
+            for skipped_handler in tiers.flatten() {
+                results.push(dispatcher::ParsedHandler {
+                    completed: dispatcher::skipped_completed_event(
+                        &skipped_handler,
+                        Some(request.turn_id.clone()),
+                        skipped_message.clone(),
+                    ),
+                    data: PreToolUseHandlerData::default(),
+                });
+            }
+            break;
+        }
+    }
 
     let should_block = results.iter().any(|result| result.data.should_block);
     let block_reason = results
@@ -250,8 +278,10 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::PreToolUseHandlerData;
+    use super::PreToolUseRequest;
     use super::parse_completed;
     use super::preview;
+    use crate::engine::CommandShell;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
     use crate::events::common;
@@ -464,6 +494,86 @@ mod tests {
                 text: "blocked by policy".to_string(),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn higher_precedence_block_skips_lower_precedence_handlers() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let marker_path = temp.path().join("project-ran");
+        let (shell_program, shell_args, blocking_command, project_command) = if cfg!(windows) {
+            (
+                "cmd".to_string(),
+                vec!["/C".to_string()],
+                "echo blocked by policy 1>&2 && exit /b 2".to_string(),
+                "type nul > project-ran".to_string(),
+            )
+        } else {
+            (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string()],
+                "printf 'blocked by policy' >&2; exit 2".to_string(),
+                "touch project-ran".to_string(),
+            )
+        };
+        let handlers = vec![
+            ConfiguredHandler {
+                event_name: HookEventName::PreToolUse,
+                matcher: Some("^Bash$".to_string()),
+                command: blocking_command,
+                timeout_sec: 5,
+                status_message: None,
+                source_path: test_path_buf("/tmp/home/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::User,
+                display_order: 0,
+            },
+            ConfiguredHandler {
+                event_name: HookEventName::PreToolUse,
+                matcher: Some("^Bash$".to_string()),
+                command: project_command,
+                timeout_sec: 5,
+                status_message: None,
+                source_path: test_path_buf("/tmp/project/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::Project,
+                display_order: 1,
+            },
+        ];
+
+        let outcome = super::run(
+            &handlers,
+            &CommandShell {
+                program: shell_program,
+                args: shell_args,
+            },
+            PreToolUseRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                cwd: temp.path().to_path_buf().abs(),
+                transcript_path: None,
+                model: "gpt-5".to_string(),
+                permission_mode: "default".to_string(),
+                tool_name: "Bash".to_string(),
+                tool_use_id: "tool-1".to_string(),
+                command: "echo hello".to_string(),
+            },
+        )
+        .await;
+
+        assert!(outcome.should_block);
+        assert_eq!(outcome.block_reason, Some("blocked by policy".to_string()));
+        assert!(!marker_path.exists());
+        assert_eq!(outcome.hook_events.len(), 2);
+        assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Blocked);
+        assert_eq!(outcome.hook_events[1].run.status, HookRunStatus::Failed);
+        assert_eq!(
+            outcome.hook_events[1].run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "skipped because a higher-precedence PreToolUse hook blocked the command"
+                    .to_string(),
+            }]
+        );
+
+        Ok(())
     }
 
     #[test]

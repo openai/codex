@@ -84,6 +84,47 @@ pub(crate) async fn execute_handlers<T>(
         .collect()
 }
 
+pub(crate) fn select_handlers_by_trust_precedence(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_input: Option<&str>,
+) -> Vec<Vec<ConfiguredHandler>> {
+    let mut non_project = Vec::new();
+    let mut project = Vec::new();
+    for handler in select_handlers(handlers, event_name, matcher_input) {
+        if handler.source == codex_protocol::protocol::HookSource::Project {
+            project.push(handler);
+        } else {
+            non_project.push(handler);
+        }
+    }
+
+    let mut tiers = Vec::new();
+    if !non_project.is_empty() {
+        tiers.push(non_project);
+    }
+    if !project.is_empty() {
+        tiers.push(project);
+    }
+    tiers
+}
+
+pub(crate) fn skipped_completed_event(
+    handler: &ConfiguredHandler,
+    turn_id: Option<String>,
+    message: String,
+) -> HookCompletedEvent {
+    let mut run = running_summary(handler);
+    run.status = HookRunStatus::Failed;
+    run.completed_at = Some(run.started_at);
+    run.duration_ms = Some(0);
+    run.entries = vec![codex_protocol::protocol::HookOutputEntry {
+        kind: codex_protocol::protocol::HookOutputEntryKind::Error,
+        text: message,
+    }];
+    HookCompletedEvent { turn_id, run }
+}
+
 pub(crate) fn completed_summary(
     handler: &ConfiguredHandler,
     run_result: &CommandRunResult,
@@ -128,6 +169,7 @@ mod tests {
 
     use super::ConfiguredHandler;
     use super::select_handlers;
+    use super::select_handlers_by_trust_precedence;
 
     fn make_handler(
         event_name: HookEventName,
@@ -143,6 +185,29 @@ mod tests {
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
+            display_order,
+        }
+    }
+
+    fn make_handler_with_source(
+        event_name: HookEventName,
+        matcher: Option<&str>,
+        command: &str,
+        source_path: &str,
+        display_order: i64,
+    ) -> ConfiguredHandler {
+        ConfiguredHandler {
+            event_name,
+            matcher: matcher.map(str::to_owned),
+            command: command.to_string(),
+            timeout_sec: 5,
+            status_message: None,
+            source_path: test_path_buf(source_path).abs(),
+            source: if source_path.contains("/project/") {
+                HookSource::Project
+            } else {
+                HookSource::User
+            },
             display_order,
         }
     }
@@ -339,5 +404,54 @@ mod tests {
         assert_eq!(selected[0].command, "first");
         assert_eq!(selected[1].command, "second");
         assert_eq!(selected[2].command, "third");
+    }
+
+    #[test]
+    fn select_handlers_by_trust_precedence_runs_non_project_before_project() {
+        let handlers = vec![
+            make_handler_with_source(
+                HookEventName::PreToolUse,
+                Some("^Bash$"),
+                "echo system",
+                "/etc/codex/hooks.json",
+                /*display_order*/ 0,
+            ),
+            make_handler_with_source(
+                HookEventName::PreToolUse,
+                Some("^Bash$"),
+                "echo user one",
+                "/tmp/home/.codex/hooks.json",
+                /*display_order*/ 1,
+            ),
+            make_handler_with_source(
+                HookEventName::PreToolUse,
+                Some("^Bash$"),
+                "echo user two",
+                "/tmp/home/.codex/hooks.json",
+                /*display_order*/ 2,
+            ),
+            make_handler_with_source(
+                HookEventName::PreToolUse,
+                Some("^Bash$"),
+                "echo project",
+                "/tmp/project/.codex/hooks.json",
+                /*display_order*/ 3,
+            ),
+        ];
+
+        let tiers =
+            select_handlers_by_trust_precedence(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(
+            tiers
+                .iter()
+                .map(|tier| {
+                    tier.iter()
+                        .map(|handler| handler.display_order)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![vec![0, 1, 2], vec![3]],
+        );
     }
 }
