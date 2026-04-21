@@ -211,7 +211,6 @@ fn chatgpt_auth_persists_agent_identity_for_workspace() {
         agent_runtime_id: "agent_123".to_string(),
         agent_private_key: "pkcs8-base64".to_string(),
         registered_at: "2026-04-13T12:00:00Z".to_string(),
-        background_task_id: None,
     };
 
     auth.set_agent_identity(record.clone())

@@ -51,7 +51,7 @@ use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
-pub use codex_features::Feature;
+use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
@@ -60,7 +60,6 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
-use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -634,16 +633,6 @@ impl AuthManagerConfig for Config {
 
     fn forced_chatgpt_workspace_id(&self) -> Option<String> {
         self.forced_chatgpt_workspace_id.clone()
-    }
-
-    fn chatgpt_base_url(&self) -> Option<String> {
-        Some(self.chatgpt_base_url.clone())
-    }
-
-    fn background_agent_task_auth_mode(&self) -> BackgroundAgentTaskAuthMode {
-        BackgroundAgentTaskAuthMode::from_feature_enabled(
-            self.features.enabled(Feature::UseAgentIdentity),
-        )
     }
 }
 
