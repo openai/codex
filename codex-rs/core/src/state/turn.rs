@@ -70,6 +70,7 @@ pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn AnySessionTask>,
+    pub(crate) records_turn_start_transcript: bool,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) handle: Arc<AbortOnDropHandle<()>>,
     pub(crate) turn_context: Arc<TurnContext>,

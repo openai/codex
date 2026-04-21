@@ -31,6 +31,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::event_mapping::parse_turn_item;
 use crate::session::PreviousTurnSettings;
@@ -280,10 +281,24 @@ pub(crate) async fn drain_turn_start_transcript_inputs(
     turn_context: &Arc<TurnContext>,
     mode: TurnStartTranscriptDrainMode,
 ) -> bool {
-    let Ok(_permit) = turn_context.transcript_serialization_lock.acquire().await else {
+    let Ok(permit) = turn_context
+        .transcript_serialization_lock
+        .clone()
+        .acquire_owned()
+        .await
+    else {
         return false;
     };
 
+    drain_turn_start_transcript_inputs_with_permit(sess, turn_context, mode, permit).await
+}
+
+pub(crate) async fn drain_turn_start_transcript_inputs_with_permit(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    mode: TurnStartTranscriptDrainMode,
+    _permit: OwnedSemaphorePermit,
+) -> bool {
     let has_queued_start_input = !turn_context.lock_turn_start_transcript_inputs().is_empty();
     if !has_queued_start_input && matches!(mode, TurnStartTranscriptDrainMode::InterruptRecovery) {
         return true;

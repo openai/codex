@@ -33,6 +33,10 @@ impl SessionTask for RegularTask {
         "session_task.turn"
     }
 
+    fn records_turn_start_transcript(&self) -> bool {
+        true
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

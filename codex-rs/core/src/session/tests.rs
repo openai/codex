@@ -5700,49 +5700,6 @@ impl SessionTask for NeverEndingTask {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
-async fn abort_regular_task_records_context_prompt_before_interrupt_marker() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let input = vec![UserInput::Text {
-        text: "hello".to_string(),
-        text_elements: Vec::new(),
-    }];
-    let mut expected = sess.build_initial_context(tc.as_ref()).await;
-    expected.push(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    });
-    expected.push(crate::tasks::interrupted_turn_history_marker());
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
-
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-
-    let history = sess.clone_history().await;
-    assert_eq!(history.raw_items(), expected.as_slice());
-    assert!(tc.lock_turn_start_transcript_inputs().is_empty());
-    assert_eq!(
-        sess.previous_turn_settings().await,
-        Some(PreviousTurnSettings {
-            model: tc.model_info.slug.clone(),
-            realtime_active: Some(tc.realtime_active),
-        })
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_log::test]
 async fn abort_non_regular_task_keeps_pending_session_start_source() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.state

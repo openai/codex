@@ -24,6 +24,7 @@ use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::TurnStartTranscriptDrainMode;
 use crate::hook_runtime::drain_turn_start_transcript_inputs;
+use crate::hook_runtime::drain_turn_start_transcript_inputs_with_permit;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -163,6 +164,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Returns the tracing name for a spawned task span.
     fn span_name(&self) -> &'static str;
 
+    /// Whether this task owns the normal user-turn transcript start sequence.
+    fn records_turn_start_transcript(&self) -> bool {
+        false
+    }
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -200,6 +206,8 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
 
     fn span_name(&self) -> &'static str;
 
+    fn records_turn_start_transcript(&self) -> bool;
+
     fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -225,6 +233,10 @@ where
 
     fn span_name(&self) -> &'static str {
         SessionTask::span_name(self)
+    }
+
+    fn records_turn_start_transcript(&self) -> bool {
+        SessionTask::records_turn_start_transcript(self)
     }
 
     fn run(
@@ -273,6 +285,7 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let records_turn_start_transcript = task.records_turn_start_transcript();
         let started_at = Instant::now();
         turn_context
             .turn_timing_state
@@ -302,7 +315,7 @@ impl Session {
             }
         }
 
-        if task_kind == TaskKind::Regular && !input.is_empty() {
+        if records_turn_start_transcript && !input.is_empty() {
             turn_context
                 .lock_turn_start_transcript_inputs()
                 .push(TurnStartTranscriptInput {
@@ -368,6 +381,7 @@ impl Session {
             handle: Arc::new(AbortOnDropHandle::new(handle)),
             kind: task_kind,
             task,
+            records_turn_start_transcript,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             _timer: timer,
@@ -628,35 +642,58 @@ impl Session {
             .cancel_git_enrichment_task();
         let session_task = task.task;
 
-        // The startup prompt queue is serialized by the regular turn itself. If an interrupt
-        // lands while that serialization is in progress, wait for the shared drain to finish
-        // before force-aborting the task so history cannot be left half-written. This can wait
-        // on turn-start hooks, but it keeps hook policy and hook-added context ahead of the
-        // model-visible interrupt marker.
-        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
+        let mut handle_aborted = false;
+        // The startup prompt queue is serialized by the regular turn itself. If the serializer is
+        // idle, grab it and abort the task before recovering the queued prompt; if the serializer
+        // is already active, wait for it to finish before force-aborting so history cannot be left
+        // half-written. This can wait on turn-start hooks, but it keeps hook policy and hook-added
+        // context ahead of the model-visible interrupt marker.
+        if reason == TurnAbortReason::Interrupted && task.records_turn_start_transcript {
             let has_turn_start_transcript_input = {
                 let inputs = task.turn_context.lock_turn_start_transcript_inputs();
                 !inputs.is_empty()
             };
             if has_turn_start_transcript_input {
-                let _ = drain_turn_start_transcript_inputs(
-                    self,
-                    &task.turn_context,
-                    TurnStartTranscriptDrainMode::InterruptRecovery,
-                )
-                .await;
+                match task
+                    .turn_context
+                    .transcript_serialization_lock
+                    .clone()
+                    .try_acquire_owned()
+                {
+                    Ok(permit) => {
+                        task.handle.abort();
+                        handle_aborted = true;
+                        let _ = drain_turn_start_transcript_inputs_with_permit(
+                            self,
+                            &task.turn_context,
+                            TurnStartTranscriptDrainMode::InterruptRecovery,
+                            permit,
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        let _ = drain_turn_start_transcript_inputs(
+                            self,
+                            &task.turn_context,
+                            TurnStartTranscriptDrainMode::InterruptRecovery,
+                        )
+                        .await;
+                    }
+                }
             }
         }
 
-        select! {
-            _ = task.done.notified() => {
-            },
-            _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
-                warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+        if !handle_aborted {
+            select! {
+                _ = task.done.notified() => {
+                },
+                _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
+                    warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+                }
             }
-        }
 
-        task.handle.abort();
+            task.handle.abort();
+        }
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
