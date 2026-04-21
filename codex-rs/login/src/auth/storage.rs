@@ -48,7 +48,6 @@ pub struct AuthDotJson {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentIdentityAuthRecord {
     pub agent_runtime_id: String,
-    #[serde(rename = "agent_private_key")]
     pub agent_private_key: String,
     pub account_id: String,
     pub chatgpt_user_id: String,

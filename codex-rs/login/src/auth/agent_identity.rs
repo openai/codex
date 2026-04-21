@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use codex_agent_identity::AgentIdentityKey;
-use codex_agent_identity::AgentTaskAuthorizationTarget;
-use codex_agent_identity::authorization_header_for_agent_task;
 use codex_agent_identity::normalize_chatgpt_base_url;
 use codex_agent_identity::register_agent_task;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -55,20 +53,6 @@ impl AgentIdentityAuth {
             })
             .await
             .map(|_| ())
-    }
-
-    pub fn authorization_header_value(&self) -> std::io::Result<String> {
-        let process_task_id = self.process_task_id.get().ok_or_else(|| {
-            std::io::Error::other("agent identity process task is not initialized")
-        })?;
-        authorization_header_for_agent_task(
-            self.key(),
-            AgentTaskAuthorizationTarget {
-                agent_runtime_id: &self.record.agent_runtime_id,
-                task_id: process_task_id,
-            },
-        )
-        .map_err(std::io::Error::other)
     }
 
     pub fn account_id(&self) -> &str {
