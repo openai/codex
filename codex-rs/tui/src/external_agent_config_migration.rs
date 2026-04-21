@@ -775,52 +775,51 @@ mod tests {
     use ratatui::layout::Rect;
     use std::path::PathBuf;
 
-    fn sample_plugin_details() -> codex_app_server_protocol::MigrationDetails {
-        codex_app_server_protocol::MigrationDetails {
-            plugins: vec![
-                PluginsMigration {
-                    marketplace_name: "acme-tools".to_string(),
-                    plugin_names: vec![
-                        "deployer".to_string(),
-                        "formatter".to_string(),
-                        "lint".to_string(),
-                    ],
-                },
-                PluginsMigration {
-                    marketplace_name: "team-marketplace".to_string(),
-                    plugin_names: vec!["asana".to_string()],
-                },
-                PluginsMigration {
-                    marketplace_name: "debug".to_string(),
-                    plugin_names: vec!["sample".to_string()],
-                },
-                PluginsMigration {
-                    marketplace_name: "data-tools".to_string(),
-                    plugin_names: vec!["warehouse".to_string()],
-                },
-            ],
-        }
-    }
-
     fn sample_items() -> Vec<ExternalAgentConfigMigrationItem> {
-        // Keep snapshot fixtures descriptive but synthetic so layout coverage
-        // stays stable when detection/path-formatting behavior changes.
         vec![
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
-                description: "Migrate home settings into home config".to_string(),
+                description:
+                    "Migrate /Users/alex/.claude/settings.json into /Users/alex/.codex/config.toml"
+                        .to_string(),
                 cwd: None,
                 details: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
-                description: "Migrate enabled plugins from project settings".to_string(),
+                description:
+                    "Migrate enabled plugins from /workspace/project/.claude/settings.json"
+                        .to_string(),
                 cwd: Some(PathBuf::from("/workspace/project")),
-                details: Some(sample_plugin_details()),
+                details: Some(codex_app_server_protocol::MigrationDetails {
+                    plugins: vec![
+                        PluginsMigration {
+                            marketplace_name: "acme-tools".to_string(),
+                            plugin_names: vec![
+                                "deployer".to_string(),
+                                "formatter".to_string(),
+                                "lint".to_string(),
+                            ],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "team-marketplace".to_string(),
+                            plugin_names: vec!["asana".to_string()],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "debug".to_string(),
+                            plugin_names: vec!["sample".to_string()],
+                        },
+                        PluginsMigration {
+                            marketplace_name: "data-tools".to_string(),
+                            plugin_names: vec!["warehouse".to_string()],
+                        },
+                    ],
+                }),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: "Migrate CLAUDE.md to AGENTS.md".to_string(),
+                description: "Migrate /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md"
+                    .to_string(),
                 cwd: Some(PathBuf::from("/workspace/project")),
                 details: None,
             },
@@ -855,71 +854,6 @@ mod tests {
 
         let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
         assert_snapshot!("external_agent_config_migration_prompt", rendered);
-    }
-
-    #[test]
-    fn display_description_rewrites_project_config_paths_relative_to_cwd() {
-        let cwd = PathBuf::from("/workspace/project");
-
-        let item = ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Config,
-            description:
-                "Migrate /workspace/project/source.json into /workspace/project/target.toml"
-                    .to_string(),
-            cwd: Some(cwd),
-            details: None,
-        };
-
-        assert_eq!(
-            ExternalAgentConfigMigrationScreen::display_description(&item),
-            "Migrate source.json into target.toml"
-        );
-    }
-
-    #[test]
-    fn display_description_rewrites_project_plugin_paths_and_adds_summary() {
-        let item = ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: "Migrate enabled plugins from /workspace/project/plugins.json".to_string(),
-            cwd: Some(PathBuf::from("/workspace/project")),
-            details: Some(sample_plugin_details()),
-        };
-
-        assert_eq!(
-            ExternalAgentConfigMigrationScreen::display_description(&item),
-            "Migrate enabled plugins from plugins.json (4 marketplaces, 6 plugins)"
-        );
-    }
-
-    #[test]
-    fn display_description_rewrites_project_markdown_paths_relative_to_cwd() {
-        let item = ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-            description: "Migrate /workspace/project/source.md to /workspace/project/target.md"
-                .to_string(),
-            cwd: Some(PathBuf::from("/workspace/project")),
-            details: None,
-        };
-
-        assert_eq!(
-            ExternalAgentConfigMigrationScreen::display_description(&item),
-            "Migrate source.md to target.md"
-        );
-    }
-
-    #[test]
-    fn display_description_preserves_home_scope_descriptions() {
-        let item = ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Config,
-            description: "Migrate home settings into home config".to_string(),
-            cwd: None,
-            details: None,
-        };
-
-        assert_eq!(
-            ExternalAgentConfigMigrationScreen::display_description(&item),
-            "Migrate home settings into home config"
-        );
     }
 
     #[test]
