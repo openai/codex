@@ -67,9 +67,7 @@ pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
 struct PluginMcpServersFile {
-    #[serde(default)]
     mcp_servers: HashMap<String, JsonValue>,
 }
 
@@ -1011,6 +1009,32 @@ mod tests {
 }"#,
         )
         .expect("parse wrapped plugin mcp config")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "sample".to_string(),
+                serde_json::json!({
+                    "command": "sample-mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn plugin_mcp_file_supports_mcp_servers_object_format_with_metadata() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "$schema": "https://example.com/plugin-mcp.schema.json",
+  "mcpServers": {
+    "sample": {
+      "command": "sample-mcp"
+    }
+  }
+}"#,
+        )
+        .expect("parse plugin mcp config with metadata")
         .into_mcp_servers();
 
         assert_eq!(
