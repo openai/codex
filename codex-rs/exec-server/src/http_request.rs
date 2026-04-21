@@ -24,9 +24,6 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 
-/// Default timeout for executor HTTP requests when the protocol omits one.
-const DEFAULT_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 pub(crate) struct PendingHttpBodyStream {
     pub(crate) request_id: String,
     response: reqwest::Response,
@@ -62,9 +59,8 @@ pub(crate) async fn run_http_request(
     let headers = build_headers(params.headers)?;
     let client = {
         let client_builder = match params.timeout_ms {
-            None => reqwest::Client::builder().timeout(DEFAULT_HTTP_REQUEST_TIMEOUT),
-            Some(None) => reqwest::Client::builder(),
-            Some(Some(timeout_ms)) => {
+            None => reqwest::Client::builder(),
+            Some(timeout_ms) => {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
         };

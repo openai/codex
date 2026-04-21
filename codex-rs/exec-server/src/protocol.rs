@@ -288,10 +288,10 @@ pub struct HttpRequestParams {
     pub body: Option<ByteChunk>,
     /// Request timeout in milliseconds.
     ///
-    /// Omitted uses the executor default, `null` disables the timeout, and a
-    /// number applies that exact millisecond deadline.
+    /// Omitted or `null` disables the timeout. A number applies that exact
+    /// millisecond deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<Option<u64>>,
+    pub timeout_ms: Option<u64>,
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
@@ -401,7 +401,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn http_request_timeout_distinguishes_omitted_null_and_number() {
+    fn http_request_timeout_treats_omitted_and_null_as_no_timeout() {
         let omitted: HttpRequestParams = serde_json::from_value(serde_json::json!({
             "method": "GET",
             "url": "https://example.test",
@@ -421,7 +421,7 @@ mod tests {
         .expect("numeric timeout should deserialize");
 
         assert_eq!(omitted.timeout_ms, None);
-        assert_eq!(null_timeout.timeout_ms, Some(None));
-        assert_eq!(explicit_timeout.timeout_ms, Some(Some(1234)));
+        assert_eq!(null_timeout.timeout_ms, None);
+        assert_eq!(explicit_timeout.timeout_ms, Some(1234));
     }
 }
