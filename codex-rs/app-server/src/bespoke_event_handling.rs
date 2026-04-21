@@ -2120,6 +2120,7 @@ fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
         },
         ThreadItem::DynamicToolCall {
             id,
+            namespace,
             tool,
             arguments,
             status,
@@ -2128,6 +2129,7 @@ fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
             duration_ms,
         } => ThreadItem::DynamicToolCall {
             id,
+            namespace,
             tool,
             arguments,
             status,
@@ -4143,6 +4145,7 @@ mod tests {
                 },
                 ThreadItem::DynamicToolCall {
                     id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
                     tool: "custom".to_string(),
                     arguments: json!({"q":"hi"}),
                     status: DynamicToolCallStatus::Completed,
@@ -4198,6 +4201,7 @@ mod tests {
                 },
                 ThreadItem::DynamicToolCall {
                     id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
                     tool: "custom".to_string(),
                     arguments: json!({"q":"hi"}),
                     status: DynamicToolCallStatus::Completed,
