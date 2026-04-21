@@ -87,6 +87,7 @@ pub use responses_api::LoadableToolSpec;
 pub use responses_api::ResponsesApiNamespace;
 pub use responses_api::ResponsesApiNamespaceTool;
 pub use responses_api::ResponsesApiTool;
+pub use responses_api::coalesce_loadable_tool_specs;
 pub(crate) use responses_api::default_namespace_description;
 pub use responses_api::dynamic_tool_to_loadable_tool_spec;
 pub use responses_api::dynamic_tool_to_responses_api_tool;

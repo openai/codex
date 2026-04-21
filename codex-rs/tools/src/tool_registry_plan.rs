@@ -17,6 +17,7 @@ use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
+use crate::coalesce_loadable_tool_specs;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
@@ -556,15 +557,12 @@ pub fn build_tool_registry_plan(
         }
     }
 
+    let mut dynamic_tool_specs = Vec::new();
     for tool in params.dynamic_tools {
         match dynamic_tool_to_loadable_tool_spec(tool) {
             Ok(loadable_tool) => {
                 let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                plan.push_spec(
-                    loadable_tool.into(),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
+                dynamic_tool_specs.push(loadable_tool);
                 plan.register_handler(handler_name, ToolHandlerKind::DynamicTool);
             }
             Err(error) => {
@@ -574,6 +572,13 @@ pub fn build_tool_registry_plan(
                 );
             }
         }
+    }
+    for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
+        plan.push_spec(
+            spec.into(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
     }
 
     plan

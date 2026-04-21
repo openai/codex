@@ -12,6 +12,7 @@ use bm25::SearchEngineBuilder;
 use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::coalesce_loadable_tool_specs;
 use std::collections::HashMap;
 
 const COMPUTER_USE_MCP_SERVER_NAME: &str = "computer-use";
@@ -136,29 +137,9 @@ impl ToolSearchHandler {
         &self,
         results: impl IntoIterator<Item = &'a ToolSearchEntry>,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        let mut tools = Vec::new();
-        // Preserve search order: group namespace children, emit standalone tools directly.
-        for entry in results {
-            match &entry.output {
-                LoadableToolSpec::Function(tool) => {
-                    tools.push(LoadableToolSpec::Function(tool.clone()));
-                }
-                LoadableToolSpec::Namespace(namespace) => {
-                    if let Some(output) = tools.iter_mut().find_map(|tool| match tool {
-                        LoadableToolSpec::Namespace(output) if output.name == namespace.name => {
-                            Some(output)
-                        }
-                        LoadableToolSpec::Namespace(_) | LoadableToolSpec::Function(_) => None,
-                    }) {
-                        output.tools.extend(namespace.tools.clone());
-                    } else {
-                        tools.push(LoadableToolSpec::Namespace(namespace.clone()));
-                    }
-                }
-            }
-        }
-
-        Ok(tools)
+        Ok(coalesce_loadable_tool_specs(
+            results.into_iter().map(|entry| entry.output.clone()),
+        ))
     }
 }
 
