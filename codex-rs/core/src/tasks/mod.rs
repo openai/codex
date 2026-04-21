@@ -260,6 +260,10 @@ impl Session {
 
     /// Starts a task in the current turn, moving queued next-turn and mailbox input into the
     /// turn state before spawning the task body.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active-turn checks and task registration must stay atomic; early requeue awaits explicitly drop the guard first"
+    )]
     async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -283,6 +287,20 @@ impl Session {
             token_usage_at_turn_start.clone(),
         )
         .await;
+        let build_requeued_startup_input =
+            |startup_pending_input: Vec<ResponseInputItem>,
+             input: Vec<UserInput>,
+             include_startup_pending_input: bool| {
+                let mut requeued_input = if include_startup_pending_input {
+                    startup_pending_input
+                } else {
+                    Vec::new()
+                };
+                if !input.is_empty() {
+                    requeued_input.push(ResponseInputItem::from(input));
+                }
+                requeued_input
+            };
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
@@ -300,7 +318,6 @@ impl Session {
             }
             TurnStartupInput::GoalContinuation(items) => (items, started_from_goal_continuation),
         };
-
         let mut active = self.active_turn.lock().await;
         let Some(turn) = (if started_from_goal_continuation {
             active.as_mut()
@@ -312,12 +329,28 @@ impl Session {
         };
         if !turn.tasks.is_empty() {
             trace!("skipping task start because another task is already active");
+            let requeued_input = build_requeued_startup_input(
+                startup_pending_input,
+                input,
+                !started_from_goal_continuation,
+            );
+            drop(active);
+            self.queue_response_items_for_next_turn(requeued_input)
+                .await;
             return;
         }
         {
             let Ok(mut turn_state) = turn.turn_state.try_lock() else {
                 warn!("turn state was locked while starting a task");
                 *active = None;
+                let requeued_input = build_requeued_startup_input(
+                    startup_pending_input,
+                    input,
+                    !started_from_goal_continuation,
+                );
+                drop(active);
+                self.queue_response_items_for_next_turn(requeued_input)
+                    .await;
                 return;
             };
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
