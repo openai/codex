@@ -12,17 +12,19 @@ Generates or edits images for the current project (for example website assets, g
 This skill has exactly two top-level modes:
 
 - **Default built-in tool mode (preferred):** built-in `image_gen` tool for normal image generation and editing. Does not require `OPENAI_API_KEY`.
-- **Fallback CLI mode (explicit-only):** `scripts/image_gen.py` CLI. Use only when the user explicitly asks for the CLI path. Requires `OPENAI_API_KEY`.
+- **Fallback CLI mode:** `scripts/image_gen.py` CLI. Use when the user explicitly asks for the CLI/API/model path, or when they explicitly require a transparent background that needs `gpt-image-1.5`. Requires `OPENAI_API_KEY`.
 
-Within the explicit CLI fallback only, the CLI exposes three subcommands:
+Within CLI fallback, the CLI exposes three subcommands:
 
 - `generate`
 - `edit`
 - `generate-batch`
 
 Rules:
-- Use the built-in `image_gen` tool by default for all normal image generation and editing requests.
-- Never switch to CLI fallback automatically.
+- Use the built-in `image_gen` tool by default for normal image generation and editing requests.
+- Do not switch to CLI fallback for ordinary quality, size, or file-path control.
+- If the user explicitly asks for a transparent image/background, use CLI fallback with `gpt-image-1.5` and explain briefly that transparent backgrounds are not supported in `gpt-image-2`, the latest model.
+- The word `batch` by itself does not mean CLI fallback. If the user asks for many assets or says to batch-generate assets without explicitly asking for CLI/API/model controls, stay on the built-in path and issue one built-in call per requested asset or variant.
 - If the built-in tool fails or is unavailable, tell the user the CLI fallback exists and that it requires `OPENAI_API_KEY`. Proceed only if the user explicitly asks for that fallback.
 - If the user explicitly asks for CLI mode, use the bundled `scripts/image_gen.py` workflow. Do not create one-off SDK runners.
 - Never modify `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
@@ -79,12 +81,13 @@ Built-in edit semantics:
 
 Execution strategy:
 - In the built-in default path, produce many assets or variants by issuing one `image_gen` call per requested asset or variant.
-- In the explicit CLI fallback path, use the CLI `generate-batch` subcommand only when the user explicitly chose CLI mode and needs many prompts/assets.
+- In the CLI fallback path, use the CLI `generate-batch` subcommand only when the user explicitly chose CLI mode and needs many prompts/assets.
+- For many distinct assets, do not use `n` as a substitute for separate prompts. `n` is for variants of one prompt; distinct assets need distinct built-in calls or distinct CLI `generate-batch` jobs.
 
 Assume the user wants a new image unless they clearly ask to change an existing one.
 
 ## Workflow
-1. Decide the top-level mode: built-in by default, fallback CLI only if explicitly requested.
+1. Decide the top-level mode: built-in by default; fallback CLI if explicitly requested or if the user explicitly needs transparent output.
 2. Decide the intent: `generate` or `edit`.
 3. Decide whether the output is preview-only or meant to be consumed by the current project.
 4. Decide the execution strategy: single asset vs repeated built-in calls vs CLI `generate-batch`.
@@ -99,13 +102,13 @@ Assume the user wants a new image unless they clearly ask to change an existing 
    - If the user's prompt is already specific and detailed, normalize it into a clear spec without adding creative requirements.
    - If the user's prompt is generic, add tasteful augmentation only when it materially improves output quality.
 10. Use the built-in `image_gen` tool by default.
-11. If the user explicitly chooses the CLI fallback, then and only then use the fallback-only docs for quality, `input_fidelity`, masks, output format, output paths, and network setup.
+11. If the user explicitly chooses the CLI fallback, or explicitly asks for transparent output, then use the fallback-only docs for model, quality, size, `input_fidelity`, masks, output format, output paths, and network setup.
 12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
 13. Iterate with a single targeted change, then re-check.
 14. For preview-only work, render the image inline; the underlying file may remain at the default `$CODEX_HOME/generated_images/...` path.
 15. For project-bound work, move or copy the selected artifact into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the default `$CODEX_HOME/generated_images/...` path.
-16. For batches, persist only the selected finals in the workspace unless the user explicitly asked to keep discarded variants.
-17. Always report the final saved path for any workspace-bound asset, plus the final prompt and whether the built-in tool or fallback CLI mode was used.
+16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
+17. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set and whether the built-in tool or fallback CLI mode was used.
 
 ## Prompt augmentation
 
@@ -140,6 +143,9 @@ Generate:
 - product-mockup — product/packaging shots, catalog imagery, merch concepts.
 - ui-mockup — app/web interface mockups and wireframes; specify the desired fidelity.
 - infographic-diagram — diagrams/infographics with structured layout and text.
+- scientific-educational — classroom explainers, scientific diagrams, and learning visuals with required labels and accuracy constraints.
+- ads-marketing — campaign concepts and ad creatives with audience, brand position, scene, and exact tagline/copy.
+- productivity-visual — slide, chart, workflow, and data-heavy business visuals.
 - logo-brand — logo/mark exploration, vector-friendly.
 - illustration-story — comics, children’s book art, narrative scenes.
 - stylized-concept — style-driven concept art, 3D/stylized renders.
@@ -179,7 +185,7 @@ Avoid: <negative constraints>
 Notes:
 - `Asset type` and `Input images` are prompt scaffolding, not dedicated CLI flags.
 - `Scene/backdrop` refers to the visual setting. It is not the same as the fallback CLI `background` parameter, which controls output transparency behavior.
-- Fallback-only execution notes such as `Quality:`, `Input fidelity:`, masks, output format, and output paths belong in the explicit CLI path only. Do not treat them as built-in `image_gen` tool arguments.
+- Fallback-only execution notes such as `Quality:`, `Input fidelity:`, masks, output format, and output paths belong in the CLI path only. Do not treat them as built-in `image_gen` tool arguments.
 
 Augmentation rules:
 - Keep it short.
@@ -220,7 +226,7 @@ Constraints: change only the background; keep the product and its edges unchange
 - Iterate with single-change follow-ups.
 - If the prompt is generic, add only the extra detail that will materially help.
 - If the prompt is already detailed, normalize it instead of expanding it.
-- For explicit CLI fallback only, see `references/cli.md` and `references/image-api.md` for `quality`, `input_fidelity`, masks, output format, and output-path guidance.
+- For CLI fallback only, see `references/cli.md` and `references/image-api.md` for model, `quality`, `input_fidelity`, masks, output format, and output-path guidance.
 
 More principles shared by both modes: `references/prompting.md`.
 Copy/paste specs shared by both modes: `references/sample-prompts.md`.
@@ -228,10 +234,33 @@ Copy/paste specs shared by both modes: `references/sample-prompts.md`.
 ## Guidance by asset type
 Asset-type templates (website assets, game assets, wireframes, logo) are consolidated in `references/sample-prompts.md`.
 
+## gpt-image-2 guidance for CLI fallback
+
+The fallback CLI defaults to `gpt-image-2`.
+
+- Use `gpt-image-2` for new CLI/API workflows unless the request needs transparent output.
+- If the user explicitly asks for transparent output, use `gpt-image-1.5` and explain that transparent backgrounds are not supported in `gpt-image-2`, the latest model.
+- `gpt-image-2` always uses high fidelity for image inputs; do not set `input_fidelity` with this model.
+- `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
+- Use `quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Square images are typically fastest to generate. Use `1024x1024` for fast square drafts.
+- If the user asks for 4K-style output, use `3824x2160` for landscape or `2160x3824` for portrait. Do not use `3840x2160`, because the maximum edge length must be less than `3840px`.
+- `gpt-image-2` size may be `auto` or `WIDTHxHEIGHT` if all constraints hold: max edge `< 3840px`, both edges multiples of `16px`, long-to-short ratio `<= 3:1`, total pixels between `655,360` and `8,294,400`.
+
+Popular `gpt-image-2` sizes:
+- `1024x1024` square
+- `1536x1024` landscape
+- `1024x1536` portrait
+- `2048x2048` 2K square
+- `2048x1152` 2K landscape
+- `3824x2160` near-4K landscape
+- `2160x3824` near-4K portrait
+- `auto`
+
 ## Fallback CLI mode only
 
 ### Temp and output conventions
-These conventions apply only to the explicit CLI fallback. They do not describe built-in `image_gen` output behavior.
+These conventions apply only to the CLI fallback. They do not describe built-in `image_gen` output behavior.
 - Use `tmp/imagegen/` for intermediate files (for example JSONL batches); delete them when done.
 - Write final artifacts under `output/imagegen/`.
 - Use `--out` or `--out-dir` to control output paths; keep filenames stable and descriptive.
@@ -276,4 +305,4 @@ If installation is not possible in this environment, tell the user which depende
 - `references/cli.md`: fallback-only CLI usage via `scripts/image_gen.py`.
 - `references/image-api.md`: fallback-only API/CLI parameter reference.
 - `references/codex-network.md`: fallback-only network/sandbox troubleshooting for CLI mode.
-- `scripts/image_gen.py`: fallback-only CLI implementation. Do not load or use it unless the user explicitly chooses CLI mode.
+- `scripts/image_gen.py`: fallback-only CLI implementation. Do not load or use it unless the user explicitly chooses CLI mode or explicitly asks for transparent output.

@@ -28,6 +28,7 @@ This file is about prompt structure, specificity, and iteration. Fallback-only e
 - If the user prompt is already specific and detailed, normalize it into a clean spec without adding creative requirements.
 - If the prompt is generic, you may add tasteful detail when it materially improves the output.
 - Treat examples in `sample-prompts.md` as fully-authored recipes, not as the default amount of augmentation to add to every request.
+- For photorealism, include `photorealistic` directly when that is the goal, plus concrete real-world texture such as pores, wrinkles, fabric wear, material grain, or imperfect everyday detail.
 
 ## Allowed and disallowed augmentation
 
@@ -46,6 +47,7 @@ Do not add:
 - Specify framing and viewpoint (close-up, wide, top-down) and placement only when it materially helps.
 - Call out negative space if the asset clearly needs room for UI or copy.
 - Avoid making left/right layout decisions unless the user or surrounding layout supports them.
+- For people, describe body framing, scale, gaze, and object interactions when they matter (`full body visible`, `looking down at the book`, `hands naturally gripping the handlebars`).
 
 ## Constraints and invariants
 - State what must not change (`keep background unchanged`).
@@ -55,6 +57,7 @@ Do not add:
 - Put literal text in quotes or ALL CAPS and specify typography (font style, size, color, placement).
 - Spell uncommon words letter-by-letter if accuracy matters.
 - For in-image copy, require verbatim rendering and no extra characters.
+- In CLI fallback mode, use `medium` or `high` quality for small text, dense infographics, data-heavy slides, multi-font layouts, legends, axes, and footnotes.
 
 ## Input images and references
 - Do not assume that every provided image is an edit target.
@@ -71,15 +74,22 @@ Do not add:
 ## Fallback-only execution controls
 - `quality`, `input_fidelity`, explicit masks, output format, and output paths are fallback-only execution controls.
 - Do not assume they are built-in `image_gen` tool arguments.
-- If the user explicitly chooses CLI fallback, see `references/cli.md` and `references/image-api.md` for those controls.
+- If the user explicitly chooses CLI fallback or explicitly asks for transparent output, see `references/cli.md` and `references/image-api.md` for those controls.
+- In CLI fallback mode, `gpt-image-2` is the default. It supports `quality=low|medium|high|auto`; use `low` for fast drafts and thumbnails, and move to `medium`, `high`, or `auto` for final assets.
+- `gpt-image-2` always uses high fidelity for image inputs, so do not set `input_fidelity` with that model.
+- If the user explicitly asks for transparent output, use `gpt-image-1.5` and explain that transparent backgrounds are not supported in `gpt-image-2`, the latest model.
+- If the user asks for 4K-style output with `gpt-image-2`, use `3824x2160` for landscape or `2160x3824` for portrait.
 
 ## Use-case tips
 Generate:
 - photorealistic-natural: Prompt as if a real photo is captured in the moment; use photography language (lens, lighting, framing); call for real texture; avoid over-stylized polish unless requested.
 - product-mockup: Describe the product/packaging and materials; ensure clean silhouette and label clarity; if in-image text is needed, require verbatim rendering and specify typography.
 - ui-mockup: Describe the target fidelity first (shippable mockup or low-fi wireframe), then focus on layout, hierarchy, and practical UI elements; avoid concept-art language.
-- infographic-diagram: Define the audience and layout flow; label parts explicitly; require verbatim text.
+- infographic-diagram: Define the audience and layout flow; label parts explicitly; require verbatim text; prefer higher quality in CLI mode for dense labels.
 - logo-brand: Keep it simple and scalable; ask for a strong silhouette and balanced negative space; avoid decorative flourishes unless requested.
+- ads-marketing: Write like a creative brief; include brand positioning, audience, desired vibe, scene, and exact tagline if text must appear.
+- productivity-visual: Name the exact artifact (slide, chart, workflow diagram), define the canvas and hierarchy, provide real labels/data, and ask for readable typography and polished spacing.
+- scientific-educational: Define audience, lesson objective, required labels, scientific constraints, arrows, and scan-friendly whitespace.
 - illustration-story: Define panels or scene beats; keep each action concrete.
 - stylized-concept: Specify style cues, material finish, and rendering approach (3D, painterly, clay) without inventing new story elements.
 - historical-scene: State the location/date and required period accuracy; constrain clothing, props, and environment to match the era.

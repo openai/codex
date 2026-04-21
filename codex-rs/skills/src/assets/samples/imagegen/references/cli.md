@@ -1,13 +1,14 @@
 # CLI reference (`scripts/image_gen.py`)
 
-This file is for the fallback CLI mode only. Read it only after the user explicitly asks to use `scripts/image_gen.py` instead of the built-in `image_gen` tool.
+This file is for the fallback CLI mode only. Read it when the user explicitly asks to use `scripts/image_gen.py` / CLI / API / model controls, or when the user explicitly asks for transparent output that requires the `gpt-image-1.5` fallback path.
 
 `generate-batch` is a CLI subcommand in this fallback path. It is not a top-level mode of the skill.
+The word `batch` in a user request is not CLI opt-in by itself.
 
 ## What this CLI does
 - `generate`: generate a new image from a prompt
 - `edit`: edit one or more existing images
-- `generate-batch`: run many generation jobs from a JSONL file
+- `generate-batch`: run many generation jobs from a JSONL file after the user explicitly chooses CLI/API/model controls
 
 Real API calls require **network access** + `OPENAI_API_KEY`. `--dry-run` does not.
 
@@ -16,7 +17,7 @@ Set a stable path to the skill CLI (default `CODEX_HOME` is `~/.codex`):
 
 ```
 export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-export IMAGE_GEN="$CODEX_HOME/skills/imagegen/scripts/image_gen.py"
+export IMAGE_GEN="$CODEX_HOME/skills/.system/imagegen/scripts/image_gen.py"
 ```
 
 Install dependencies into that environment with its package manager. In uv-managed environments, `uv pip install ...` remains the preferred path.
@@ -60,25 +61,96 @@ python "$IMAGE_GEN" edit \
 - **Never modify** `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
 
 ## Defaults
-- Model: `gpt-image-1.5`
+- Model: `gpt-image-2`
 - Supported model family for this CLI: GPT Image models (`gpt-image-*`)
-- Size: `1024x1024`
-- Quality: `auto`
+- Size: `auto`
+- Quality: `medium`
 - Output format: `png`
 - Default one-off output path: `output/imagegen/output.png`
 - Background: unspecified unless `--background` is set
+
+## gpt-image-2 size and model guidance
+
+`gpt-image-2` is the default model for new CLI fallback work.
+
+- Use `--quality low` for fast drafts, thumbnails, and quick iterations.
+- Use `--quality medium`, `--quality high`, or `--quality auto` for final assets, dense text, diagrams, identity-sensitive edits, and high-resolution outputs.
+- Square images are typically fastest. Use `--size 1024x1024` for quick square drafts.
+- If the user asks for 4K-style output, use `--size 3824x2160` for landscape or `--size 2160x3824` for portrait.
+- Do not pass `--input-fidelity` with `gpt-image-2`; this model always uses high fidelity for image inputs.
+- Do not use `--background transparent` with `gpt-image-2`; use `gpt-image-1.5` for transparent output.
+
+Popular `gpt-image-2` sizes:
+- `1024x1024`
+- `1536x1024`
+- `1024x1536`
+- `2048x2048`
+- `2048x1152`
+- `3824x2160`
+- `2160x3824`
+- `auto`
+
+`gpt-image-2` size constraints:
+- max edge `< 3840px`
+- both edges multiples of `16px`
+- long edge to short edge ratio `<= 3:1`
+- total pixels between `655,360` and `8,294,400`
+
+Fast draft:
+
+```bash
+python "$IMAGE_GEN" generate \
+  --prompt "A product thumbnail of a matte ceramic mug on a stone surface" \
+  --quality low \
+  --size 1024x1024 \
+  --out output/imagegen/mug-draft.png
+```
+
+Final 2K landscape:
+
+```bash
+python "$IMAGE_GEN" generate \
+  --prompt "A polished landing-page hero image of a matte ceramic mug on a stone surface" \
+  --quality high \
+  --size 2048x1152 \
+  --out output/imagegen/mug-hero.png
+```
+
+Near-4K landscape:
+
+```bash
+python "$IMAGE_GEN" generate \
+  --prompt "A detailed architectural visualization at golden hour" \
+  --size 3824x2160 \
+  --quality high \
+  --out output/imagegen/architecture-near-4k.png
+```
+
+Transparent background request:
+
+```bash
+python "$IMAGE_GEN" generate \
+  --model gpt-image-1.5 \
+  --prompt "A clean product cutout on a transparent background" \
+  --background transparent \
+  --output-format png \
+  --out output/imagegen/product-cutout.png
+```
+
+When using this path, explain briefly that transparent backgrounds are not supported in `gpt-image-2`, the latest model, so `gpt-image-1.5` is required.
 
 ## Quality, input fidelity, and masks (CLI fallback only)
 These are explicit CLI controls. They are not built-in `image_gen` tool arguments.
 
 - `--quality` works for `generate`, `edit`, and `generate-batch`: `low|medium|high|auto`
-- `--input-fidelity` is **edit-only** and validated as `low|high`
+- `--input-fidelity` is **edit-only** and validated as `low|high`; it is not supported for `gpt-image-2`
 - `--mask` is **edit-only**
 
 Example:
 
 ```bash
 python "$IMAGE_GEN" edit \
+  --model gpt-image-1.5 \
   --image input.png \
   --prompt "Change only the background" \
   --quality high \
@@ -147,10 +219,11 @@ Notes:
 - Per-job overrides are supported in JSONL (for example `size`, `quality`, `background`, `output_format`, `output_compression`, `moderation`, `n`, `model`, `out`, and prompt-augmentation fields).
 - `--n` generates multiple variants for a single prompt; `generate-batch` is for many different prompts.
 - In batch mode, per-job `out` is treated as a filename under `--out-dir`.
+- For many requested deliverable assets, provide one prompt/job per distinct asset and use semantic filenames when possible.
 
 ## CLI notes
-- Supported sizes: `1024x1024`, `1536x1024`, `1024x1536`, or `auto`.
-- Transparent backgrounds require `output_format` to be `png` or `webp`.
+- Supported sizes depend on the model. `gpt-image-2` supports flexible constrained sizes; older GPT Image models support `1024x1024`, `1536x1024`, `1024x1536`, or `auto`.
+- Transparent backgrounds require `output_format` to be `png` or `webp` and are not supported by `gpt-image-2`.
 - `--prompt-file`, `--output-compression`, `--moderation`, `--max-attempts`, `--fail-fast`, `--force`, and `--no-augment` are supported.
 - This CLI is intended for GPT Image models. Do not assume older non-GPT image-model behavior applies here.
 

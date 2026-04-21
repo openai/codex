@@ -1,6 +1,6 @@
 # Codex network approvals / sandbox notes
 
-This file is for the fallback CLI mode only. Read it only after the user explicitly asks to use `scripts/image_gen.py`.
+This file is for the fallback CLI mode only. Read it when the user explicitly asks to use `scripts/image_gen.py` / CLI / API / model controls, or when the user explicitly asks for transparent output that requires the `gpt-image-1.5` fallback path.
 
 This guidance is intentionally isolated from `SKILL.md` because it can vary by environment and may become stale. Prefer the defaults in your environment when in doubt.
 
