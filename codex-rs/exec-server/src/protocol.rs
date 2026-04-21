@@ -272,17 +272,12 @@ pub struct HttpHeader {
 ///
 /// Omitted means "use the executor default", `null` means "no timeout", and a
 /// number means "use exactly this many milliseconds".
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum HttpRequestTimeout {
+    #[default]
     Default,
     None,
     Millis(u64),
-}
-
-impl Default for HttpRequestTimeout {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl HttpRequestTimeout {
