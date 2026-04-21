@@ -328,7 +328,12 @@ impl MessageProcessor {
         let device_key_api = DeviceKeyApi::default();
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
-        let fs_api = FsApi::default();
+        let fs_api = FsApi::new(
+            thread_manager
+                .environment_manager()
+                .local_environment()
+                .get_filesystem(),
+        );
         let fs_watch_manager = FsWatchManager::new(outgoing.clone());
 
         Self {
@@ -1079,11 +1084,14 @@ impl MessageProcessor {
         }
 
         let outgoing = Arc::clone(&self.outgoing);
+        let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
             let (all_connectors_result, accessible_connectors_result) = tokio::join!(
                 connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                connectors::list_accessible_connectors_from_mcp_tools_with_options(
-                    &config, /*force_refetch*/ true,
+                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                    &config,
+                    /*force_refetch*/ true,
+                    &environment_manager,
                 ),
             );
             let all_connectors = match all_connectors_result {
@@ -1096,7 +1104,7 @@ impl MessageProcessor {
                 }
             };
             let accessible_connectors = match accessible_connectors_result {
-                Ok(connectors) => connectors,
+                Ok(status) => status.connectors,
                 Err(err) => {
                     tracing::warn!(
                         "failed to force-refresh accessible apps after experimental feature enablement: {err:#}"

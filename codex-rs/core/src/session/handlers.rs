@@ -507,8 +507,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     let plugins_manager = &sess.services.plugins_manager;
     let fs = sess
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem());
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;

@@ -13,7 +13,9 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
-use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentManagerArgs;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::DiscoverableTool;
@@ -191,6 +193,28 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    // TODO: Wire callers that already own an EnvironmentManager into
+    // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
+    // of constructing a temporary manager here.
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
+    list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        config,
+        force_refetch,
+        &environment_manager,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: &EnvironmentManager,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
@@ -235,6 +259,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
+    let environment = environment_manager
+        .default_environment()
+        .unwrap_or_else(|| environment_manager.local_environment());
+
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -243,7 +271,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         SandboxPolicy::new_read_only_policy(),
-        McpRuntimeEnvironment::new(Arc::new(Environment::default()), config.cwd.to_path_buf()),
+        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),

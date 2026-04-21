@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::user_input::UserInput;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::compact::content_items_to_text;
@@ -490,23 +493,58 @@ pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<Gu
     let Some(text) = text else {
         anyhow::bail!("guardian review completed without an assessment payload");
     };
-    if let Ok(assessment) = serde_json::from_str::<GuardianAssessment>(text) {
-        return Ok(assessment);
-    }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
-        && start < end
-        && let Some(slice) = text.get(start..=end)
-    {
-        return Ok(serde_json::from_str::<GuardianAssessment>(slice)?);
-    }
-    anyhow::bail!("guardian assessment was not valid JSON")
+    let parsed_payload =
+        if let Ok(payload) = serde_json::from_str::<GuardianAssessmentPayload>(text) {
+            payload
+        } else if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
+            && start < end
+            && let Some(slice) = text.get(start..=end)
+        {
+            serde_json::from_str::<GuardianAssessmentPayload>(slice)?
+        } else {
+            anyhow::bail!("guardian assessment was not valid JSON");
+        };
+
+    let outcome = parsed_payload.outcome;
+    let risk_level = parsed_payload.risk_level.unwrap_or(match outcome {
+        super::GuardianAssessmentOutcome::Allow => GuardianRiskLevel::Low,
+        super::GuardianAssessmentOutcome::Deny => GuardianRiskLevel::High,
+    });
+    let rationale = parsed_payload
+        .rationale
+        .filter(|rationale| !rationale.trim().is_empty())
+        .unwrap_or_else(|| match outcome {
+            super::GuardianAssessmentOutcome::Allow => {
+                "Guardian returned a low-risk allow decision.".to_string()
+            }
+            super::GuardianAssessmentOutcome::Deny => {
+                "Guardian returned a deny decision without a rationale.".to_string()
+            }
+        });
+
+    Ok(GuardianAssessment {
+        risk_level,
+        user_authorization: parsed_payload
+            .user_authorization
+            .unwrap_or(GuardianUserAuthorization::Unknown),
+        outcome,
+        rationale,
+    })
 }
 
-/// JSON schema supplied as `final_output_json_schema` to force a structured
+#[derive(Deserialize)]
+struct GuardianAssessmentPayload {
+    risk_level: Option<GuardianRiskLevel>,
+    user_authorization: Option<GuardianUserAuthorization>,
+    outcome: super::GuardianAssessmentOutcome,
+    rationale: Option<String>,
+}
+
+/// JSON schema supplied as `final_output_json_schema` to guide a structured
 /// final answer from the guardian review session.
 ///
 /// Keep this next to `guardian_output_contract_prompt()` so the prompt text and
-/// enforced schema stay aligned.
+/// output schema stay aligned.
 pub(crate) fn guardian_output_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -528,14 +566,18 @@ pub(crate) fn guardian_output_schema() -> Value {
                 "type": "string"
             }
         },
-        "required": ["risk_level", "user_authorization", "outcome", "rationale"]
+        "required": ["outcome"]
     })
 }
 
-/// Prompt fragment that describes the exact JSON contract enforced by
+/// Prompt fragment that describes the exact JSON contract paired with
 /// `guardian_output_schema()`.
 fn guardian_output_contract_prompt() -> &'static str {
-    r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON with this exact schema:
+    r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON.
+
+For low-risk actions, give the final answer directly: {"outcome":"allow"}.
+
+For anything else, use this JSON schema:
 {
   "risk_level": "low" | "medium" | "high" | "critical",
   "user_authorization": "unknown" | "low" | "medium" | "high",
