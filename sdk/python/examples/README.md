@@ -30,7 +30,7 @@ will download the matching GitHub release artifact, stage a temporary local
 `openai-codex-cli-bin` package, install it into your active interpreter, and clean up
 the temporary files afterward.
 
-Current pinned runtime version: `0.116.0-alpha.1`
+The pinned runtime version comes from `sdk/python/_runtime_setup.py`.
 
 ## Run examples
 

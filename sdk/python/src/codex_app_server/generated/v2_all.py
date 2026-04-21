@@ -226,6 +226,7 @@ class AuthMode(Enum):
     apikey = "apikey"
     chatgpt = "chatgpt"
     chatgpt_auth_tokens = "chatgptAuthTokens"
+    agent_identity = "agentIdentity"
 
 
 class AutoReviewDecisionSource(RootModel[Literal["agent"]]):
@@ -701,6 +702,75 @@ class DeprecationNoticeNotification(BaseModel):
         ),
     ] = None
     summary: Annotated[str, Field(description="Concise summary of what is deprecated.")]
+
+
+class DeviceKeyAlgorithm(RootModel[Literal["ecdsa_p256_sha256"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["ecdsa_p256_sha256"],
+        Field(
+            description="Device-key algorithm reported at enrollment and signing boundaries."
+        ),
+    ]
+
+
+class DeviceKeyProtectionClass(Enum):
+    hardware_secure_enclave = "hardware_secure_enclave"
+    hardware_tpm = "hardware_tpm"
+    os_protected_nonextractable = "os_protected_nonextractable"
+
+
+class DeviceKeyProtectionPolicy(Enum):
+    hardware_only = "hardware_only"
+    allow_os_protected_nonextractable = "allow_os_protected_nonextractable"
+
+
+class DeviceKeyPublicParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    key_id: Annotated[str, Field(alias="keyId")]
+
+
+class DeviceKeyPublicResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    key_id: Annotated[str, Field(alias="keyId")]
+    protection_class: Annotated[
+        DeviceKeyProtectionClass, Field(alias="protectionClass")
+    ]
+    public_key_spki_der_base64: Annotated[
+        str,
+        Field(
+            alias="publicKeySpkiDerBase64",
+            description="SubjectPublicKeyInfo DER encoded as base64.",
+        ),
+    ]
+
+
+class DeviceKeySignResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    signature_der_base64: Annotated[
+        str,
+        Field(
+            alias="signatureDerBase64",
+            description="ECDSA signature DER encoded as base64.",
+        ),
+    ]
+    signed_payload_base64: Annotated[
+        str,
+        Field(
+            alias="signedPayloadBase64",
+            description="Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
+        ),
+    ]
 
 
 class InputTextDynamicToolCallOutputContentItem(BaseModel):
@@ -2057,6 +2127,13 @@ class PatchChangeKind(
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
 
 
+class PermissionProfileNetworkPermissions(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    enabled: bool | None = None
+
+
 class Personality(Enum):
     none = "none"
     friendly = "friendly"
@@ -2474,6 +2551,34 @@ class ReasoningTextDeltaNotification(BaseModel):
     item_id: Annotated[str, Field(alias="itemId")]
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class RemoteControlClientConnectionAudience(
+    RootModel[Literal["remote_control_client_websocket"]]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["remote_control_client_websocket"],
+        Field(
+            description="Audience for a remote-control client connection device-key proof."
+        ),
+    ]
+
+
+class RemoteControlClientEnrollmentAudience(
+    RootModel[Literal["remote_control_client_enrollment"]]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        Literal["remote_control_client_enrollment"],
+        Field(
+            description="Audience for a remote-control client enrollment device-key proof."
+        ),
+    ]
 
 
 class RequestId(RootModel[str | int]):
@@ -3162,7 +3267,7 @@ class SkillSummary(BaseModel):
     enabled: bool
     interface: SkillInterface | None = None
     name: str
-    path: AbsolutePathBuf
+    path: AbsolutePathBuf | None = None
     short_description: Annotated[str | None, Field(alias="shortDescription")] = None
 
 
@@ -3585,6 +3690,13 @@ class ContextCompactionThreadItem(BaseModel):
     type: Annotated[
         Literal["contextCompaction"], Field(title="ContextCompactionThreadItemType")
     ]
+
+
+class ThreadListCwdFilter(RootModel[str | list[str]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: str | list[str]
 
 
 class ThreadLoadedListParams(BaseModel):
@@ -4047,6 +4159,14 @@ class TurnDiffUpdatedNotification(BaseModel):
     diff: str
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class TurnEnvironmentParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwd: AbsolutePathBuf
+    environment_id: Annotated[str, Field(alias="environmentId")]
 
 
 class TurnInterruptParams(BaseModel):
@@ -4581,6 +4701,17 @@ class AppListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["app/list"], Field(title="App/listRequestMethod")]
     params: AppsListParams
+
+
+class DeviceKeyPublicRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["device/key/public"], Field(title="Device/key/publicRequestMethod")
+    ]
+    params: DeviceKeyPublicParams
 
 
 class FsReadFileRequest(BaseModel):
@@ -5267,6 +5398,159 @@ class ContentItem(
     root: InputTextContentItem | InputImageContentItem | OutputTextContentItem
 
 
+class DeviceKeyCreateParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    client_id: Annotated[str, Field(alias="clientId")]
+    protection_policy: Annotated[
+        DeviceKeyProtectionPolicy | None,
+        Field(
+            alias="protectionPolicy",
+            description="Defaults to `hardware_only` when omitted.",
+        ),
+    ] = None
+
+
+class DeviceKeyCreateResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    algorithm: DeviceKeyAlgorithm
+    key_id: Annotated[str, Field(alias="keyId")]
+    protection_class: Annotated[
+        DeviceKeyProtectionClass, Field(alias="protectionClass")
+    ]
+    public_key_spki_der_base64: Annotated[
+        str,
+        Field(
+            alias="publicKeySpkiDerBase64",
+            description="SubjectPublicKeyInfo DER encoded as base64.",
+        ),
+    ]
+
+
+class RemoteControlClientConnectionDeviceKeySignPayload(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    audience: RemoteControlClientConnectionAudience
+    client_id: Annotated[str, Field(alias="clientId")]
+    nonce: str
+    scopes: Annotated[
+        list[str],
+        Field(
+            description="Must contain exactly `remote_control_controller_websocket`."
+        ),
+    ]
+    session_id: Annotated[
+        str,
+        Field(
+            alias="sessionId",
+            description="Backend-issued websocket session id that this proof authorizes.",
+        ),
+    ]
+    target_origin: Annotated[
+        str,
+        Field(
+            alias="targetOrigin",
+            description="Origin of the backend endpoint that issued the challenge and will verify this proof.",
+        ),
+    ]
+    target_path: Annotated[
+        str,
+        Field(
+            alias="targetPath",
+            description="Websocket route path that this proof authorizes.",
+        ),
+    ]
+    token_expires_at: Annotated[
+        int,
+        Field(
+            alias="tokenExpiresAt",
+            description="Remote-control token expiration as Unix seconds.",
+        ),
+    ]
+    token_sha256_base64url: Annotated[
+        str,
+        Field(
+            alias="tokenSha256Base64url",
+            description="SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
+        ),
+    ]
+    type: Annotated[
+        Literal["remoteControlClientConnection"],
+        Field(title="RemoteControlClientConnectionDeviceKeySignPayloadType"),
+    ]
+
+
+class RemoteControlClientEnrollmentDeviceKeySignPayload(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_user_id: Annotated[str, Field(alias="accountUserId")]
+    audience: RemoteControlClientEnrollmentAudience
+    challenge_expires_at: Annotated[
+        int,
+        Field(
+            alias="challengeExpiresAt",
+            description="Enrollment challenge expiration as Unix seconds.",
+        ),
+    ]
+    challenge_id: Annotated[
+        str,
+        Field(
+            alias="challengeId",
+            description="Backend-issued enrollment challenge id that this proof authorizes.",
+        ),
+    ]
+    client_id: Annotated[str, Field(alias="clientId")]
+    device_identity_sha256_base64url: Annotated[
+        str,
+        Field(
+            alias="deviceIdentitySha256Base64url",
+            description="SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
+        ),
+    ]
+    nonce: str
+    target_origin: Annotated[
+        str,
+        Field(
+            alias="targetOrigin",
+            description="Origin of the backend endpoint that issued the challenge and will verify this proof.",
+        ),
+    ]
+    target_path: Annotated[
+        str,
+        Field(
+            alias="targetPath",
+            description="HTTP route path that this proof authorizes.",
+        ),
+    ]
+    type: Annotated[
+        Literal["remoteControlClientEnrollment"],
+        Field(title="RemoteControlClientEnrollmentDeviceKeySignPayloadType"),
+    ]
+
+
+class DeviceKeySignPayload(
+    RootModel[
+        RemoteControlClientConnectionDeviceKeySignPayload
+        | RemoteControlClientEnrollmentDeviceKeySignPayload
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        RemoteControlClientConnectionDeviceKeySignPayload
+        | RemoteControlClientEnrollmentDeviceKeySignPayload,
+        Field(description="Structured payloads accepted by `device/key/sign`."),
+    ]
+
+
 class ExperimentalFeature(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5597,6 +5881,16 @@ class OverriddenMetadata(BaseModel):
     overriding_layer: Annotated[ConfigLayerMetadata, Field(alias="overridingLayer")]
 
 
+class PermissionProfileFileSystemPermissions(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    entries: list[FileSystemSandboxEntry]
+    glob_scan_max_depth: Annotated[
+        int | None, Field(alias="globScanMaxDepth", ge=1)
+    ] = None
+
+
 class PluginDetail(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5604,7 +5898,9 @@ class PluginDetail(BaseModel):
     apps: list[AppSummary]
     description: str | None = None
     marketplace_name: Annotated[str, Field(alias="marketplaceName")]
-    marketplace_path: Annotated[AbsolutePathBuf, Field(alias="marketplacePath")]
+    marketplace_path: Annotated[
+        AbsolutePathBuf | None, Field(alias="marketplacePath")
+    ] = None
     mcp_servers: Annotated[list[str], Field(alias="mcpServers")]
     skills: list[SkillSummary]
     summary: PluginSummary
@@ -6155,9 +6451,9 @@ class ThreadListParams(BaseModel):
         Field(description="Opaque pagination cursor returned by a previous call."),
     ] = None
     cwd: Annotated[
-        str | None,
+        ThreadListCwdFilter | None,
         Field(
-            description="Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned."
+            description="Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
         ),
     ] = None
     limit: Annotated[
@@ -6199,6 +6495,13 @@ class ThreadListParams(BaseModel):
         Field(
             alias="sourceKinds",
             description="Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.",
+        ),
+    ] = None
+    use_state_db_only: Annotated[
+        bool | None,
+        Field(
+            alias="useStateDbOnly",
+            description="If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
         ),
     ] = None
 
@@ -6481,6 +6784,17 @@ class ThreadListRequest(BaseModel):
     params: ThreadListParams
 
 
+class DeviceKeyCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["device/key/create"], Field(title="Device/key/createRequestMethod")
+    ]
+    params: DeviceKeyCreateParams
+
+
 class TurnStartRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6591,6 +6905,14 @@ class ConfigWriteResponse(BaseModel):
     version: str
 
 
+class DeviceKeySignParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    key_id: Annotated[str, Field(alias="keyId")]
+    payload: DeviceKeySignPayload
+
+
 class ErrorNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6692,6 +7014,16 @@ class ListMcpServerStatusResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class PermissionProfile(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    file_system: Annotated[
+        PermissionProfileFileSystemPermissions | None, Field(alias="fileSystem")
+    ] = None
+    network: PermissionProfileNetworkPermissions | None = None
 
 
 class PluginListResponse(BaseModel):
@@ -6984,6 +7316,17 @@ class TurnStartedNotification(BaseModel):
     )
     thread_id: Annotated[str, Field(alias="threadId")]
     turn: Turn
+
+
+class DeviceKeySignRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["device/key/sign"], Field(title="Device/key/signRequestMethod")
+    ]
+    params: DeviceKeySignParams
 
 
 class ConfigBatchWriteRequest(BaseModel):
@@ -7319,10 +7662,22 @@ class ThreadForkResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7384,10 +7739,22 @@ class ThreadResumeResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7426,10 +7793,22 @@ class ThreadStartResponse(BaseModel):
     ] = []
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
+    permission_profile: Annotated[
+        PermissionProfile | None,
+        Field(
+            alias="permissionProfile",
+            description="Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`.",
+        ),
+    ] = None
     reasoning_effort: Annotated[
         ReasoningEffort | None, Field(alias="reasoningEffort")
     ] = None
-    sandbox: SandboxPolicy
+    sandbox: Annotated[
+        SandboxPolicy,
+        Field(
+            description="Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
+        ),
+    ]
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread: Thread
 
@@ -7506,6 +7885,9 @@ class ClientRequest(
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest
+        | DeviceKeyCreateRequest
+        | DeviceKeyPublicRequest
+        | DeviceKeySignRequest
         | FsReadFileRequest
         | FsWriteFileRequest
         | FsCreateDirectoryRequest
@@ -7578,6 +7960,9 @@ class ClientRequest(
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest
+        | DeviceKeyCreateRequest
+        | DeviceKeyPublicRequest
+        | DeviceKeySignRequest
         | FsReadFileRequest
         | FsWriteFileRequest
         | FsCreateDirectoryRequest

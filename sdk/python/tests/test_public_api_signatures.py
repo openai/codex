@@ -70,6 +70,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sort_direction",
             "sort_key",
             "source_kinds",
+            "use_state_db_only",
         ],
         Codex.thread_resume: [
             "approval_policy",
@@ -147,6 +148,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sort_direction",
             "sort_key",
             "source_kinds",
+            "use_state_db_only",
         ],
         AsyncCodex.thread_resume: [
             "approval_policy",

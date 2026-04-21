@@ -176,13 +176,14 @@ class Codex:
         *,
         archived: bool | None = None,
         cursor: str | None = None,
-        cwd: str | None = None,
+        cwd: ThreadListCwdFilter | None = None,
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        use_state_db_only: bool | None = None,
     ) -> ThreadListResponse:
         params = ThreadListParams(
             archived=archived,
@@ -194,6 +195,7 @@ class Codex:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            use_state_db_only=use_state_db_only,
         )
         return self._client.thread_list(params)
 
@@ -371,13 +373,14 @@ class AsyncCodex:
         *,
         archived: bool | None = None,
         cursor: str | None = None,
-        cwd: str | None = None,
+        cwd: ThreadListCwdFilter | None = None,
         limit: int | None = None,
         model_providers: list[str] | None = None,
         search_term: str | None = None,
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        use_state_db_only: bool | None = None,
     ) -> ThreadListResponse:
         await self._ensure_initialized()
         params = ThreadListParams(
@@ -390,6 +393,7 @@ class AsyncCodex:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            use_state_db_only=use_state_db_only,
         )
         return await self._client.thread_list(params)
 
