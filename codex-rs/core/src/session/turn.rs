@@ -322,6 +322,7 @@ pub(crate) async fn run_turn(
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
+        crate::guardian::enqueue_proactive_guardian_trunk_sync(&sess, &turn_context);
         user_prompt_submit_outcome.additional_contexts
     };
     sess.services
@@ -1835,6 +1836,7 @@ async fn drain_in_flight(
                 let response_item = response_input.into();
                 sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                crate::guardian::enqueue_proactive_guardian_trunk_sync(&sess, &turn_context);
                 mark_thread_memory_mode_polluted_if_external_context(
                     sess.as_ref(),
                     turn_context.as_ref(),

@@ -342,6 +342,8 @@ pub(crate) async fn handle_output_item_done(
         }
     }
 
+    crate::guardian::enqueue_proactive_guardian_trunk_sync(&ctx.sess, &ctx.turn_context);
+
     Ok(output)
 }
 

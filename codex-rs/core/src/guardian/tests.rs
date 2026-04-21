@@ -1,4 +1,5 @@
 use super::*;
+use crate::compact::SUMMARIZATION_PROMPT;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
@@ -12,6 +13,7 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::guardian::review::proactively_sync_guardian_trunk;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -41,6 +43,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
@@ -75,11 +78,21 @@ async fn guardian_test_session_and_turn(
 async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
+    guardian_test_session_and_turn_with_config(base_url, |_| {}).await
+}
+
+async fn guardian_test_session_and_turn_with_config(
+    base_url: &str,
+    configure: impl FnOnce(&mut Config),
+) -> (Arc<Session>, Arc<TurnContext>) {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
+    configure(&mut config);
+    turn.approval_policy = config.permissions.approval_policy.clone();
+    turn.compact_prompt = config.compact_prompt.clone();
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -249,10 +262,11 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
     .await?;
 
     let text = guardian_prompt_text(&prompt.items);
-    assert!(text.contains("whose request action you are assessing"));
+    assert!(text.contains("Transcript sync only. No approval decision is requested"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(text.contains(">>> TRANSCRIPT END\n"));
-    assert!(text.contains("The Codex agent has requested the following action:\n"));
+    assert!(text.contains("The Codex agent has requested the following action."));
+    assert!(text.contains(">>> APPROVAL REQUEST START\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
 
@@ -310,12 +324,12 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     .await?;
 
     let text = guardian_prompt_text(&prompt.items);
-    assert!(text.contains("added since your last approval assessment"));
+    assert!(text.contains("was added since the last sync"));
     assert!(text.contains(">>> TRANSCRIPT DELTA START\n"));
     assert!(text.contains("[5] user: Please also push the second docs fix."));
     assert!(text.contains("[6] assistant: I need approval for the second push."));
     assert!(text.contains(">>> TRANSCRIPT DELTA END\n"));
-    assert!(text.contains("The Codex agent has requested the following next action:\n"));
+    assert!(text.contains("The Codex agent has requested the following action."));
     assert!(!text.contains("[1] user: Please check the repo visibility"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 6);
 
@@ -383,7 +397,7 @@ async fn build_guardian_prompt_stale_delta_cursor_falls_back_to_full_prompt() ->
     .await?;
 
     let text = guardian_prompt_text(&prompt.items);
-    assert!(text.contains("whose request action you are assessing"));
+    assert!(text.contains("Transcript sync only. No approval decision is requested"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
     assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
@@ -468,7 +482,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
     .await?;
 
     let text = guardian_prompt_text(&prompt.items);
-    assert!(text.contains("whose request action you are assessing"));
+    assert!(text.contains("Transcript sync only. No approval decision is requested"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
     assert!(text.contains("[3] user: Please push after the compaction."));
@@ -567,6 +581,113 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             text: "repo is public".to_string(),
         }
     );
+}
+
+#[test]
+fn collect_guardian_transcript_entries_excludes_dangling_tool_calls() {
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "read_file".to_string(),
+            namespace: None,
+            arguments: "{\"path\":\"README.md\"}".to_string(),
+            call_id: "pending-call".to_string(),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "read_file".to_string(),
+            namespace: None,
+            arguments: "{\"path\":\"Cargo.toml\"}".to_string(),
+            call_id: "completed-call".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "completed-call".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "workspace manifest".to_string(),
+            ),
+        },
+    ];
+
+    let entries = collect_guardian_transcript_entries(&items);
+
+    assert_eq!(
+        entries,
+        vec![
+            GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::Tool("tool read_file call".to_string()),
+                text: "{\"path\":\"Cargo.toml\"}".to_string(),
+            },
+            GuardianTranscriptEntry {
+                kind: GuardianTranscriptEntryKind::Tool("tool read_file result".to_string()),
+                text: "workspace manifest".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn build_guardian_transcript_items_flags_pending_tool_calls() -> anyhow::Result<()> {
+    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
+    session
+        .record_into_history(
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "read_file".to_string(),
+                    namespace: None,
+                    arguments: "{\"path\":\"README.md\"}".to_string(),
+                    call_id: "pending-call".to_string(),
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "read_file".to_string(),
+                    namespace: None,
+                    arguments: "{\"path\":\"Cargo.toml\"}".to_string(),
+                    call_id: "completed-call".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "completed-call".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                        "workspace manifest".to_string(),
+                    ),
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let prompt = build_guardian_transcript_sync_items(&session, GuardianPromptMode::Full).await;
+
+    assert!(prompt.has_pending_tool_call);
+    assert_eq!(prompt.transcript_cursor.transcript_entry_count, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_guardian_approval_request_items_are_skinny() -> anyhow::Result<()> {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let items = build_guardian_approval_request_items(
+        &session,
+        Some("retry after sandbox denial".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "status".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+    )?;
+
+    let text = guardian_prompt_text(&items);
+    assert!(text.contains(">>> APPROVAL REQUEST START\n"));
+    assert!(text.contains("\"command\": ["));
+    assert!(text.contains("retry after sandbox denial"));
+    assert!(!text.contains(">>> TRANSCRIPT START\n"));
+    assert!(!text.contains(">>> TRANSCRIPT DELTA START\n"));
+
+    Ok(())
 }
 
 #[test]
@@ -1294,17 +1415,23 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         1,
         "follow-up reminder should be persisted for guardian forks"
     );
-    let second_user_message = requests[1]
-        .message_input_text_groups("user")
-        .last()
-        .expect("follow-up guardian user message")
+    let second_user_messages = requests[1].message_input_text_groups("user");
+    let second_transcript_delta = second_user_messages
+        .iter()
+        .find(|message| message.join("").contains(">>> TRANSCRIPT DELTA START\n"))
+        .expect("follow-up guardian transcript delta message")
         .join("");
-    assert!(second_user_message.contains(">>> TRANSCRIPT DELTA START\n"));
-    assert!(second_user_message.contains("[5] user: Please push the second docs fix too."));
+    assert!(second_transcript_delta.contains("[5] user: Please push the second docs fix too."));
     assert!(
-        second_user_message.contains("[6] assistant: I need approval for the second docs fix.")
+        second_transcript_delta.contains("[6] assistant: I need approval for the second docs fix.")
     );
-    assert!(!second_user_message.contains("[1] user: Please check the repo visibility"));
+    assert!(!second_transcript_delta.contains("[1] user: Please check the repo visibility"));
+    let second_approval_message = second_user_messages
+        .last()
+        .expect("follow-up guardian approval request message")
+        .join("");
+    assert!(second_approval_message.contains(">>> APPROVAL REQUEST START\n"));
+    assert!(!second_approval_message.contains(">>> TRANSCRIPT DELTA START\n"));
 
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
@@ -1329,6 +1456,185 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             )
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proactive_guardian_sync_compacts_trunk_before_review_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let compact_summary = "GUARDIAN_COMPACT_SUMMARY";
+    let first_guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The first action is narrow and explicitly requested.",
+    })
+    .to_string();
+    let second_guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The second action is narrow and explicitly requested.",
+    })
+    .to_string();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-first-review"),
+                ev_assistant_message("msg-guardian-first-review", &first_guardian_assessment),
+                ev_completed("resp-guardian-first-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-compact"),
+                ev_assistant_message("msg-guardian-compact", compact_summary),
+                ev_completed_with_tokens("resp-guardian-compact", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-second-review"),
+                ev_assistant_message("msg-guardian-second-review", &second_guardian_assessment),
+                ev_completed("resp-guardian-second-review"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (session, turn) =
+        guardian_test_session_and_turn_with_config(server.uri().as_str(), |config| {
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.model_provider.name = "OpenAI-compatible guardian compact test".to_string();
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+            config.model_auto_compact_token_limit = Some(1);
+        })
+        .await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let first_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-before-proactive-compact".to_string(),
+            command: vec!["git".to_string(), "status".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to inspect the repo before pushing.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+        panic!("expected first guardian assessment");
+    };
+    assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
+
+    let initial_requests = request_log.requests();
+    assert_eq!(
+        initial_requests.len(),
+        1,
+        "fresh guardian trunk should use its first normal turn before proactive sync mutates history"
+    );
+    assert!(
+        initial_requests[0].body_contains_text(">>> TRANSCRIPT START"),
+        "initial review should include the full transcript in the policy-bearing first turn"
+    );
+    assert!(
+        !initial_requests[0].body_contains_text(SUMMARIZATION_PROMPT),
+        "initial review should not compact before the guardian policy has been injected"
+    );
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Please push the docs fix now.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "I need approval to push the docs fix.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    proactively_sync_guardian_trunk(&session, &turn).await;
+
+    let sync_requests = request_log.requests();
+    assert_eq!(
+        sync_requests.len(),
+        2,
+        "proactive transcript sync should compact after the first guardian turn and before the next approval review request"
+    );
+    assert!(
+        sync_requests[1].body_contains_text(SUMMARIZATION_PROMPT),
+        "proactive sync should trigger a compact request"
+    );
+    assert!(
+        sync_requests[1]
+            .body_contains_text("Transcript sync only. No approval decision is requested"),
+        "compact request should include the synced guardian transcript"
+    );
+
+    let second_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-after-proactive-compact".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+        panic!("expected second guardian assessment");
+    };
+    assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected initial review, one proactive compact request, and one later guardian review request"
+    );
+    let compact_request = &requests[1];
+    let review_request = &requests[2];
+    assert!(compact_request.body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(
+        review_request.body_contains_text(compact_summary),
+        "review request should use compacted guardian trunk history"
+    );
+    assert!(
+        review_request.body_contains_text(">>> APPROVAL REQUEST START"),
+        "second request should be the approval review"
+    );
+    assert!(
+        !review_request.body_contains_text(SUMMARIZATION_PROMPT),
+        "approval review should not do request-time compaction after proactive compaction succeeded"
+    );
 
     Ok(())
 }
@@ -1446,231 +1752,241 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
-    let handle =
-        std::thread::Builder::new()
-            .name("guardian_parallel_reviews_fork_from_last_committed_trunk_history".to_string())
-            .stack_size(TEST_STACK_SIZE_BYTES)
-            .spawn(|| -> anyhow::Result<()> {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(Box::pin(async {
-        let first_assessment = serde_json::json!({
-            "risk_level": "low",
-            "user_authorization": "high",
-            "outcome": "allow",
-            "rationale": "first guardian rationale",
-        })
-        .to_string();
-        let second_assessment = serde_json::json!({
-            "risk_level": "low",
-            "user_authorization": "high",
-            "outcome": "allow",
-            "rationale": "second guardian rationale",
-        })
-        .to_string();
-        let third_assessment = serde_json::json!({
-            "risk_level": "low",
-            "user_authorization": "high",
-            "outcome": "allow",
-            "rationale": "third guardian rationale",
-        })
-        .to_string();
-        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
-        let (server, _) = start_streaming_sse_server(vec![
-            vec![StreamingSseChunk {
-                gate: None,
-                body: sse(vec![
-                    ev_response_created("resp-guardian-1"),
-                    ev_assistant_message("msg-guardian-1", &first_assessment),
-                    ev_completed("resp-guardian-1"),
-                ]),
-            }],
-            vec![
-                StreamingSseChunk {
-                    gate: None,
-                    body: sse(vec![ev_response_created("resp-guardian-2")]),
-                },
-                StreamingSseChunk {
-                    gate: Some(gate_rx),
-                    body: sse(vec![
-                        ev_assistant_message("msg-guardian-2", &second_assessment),
-                        ev_completed("resp-guardian-2"),
-                    ]),
-                },
-            ],
-            vec![StreamingSseChunk {
-                gate: None,
-                body: sse(vec![
-                    ev_response_created("resp-guardian-3"),
-                    ev_assistant_message("msg-guardian-3", &third_assessment),
-                    ev_completed("resp-guardian-3"),
-                ]),
-            }],
-        ])
-        .await;
+    let handle = std::thread::Builder::new()
+        .name("guardian_parallel_reviews_fork_from_last_committed_trunk_history".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(Box::pin(async {
+                let first_assessment = serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "first guardian rationale",
+                })
+                .to_string();
+                let second_assessment = serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "second guardian rationale",
+                })
+                .to_string();
+                let third_assessment = serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "third guardian rationale",
+                })
+                .to_string();
+                let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+                let (server, _) = start_streaming_sse_server(vec![
+                    vec![StreamingSseChunk {
+                        gate: None,
+                        body: sse(vec![
+                            ev_response_created("resp-guardian-1"),
+                            ev_assistant_message("msg-guardian-1", &first_assessment),
+                            ev_completed("resp-guardian-1"),
+                        ]),
+                    }],
+                    vec![
+                        StreamingSseChunk {
+                            gate: None,
+                            body: sse(vec![ev_response_created("resp-guardian-2")]),
+                        },
+                        StreamingSseChunk {
+                            gate: Some(gate_rx),
+                            body: sse(vec![
+                                ev_assistant_message("msg-guardian-2", &second_assessment),
+                                ev_completed("resp-guardian-2"),
+                            ]),
+                        },
+                    ],
+                    vec![StreamingSseChunk {
+                        gate: None,
+                        body: sse(vec![
+                            ev_response_created("resp-guardian-3"),
+                            ev_assistant_message("msg-guardian-3", &third_assessment),
+                            ev_completed("resp-guardian-3"),
+                        ]),
+                    }],
+                ])
+                .await;
 
-        let (session, turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
-        seed_guardian_parent_history(&session, &turn).await;
+                let (session, turn) =
+                    guardian_test_session_and_turn_with_base_url(server.uri()).await;
+                seed_guardian_parent_history(&session, &turn).await;
 
-        let initial_request = GuardianApprovalRequest::Shell {
-            id: "shell-guardian-1".to_string(),
-            command: vec!["git".to_string(), "status".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Inspect repo state before proceeding.".to_string()),
-        };
-        assert_eq!(
-            review_approval_request(
-                &session,
-                &turn,
-                "review-shell-guardian-1".to_string(),
-                initial_request,
-                /*retry_reason*/ None
-            )
-            .await,
-            ReviewDecision::Approved
-        );
-        session
-            .record_into_history(
-                &[
-                    ResponseItem::Message {
-                        id: None,
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText {
-                            text: "Please inspect pending changes before pushing.".to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                    ResponseItem::Message {
-                        id: None,
-                        role: "assistant".to_string(),
-                        content: vec![ContentItem::OutputText {
-                            text: "I need approval to run git diff.".to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                ],
-                turn.as_ref(),
-            )
-            .await;
+                let initial_request = GuardianApprovalRequest::Shell {
+                    id: "shell-guardian-1".to_string(),
+                    command: vec!["git".to_string(), "status".to_string()],
+                    cwd: test_path_buf("/repo/codex-rs/core").abs(),
+                    sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    justification: Some("Inspect repo state before proceeding.".to_string()),
+                };
+                assert_eq!(
+                    review_approval_request(
+                        &session,
+                        &turn,
+                        "review-shell-guardian-1".to_string(),
+                        initial_request,
+                        /*retry_reason*/ None
+                    )
+                    .await,
+                    ReviewDecision::Approved
+                );
+                session
+                    .record_into_history(
+                        &[
+                            ResponseItem::Message {
+                                id: None,
+                                role: "user".to_string(),
+                                content: vec![ContentItem::InputText {
+                                    text: "Please inspect pending changes before pushing."
+                                        .to_string(),
+                                }],
+                                end_turn: None,
+                                phase: None,
+                            },
+                            ResponseItem::Message {
+                                id: None,
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText {
+                                    text: "I need approval to run git diff.".to_string(),
+                                }],
+                                end_turn: None,
+                                phase: None,
+                            },
+                        ],
+                        turn.as_ref(),
+                    )
+                    .await;
 
-        let second_request = GuardianApprovalRequest::Shell {
-            id: "shell-guardian-2".to_string(),
-            command: vec!["git".to_string(), "diff".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Inspect pending changes before proceeding.".to_string()),
-        };
-        let third_request = GuardianApprovalRequest::Shell {
-            id: "shell-guardian-3".to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs(),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Inspect whether pushing is safe before proceeding.".to_string()),
-        };
+                let second_request = GuardianApprovalRequest::Shell {
+                    id: "shell-guardian-2".to_string(),
+                    command: vec!["git".to_string(), "diff".to_string()],
+                    cwd: test_path_buf("/repo/codex-rs/core").abs(),
+                    sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    justification: Some("Inspect pending changes before proceeding.".to_string()),
+                };
+                let third_request = GuardianApprovalRequest::Shell {
+                    id: "shell-guardian-3".to_string(),
+                    command: vec!["git".to_string(), "push".to_string()],
+                    cwd: test_path_buf("/repo/codex-rs/core").abs(),
+                    sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    justification: Some(
+                        "Inspect whether pushing is safe before proceeding.".to_string(),
+                    ),
+                };
 
-        let session_for_second = Arc::clone(&session);
-        let turn_for_second = Arc::clone(&turn);
-        let mut second_review = tokio::spawn(async move {
-            review_approval_request(
-                &session_for_second,
-                &turn_for_second,
-                "review-shell-guardian-2".to_string(),
-                second_request,
-                Some("trunk follow-up".to_string()),
-            )
-            .await
-        });
+                let session_for_second = Arc::clone(&session);
+                let turn_for_second = Arc::clone(&turn);
+                let mut second_review = tokio::spawn(async move {
+                    review_approval_request(
+                        &session_for_second,
+                        &turn_for_second,
+                        "review-shell-guardian-2".to_string(),
+                        second_request,
+                        Some("trunk follow-up".to_string()),
+                    )
+                    .await
+                });
 
-        let second_request_observed = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if server.requests().await.len() >= 2 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-        assert!(
-            second_request_observed.is_ok(),
-            "second guardian request was not observed"
-        );
-        session
-            .record_into_history(
-                &[
-                    ResponseItem::Message {
-                        id: None,
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText {
-                            text: "Now inspect whether pushing is safe.".to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                    ResponseItem::Message {
-                        id: None,
-                        role: "assistant".to_string(),
-                        content: vec![ContentItem::OutputText {
-                            text: "I need approval to push after the diff check.".to_string(),
-                        }],
-                        end_turn: None,
-                        phase: None,
-                    },
-                ],
-                turn.as_ref(),
-            )
-            .await;
+                let second_request_observed = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        if server.requests().await.len() >= 2 {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await;
+                assert!(
+                    second_request_observed.is_ok(),
+                    "second guardian request was not observed"
+                );
+                session
+                    .record_into_history(
+                        &[
+                            ResponseItem::Message {
+                                id: None,
+                                role: "user".to_string(),
+                                content: vec![ContentItem::InputText {
+                                    text: "Now inspect whether pushing is safe.".to_string(),
+                                }],
+                                end_turn: None,
+                                phase: None,
+                            },
+                            ResponseItem::Message {
+                                id: None,
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText {
+                                    text: "I need approval to push after the diff check."
+                                        .to_string(),
+                                }],
+                                end_turn: None,
+                                phase: None,
+                            },
+                        ],
+                        turn.as_ref(),
+                    )
+                    .await;
 
-        let third_decision = review_approval_request(
-            &session,
-            &turn,
-            "review-shell-guardian-3".to_string(),
-            third_request,
-            Some("parallel follow-up".to_string()),
-        )
-        .await;
-        assert_eq!(third_decision, ReviewDecision::Approved);
-        let requests = server.requests().await;
-        assert_eq!(requests.len(), 3);
-        let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
-        let third_request_body_text = third_request_body.to_string();
-        assert!(
-            third_request_body_text.contains("first guardian rationale"),
-            "forked guardian review should include the last committed trunk assessment"
-        );
-        let third_user_message = last_user_message_text_from_body(&third_request_body);
-        assert!(third_user_message.contains(">>> TRANSCRIPT DELTA START\n"));
-        assert!(
-            third_user_message.contains("[5] user: Please inspect pending changes before pushing.")
-        );
-        assert!(third_user_message.contains("[7] user: Now inspect whether pushing is safe."));
-        assert!(!third_user_message.contains("[1] user: Please check the repo visibility"));
-        assert!(
-            !third_request_body_text.contains("second guardian rationale"),
-            "forked guardian review should not include the still in-flight trunk assessment"
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut second_review)
-                .await
-                .is_err(),
-            "the trunk guardian review should still be blocked on its gated response"
-        );
+                let third_decision = review_approval_request(
+                    &session,
+                    &turn,
+                    "review-shell-guardian-3".to_string(),
+                    third_request,
+                    Some("parallel follow-up".to_string()),
+                )
+                .await;
+                assert_eq!(third_decision, ReviewDecision::Approved);
+                let requests = server.requests().await;
+                assert_eq!(requests.len(), 3);
+                let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+                let third_request_body_text = third_request_body.to_string();
+                assert!(
+                    third_request_body_text.contains("first guardian rationale"),
+                    "forked guardian review should include the last committed trunk assessment"
+                );
+                let third_user_message = last_user_message_text_from_body(&third_request_body);
+                assert!(third_user_message.contains(">>> APPROVAL REQUEST START\n"));
+                assert!(!third_user_message.contains(">>> TRANSCRIPT DELTA START\n"));
+                assert!(third_request_body_text.contains(">>> TRANSCRIPT DELTA START"));
+                assert!(
+                    third_request_body_text
+                        .contains("[5] user: Please inspect pending changes before pushing.")
+                );
+                assert!(
+                    third_request_body_text
+                        .contains("[7] user: Now inspect whether pushing is safe.")
+                );
+                assert!(!third_user_message.contains("[1] user: Please check the repo visibility"));
+                assert!(
+                    !third_request_body_text.contains("second guardian rationale"),
+                    "forked guardian review should not include the still in-flight trunk assessment"
+                );
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), &mut second_review)
+                        .await
+                        .is_err(),
+                    "the trunk guardian review should still be blocked on its gated response"
+                );
 
-        gate_tx
-            .send(())
-            .expect("second guardian review gate should still be open");
-        assert_eq!(second_review.await?, ReviewDecision::Approved);
-        server.shutdown().await;
+                gate_tx
+                    .send(())
+                    .expect("second guardian review gate should still be open");
+                assert_eq!(second_review.await?, ReviewDecision::Approved);
+                server.shutdown().await;
 
-        Ok(())
-                }))
-            })?;
+                Ok(())
+            }))
+        })?;
 
     match handle.join() {
         Ok(result) => result,
