@@ -519,8 +519,6 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
-`environments` is experimental and requires `initialize.params.capabilities.experimentalApi = true`. When omitted or `null`, Codex uses the thread's default environment behavior. When set to `[]`, the turn runs without an agent-accessible environment. When set to one or more `{ "environmentId", "cwd" }` entries, Codex resolves each id against the configured environments and uses the first entry as the turn's primary environment and cwd.
-
 `approvalsReviewer` accepts:
 
 - `"user"` — default. Review approval requests directly in the client.
