@@ -399,7 +399,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
-    pub(crate) inherited_rollout_trace: Option<RolloutTraceRecorder>,
+    /// Parent rollout-tree recorder, or a disabled recorder when this spawn has no parent trace.
+    pub(crate) inherited_rollout_trace: RolloutTraceRecorder,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,

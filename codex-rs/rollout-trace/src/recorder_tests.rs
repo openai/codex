@@ -17,25 +17,22 @@ use crate::replay_bundle;
 fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let thread_id = ThreadId::new();
-    RolloutTraceRecorder::create_in_root(
-        temp.path(),
-        thread_id,
-        ThreadStartedTraceMetadata {
-            thread_id: thread_id.to_string(),
-            agent_path: "/root".to_string(),
-            task_name: None,
-            nickname: None,
-            agent_role: None,
-            session_source: SessionSource::Exec,
-            cwd: PathBuf::from("/workspace"),
-            rollout_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
-            model: "gpt-test".to_string(),
-            provider_name: "test-provider".to_string(),
-            approval_policy: "never".to_string(),
-            sandbox_policy: format!("{:?}", SandboxPolicy::DangerFullAccess),
-        },
-    )
-    .expect("trace recorder");
+    let recorder =
+        RolloutTraceRecorder::create_in_root(temp.path(), thread_id).expect("trace recorder");
+    recorder.record_thread_started(ThreadStartedTraceMetadata {
+        thread_id: thread_id.to_string(),
+        agent_path: "/root".to_string(),
+        task_name: None,
+        nickname: None,
+        agent_role: None,
+        session_source: SessionSource::Exec,
+        cwd: PathBuf::from("/workspace"),
+        rollout_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+        model: "gpt-test".to_string(),
+        provider_name: "test-provider".to_string(),
+        approval_policy: "never".to_string(),
+        sandbox_policy: format!("{:?}", SandboxPolicy::DangerFullAccess),
+    });
 
     let bundle_dir = single_bundle_dir(temp.path())?;
     let replayed = replay_bundle(&bundle_dir)?;
@@ -53,12 +50,9 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let root_thread_id = ThreadId::new();
     let child_thread_id = ThreadId::new();
-    let recorder = RolloutTraceRecorder::create_in_root(
-        temp.path(),
-        root_thread_id,
-        minimal_metadata(root_thread_id),
-    )
-    .expect("trace recorder");
+    let recorder =
+        RolloutTraceRecorder::create_in_root(temp.path(), root_thread_id).expect("trace recorder");
+    recorder.record_thread_started(minimal_metadata(root_thread_id));
 
     recorder.record_thread_started(ThreadStartedTraceMetadata {
         thread_id: child_thread_id.to_string(),
@@ -99,6 +93,52 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         crate::ExecutionStatus::Running
     );
     assert_eq!(replayed.raw_payloads.len(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn disabled_recorder_accepts_trace_calls_without_writing() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutTraceRecorder::disabled();
+
+    recorder.record_thread_started(minimal_metadata(thread_id));
+
+    let inference_trace = recorder.inference_trace_context(
+        thread_id.to_string(),
+        "turn-1".to_string(),
+        "gpt-test".to_string(),
+        "test-provider".to_string(),
+    );
+    let inference_attempt = inference_trace.start_attempt();
+    inference_attempt.record_started(&serde_json::json!({ "kind": "inference" }));
+    let token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
+    inference_attempt.record_completed("response-1", &token_usage, &[]);
+    inference_attempt.record_failed("inference failed");
+
+    let compaction_trace = recorder.compaction_trace_context(
+        thread_id.to_string(),
+        "turn-1".to_string(),
+        "compaction-1".to_string(),
+        "gpt-test".to_string(),
+        "test-provider".to_string(),
+    );
+    let compaction_attempt =
+        compaction_trace.start_attempt(&serde_json::json!({ "kind": "compaction" }));
+    compaction_attempt.record_completed(&[]);
+    compaction_attempt.record_failed("compaction failed");
+    recorder.record_compaction_installed(
+        thread_id.to_string(),
+        "turn-1".to_string(),
+        "compaction-1".to_string(),
+        &CompactionCheckpointTracePayload {
+            input_history: &[],
+            replacement_history: &[],
+        },
+    );
+
+    assert_eq!(fs::read_dir(temp.path())?.count(), 0);
 
     Ok(())
 }

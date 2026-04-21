@@ -42,7 +42,7 @@ pub(crate) struct SessionServices {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
-    pub(crate) rollout_trace: Option<RolloutTraceRecorder>,
+    pub(crate) rollout_trace: RolloutTraceRecorder,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,

@@ -31,9 +31,22 @@ pub const CODEX_ROLLOUT_TRACE_ROOT_ENV: &str = "CODEX_ROLLOUT_TRACE_ROOT";
 /// Lightweight handle stored in `SessionServices`.
 ///
 /// Cloning the handle is cheap; all sequencing and file ownership remains
-/// inside `TraceWriter`.
+/// inside `TraceWriter`. Disabled handles intentionally accept the same calls
+/// as enabled handles so hot-path session code can describe traceable events
+/// without repeatedly branching on whether diagnostic recording is enabled.
 #[derive(Clone, Debug)]
 pub struct RolloutTraceRecorder {
+    state: RolloutTraceRecorderState,
+}
+
+#[derive(Clone, Debug)]
+enum RolloutTraceRecorderState {
+    Disabled,
+    Enabled(EnabledRolloutTraceRecorder),
+}
+
+#[derive(Clone, Debug)]
+struct EnabledRolloutTraceRecorder {
     writer: Arc<TraceWriter>,
 }
 
@@ -69,28 +82,35 @@ pub struct CompactionCheckpointTracePayload<'a> {
 }
 
 impl RolloutTraceRecorder {
-    /// Creates and starts a trace bundle if `CODEX_ROLLOUT_TRACE_ROOT` is set.
+    /// Builds a recorder handle that accepts trace calls and records nothing.
+    pub fn disabled() -> Self {
+        Self {
+            state: RolloutTraceRecorderState::Disabled,
+        }
+    }
+
+    /// Creates and starts a root trace bundle, or returns a disabled recorder.
     ///
     /// Trace startup is best-effort. A tracing failure must not make the Codex
     /// session unusable, because traces are diagnostic and can be enabled while
-    /// debugging unrelated production failures.
-    pub fn maybe_create(thread_id: ThreadId, metadata: ThreadStartedTraceMetadata) -> Option<Self> {
-        let root = std::env::var_os(CODEX_ROLLOUT_TRACE_ROOT_ENV)?;
+    /// debugging unrelated production failures. The returned recorder has not
+    /// emitted `ThreadStarted`; session setup records that event uniformly for
+    /// root and inherited child recorders.
+    pub fn create_root_or_disabled(thread_id: ThreadId) -> Self {
+        let Some(root) = std::env::var_os(CODEX_ROLLOUT_TRACE_ROOT_ENV) else {
+            return Self::disabled();
+        };
         let root = PathBuf::from(root);
-        match Self::create_in_root(root.as_path(), thread_id, metadata) {
-            Ok(recorder) => Some(recorder),
+        match Self::create_in_root(root.as_path(), thread_id) {
+            Ok(recorder) => recorder,
             Err(err) => {
                 warn!("failed to initialize rollout trace recorder: {err:#}");
-                None
+                Self::disabled()
             }
         }
     }
 
-    fn create_in_root(
-        root: &Path,
-        thread_id: ThreadId,
-        metadata: ThreadStartedTraceMetadata,
-    ) -> anyhow::Result<Self> {
+    fn create_in_root(root: &Path, thread_id: ThreadId) -> anyhow::Result<Self> {
         let trace_id = Uuid::new_v4().to_string();
         let thread_id = thread_id.to_string();
         let bundle_dir = root.join(format!("trace-{trace_id}-{thread_id}"));
@@ -100,7 +120,7 @@ impl RolloutTraceRecorder {
             thread_id.clone(),
             thread_id.clone(),
         )?;
-        let recorder = Self {
+        let recorder = EnabledRolloutTraceRecorder {
             writer: Arc::new(writer),
         };
 
@@ -109,10 +129,14 @@ impl RolloutTraceRecorder {
             root_thread_id: thread_id,
         });
 
-        recorder.record_thread_started(metadata);
-
         debug!("recording rollout trace at {}", bundle_dir.display());
-        Ok(recorder)
+        Ok(Self::enabled(recorder))
+    }
+
+    fn enabled(inner: EnabledRolloutTraceRecorder) -> Self {
+        Self {
+            state: RolloutTraceRecorderState::Enabled(inner),
+        }
     }
 
     /// Emits the lifecycle event and metadata for one thread in this rollout tree.
@@ -122,9 +146,12 @@ impl RolloutTraceRecorder {
     /// the root bundle preserves one raw payload namespace and one reduced
     /// `RolloutTrace` for the whole multi-agent task.
     pub fn record_thread_started(&self, metadata: ThreadStartedTraceMetadata) {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return;
+        };
         let metadata_payload =
-            self.write_json_payload_best_effort(RawPayloadKind::SessionMetadata, &metadata);
-        self.append_best_effort(RawTraceEventPayload::ThreadStarted {
+            recorder.write_json_payload_best_effort(RawPayloadKind::SessionMetadata, &metadata);
+        recorder.append_best_effort(RawTraceEventPayload::ThreadStarted {
             thread_id: metadata.thread_id,
             agent_path: metadata.agent_path,
             metadata_payload,
@@ -143,8 +170,12 @@ impl RolloutTraceRecorder {
         model: String,
         provider_name: String,
     ) -> InferenceTraceContext {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return InferenceTraceContext::disabled();
+        };
+
         InferenceTraceContext::enabled(
-            Arc::clone(&self.writer),
+            Arc::clone(&recorder.writer),
             thread_id,
             codex_turn_id,
             model,
@@ -166,8 +197,12 @@ impl RolloutTraceRecorder {
         model: String,
         provider_name: String,
     ) -> CompactionTraceContext {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return CompactionTraceContext::disabled();
+        };
+
         CompactionTraceContext::enabled(
-            Arc::clone(&self.writer),
+            Arc::clone(&recorder.writer),
             thread_id,
             codex_turn_id,
             compaction_id,
@@ -189,12 +224,15 @@ impl RolloutTraceRecorder {
         compaction_id: String,
         checkpoint: &CompactionCheckpointTracePayload<'_>,
     ) {
-        let Some(checkpoint_payload) =
-            self.write_json_payload_best_effort(RawPayloadKind::CompactionCheckpoint, checkpoint)
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return;
+        };
+        let Some(checkpoint_payload) = recorder
+            .write_json_payload_best_effort(RawPayloadKind::CompactionCheckpoint, checkpoint)
         else {
             return;
         };
-        self.append_with_context_best_effort(
+        recorder.append_with_context_best_effort(
             thread_id,
             codex_turn_id,
             RawTraceEventPayload::CompactionInstalled {
@@ -203,7 +241,9 @@ impl RolloutTraceRecorder {
             },
         );
     }
+}
 
+impl EnabledRolloutTraceRecorder {
     fn write_json_payload_best_effort(
         &self,
         kind: RawPayloadKind,

@@ -27,7 +27,6 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
-use codex_rollout_trace::CompactionTraceContext;
 use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -170,17 +169,12 @@ async fn run_remote_compact_task_inner_impl(
     // Remote compaction is the only compaction shape rollout tracing supports. The trace context
     // records the exact `/responses/compact` request and response; normal sampling requests remain
     // traced through the inference path.
-    let compaction_trace = sess.services.rollout_trace.as_ref().map_or_else(
-        CompactionTraceContext::disabled,
-        |trace| {
-            trace.compaction_trace_context(
-                sess.conversation_id.to_string(),
-                turn_context.sub_id.clone(),
-                compaction_id.clone(),
-                turn_context.model_info.slug.clone(),
-                turn_context.provider.info().name.clone(),
-            )
-        },
+    let compaction_trace = sess.services.rollout_trace.compaction_trace_context(
+        sess.conversation_id.to_string(),
+        turn_context.sub_id.clone(),
+        compaction_id.clone(),
+        turn_context.model_info.slug.clone(),
+        turn_context.provider.info().name.clone(),
     );
 
     let mut new_history = sess
@@ -226,20 +220,18 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    if let Some(trace) = sess.services.rollout_trace.as_ref() {
-        // Install is the semantic boundary where the compact endpoint's output becomes live
-        // thread history. Keep it distinct from the later inference request so the reducer can
-        // still represent repeated developer/context prefix items exactly as the model saw them.
-        trace.record_compaction_installed(
-            sess.conversation_id.to_string(),
-            turn_context.sub_id.clone(),
-            compaction_id,
-            &CompactionCheckpointTracePayload {
-                input_history: &trace_input_history,
-                replacement_history: &new_history,
-            },
-        );
-    }
+    // Install is the semantic boundary where the compact endpoint's output becomes live
+    // thread history. Keep it distinct from the later inference request so the reducer can
+    // still represent repeated developer/context prefix items exactly as the model saw them.
+    sess.services.rollout_trace.record_compaction_installed(
+        sess.conversation_id.to_string(),
+        turn_context.sub_id.clone(),
+        compaction_id,
+        &CompactionCheckpointTracePayload {
+            input_history: &trace_input_history,
+            replacement_history: &new_history,
+        },
+    );
     sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(turn_context).await;

@@ -229,7 +229,7 @@ impl Session {
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
-        inherited_rollout_trace: Option<RolloutTraceRecorder>,
+        inherited_rollout_trace: RolloutTraceRecorder,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -386,20 +386,18 @@ impl Session {
             approval_policy: session_configuration.approval_policy.value().to_string(),
             sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
         };
-        let rollout_trace = if let Some(rollout_trace) = inherited_rollout_trace {
-            rollout_trace.record_thread_started(trace_metadata);
-            Some(rollout_trace)
-        } else if matches!(
+        let rollout_trace = if matches!(
             session_configuration.session_source,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
         ) {
             // Spawned child threads are part of their root rollout tree. If
             // the parent had no trace recorder, do not create an orphan child
             // bundle that looks like an independent rollout.
-            None
+            inherited_rollout_trace
         } else {
-            RolloutTraceRecorder::maybe_create(conversation_id, trace_metadata)
+            RolloutTraceRecorder::create_root_or_disabled(conversation_id)
         };
+        rollout_trace.record_thread_started(trace_metadata);
 
         let mut post_session_configured_events = Vec::<Event>::new();
 

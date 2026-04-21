@@ -1874,16 +1874,11 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
-    let inference_trace = sess.services.rollout_trace.as_ref().map_or_else(
-        codex_rollout_trace::InferenceTraceContext::disabled,
-        |trace| {
-            trace.inference_trace_context(
-                sess.conversation_id.to_string(),
-                turn_context.sub_id.clone(),
-                turn_context.model_info.slug.clone(),
-                turn_context.provider.info().name.clone(),
-            )
-        },
+    let inference_trace = sess.services.rollout_trace.inference_trace_context(
+        sess.conversation_id.to_string(),
+        turn_context.sub_id.clone(),
+        turn_context.model_info.slug.clone(),
+        turn_context.provider.info().name.clone(),
     );
     let mut stream = client_session
         .stream_with_trace(
