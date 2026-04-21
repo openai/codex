@@ -1,18 +1,18 @@
-use crate::config::Config;
-use crate::config::ConfigBuilder;
-use crate::plugins::MarketplaceAddRequest;
-use crate::plugins::PluginId;
-use crate::plugins::PluginInstallRequest;
-use crate::plugins::PluginsManager;
-use crate::plugins::add_marketplace;
-use crate::plugins::configured_plugins_from_stack;
-use crate::plugins::find_marketplace_manifest_path;
-use crate::plugins::is_local_marketplace_source;
-use crate::plugins::parse_marketplace_source;
+use codex_config::types::PluginConfig;
+use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::plugins::MarketplaceAddRequest;
+use codex_core::plugins::PluginId;
+use codex_core::plugins::PluginInstallRequest;
+use codex_core::plugins::PluginsManager;
+use codex_core::plugins::add_marketplace;
+use codex_core::plugins::is_local_marketplace_source;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
@@ -29,13 +29,13 @@ const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 const EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalAgentConfigDetectOptions {
+pub(crate) struct ExternalAgentConfigDetectOptions {
     pub include_home: bool,
     pub cwds: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalAgentConfigMigrationItemType {
+pub(crate) enum ExternalAgentConfigMigrationItemType {
     Config,
     Skills,
     AgentsMd,
@@ -44,24 +44,24 @@ pub enum ExternalAgentConfigMigrationItemType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginsMigration {
+pub(crate) struct PluginsMigration {
     pub marketplace_name: String,
     pub plugin_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MigrationDetails {
+pub(crate) struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingPluginImport {
+pub(crate) struct PendingPluginImport {
     pub cwd: Option<PathBuf>,
     pub details: MigrationDetails,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginImportOutcome {
+pub(crate) struct PluginImportOutcome {
     pub succeeded_marketplaces: Vec<String>,
     pub succeeded_plugin_ids: Vec<String>,
     pub failed_marketplaces: Vec<String>,
@@ -69,7 +69,7 @@ pub struct PluginImportOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalAgentConfigMigrationItem {
+pub(crate) struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
     pub cwd: Option<PathBuf>,
@@ -77,13 +77,13 @@ pub struct ExternalAgentConfigMigrationItem {
 }
 
 #[derive(Clone)]
-pub struct ExternalAgentConfigService {
+pub(crate) struct ExternalAgentConfigService {
     codex_home: PathBuf,
     external_agent_home: PathBuf,
 }
 
 impl ExternalAgentConfigService {
-    pub fn new(codex_home: PathBuf) -> Self {
+    pub(crate) fn new(codex_home: PathBuf) -> Self {
         let external_agent_home = default_external_agent_home();
         Self {
             codex_home,
@@ -99,7 +99,7 @@ impl ExternalAgentConfigService {
         }
     }
 
-    pub async fn detect(
+    pub(crate) async fn detect(
         &self,
         params: ExternalAgentConfigDetectOptions,
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
@@ -119,7 +119,7 @@ impl ExternalAgentConfigService {
         Ok(items)
     }
 
-    pub async fn import(
+    pub(crate) async fn import(
         &self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<Vec<PendingPluginImport>> {
@@ -297,10 +297,21 @@ impl ExternalAgentConfigService {
                 .await
             {
                 Ok(config) => {
-                    let configured_plugin_ids =
-                        configured_plugins_from_stack(&config.config_layer_stack)
-                            .into_keys()
-                            .collect::<HashSet<_>>();
+                    let configured_plugin_ids = config
+                        .config_layer_stack
+                        .get_user_layer()
+                        .and_then(|user_layer| user_layer.config.get("plugins"))
+                        .and_then(|plugins| {
+                            match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {
+                                Ok(plugins) => Some(plugins),
+                                Err(err) => {
+                                    tracing::warn!("invalid plugins config: {err}");
+                                    None
+                                }
+                            }
+                        })
+                        .map(|plugins| plugins.into_keys().collect::<HashSet<_>>())
+                        .unwrap_or_default();
                     let configured_marketplace_plugins = configured_marketplace_plugins(
                         &config,
                         &PluginsManager::new(self.codex_home.clone()),
@@ -410,7 +421,7 @@ impl ExternalAgentConfigService {
         Ok((local_details, remote_details))
     }
 
-    pub async fn import_plugins(
+    pub(crate) async fn import_plugins(
         &self,
         cwd: Option<&Path>,
         details: Option<MigrationDetails>,
@@ -638,7 +649,7 @@ fn extract_plugin_migration_details(
     let loadable_marketplaces = collect_marketplace_import_sources(settings, source_root)
         .into_iter()
         .filter_map(|(marketplace_name, source)| {
-            parse_marketplace_source(&source.source, source.ref_name)
+            is_local_marketplace_source(&source.source, source.ref_name)
                 .ok()
                 .map(|_| marketplace_name)
         })

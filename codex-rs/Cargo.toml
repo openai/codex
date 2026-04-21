@@ -383,6 +383,8 @@ zeroize = "1.8.2"
 rust = {}
 
 [workspace.lints.clippy]
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
 expect_used = "deny"
 identity_op = "deny"
 manual_clamp = "deny"
@@ -427,6 +429,11 @@ ignored = [
     "codex-utils-template",
     "codex-v8-poc",
 ]
+
+[profile.dev]
+# Keep line tables/backtraces while avoiding expensive full variable debug info
+# across local dev builds.
+debug = 1
 
 [profile.dev-small]
 inherits = "dev"

@@ -103,6 +103,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let dynamic_tools = vec![
         DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "geo_lookup".to_string(),
             description: "lookup a city".to_string(),
             input_schema: json!({
@@ -113,6 +114,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             defer_loading: true,
         },
         DynamicToolSpec {
+            namespace: None,
             name: "weather_lookup".to_string(),
             description: "lookup weather".to_string(),
             input_schema: json!({

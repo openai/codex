@@ -655,6 +655,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "tool-1".to_string(),
+                    namespace: None,
                     tool: "tool".to_string(),
                     arguments: json!({}),
                 },

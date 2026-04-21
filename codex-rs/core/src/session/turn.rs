@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::SkillInjections;
 use crate::SkillLoadOutcome;
@@ -59,6 +62,8 @@ use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::backoff;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
+use codex_analytics::CodexResponsesApiCallInput;
+use codex_analytics::CodexResponsesApiCallStatus;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
@@ -91,10 +96,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -404,6 +412,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
+    let mut next_turn_responses_call_index: u64 = 0;
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -475,12 +484,15 @@ pub(crate) async fn run_turn(
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        let turn_responses_call_index = next_turn_responses_call_index;
+        next_turn_responses_call_index = next_turn_responses_call_index.saturating_add(1);
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             turn_metadata_header.as_deref(),
+            turn_responses_call_index,
             sampling_request_input,
             &explicitly_enabled_connectors,
             skills_outcome,
@@ -979,7 +991,7 @@ pub(crate) fn build_prompt(
         .dynamic_tools
         .iter()
         .filter(|tool| tool.defer_loading)
-        .map(|tool| tool.name.as_str())
+        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
         .collect::<HashSet<_>>();
     let tools = if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -987,7 +999,7 @@ pub(crate) fn build_prompt(
         router
             .model_visible_specs()
             .into_iter()
-            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
+            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
 
@@ -999,6 +1011,131 @@ pub(crate) fn build_prompt(
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
     }
+}
+
+fn filter_deferred_dynamic_tool_spec(
+    spec: ToolSpec,
+    deferred_dynamic_tools: &HashSet<ToolName>,
+) -> Option<ToolSpec> {
+    match spec {
+        ToolSpec::Function(tool) => {
+            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
+                None
+            } else {
+                Some(ToolSpec::Function(tool))
+            }
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
+                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
+                ),
+            });
+            if namespace.tools.is_empty() {
+                None
+            } else {
+                Some(ToolSpec::Namespace(namespace))
+            }
+        }
+        spec => Some(spec),
+    }
+}
+
+struct ResponsesApiCallObservation {
+    turn_responses_call_index: u64,
+    started_at: u64,
+    started_instant: Instant,
+    input_items: Vec<ResponseItem>,
+    output_items: Vec<ResponseItem>,
+    responses_id: Option<String>,
+    token_usage: Option<TokenUsage>,
+}
+
+impl ResponsesApiCallObservation {
+    fn new(turn_responses_call_index: u64) -> Self {
+        Self {
+            turn_responses_call_index,
+            started_at: current_unix_seconds(),
+            started_instant: Instant::now(),
+            input_items: Vec::new(),
+            output_items: Vec::new(),
+            responses_id: None,
+            token_usage: None,
+        }
+    }
+
+    fn record_prompt(&mut self, prompt: &Prompt) {
+        self.input_items = prompt.input.clone();
+        self.output_items.clear();
+        self.responses_id = None;
+        self.token_usage = None;
+    }
+
+    fn record_output_item_done(&mut self, item: &ResponseItem) {
+        self.output_items.push(item.clone());
+    }
+
+    fn record_completed(&mut self, response_id: String, token_usage: Option<TokenUsage>) {
+        self.responses_id = Some(response_id);
+        self.token_usage = token_usage;
+    }
+
+    fn into_input(
+        self,
+        status: CodexResponsesApiCallStatus,
+        error: Option<String>,
+    ) -> CodexResponsesApiCallInput {
+        let completed_at = current_unix_seconds();
+        CodexResponsesApiCallInput {
+            responses_id: self.responses_id,
+            turn_responses_call_index: self.turn_responses_call_index,
+            status,
+            error,
+            started_at: self.started_at,
+            completed_at: Some(completed_at),
+            duration_ms: Some(self.started_instant.elapsed().as_millis() as u64),
+            input_items: self.input_items,
+            output_items: self.output_items,
+            token_usage: self.token_usage,
+        }
+    }
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn responses_api_call_error_status(err: &CodexErr) -> CodexResponsesApiCallStatus {
+    match err {
+        CodexErr::TurnAborted => CodexResponsesApiCallStatus::Interrupted,
+        _ => CodexResponsesApiCallStatus::Failed,
+    }
+}
+
+fn track_responses_api_call_observation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    observation: ResponsesApiCallObservation,
+    status: CodexResponsesApiCallStatus,
+    error: Option<String>,
+) {
+    if !sess.enabled(Feature::GeneralAnalytics) {
+        return;
+    }
+    sess.services
+        .analytics_events_client
+        .track_responses_api_call(
+            build_track_events_context(
+                turn_context.model_info.slug.clone(),
+                sess.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+            ),
+            observation.into_input(status, error),
+        );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1016,6 +1153,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
+    turn_responses_call_index: u64,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
@@ -1052,6 +1190,8 @@ async fn run_sampling_request(
         .await;
     let mut retries = 0;
     let mut initial_input = Some(input);
+    let mut responses_api_call_observation =
+        ResponsesApiCallObservation::new(turn_responses_call_index);
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -1066,6 +1206,7 @@ async fn run_sampling_request(
             turn_context.as_ref(),
             base_instructions.clone(),
         );
+        responses_api_call_observation.record_prompt(&prompt);
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -1075,15 +1216,30 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
+            &mut responses_api_call_observation,
             cancellation_token.child_token(),
         )
         .await
         {
             Ok(output) => {
+                track_responses_api_call_observation(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    responses_api_call_observation,
+                    CodexResponsesApiCallStatus::Completed,
+                    /*error*/ None,
+                );
                 return Ok(output);
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
+                track_responses_api_call_observation(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    responses_api_call_observation,
+                    CodexResponsesApiCallStatus::Failed,
+                    Some("context window exceeded".to_string()),
+                );
                 return Err(CodexErr::ContextWindowExceeded);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
@@ -1091,12 +1247,28 @@ async fn run_sampling_request(
                 if let Some(rate_limits) = rate_limits {
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
+                track_responses_api_call_observation(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    responses_api_call_observation,
+                    CodexResponsesApiCallStatus::Failed,
+                    Some(e.to_string()),
+                );
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(err) => err,
         };
 
         if !err.is_retryable() {
+            let status = responses_api_call_error_status(&err);
+            let error = Some(format!("{err:#}"));
+            track_responses_api_call_observation(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                responses_api_call_observation,
+                status,
+                error,
+            );
             return Err(err);
         }
 
@@ -1148,6 +1320,14 @@ async fn run_sampling_request(
             }
             tokio::time::sleep(delay).await;
         } else {
+            let error = Some(format!("{err:#}"));
+            track_responses_api_call_observation(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                responses_api_call_observation,
+                CodexResponsesApiCallStatus::Failed,
+                error,
+            );
             return Err(err);
         }
     }
@@ -1864,6 +2044,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
+    responses_api_call_observation: &mut ResponsesApiCallObservation,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     feedback_tags!(
@@ -1939,6 +2120,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                responses_api_call_observation.record_output_item_done(&item);
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Some(event) = consumer.flush_on_complete()
                 {
@@ -2109,9 +2291,10 @@ async fn try_run_sampling_request(
                 sess.services.models_manager.refresh_if_new_etag(etag).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                responses_api_call_observation.record_completed(response_id, token_usage.clone());
                 flush_assistant_text_segments_all(
                     &sess,
                     &turn_context,
