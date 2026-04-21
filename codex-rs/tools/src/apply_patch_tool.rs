@@ -8,6 +8,13 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
+const APPLY_PATCH_ENVIRONMENT_LARK_GRAMMAR: &str =
+    include_str!("tool_apply_patch_environment.lark");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyPatchToolOptions {
+    pub multi_environment_tools: bool,
+}
 
 const APPLY_PATCH_JSON_TOOL_DESCRIPTION: &str = r#"Use the `apply_patch` tool to edit files.
 Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
@@ -82,30 +89,50 @@ It is important to remember:
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyPatchToolArgs {
     pub input: String,
+    #[serde(default, alias = "environmentId")]
+    pub environment_id: Option<String>,
 }
 
 /// Returns a custom tool that can be used to edit files. Well-suited for GPT-5 models
 /// https://platform.openai.com/docs/guides/function-calling#custom-tools
-pub fn create_apply_patch_freeform_tool() -> ToolSpec {
+pub fn create_apply_patch_freeform_tool(options: ApplyPatchToolOptions) -> ToolSpec {
+    let description = if options.multi_environment_tools {
+        "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON. To target a non-primary selected environment, add a first line `*** Environment: <environment_id>` before `*** Begin Patch`."
+    } else {
+        "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON."
+    };
+    let definition = if options.multi_environment_tools {
+        APPLY_PATCH_ENVIRONMENT_LARK_GRAMMAR
+    } else {
+        APPLY_PATCH_LARK_GRAMMAR
+    };
     ToolSpec::Freeform(FreeformTool {
         name: "apply_patch".to_string(),
-        description: "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.".to_string(),
+        description: description.to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
-            definition: APPLY_PATCH_LARK_GRAMMAR.to_string(),
+            definition: definition.to_string(),
         },
     })
 }
 
 /// Returns a json tool that can be used to edit files. Should only be used with gpt-oss models
-pub fn create_apply_patch_json_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
+pub fn create_apply_patch_json_tool(options: ApplyPatchToolOptions) -> ToolSpec {
+    let mut properties = BTreeMap::from([(
         "input".to_string(),
         JsonSchema::string(Some(
             "The entire contents of the apply_patch command".to_string(),
         )),
     )]);
+    if options.multi_environment_tools {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional selected environment id to apply the patch in; omit to use the primary environment.".to_string(),
+            )),
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "apply_patch".to_string(),

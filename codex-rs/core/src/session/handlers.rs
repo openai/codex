@@ -1012,7 +1012,7 @@ pub async fn review(
     sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context).await;
-    match resolve_review_request(review_request, &turn_context.cwd) {
+    match resolve_review_request(review_request, turn_context.cwd()) {
         Ok(resolved) => {
             spawn_review_thread(
                 Arc::clone(sess),

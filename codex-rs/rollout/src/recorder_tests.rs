@@ -543,6 +543,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             turn_id: Some("turn-1".to_string()),
             trace_id: None,
             cwd: latest_cwd.clone(),
+            environments: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,

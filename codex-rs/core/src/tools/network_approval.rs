@@ -442,7 +442,7 @@ impl NetworkApprovalService {
                     guardian_approval_id,
                     /*approval_id*/ None,
                     prompt_command,
-                    turn_context.cwd.clone(),
+                    turn_context.cwd().clone(),
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,

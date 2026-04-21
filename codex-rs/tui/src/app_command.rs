@@ -315,6 +315,7 @@ impl AppCommand {
             },
             Op::OverrideTurnContext {
                 cwd,
+                environments: _,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
@@ -325,7 +326,6 @@ impl AppCommand {
                 service_tier,
                 collaboration_mode,
                 personality,
-                environments: _,
             } => AppCommandView::OverrideTurnContext {
                 cwd,
                 approval_policy,

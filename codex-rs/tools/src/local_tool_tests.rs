@@ -96,6 +96,7 @@ fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        multi_environment_tools: false,
     });
 
     let description = if cfg!(windows) {
@@ -332,6 +333,7 @@ fn shell_command_tool_matches_expected_spec() {
     let tool = create_shell_command_tool(CommandToolOptions {
         allow_login_shell: true,
         exec_permission_approvals_enabled: false,
+        multi_environment_tools: false,
     });
 
     let description = if cfg!(windows) {

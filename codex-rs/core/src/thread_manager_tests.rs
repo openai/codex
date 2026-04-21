@@ -392,16 +392,18 @@ async fn resume_and_fork_preserve_persisted_sticky_environments() {
         .await
         .expect("build resumed turn context");
     assert_eq!(
-        resumed_turn.environments.as_ref().map(|environments| {
-            environments
-                .iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id.clone(),
-                    cwd: environment.cwd.clone(),
-                })
-                .collect::<Vec<_>>()
-        }),
-        Some(environments.clone()),
+        resumed_turn
+            .environments
+            .iter()
+            .map(|environment| TurnEnvironmentSelection {
+                environment_id: environment
+                    .environment_id
+                    .clone()
+                    .expect("persisted environment should have an id"),
+                cwd: environment.cwd.clone(),
+            })
+            .collect::<Vec<_>>(),
+        environments.clone(),
     );
 
     let forked = manager
@@ -426,16 +428,18 @@ async fn resume_and_fork_preserve_persisted_sticky_environments() {
         .await
         .expect("build forked turn context");
     assert_eq!(
-        forked_turn.environments.as_ref().map(|environments| {
-            environments
-                .iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id.clone(),
-                    cwd: environment.cwd.clone(),
-                })
-                .collect::<Vec<_>>()
-        }),
-        Some(environments),
+        forked_turn
+            .environments
+            .iter()
+            .map(|environment| TurnEnvironmentSelection {
+                environment_id: environment
+                    .environment_id
+                    .clone()
+                    .expect("persisted environment should have an id"),
+                cwd: environment.cwd.clone(),
+            })
+            .collect::<Vec<_>>(),
+        environments,
     );
 }
 

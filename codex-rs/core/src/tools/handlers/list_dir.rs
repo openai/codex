@@ -99,7 +99,7 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
-        let read_deny_matcher = ReadDenyMatcher::new(&turn.file_system_sandbox_policy, &turn.cwd);
+        let read_deny_matcher = ReadDenyMatcher::new(&turn.file_system_sandbox_policy, turn.cwd());
         if read_deny_matcher
             .as_ref()
             .is_some_and(|matcher| matcher.is_read_denied(&path))

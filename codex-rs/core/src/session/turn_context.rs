@@ -11,6 +11,13 @@ pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManag
     )
 }
 
+fn multi_environment_tools_enabled(
+    features: &codex_features::Features,
+    environments: &[TurnEnvironment],
+) -> bool {
+    features.enabled(codex_features::Feature::MultiEnvironmentTools) && environments.len() > 1
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
@@ -29,9 +36,27 @@ impl TurnSkillsContext {
 #[derive(Clone, Debug)]
 pub(crate) struct TurnEnvironment {
     #[allow(dead_code)]
-    pub(crate) environment_id: String,
+    pub(crate) environment_id: Option<String>,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct SelectedTurnEnvironment {
+    pub(crate) environment_id: Option<String>,
+    pub(crate) environment: Arc<Environment>,
+    pub(crate) cwd: AbsolutePathBuf,
+}
+
+impl TurnEnvironment {
+    fn selected(&self) -> SelectedTurnEnvironment {
+        SelectedTurnEnvironment {
+            environment_id: self.environment_id.clone(),
+            environment: Arc::clone(&self.environment),
+            cwd: self.cwd.clone(),
+        }
+    }
 }
 
 /// The context needed for a single turn of the thread.
@@ -48,12 +73,8 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
-    pub(crate) environment: Option<Arc<Environment>>,
-    pub(crate) environments: Option<Vec<TurnEnvironment>>,
-    /// The session's absolute working directory. All relative paths provided
-    /// by the model as well as sandbox policies are resolved against this path
-    /// instead of `std::env::current_dir()`.
-    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) environments: Vec<TurnEnvironment>,
+    pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
@@ -138,6 +159,8 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
+        let multi_environment_tools =
+            multi_environment_tools_enabled(&features, &self.environments);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager
@@ -156,6 +179,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
+        .with_multi_environment_tools(multi_environment_tools)
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -178,9 +202,8 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
-            environment: self.environment.clone(),
             environments: self.environments.clone(),
-            cwd: self.cwd.clone(),
+            environment_selections: self.environment_selections.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
@@ -212,19 +235,56 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
-        path.as_ref()
-            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
+    pub(crate) fn cwd(&self) -> &AbsolutePathBuf {
+        &self.config.cwd
     }
 
-    pub(crate) fn file_system_sandbox_context(
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
+        path.as_ref()
+            .map_or_else(|| self.cwd().clone(), |path| self.cwd().join(path))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn primary_environment(&self) -> Option<SelectedTurnEnvironment> {
+        self.environments.first().map(TurnEnvironment::selected)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn environment_for_tool(
         &self,
+        environment_id: Option<&str>,
+    ) -> Option<SelectedTurnEnvironment> {
+        match environment_id {
+            Some(environment_id) => self
+                .environments
+                .iter()
+                .find(|environment| environment.environment_id.as_deref() == Some(environment_id))
+                .map(TurnEnvironment::selected),
+            None => self.primary_environment(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn resolve_path_for_environment(
+        &self,
+        environment: &SelectedTurnEnvironment,
+        path: Option<String>,
+    ) -> AbsolutePathBuf {
+        path.as_ref().map_or_else(
+            || environment.cwd.clone(),
+            |path| environment.cwd.join(path),
+        )
+    }
+
+    pub(crate) fn file_system_sandbox_context_for_cwd(
+        &self,
+        cwd: &AbsolutePathBuf,
         additional_permissions: Option<PermissionProfile>,
     ) -> FileSystemSandboxContext {
         FileSystemSandboxContext {
             sandbox_policy: self.sandbox_policy.get().clone(),
-            sandbox_policy_cwd: Some(self.cwd.clone()),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            sandbox_policy_cwd: Some(cwd.clone()),
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(cwd),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -235,15 +295,16 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(
+        &self,
+        cwd: &AbsolutePathBuf,
+    ) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
         // this comparison and the legacy projection should go away.
-        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            self.sandbox_policy.get(),
-            &self.cwd,
-        );
+        let legacy_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(self.sandbox_policy.get(), cwd);
         (self.file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then(|| self.file_system_sandbox_policy.clone())
     }
@@ -258,13 +319,14 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
-            cwd: self.cwd.to_path_buf(),
+            cwd: self.cwd().to_path_buf(),
+            environments: self.environment_selections.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(self.cwd()),
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
@@ -360,9 +422,8 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
-        environment: Option<Arc<Environment>>,
-        environments: Option<Vec<TurnEnvironment>>,
-        cwd: AbsolutePathBuf,
+        environments: Vec<TurnEnvironment>,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -378,6 +439,9 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let image_generation_tool_auth_allowed =
             image_generation_tool_auth_allowed(auth_manager.as_deref());
+        let multi_environment_tools =
+            multi_environment_tools_enabled(&per_turn_config.features, &environments);
+        let has_environment = !environments.is_empty();
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
@@ -398,7 +462,8 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(environment.is_some())
+        .with_has_environment(has_environment)
+        .with_multi_environment_tools(multi_environment_tools)
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -411,7 +476,7 @@ impl Session {
             conversation_id.to_string(),
             &session_source,
             sub_id.clone(),
-            cwd.clone(),
+            per_turn_config.cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
         ));
@@ -428,9 +493,8 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
-            environment,
             environments,
-            cwd,
+            environment_selections,
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
@@ -579,7 +643,7 @@ impl Session {
                 })?;
             let cwd = selected_environment.cwd;
             turn_environments.push(TurnEnvironment {
-                environment_id: selected_environment.environment_id,
+                environment_id: Some(selected_environment.environment_id),
                 environment,
                 cwd,
             });
@@ -626,7 +690,15 @@ impl Session {
             ));
         }
 
+        let mut seen_environment_ids = HashSet::new();
         for selected_environment in environments {
+            if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "duplicate turn environment id `{}`",
+                    selected_environment.environment_id
+                )));
+            }
+
             if environment_manager
                 .get_environment(&selected_environment.environment_id)
                 .is_none()
@@ -648,17 +720,38 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         turn_environments: Option<Vec<TurnEnvironment>>,
     ) -> Arc<TurnContext> {
+        let environment_selections = turn_environments.as_ref().map(|environments| {
+            environments
+                .iter()
+                .filter_map(|environment| {
+                    environment.environment_id.as_ref().map(|environment_id| {
+                        TurnEnvironmentSelection {
+                            environment_id: environment_id.clone(),
+                            cwd: environment.cwd.clone(),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
         // `None` means use the thread's default environment. `Some([])` is an
         // explicit no-environment turn, so do not fall back in that case.
-        let primary_turn_environment = turn_environments
-            .as_ref()
-            .and_then(|turn_environments| turn_environments.first());
-        let environment = match primary_turn_environment {
-            Some(turn_environment) => Some(Arc::clone(&turn_environment.environment)),
-            None if turn_environments.is_some() => None,
-            None => self.services.environment_manager.default_environment(),
+        let turn_environments = match turn_environments {
+            Some(turn_environments) => turn_environments,
+            None => self
+                .services
+                .environment_manager
+                .default_environment()
+                .map(|environment| {
+                    vec![TurnEnvironment {
+                        environment_id: None,
+                        environment,
+                        cwd: session_configuration.cwd.clone(),
+                    }]
+                })
+                .unwrap_or_default(),
         };
-        let cwd = primary_turn_environment
+        let cwd = turn_environments
+            .first()
             .map(|turn_environment| turn_environment.cwd.clone())
             .unwrap_or_else(|| session_configuration.cwd.clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
@@ -684,9 +777,9 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = environment
-            .as_ref()
-            .map(|environment| environment.get_filesystem());
+        let fs = turn_environments
+            .first()
+            .map(|environment| environment.environment.get_filesystem());
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
@@ -714,9 +807,8 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
-            environment,
             turn_environments,
-            cwd,
+            environment_selections,
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,

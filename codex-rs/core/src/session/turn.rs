@@ -549,7 +549,7 @@ pub(crate) async fn run_turn(
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
-                        cwd: turn_context.cwd.clone(),
+                        cwd: turn_context.cwd().clone(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
@@ -597,7 +597,7 @@ pub(crate) async fn run_turn(
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
-                            cwd: turn_context.cwd.clone(),
+                            cwd: turn_context.cwd().clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
                             hook_event: HookEvent::AfterAgent {
@@ -1038,7 +1038,7 @@ fn filter_deferred_dynamic_tool_spec(
     fields(
         turn_id = %turn_context.sub_id,
         model = %turn_context.model_info.slug,
-        cwd = %turn_context.cwd.display()
+        cwd = %turn_context.cwd().display()
     )
 )]
 async fn run_sampling_request(

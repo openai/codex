@@ -315,7 +315,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd().clone(),
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -342,7 +342,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": Some(turn_context.cwd().to_string_lossy().to_string()),
                     "timeout_ms": params.expiration.timeout_ms(),
                     "sandbox_permissions": params.sandbox_permissions,
                     "additional_permissions": PermissionProfile {
@@ -532,7 +532,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
                         "echo hi",
                     ],
                     "timeout_ms": 1_000_u64,
-                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "workdir": Some(turn_context.cwd().to_string_lossy().to_string()),
                 })
                 .to_string(),
             },

@@ -234,7 +234,7 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+                let cwd = resolve_workdir_base_path(&arguments, turn.cwd())?;
                 let params: ShellToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
@@ -348,7 +348,7 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
+        let cwd = resolve_workdir_base_path(&arguments, turn.cwd())?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
@@ -400,12 +400,12 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(environment) = turn.primary_environment() else {
             return Err(FunctionCallError::RespondToModel(
                 "shell is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
+        let fs = environment.environment.get_filesystem();
 
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
@@ -424,7 +424,7 @@ impl ShellHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             session.as_ref(),
-            turn.cwd.as_path(),
+            turn.cwd().as_path(),
             exec_params.sandbox_permissions,
             additional_permissions,
         )
@@ -475,6 +475,7 @@ impl ShellHandler {
             &exec_params.command,
             &exec_params.cwd,
             fs.as_ref(),
+            environment.clone(),
             session.clone(),
             turn.clone(),
             Some(&tracker),

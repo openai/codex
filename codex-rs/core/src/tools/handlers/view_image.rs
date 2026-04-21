@@ -29,6 +29,8 @@ const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
 struct ViewImageArgs {
     path: String,
     detail: Option<String>,
+    #[serde(default, alias = "environmentId")]
+    environment_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -87,17 +89,31 @@ impl ToolHandler for ViewImageHandler {
             }
         };
 
-        let abs_path = turn.resolve_path(Some(args.path));
-        let Some(environment) = turn.environment.as_ref() else {
-            return Err(FunctionCallError::RespondToModel(
-                "view_image is unavailable in this session".to_string(),
-            ));
+        let requested_environment_id = if turn.tools_config.multi_environment_tools {
+            args.environment_id.as_deref()
+        } else {
+            None
         };
-        let sandbox = environment
-            .is_remote()
-            .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
+        let tool_environment = turn
+            .environment_for_tool(requested_environment_id)
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(match requested_environment_id {
+                    Some(environment_id) => {
+                        format!("environment `{environment_id}` is unavailable in this session")
+                    }
+                    None => "view_image is unavailable in this session".to_string(),
+                })
+            })?;
+        let abs_path = turn.resolve_path_for_environment(&tool_environment, Some(args.path));
+        let sandbox = tool_environment.environment.is_remote().then(|| {
+            turn.file_system_sandbox_context_for_cwd(
+                &tool_environment.cwd,
+                /*additional_permissions*/ None,
+            )
+        });
 
-        let metadata = environment
+        let metadata = tool_environment
+            .environment
             .get_filesystem()
             .get_metadata(&abs_path, sandbox.as_ref())
             .await
@@ -114,7 +130,8 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = environment
+        let file_bytes = tool_environment
+            .environment
             .get_filesystem()
             .read_file(&abs_path, sandbox.as_ref())
             .await

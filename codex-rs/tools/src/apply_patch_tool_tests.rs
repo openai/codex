@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 #[test]
 fn create_apply_patch_freeform_tool_matches_expected_spec() {
     assert_eq!(
-        create_apply_patch_freeform_tool(),
+        create_apply_patch_freeform_tool(ApplyPatchToolOptions {
+            multi_environment_tools: false,
+        }),
         ToolSpec::Freeform(FreeformTool {
             name: "apply_patch".to_string(),
             description:
@@ -24,7 +26,9 @@ fn create_apply_patch_freeform_tool_matches_expected_spec() {
 #[test]
 fn create_apply_patch_json_tool_matches_expected_spec() {
     assert_eq!(
-        create_apply_patch_json_tool(),
+        create_apply_patch_json_tool(ApplyPatchToolOptions {
+            multi_environment_tools: false,
+        }),
         ToolSpec::Function(ResponsesApiTool {
             name: "apply_patch".to_string(),
             description: APPLY_PATCH_JSON_TOOL_DESCRIPTION.to_string(),
@@ -43,4 +47,32 @@ fn create_apply_patch_json_tool_matches_expected_spec() {
             output_schema: None,
         })
     );
+}
+
+#[test]
+fn create_apply_patch_freeform_tool_with_environment_matches_expected_spec() {
+    let ToolSpec::Freeform(tool) = create_apply_patch_freeform_tool(ApplyPatchToolOptions {
+        multi_environment_tools: true,
+    }) else {
+        panic!("apply_patch should be a freeform tool");
+    };
+    assert!(
+        tool.description
+            .contains("*** Environment: <environment_id>")
+    );
+    assert_eq!(tool.format.definition, APPLY_PATCH_ENVIRONMENT_LARK_GRAMMAR);
+}
+
+#[test]
+fn create_apply_patch_json_tool_with_environment_includes_environment_id() {
+    let ToolSpec::Function(tool) = create_apply_patch_json_tool(ApplyPatchToolOptions {
+        multi_environment_tools: true,
+    }) else {
+        panic!("apply_patch should be a function tool");
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .expect("apply_patch parameters should include properties");
+    assert!(properties.contains_key("environment_id"));
 }

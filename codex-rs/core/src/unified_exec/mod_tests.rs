@@ -6,6 +6,7 @@ use crate::sandboxing::ExecRequest;
 use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
@@ -24,6 +25,17 @@ use tokio::time::Instant;
 async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
     let (session, turn) = make_session_and_context().await;
     (Arc::new(session), Arc::new(turn))
+}
+
+fn set_primary_environment_for_tests(
+    turn: &mut TurnContext,
+    environment: Arc<codex_exec_server::Environment>,
+) {
+    turn.environments = vec![TurnEnvironment {
+        environment_id: None,
+        environment,
+        cwd: turn.cwd().clone(),
+    }];
 }
 
 async fn exec_command(
@@ -89,9 +101,10 @@ async fn exec_command_with_tty(
     let process_id = manager.allocate_process_id().await;
     let cwd = workdir
         .as_ref()
-        .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
+        .map_or_else(|| turn.cwd().clone(), |workdir| turn.cwd().join(workdir));
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+    let environment = turn.primary_environment().expect("turn environment");
 
     let process = Arc::new(
         manager
@@ -100,7 +113,7 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environment.as_ref().expect("turn environment"),
+                &environment.environment,
             )
             .await?,
     );
@@ -504,7 +517,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "exit 17".to_string()],
-        turn.cwd.clone(),
+        turn.cwd().clone(),
         shell_env(),
     );
 
@@ -595,16 +608,17 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    turn.environment = Some(Arc::new(remote_test_env.environment().clone()));
+    set_primary_environment_for_tests(&mut turn, Arc::new(remote_test_env.environment().clone()));
 
     let request = test_exec_request(
         &turn,
         vec!["bash".to_string(), "-lc".to_string(), "echo ok".to_string()],
-        turn.cwd.clone(),
+        turn.cwd().clone(),
         shell_env(),
     );
 
     let manager = UnifiedExecProcessManager::default();
+    let environment = turn.primary_environment().expect("turn environment");
     let err = manager
         .open_session_with_exec_env(
             /*process_id*/ 1234,
@@ -613,7 +627,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environment.as_ref().expect("turn environment"),
+            &environment.environment,
         )
         .await
         .expect_err("expected inherited fd rejection");

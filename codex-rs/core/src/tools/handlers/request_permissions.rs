@@ -38,7 +38,7 @@ impl ToolHandler for RequestPermissionsHandler {
         };
 
         let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, &turn.cwd)?;
+            parse_arguments_with_base_path(&arguments, turn.cwd())?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;

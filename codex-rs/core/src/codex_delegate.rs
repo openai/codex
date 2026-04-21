@@ -533,7 +533,7 @@ async fn handle_patch_approval(
     let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
         let files = changes
             .keys()
-            .map(|path| parent_ctx.cwd.join(path))
+            .map(|path| parent_ctx.cwd().join(path))
             .collect::<Vec<_>>();
         let review_cancel = cancel_token.child_token();
         let patch = changes
@@ -569,7 +569,7 @@ async fn handle_patch_approval(
             new_guardian_review_id(),
             GuardianApprovalRequest::ApplyPatch {
                 id: approval_id.clone(),
-                cwd: parent_ctx.cwd.clone(),
+                cwd: parent_ctx.cwd().clone(),
                 files,
                 patch,
             },
@@ -740,7 +740,7 @@ async fn handle_request_permissions(
         reason: event.reason,
         permissions: event.permissions,
     };
-    let cwd = event.cwd.unwrap_or_else(|| parent_ctx.cwd.clone());
+    let cwd = event.cwd.unwrap_or_else(|| parent_ctx.cwd().clone());
     let response_fut = parent_session.request_permissions_for_cwd(
         parent_ctx,
         call_id.clone(),
