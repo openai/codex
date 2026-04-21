@@ -27,7 +27,11 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
 
     // Make direct HTTP request to ChatGPT backend API with the token
     let client = create_client();
-    let url = format!("{chatgpt_base_url}{path}");
+    let url = format!(
+        "{}/{}",
+        chatgpt_base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
 
     let token =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;

@@ -212,6 +212,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
+use codex_chatgpt::workspace_settings;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
@@ -752,6 +753,18 @@ impl CodexMessageProcessor {
                 message: format!("failed to reload config: {err}"),
                 data: None,
             })
+    }
+
+    async fn workspace_codex_plugins_enabled(config: &Config, auth: Option<&CodexAuth>) -> bool {
+        match workspace_settings::codex_plugins_enabled_for_workspace(config, auth).await {
+            Ok(enabled) => enabled,
+            Err(err) => {
+                warn!(
+                    "failed to fetch workspace Codex plugins setting; allowing Codex plugins: {err:#}"
+                );
+                true
+            }
+        }
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -5377,6 +5390,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let auth = self.auth_manager.auth().await;
+        let workspace_codex_plugins_enabled =
+            Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await;
 
         let data = FEATURES
             .iter()
@@ -5411,7 +5427,9 @@ impl CodexMessageProcessor {
                     display_name,
                     description,
                     announcement,
-                    enabled: config.features.enabled(spec.id),
+                    enabled: config.features.enabled(spec.id)
+                        && (workspace_codex_plugins_enabled
+                            || !matches!(spec.id, Feature::Apps | Feature::Plugins)),
                     default_enabled: spec.default_enabled,
                 }
             })
@@ -6220,6 +6238,19 @@ impl CodexMessageProcessor {
             return;
         }
 
+        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    AppsListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         tokio::spawn(async move {
@@ -6459,6 +6490,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let auth = self.auth_manager.auth().await;
+        let workspace_codex_plugins_enabled =
+            Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = match self.thread_manager.environment_manager().current().await {
@@ -6520,7 +6554,7 @@ impl CodexMessageProcessor {
             let effective_skill_roots = plugins_manager
                 .effective_skill_roots_for_layer_stack(
                     &config_layer_stack,
-                    config.features.enabled(Feature::Plugins),
+                    config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled,
                 )
                 .await;
             let skills_input = codex_core::skills::SkillsLoadInput::new(
@@ -6588,7 +6622,6 @@ impl CodexMessageProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams { cwds } = params;
         let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
         let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
@@ -6598,6 +6631,22 @@ impl CodexMessageProcessor {
             }
         };
         let auth = self.auth_manager.auth().await;
+
+        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    PluginListResponse {
+                        marketplaces: Vec::new(),
+                        marketplace_load_errors: Vec::new(),
+                        featured_plugin_ids: Vec::new(),
+                    },
+                )
+                .await;
+            return;
+        }
+
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
