@@ -42,6 +42,101 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     }
 }
 
+fn normalize_windows_path_for_compare(path: &str) -> String {
+    let normalized = path.trim().replace('/', "\\");
+    if normalized.len() <= 3 {
+        return normalized.to_ascii_lowercase();
+    }
+    normalized
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn path_is_within_windows_root(path: &str, root: &str) -> bool {
+    let path = normalize_windows_path_for_compare(path);
+    let root = normalize_windows_path_for_compare(root);
+    if root.is_empty() || !path.starts_with(&root) {
+        return false;
+    }
+    path.len() == root.len() || path.as_bytes().get(root.len()) == Some(&b'\\')
+}
+
+fn split_windows_drive(path: &str) -> Option<(String, String)> {
+    if path.as_bytes().get(1) != Some(&b':') {
+        return None;
+    }
+    let drive = path[..2].to_string();
+    let rest = match path.get(2..) {
+        Some("") | None => "\\".to_string(),
+        Some(rest) => rest.to_string(),
+    };
+    Some((drive, rest))
+}
+
+fn default_roaming_appdata(userprofile: &str) -> String {
+    format!(r"{userprofile}\AppData\Roaming")
+}
+
+fn default_local_appdata(userprofile: &str) -> String {
+    format!(r"{userprofile}\AppData\Local")
+}
+
+fn sanitize_windows_profile_env_with_current(
+    env_map: &mut HashMap<String, String>,
+    current_userprofile: Option<String>,
+    current_appdata: Option<String>,
+    current_localappdata: Option<String>,
+    current_temp: Option<String>,
+    current_tmp: Option<String>,
+) {
+    let Some(current_userprofile) = current_userprofile.filter(|value| !value.trim().is_empty())
+    else {
+        return;
+    };
+
+    let original_userprofile = env_map.get("USERPROFILE").cloned();
+    let appdata = current_appdata.unwrap_or_else(|| default_roaming_appdata(&current_userprofile));
+    let localappdata =
+        current_localappdata.unwrap_or_else(|| default_local_appdata(&current_userprofile));
+
+    env_map.insert("USERPROFILE".into(), current_userprofile.clone());
+    env_map.insert("HOME".into(), current_userprofile.clone());
+    if let Some((drive, homedir)) = split_windows_drive(&current_userprofile) {
+        env_map.insert("HOMEDRIVE".into(), drive);
+        env_map.insert("HOMEPATH".into(), homedir);
+    }
+    env_map.insert("APPDATA".into(), appdata);
+    env_map.insert("LOCALAPPDATA".into(), localappdata);
+    if let Some(temp) = current_temp {
+        env_map.insert("TEMP".into(), temp);
+    }
+    if let Some(tmp) = current_tmp {
+        env_map.insert("TMP".into(), tmp);
+    }
+
+    if let Some(original_userprofile) = original_userprofile
+        && !original_userprofile.eq_ignore_ascii_case(&current_userprofile)
+        && let Some(path) = env_map.get_mut("PATH")
+    {
+        let filtered: Vec<&str> = path
+            .split(';')
+            .filter(|entry| !path_is_within_windows_root(entry, &original_userprofile))
+            .collect();
+        *path = filtered.join(";");
+    }
+}
+
+pub fn sanitize_windows_profile_env(env_map: &mut HashMap<String, String>) {
+    sanitize_windows_profile_env_with_current(
+        env_map,
+        env::var("USERPROFILE").ok(),
+        env::var("APPDATA").ok(),
+        env::var("LOCALAPPDATA").ok(),
+        env::var("TEMP").ok(),
+        env::var("TMP").ok(),
+    );
+}
+
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
     let existing = env_map
         .get("PATH")
@@ -171,4 +266,107 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_windows_profile_env_with_current;
+    use std::collections::HashMap;
+
+    #[test]
+    fn rewrites_profile_vars_and_filters_host_profile_path_entries() {
+        let mut env_map = HashMap::from([
+            ("USERPROFILE".to_string(), r"C:\Users\andre".to_string()),
+            ("HOME".to_string(), r"C:\Users\andre".to_string()),
+            ("APPDATA".to_string(), r"C:\Users\andre\AppData\Roaming".to_string()),
+            (
+                "LOCALAPPDATA".to_string(),
+                r"C:\Users\andre\AppData\Local".to_string(),
+            ),
+            ("TEMP".to_string(), r"C:\Users\andre\AppData\Local\Temp".to_string()),
+            ("TMP".to_string(), r"C:\Users\andre\AppData\Local\Temp".to_string()),
+            (
+                "PATH".to_string(),
+                [
+                    r"C:\Windows\System32",
+                    r"C:\Users\andre\AppData\Local\Microsoft\WindowsApps",
+                    r"C:\Users\andre\AppData\Roaming\npm",
+                    r"D:\tools",
+                ]
+                .join(";"),
+            ),
+        ]);
+
+        sanitize_windows_profile_env_with_current(
+            &mut env_map,
+            Some(r"C:\Users\CodexSandboxOffline".to_string()),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Roaming".to_string()),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local".to_string()),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local\Temp".to_string()),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local\Temp".to_string()),
+        );
+
+        assert_eq!(
+            env_map.get("USERPROFILE").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline")
+        );
+        assert_eq!(
+            env_map.get("HOME").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline")
+        );
+        assert_eq!(env_map.get("HOMEDRIVE").map(String::as_str), Some("C:"));
+        assert_eq!(
+            env_map.get("HOMEPATH").map(String::as_str),
+            Some(r"\Users\CodexSandboxOffline")
+        );
+        assert_eq!(
+            env_map.get("APPDATA").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Roaming")
+        );
+        assert_eq!(
+            env_map.get("LOCALAPPDATA").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local")
+        );
+        assert_eq!(
+            env_map.get("TEMP").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local\Temp")
+        );
+        assert_eq!(
+            env_map.get("PATH").map(String::as_str),
+            Some(r"C:\Windows\System32;D:\tools")
+        );
+    }
+
+    #[test]
+    fn leaves_path_unchanged_when_userprofile_already_matches() {
+        let mut env_map = HashMap::from([
+            ("USERPROFILE".to_string(), r"C:\Users\CodexSandboxOffline".to_string()),
+            (
+                "PATH".to_string(),
+                [r"C:\Windows\System32", r"C:\Users\CodexSandboxOffline\bin"].join(";"),
+            ),
+        ]);
+
+        sanitize_windows_profile_env_with_current(
+            &mut env_map,
+            Some(r"C:\Users\CodexSandboxOffline".to_string()),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            env_map.get("PATH").map(String::as_str),
+            Some(r"C:\Windows\System32;C:\Users\CodexSandboxOffline\bin")
+        );
+        assert_eq!(
+            env_map.get("APPDATA").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Roaming")
+        );
+        assert_eq!(
+            env_map.get("LOCALAPPDATA").map(String::as_str),
+            Some(r"C:\Users\CodexSandboxOffline\AppData\Local")
+        );
+    }
 }
