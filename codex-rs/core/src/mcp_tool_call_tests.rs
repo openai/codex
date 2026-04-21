@@ -668,7 +668,7 @@ fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
     );
 
     assert_eq!(
-        with_mcp_tool_call_thread_id_meta(None, "thread-live"),
+        with_mcp_tool_call_thread_id_meta(/*meta*/ None, "thread-live"),
         Some(serde_json::json!({
             "threadId": "thread-live",
         }))
