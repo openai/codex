@@ -22,12 +22,6 @@ use crate::protocol::HttpRequestResponse;
 /// Maximum queued body frames per streamed executor HTTP response.
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: usize = 256;
 
-#[derive(Clone)]
-pub(super) struct HttpBodyStreamRoute {
-    tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
-    failure: Arc<StdMutex<Option<String>>>,
-}
-
 /// Request-scoped stream of body chunks for an executor HTTP response.
 ///
 /// The initial `http/request` call returns status and headers. This stream then
@@ -42,97 +36,6 @@ pub struct HttpResponseBodyStream {
     // Terminal frames can carry a final chunk; return that once, then EOF.
     pending_eof: bool,
     closed: bool,
-}
-
-impl HttpBodyStreamRoute {
-    /// Creates an active route that delivers body deltas to the caller.
-    fn active(
-        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
-        failure: Arc<StdMutex<Option<String>>>,
-    ) -> Self {
-        Self { tx, failure }
-    }
-
-    /// Sends one body delta to the caller.
-    fn try_send(
-        &self,
-        delta: HttpRequestBodyDeltaNotification,
-    ) -> Result<(), TrySendError<HttpRequestBodyDeltaNotification>> {
-        self.tx.try_send(delta)
-    }
-
-    /// Records a terminal failure that the stream sees after queued chunks.
-    fn set_failure(&self, message: String) {
-        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
-    }
-}
-
-impl ExecServerClient {
-    /// Performs an executor-side HTTP request and buffers the response body.
-    pub async fn http_request(
-        &self,
-        mut params: HttpRequestParams,
-    ) -> Result<HttpRequestResponse, ExecServerError> {
-        params.stream_response = false;
-        params.request_id = None;
-        self.call_http_request(&params).await
-    }
-
-    /// Performs an executor-side HTTP request and returns a body stream.
-    ///
-    /// The method sets `stream_response` and replaces any caller-supplied
-    /// `request_id` with a connection-local id, so late deltas from abandoned
-    /// streams cannot be confused with later requests.
-    pub async fn http_request_stream(
-        &self,
-        mut params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
-        params.stream_response = true;
-        let request_id = self.inner.next_http_body_stream_request_id();
-        params.request_id = Some(request_id.clone());
-        let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
-        let failure = Arc::new(StdMutex::new(None));
-        self.inner
-            .insert_http_body_stream(
-                request_id.clone(),
-                HttpBodyStreamRoute::active(tx, Arc::clone(&failure)),
-            )
-            .await?;
-        let mut registration = HttpBodyStreamRegistration {
-            inner: Arc::clone(&self.inner),
-            request_id: request_id.clone(),
-            active: true,
-        };
-        let response = match self.call_http_request(&params).await {
-            Ok(response) => response,
-            Err(error) => {
-                self.inner.remove_http_body_stream(&request_id).await;
-                registration.active = false;
-                return Err(error);
-            }
-        };
-        registration.active = false;
-        Ok((
-            response,
-            HttpResponseBodyStream {
-                inner: Arc::clone(&self.inner),
-                request_id,
-                next_seq: 1,
-                rx,
-                failure,
-                pending_eof: false,
-                closed: false,
-            },
-        ))
-    }
-
-    /// Sends an executor HTTP request after the caller has chosen buffering or streaming.
-    async fn call_http_request(
-        &self,
-        params: &HttpRequestParams,
-    ) -> Result<HttpRequestResponse, ExecServerError> {
-        self.call(HTTP_REQUEST_METHOD, params).await
-    }
 }
 
 impl HttpResponseBodyStream {
@@ -214,6 +117,35 @@ impl Drop for HttpResponseBodyStream {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct HttpBodyStreamRoute {
+    tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
+    failure: Arc<StdMutex<Option<String>>>,
+}
+
+impl HttpBodyStreamRoute {
+    /// Creates an active route that delivers body deltas to the caller.
+    fn active(
+        tx: mpsc::Sender<HttpRequestBodyDeltaNotification>,
+        failure: Arc<StdMutex<Option<String>>>,
+    ) -> Self {
+        Self { tx, failure }
+    }
+
+    /// Sends one body delta to the caller.
+    fn try_send(
+        &self,
+        delta: HttpRequestBodyDeltaNotification,
+    ) -> Result<(), TrySendError<HttpRequestBodyDeltaNotification>> {
+        self.tx.try_send(delta)
+    }
+
+    /// Records a terminal failure that the stream sees after queued chunks.
+    fn set_failure(&self, message: String) {
+        *self.failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(message);
+    }
+}
+
 /// Active route registration owned while `http_request_stream` awaits headers.
 struct HttpBodyStreamRegistration {
     inner: Arc<Inner>,
@@ -227,6 +159,74 @@ impl Drop for HttpBodyStreamRegistration {
         if self.active {
             spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
         }
+    }
+}
+
+impl ExecServerClient {
+    /// Performs an executor-side HTTP request and buffers the response body.
+    pub async fn http_request(
+        &self,
+        mut params: HttpRequestParams,
+    ) -> Result<HttpRequestResponse, ExecServerError> {
+        params.stream_response = false;
+        params.request_id = None;
+        self.call_http_request(&params).await
+    }
+
+    /// Performs an executor-side HTTP request and returns a body stream.
+    ///
+    /// The method sets `stream_response` and replaces any caller-supplied
+    /// `request_id` with a connection-local id, so late deltas from abandoned
+    /// streams cannot be confused with later requests.
+    pub async fn http_request_stream(
+        &self,
+        mut params: HttpRequestParams,
+    ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
+        params.stream_response = true;
+        let request_id = self.inner.next_http_body_stream_request_id();
+        params.request_id = Some(request_id.clone());
+        let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
+        let failure = Arc::new(StdMutex::new(None));
+        self.inner
+            .insert_http_body_stream(
+                request_id.clone(),
+                HttpBodyStreamRoute::active(tx, Arc::clone(&failure)),
+            )
+            .await?;
+        let mut registration = HttpBodyStreamRegistration {
+            inner: Arc::clone(&self.inner),
+            request_id: request_id.clone(),
+            active: true,
+        };
+        let response = match self.call_http_request(&params).await {
+            Ok(response) => response,
+            Err(error) => {
+                self.inner.remove_http_body_stream(&request_id).await;
+                registration.active = false;
+                return Err(error);
+            }
+        };
+        registration.active = false;
+        Ok((
+            response,
+            HttpResponseBodyStream {
+                inner: Arc::clone(&self.inner),
+                request_id,
+                next_seq: 1,
+                rx,
+                failure,
+                pending_eof: false,
+                closed: false,
+            },
+        ))
+    }
+
+    /// Sends an executor HTTP request after the caller has chosen buffering or streaming.
+    async fn call_http_request(
+        &self,
+        params: &HttpRequestParams,
+    ) -> Result<HttpRequestResponse, ExecServerError> {
+        self.call(HTTP_REQUEST_METHOD, params).await
     }
 }
 
