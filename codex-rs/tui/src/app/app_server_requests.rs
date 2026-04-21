@@ -558,6 +558,7 @@ mod tests {
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
+                        glob_scan_max_depth: None,
                         entries: None,
                     }),
                 },
@@ -654,6 +655,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     call_id: "tool-1".to_string(),
+                    namespace: None,
                     tool: "tool".to_string(),
                     arguments: json!({}),
                 },

@@ -22,6 +22,8 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the terminal title.
@@ -68,20 +70,16 @@ impl TerminalTitleItem {
         }
     }
 
-    /// Example text used when previewing the title picker.
-    ///
-    /// These are illustrative sample values, not live data from the current
-    /// session.
-    pub(crate) fn preview_example(self) -> &'static str {
+    pub(crate) fn preview_item(self) -> Option<StatusSurfacePreviewItem> {
         match self {
-            TerminalTitleItem::AppName => "codex",
-            TerminalTitleItem::Project => "my-project",
-            TerminalTitleItem::Spinner => "⠋",
-            TerminalTitleItem::Status => "Working",
-            TerminalTitleItem::Thread => "Investigate flaky test",
-            TerminalTitleItem::GitBranch => "feat/awesome-feature",
-            TerminalTitleItem::Model => "gpt-5.2-codex",
-            TerminalTitleItem::TaskProgress => "Tasks 2/5",
+            TerminalTitleItem::AppName => Some(StatusSurfacePreviewItem::AppName),
+            TerminalTitleItem::Project => Some(StatusSurfacePreviewItem::ProjectName),
+            TerminalTitleItem::Spinner => None,
+            TerminalTitleItem::Status => Some(StatusSurfacePreviewItem::Status),
+            TerminalTitleItem::Thread => Some(StatusSurfacePreviewItem::ThreadTitle),
+            TerminalTitleItem::GitBranch => Some(StatusSurfacePreviewItem::GitBranch),
+            TerminalTitleItem::Model => Some(StatusSurfacePreviewItem::Model),
+            TerminalTitleItem::TaskProgress => Some(StatusSurfacePreviewItem::TaskProgress),
         }
     }
 
@@ -100,6 +98,39 @@ impl TerminalTitleItem {
             }
             Some(_) => " | ",
         }
+    }
+}
+
+pub(crate) fn preview_line_for_title_items(
+    items: &[TerminalTitleItem],
+    preview_data: &StatusSurfacePreviewData,
+) -> Option<Line<'static>> {
+    let mut previous = None;
+    let preview = items
+        .iter()
+        .copied()
+        .fold(String::new(), |mut preview, item| {
+            if item == TerminalTitleItem::Spinner {
+                preview.push_str(item.separator_from_previous(previous));
+                preview.push('⠋');
+                previous = Some(item);
+                return preview;
+            }
+            let Some(value) = item
+                .preview_item()
+                .and_then(|preview_item| preview_data.value_for(preview_item))
+            else {
+                return preview;
+            };
+            preview.push_str(item.separator_from_previous(previous));
+            preview.push_str(value);
+            previous = Some(item);
+            preview
+        });
+    if preview.is_empty() {
+        None
+    } else {
+        Some(Line::from(preview))
     }
 }
 
@@ -128,7 +159,11 @@ impl TerminalTitleSetupView {
     /// main TUI still warns about them when rendering the actual title, but the
     /// picker itself only exposes the selectable items it can meaningfully
     /// preview and persist.
-    pub(crate) fn new(title_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        title_items: Option<&[String]>,
+        preview_data: StatusSurfacePreviewData,
+        app_event_tx: AppEventSender,
+    ) -> Self {
         let selected_items = title_items
             .into_iter()
             .flatten()
@@ -161,25 +196,14 @@ impl TerminalTitleSetupView {
             ])
             .items(items)
             .enable_ordering()
-            .on_preview(|items| {
+            .on_preview(move |items| {
                 let items = parse_terminal_title_items(
                     items
                         .iter()
                         .filter(|item| item.enabled)
                         .map(|item| item.id.as_str()),
                 )?;
-                let mut preview = String::new();
-                let mut previous = None;
-                for item in items.iter().copied() {
-                    preview.push_str(item.separator_from_previous(previous));
-                    preview.push_str(item.preview_example());
-                    previous = Some(item);
-                }
-                if preview.is_empty() {
-                    None
-                } else {
-                    Some(Line::from(preview))
-                }
+                preview_line_for_title_items(&items, &preview_data)
             })
             .on_change(|items, app_event| {
                 let Some(items) = parse_terminal_title_items(
@@ -243,49 +267,7 @@ impl Renderable for TerminalTitleSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    fn render_lines(view: &TerminalTitleSetupView, width: u16) -> String {
-        let height = view.desired_height(width);
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        view.render(area, &mut buf);
-
-        let lines: Vec<String> = (0..area.height)
-            .map(|row| {
-                let mut line = String::new();
-                for col in 0..area.width {
-                    let symbol = buf[(area.x + col, area.y + row)].symbol();
-                    if symbol.is_empty() {
-                        line.push(' ');
-                    } else {
-                        line.push_str(symbol);
-                    }
-                }
-                line
-            })
-            .collect();
-        lines.join("\n")
-    }
-
-    #[test]
-    fn renders_title_setup_popup() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let selected = [
-            "project".to_string(),
-            "spinner".to_string(),
-            "status".to_string(),
-            "thread".to_string(),
-        ];
-        let view = TerminalTitleSetupView::new(Some(&selected), tx);
-        assert_snapshot!(
-            "terminal_title_setup_basic",
-            render_lines(&view, /*width*/ 84)
-        );
-    }
 
     #[test]
     fn parse_terminal_title_items_preserves_order() {

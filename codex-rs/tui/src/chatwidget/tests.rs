@@ -277,6 +277,7 @@ mod side;
 mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
+mod status_surface_previews;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;

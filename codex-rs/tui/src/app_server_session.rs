@@ -145,6 +145,7 @@ pub(crate) struct AppServerSession {
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
     pub(crate) forked_from_id: Option<ThreadId>,
+    pub(crate) fork_parent_title: Option<String>,
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
@@ -376,7 +377,12 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_resume_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
@@ -398,13 +404,43 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_fork_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
+        }
+    }
+
+    async fn fork_parent_title_from_app_server(
+        &mut self,
+        forked_from_id: Option<&str>,
+    ) -> Option<String> {
+        let forked_from_id = forked_from_id?;
+        let forked_from_id = match ThreadId::from_string(forked_from_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::warn!("Failed to parse fork parent thread id from app server: {err}");
+                return None;
+            }
+        };
+
+        match self
+            .thread_read(forked_from_id, /*include_turns*/ false)
+            .await
+        {
+            Ok(thread) => thread.name,
+            Err(err) => {
+                tracing::warn!("Failed to read fork parent metadata from app server: {err}");
+                None
+            }
         }
     }
 
@@ -1265,6 +1301,7 @@ async fn thread_session_state_from_thread_response(
     Ok(ThreadSessionState {
         thread_id,
         forked_from_id,
+        fork_parent_title: None,
         thread_name,
         model,
         model_provider_id,

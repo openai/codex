@@ -879,6 +879,7 @@ mod tests {
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
                                         read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
+                                        glob_scan_max_depth: None,
                                         entries: None,
                                     },
                                 ),
@@ -942,6 +943,7 @@ mod tests {
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
                                         read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
+                                        glob_scan_max_depth: None,
                                         entries: None,
                                     },
                                 ),
