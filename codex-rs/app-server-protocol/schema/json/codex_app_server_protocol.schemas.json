@@ -7,6 +7,15 @@
     },
     "AdditionalFileSystemPermissions": {
       "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/FileSystemSandboxEntry"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "read": {
           "items": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
@@ -673,6 +682,30 @@
             "params"
           ],
           "title": "Marketplace/addRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/remove"
+              ],
+              "title": "Marketplace/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MarketplaceRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/removeRequest",
           "type": "object"
         },
         {
@@ -1447,6 +1480,30 @@
             },
             "method": {
               "enum": [
+                "account/sendAddCreditsNudgeEmail"
+              ],
+              "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SendAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/sendAddCreditsNudgeEmailRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -2202,6 +2259,217 @@
       ],
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
+    },
+    "FileSystemAccessMode": {
+      "enum": [
+        "read",
+        "write",
+        "none"
+      ],
+      "type": "string"
+    },
+    "FileSystemPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "path"
+              ],
+              "title": "PathFileSystemPathType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "PathFileSystemPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "glob_pattern"
+              ],
+              "title": "GlobPatternFileSystemPathType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "title": "GlobPatternFileSystemPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "special"
+              ],
+              "title": "SpecialFileSystemPathType",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/FileSystemSpecialPath"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "title": "SpecialFileSystemPath",
+          "type": "object"
+        }
+      ]
+    },
+    "FileSystemSandboxEntry": {
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        "path": {
+          "$ref": "#/definitions/FileSystemPath"
+        }
+      },
+      "required": [
+        "access",
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileSystemSpecialPath": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "root"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "RootFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "minimal"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "MinimalFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "current_working_directory"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "project_roots"
+              ],
+              "type": "string"
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "tmpdir"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "TmpdirFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "slash_tmp"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "SlashTmpFileSystemSpecialPath",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "FuzzyFileSearchMatchType": {
       "enum": [
@@ -4026,6 +4294,26 @@
           "properties": {
             "method": {
               "enum": [
+                "item/fileChange/patchUpdated"
+              ],
+              "title": "Item/fileChange/patchUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FileChangePatchUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/patchUpdatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "serverRequest/resolved"
               ],
               "title": "ServerRequest/resolvedNotificationMethod",
@@ -5102,6 +5390,20 @@
         },
         "title": "AccountUpdatedNotification",
         "type": "object"
+      },
+      "AddCreditsNudgeCreditType": {
+        "enum": [
+          "credits",
+          "usage_limit"
+        ],
+        "type": "string"
+      },
+      "AddCreditsNudgeEmailStatus": {
+        "enum": [
+          "sent",
+          "cooldown_active"
+        ],
+        "type": "string"
       },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7135,6 +7437,16 @@
           },
           {
             "properties": {
+              "detail": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ImageDetail"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "image_url": {
                 "type": "string"
               },
@@ -7691,6 +8003,34 @@
           "turnId"
         ],
         "title": "FileChangeOutputDeltaNotification",
+        "type": "object"
+      },
+      "FileChangePatchUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/definitions/v2/FileUpdateChange"
+            },
+            "type": "array"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "FileChangePatchUpdatedNotification",
         "type": "object"
       },
       "FileUpdateChange": {
@@ -9283,6 +9623,42 @@
           "marketplacePath",
           "message"
         ],
+        "type": "object"
+      },
+      "MarketplaceRemoveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName"
+        ],
+        "title": "MarketplaceRemoveParams",
+        "type": "object"
+      },
+      "MarketplaceRemoveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "installedRoot": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "marketplaceName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName"
+        ],
+        "title": "MarketplaceRemoveResponse",
         "type": "object"
       },
       "McpAuthStatus": {
@@ -12271,6 +12647,32 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "SendAddCreditsNudgeEmailParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "creditType": {
+            "$ref": "#/definitions/v2/AddCreditsNudgeCreditType"
+          }
+        },
+        "required": [
+          "creditType"
+        ],
+        "title": "SendAddCreditsNudgeEmailParams",
+        "type": "object"
+      },
+      "SendAddCreditsNudgeEmailResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/AddCreditsNudgeEmailStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "SendAddCreditsNudgeEmailResponse",
         "type": "object"
       },
       "ServerRequestResolvedNotification": {

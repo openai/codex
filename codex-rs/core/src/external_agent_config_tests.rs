@@ -1290,6 +1290,49 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
 }
 
 #[tokio::test]
+async fn detect_home_infers_claude_official_marketplace_when_missing_from_settings() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "sample@claude-plugins-official": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(external_agent_home.clone(), codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Migrate enabled plugins from {}",
+                external_agent_home.join("settings.json").display()
+            ),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "claude-plugins-official".to_string(),
+                    plugin_names: vec!["sample".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let marketplace_root = external_agent_home.join("my-marketplace");
@@ -1360,6 +1403,46 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
     let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
     assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
     assert!(config.contains("enabled = true"));
+}
+
+#[tokio::test]
+async fn import_plugins_infers_claude_official_marketplace_when_missing_from_settings() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "sample@claude-plugins-official": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(external_agent_home, codex_home)
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "claude-plugins-official".to_string(),
+                    plugin_names: vec!["sample".to_string()],
+                }],
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["claude-plugins-official".to_string()],
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: vec!["sample@claude-plugins-official".to_string()],
+        }
+    );
 }
 
 #[tokio::test]

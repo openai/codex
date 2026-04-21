@@ -41,6 +41,8 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -81,6 +83,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -135,6 +138,7 @@ pub(crate) struct AppServerSession {
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
     pub(crate) forked_from_id: Option<ThreadId>,
+    pub(crate) fork_parent_title: Option<String>,
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
@@ -366,7 +370,12 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_resume_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
@@ -388,13 +397,43 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_fork_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
+        }
+    }
+
+    async fn fork_parent_title_from_app_server(
+        &mut self,
+        forked_from_id: Option<&str>,
+    ) -> Option<String> {
+        let forked_from_id = forked_from_id?;
+        let forked_from_id = match ThreadId::from_string(forked_from_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::warn!("Failed to parse fork parent thread id from app server: {err}");
+                return None;
+            }
+        };
+
+        match self
+            .thread_read(forked_from_id, /*include_turns*/ false)
+            .await
+        {
+            Ok(thread) => thread.name,
+            Err(err) => {
+                tracing::warn!("Failed to read fork parent metadata from app server: {err}");
+                None
+            }
         }
     }
 
@@ -443,6 +482,29 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_inject_items(
+        &mut self,
+        thread_id: ThreadId,
+        items: Vec<ResponseItem>,
+    ) -> Result<ThreadInjectItemsResponse> {
+        let items = items
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .wrap_err("failed to encode thread/inject_items payload")?;
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadInjectItems {
+                request_id,
+                params: ThreadInjectItemsParams {
+                    thread_id: thread_id.to_string(),
+                    items,
+                },
+            })
+            .await
+            .wrap_err("thread/inject_items failed during TUI side conversation setup")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -997,6 +1059,8 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions: config.base_instructions.clone(),
+        developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1176,6 +1240,7 @@ async fn thread_session_state_from_thread_response(
     Ok(ThreadSessionState {
         thread_id,
         forked_from_id,
+        fork_parent_title: None,
         thread_name,
         model,
         model_provider_id,
@@ -1358,6 +1423,28 @@ mod tests {
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
+    }
+
+    #[tokio::test]
+    async fn thread_fork_params_forward_instruction_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.base_instructions = Some("Base override.".to_string());
+        config.developer_instructions = Some("Developer override.".to_string());
+        let thread_id = ThreadId::new();
+
+        let params = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
+        assert_eq!(
+            params.developer_instructions.as_deref(),
+            Some("Developer override.")
+        );
     }
 
     #[tokio::test]

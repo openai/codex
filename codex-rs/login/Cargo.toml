@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -20,6 +21,8 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
+crypto_box = { workspace = true }
+ed25519-dalek = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
@@ -42,7 +45,6 @@ urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }
 core_test_support = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }

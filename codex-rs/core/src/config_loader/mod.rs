@@ -9,6 +9,8 @@ use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::ThreadConfigContext;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_exec_server::ExecutorFileSystem;
@@ -127,7 +129,11 @@ pub async fn load_config_layers_state(
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: &dyn ThreadConfigLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let ignore_user_config = overrides.ignore_user_config;
+    let ignore_user_and_project_exec_policy_rules =
+        overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -157,6 +163,15 @@ pub async fn load_config_layers_state(
         loaded_config_layers.clone(),
     )
     .await?;
+
+    let thread_config_context = ThreadConfigContext {
+        thread_id: None,
+        cwd: cwd.clone(),
+    };
+    let thread_config_layers = thread_config_loader
+        .load_config_layers(thread_config_context)
+        .await
+        .map_err(io::Error::other)?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
@@ -189,19 +204,28 @@ pub async fn load_config_layers_state(
         .await?;
     layers.push(system_layer);
 
-    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
-    // exists, but is malformed, then this error should be propagated to the
-    // user.
+    // Add a layer for $CODEX_HOME/config.toml so folder-derived resources such
+    // as rules/ can still be discovered. When user config is ignored, preserve
+    // the layer metadata without reading config.toml.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    let user_layer = load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
+    let user_layer = if ignore_user_config {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: user_file.clone(),
             },
-            config_toml,
+            TomlValue::Table(toml::map::Map::new()),
         )
-    })
-    .await?;
+    } else {
+        load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                config_toml,
+            )
+        })
+        .await?
+    };
     layers.push(user_layer);
 
     if let Some(cwd) = cwd {
@@ -271,6 +295,10 @@ pub async fn load_config_layers_state(
         ));
     }
 
+    for thread_config_layer in thread_config_layers {
+        insert_layer_by_precedence(&mut layers, thread_config_layer);
+    }
+
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // config layer on top of everything else. For fields in
     // `managed_config.toml` that do not have an equivalent in
@@ -312,11 +340,22 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(
+    Ok(ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
-    )
+    )?
+    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+}
+
+fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
+    match layers
+        .iter()
+        .position(|existing| existing.name.precedence() > layer.name.precedence())
+    {
+        Some(index) => layers.insert(index, layer),
+        None => layers.push(layer),
+    }
 }
 
 /// Attempts to load a config.toml file from `config_toml`.

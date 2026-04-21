@@ -114,6 +114,20 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
+    "AddCreditsNudgeCreditType": {
+      "enum": [
+        "credits",
+        "usage_limit"
+      ],
+      "type": "string"
+    },
+    "AddCreditsNudgeEmailStatus": {
+      "enum": [
+        "sent",
+        "cooldown_active"
+      ],
+      "type": "string"
+    },
     "AgentMessageDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -1264,6 +1278,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/remove"
+              ],
+              "title": "Marketplace/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -2020,6 +2058,30 @@
             "method"
           ],
           "title": "Account/rateLimits/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/sendAddCreditsNudgeEmail"
+              ],
+              "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SendAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/sendAddCreditsNudgeEmailRequest",
           "type": "object"
         },
         {
@@ -3712,6 +3774,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -4268,6 +4340,34 @@
         "turnId"
       ],
       "title": "FileChangeOutputDeltaNotification",
+      "type": "object"
+    },
+    "FileChangePatchUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/definitions/FileUpdateChange"
+          },
+          "type": "array"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "changes",
+        "itemId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "FileChangePatchUpdatedNotification",
       "type": "object"
     },
     "FileUpdateChange": {
@@ -6015,6 +6115,42 @@
         "marketplacePath",
         "message"
       ],
+      "type": "object"
+    },
+    "MarketplaceRemoveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName"
+      ],
+      "title": "MarketplaceRemoveParams",
+      "type": "object"
+    },
+    "MarketplaceRemoveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "installedRoot": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "marketplaceName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName"
+      ],
+      "title": "MarketplaceRemoveResponse",
       "type": "object"
     },
     "McpAuthStatus": {
@@ -9005,6 +9141,32 @@
       },
       "type": "object"
     },
+    "SendAddCreditsNudgeEmailParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "creditType": {
+          "$ref": "#/definitions/AddCreditsNudgeCreditType"
+        }
+      },
+      "required": [
+        "creditType"
+      ],
+      "title": "SendAddCreditsNudgeEmailParams",
+      "type": "object"
+    },
+    "SendAddCreditsNudgeEmailResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SendAddCreditsNudgeEmailResponse",
+      "type": "object"
+    },
     "ServerNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Notification sent from the server to the client.",
@@ -9510,6 +9672,26 @@
             "params"
           ],
           "title": "Item/fileChange/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/fileChange/patchUpdated"
+              ],
+              "title": "Item/fileChange/patchUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FileChangePatchUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/patchUpdatedNotification",
           "type": "object"
         },
         {

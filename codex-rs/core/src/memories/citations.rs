@@ -42,16 +42,12 @@ pub fn parse_memory_citation(citations: Vec<String>) -> Option<MemoryCitation> {
     }
 }
 
-pub fn get_thread_id_from_citations(citations: Vec<String>) -> Vec<ThreadId> {
-    let mut result = Vec::new();
-    if let Some(memory_citation) = parse_memory_citation(citations) {
-        for rollout_id in memory_citation.rollout_ids {
-            if let Ok(thread_id) = ThreadId::try_from(rollout_id.as_str()) {
-                result.push(thread_id);
-            }
-        }
-    }
-    result
+pub fn thread_ids_from_memory_citation(memory_citation: &MemoryCitation) -> Vec<ThreadId> {
+    memory_citation
+        .rollout_ids
+        .iter()
+        .filter_map(|id| ThreadId::try_from(id.as_str()).ok())
+        .collect()
 }
 
 fn parse_memory_citation_entry(line: &str) -> Option<MemoryCitationEntry> {
