@@ -25,11 +25,9 @@ struct RemoteExecProcess {
 }
 
 impl RemoteProcess {
-    pub(crate) fn new(websocket_url: String) -> Self {
+    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
         trace!("remote process new");
-        Self {
-            client: LazyRemoteExecServerClient::new(websocket_url),
-        }
+        Self { client }
     }
 }
 

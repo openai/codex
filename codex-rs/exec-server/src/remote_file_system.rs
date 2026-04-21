@@ -32,11 +32,9 @@ pub(crate) struct RemoteFileSystem {
 }
 
 impl RemoteFileSystem {
-    pub(crate) fn new(websocket_url: String) -> Self {
+    pub(crate) fn new(client: LazyRemoteExecServerClient) -> Self {
         trace!("remote fs new");
-        Self {
-            client: LazyRemoteExecServerClient::new(websocket_url),
-        }
+        Self { client }
     }
 }
 
