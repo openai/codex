@@ -1782,7 +1782,9 @@ impl CodexMessageProcessor {
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) =
-                        if include_token && permanent_refresh_failure {
+                        if matches!(auth, CodexAuth::AgentIdentity(_))
+                            || include_token && permanent_refresh_failure
+                        {
                             (Some(auth_mode), None)
                         } else {
                             match auth.get_token() {
@@ -1834,7 +1836,9 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                CoreAuthMode::Chatgpt
+                | CoreAuthMode::ChatgptAuthTokens
+                | CoreAuthMode::AgentIdentity => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 

@@ -30,6 +30,11 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// Programmatic Codex auth backed by a registered Agent Identity.
+    #[serde(rename = "agentIdentity")]
+    #[ts(rename = "agentIdentity")]
+    #[strum(serialize = "agentIdentity")]
+    AgentIdentity,
 }
 
 macro_rules! experimental_reason_expr {

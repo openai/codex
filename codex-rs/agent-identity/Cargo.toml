@@ -20,6 +20,7 @@ codex-protocol = { workspace = true }
 crypto_box = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
