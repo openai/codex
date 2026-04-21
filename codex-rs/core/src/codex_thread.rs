@@ -102,26 +102,11 @@ impl CodexThread {
         goal_status: ThreadGoalStatus,
         should_continue_active_goal: bool,
     ) {
-        match goal_status {
-            ThreadGoalStatus::Active if should_continue_active_goal => {
-                self.codex
-                    .session
-                    .clear_queued_goal_continuations_for_next_turn()
-                    .await;
-                self.codex
-                    .session
-                    .maybe_start_turn_for_active_goal_continuation()
-                    .await;
-            }
-            ThreadGoalStatus::Active => {}
-            ThreadGoalStatus::BudgetLimited
-            | ThreadGoalStatus::Paused
-            | ThreadGoalStatus::Complete => {
-                self.codex
-                    .session
-                    .clear_queued_goal_continuations_for_next_turn()
-                    .await;
-            }
+        if goal_status == ThreadGoalStatus::Active && should_continue_active_goal {
+            self.codex
+                .session
+                .maybe_start_turn_for_active_goal_continuation()
+                .await;
         }
     }
 

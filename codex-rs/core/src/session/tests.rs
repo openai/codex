@@ -6169,44 +6169,6 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
-async fn user_input_turn_drops_queued_goal_continuation() {
-    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let queued_goal_continuation = ResponseInputItem::Message {
-        role: "developer".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "Continue working toward the active thread goal.".to_string(),
-        }],
-    };
-    let queued_user_item = ResponseInputItem::Message {
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "queued before wake".to_string(),
-        }],
-    };
-    sess.queue_response_items_for_next_turn(vec![
-        queued_goal_continuation,
-        queued_user_item.clone(),
-    ])
-    .await;
-    let input = vec![UserInput::Text {
-        text: "fresh user request".to_string(),
-        text_elements: Vec::new(),
-    }];
-
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-
-    assert_eq!(sess.get_pending_input().await, vec![queued_user_item]);
-}
-
-#[tokio::test]
 async fn interrupt_pauses_active_goal_and_prevents_continuation() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -6240,8 +6202,8 @@ async fn interrupt_pauses_active_goal_and_prevents_continuation() -> anyhow::Res
         goal.status
     );
 
-    sess.queue_goal_continuation_if_active().await;
-    assert!(!sess.has_queued_response_items_for_next_turn().await);
+    sess.maybe_start_turn_for_active_goal_continuation().await;
+    assert!(!sess.has_active_turn().await);
 
     Ok(())
 }
@@ -6285,7 +6247,7 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn inactive_goal_does_not_start_stale_queued_continuation() -> anyhow::Result<()> {
+async fn inactive_goal_does_not_start_continuation() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
@@ -6296,11 +6258,6 @@ async fn inactive_goal_does_not_start_stale_queued_continuation() -> anyhow::Res
         },
     )
     .await?;
-    sess.queue_goal_continuation_if_active().await;
-    assert!(
-        sess.has_queued_response_items_for_next_turn().await,
-        "active goal should queue a continuation"
-    );
 
     let state_db = sess
         .thread_goal_state_db
@@ -6321,16 +6278,12 @@ async fn inactive_goal_does_not_start_stale_queued_continuation() -> anyhow::Res
     sess.maybe_start_turn_for_active_goal_continuation().await;
 
     assert!(!sess.has_active_turn().await);
-    assert!(
-        !sess.has_queued_response_items_for_next_turn().await,
-        "inactive goals should clear stale continuation input"
-    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_continuation_without_tool_calls_does_not_requeue_itself() -> anyhow::Result<()> {
+async fn goal_continuation_without_tool_calls_suppresses_next_continuation() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
@@ -6341,11 +6294,6 @@ async fn goal_continuation_without_tool_calls_does_not_requeue_itself() -> anyho
         },
     )
     .await?;
-    sess.queue_goal_continuation_if_active().await;
-    assert!(
-        sess.has_queued_response_items_for_next_turn().await,
-        "active goal should queue a continuation"
-    );
 
     sess.spawn_task(
         Arc::clone(&tc),
@@ -6356,18 +6304,22 @@ async fn goal_continuation_without_tool_calls_does_not_requeue_itself() -> anyho
         },
     )
     .await;
-    assert!(
-        !sess.has_queued_response_items_for_next_turn().await,
-        "starting the continuation turn should drain queued continuation input"
-    );
+    let turn_state = {
+        let active = sess.active_turn.lock().await;
+        active
+            .as_ref()
+            .expect("turn should be active")
+            .turn_state
+            .clone()
+    };
+    turn_state.lock().await.started_from_goal_continuation = true;
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
     tokio::task::yield_now().await;
-    sess.queue_goal_continuation_if_active().await;
 
     assert!(
-        !sess.has_queued_response_items_for_next_turn().await,
+        sess.goal_continuation_items_if_active().await.is_none(),
         "a continuation turn that made no tool calls should wait for new input"
     );
 
@@ -6380,10 +6332,9 @@ async fn goal_continuation_without_tool_calls_does_not_requeue_itself() -> anyho
         },
     )
     .await?;
-    sess.queue_goal_continuation_if_active().await;
 
     assert!(
-        sess.has_queued_response_items_for_next_turn().await,
+        sess.goal_continuation_items_if_active().await.is_some(),
         "mutating the goal should allow continuation again"
     );
 
@@ -7316,6 +7267,7 @@ async fn create_goal_tool_rejects_existing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal-1".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -7334,6 +7286,7 @@ async fn create_goal_tool_rejects_existing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "create-goal-2".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -7378,6 +7331,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -7396,6 +7350,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "pause-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),
@@ -7438,6 +7393,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
@@ -7456,6 +7412,7 @@ async fn update_goal_tool_marks_goal_complete() {
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
             tracker,
             call_id: "complete-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),

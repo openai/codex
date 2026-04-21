@@ -63,6 +63,11 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
+enum TurnStartupInput {
+    PendingWork,
+    GoalContinuation(Vec<ResponseInputItem>),
+}
+
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
@@ -249,7 +254,8 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task(turn_context, input, task, TurnStartupInput::PendingWork)
+            .await;
     }
 
     /// Starts a task in the current turn, moving queued next-turn and mailbox input into the
@@ -259,6 +265,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         task: T,
+        startup_input: TurnStartupInput,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -278,23 +285,19 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let mut queued_response_items = self.take_queued_response_items_for_next_turn().await;
-        if !input.is_empty() {
-            queued_response_items.retain(|item| !crate::goals::is_goal_continuation_item(item));
-        }
-        let mailbox_items = self.get_pending_input().await;
-        let started_from_goal_continuation = queued_response_items
-            .iter()
-            .chain(mailbox_items.iter())
-            .any(crate::goals::is_goal_continuation_item);
-        let has_non_goal_pending_input = queued_response_items
-            .iter()
-            .chain(mailbox_items.iter())
-            .any(|item| !crate::goals::is_goal_continuation_item(item));
-        if !input.is_empty() || has_non_goal_pending_input {
-            self.goal_continuation_suppressed
-                .store(false, Ordering::SeqCst);
-        }
+        let (startup_pending_input, started_from_goal_continuation) = match startup_input {
+            TurnStartupInput::PendingWork => {
+                let mut startup_pending_input =
+                    self.take_queued_response_items_for_next_turn().await;
+                startup_pending_input.extend(self.get_pending_input().await);
+                if !input.is_empty() || !startup_pending_input.is_empty() {
+                    self.goal_continuation_suppressed
+                        .store(false, Ordering::SeqCst);
+                }
+                (startup_pending_input, false)
+            }
+            TurnStartupInput::GoalContinuation(items) => (items, true),
+        };
 
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -303,10 +306,7 @@ impl Session {
             let mut turn_state = turn.turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
             turn_state.started_from_goal_continuation = started_from_goal_continuation;
-            for item in queued_response_items {
-                turn_state.push_pending_input(item);
-            }
-            for item in mailbox_items {
+            for item in startup_pending_input {
                 turn_state.push_pending_input(item);
             }
         }
@@ -385,20 +385,37 @@ impl Session {
             .await;
     }
 
-    /// Starts queued user/mailbox work first; if that leaves the session idle, queues an active
-    /// goal continuation through the same pending-work path and tries again.
+    /// Starts queued user/mailbox work first; if that leaves the session idle, starts a goal
+    /// continuation turn directly.
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
-        self.clear_stale_goal_continuations_for_next_turn().await;
         self.maybe_start_turn_for_pending_work().await;
-        self.queue_goal_continuation_if_active().await;
-        self.maybe_start_turn_for_pending_work().await;
+        self.maybe_start_turn_for_active_goal_continuation().await;
     }
 
-    /// Queues an active goal continuation and starts a regular turn for it if the session is idle.
+    /// Starts a regular turn for an active goal if the session is idle.
     pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
-        self.clear_stale_goal_continuations_for_next_turn().await;
-        self.queue_goal_continuation_if_active().await;
-        self.maybe_start_turn_for_pending_work().await;
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        let Some(items) = self.goal_continuation_items_if_active().await else {
+            return;
+        };
+        {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return;
+            }
+            *active_turn = Some(ActiveTurn::default());
+        }
+
+        let turn_context = self.new_default_turn().await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        self.start_task(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            TurnStartupInput::GoalContinuation(items),
+        )
+        .await;
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
@@ -427,14 +444,18 @@ impl Session {
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        self.start_task(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            TurnStartupInput::PendingWork,
+        )
+        .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         self.abort_all_tasks_without_restart(reason.clone()).await;
         if reason == TurnAbortReason::Interrupted {
-            self.clear_queued_goal_continuations_for_next_turn().await;
             self.maybe_start_turn_for_pending_work().await;
         }
     }
@@ -494,14 +515,11 @@ impl Session {
         };
 
         if let Some((tasks, turn_state)) = active_turn {
-            let mut startup_pending_input = if tasks.is_empty() {
+            let startup_pending_input = if tasks.is_empty() {
                 turn_state.lock().await.take_pending_input()
             } else {
                 Vec::new()
             };
-            if reason == TurnAbortReason::Replaced {
-                startup_pending_input.retain(|item| !crate::goals::is_goal_continuation_item(item));
-            }
             self.queue_response_items_for_next_turn(startup_pending_input)
                 .await;
 

@@ -173,9 +173,6 @@ async fn handle_update_goal(
         .get_thread_goal()
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    session
-        .clear_queued_goal_continuations_for_next_turn()
-        .await;
     goal_response(goal)
 }
 
