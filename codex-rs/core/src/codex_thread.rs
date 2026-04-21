@@ -24,6 +24,7 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -103,23 +104,56 @@ impl CodexThread {
         goal_status: ThreadGoalStatus,
         should_continue_active_goal: bool,
     ) {
-        if goal_status == ThreadGoalStatus::Active && should_continue_active_goal {
-            self.codex
-                .session
-                .goal_continuation_suppressed
-                .store(false, Ordering::SeqCst);
-            self.codex
-                .session
-                .maybe_start_turn_for_active_goal_continuation()
-                .await;
+        match goal_status {
+            ThreadGoalStatus::Active => {
+                if should_continue_active_goal {
+                    self.codex
+                        .session
+                        .goal_continuation_suppressed
+                        .store(false, Ordering::SeqCst);
+                    self.codex
+                        .session
+                        .maybe_start_turn_for_active_goal_continuation()
+                        .await;
+                }
+            }
+            ThreadGoalStatus::BudgetLimited => {
+                if !self.codex.session.has_active_turn().await {
+                    self.codex
+                        .session
+                        .clear_stopped_thread_goal_runtime_state()
+                        .await;
+                }
+            }
+            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
+                self.codex
+                    .session
+                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                    .await;
+                self.codex
+                    .session
+                    .clear_stopped_thread_goal_runtime_state()
+                    .await;
+            }
         }
     }
 
     pub async fn apply_goal_clear_runtime_effects(&self) {
         self.codex
             .session
+            .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+            .await;
+        self.codex
+            .session
             .clear_cached_thread_goal_after_delete()
             .await;
+    }
+
+    pub async fn account_thread_goal_before_external_mutation(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .account_thread_goal_before_external_mutation()
+            .await
     }
 
     #[doc(hidden)]

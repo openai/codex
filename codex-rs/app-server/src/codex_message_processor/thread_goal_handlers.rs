@@ -74,6 +74,17 @@ impl CodexMessageProcessor {
         )
         .await;
 
+        if let Some(thread) = running_thread.as_ref()
+            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to account thread goal progress before update: {err}"),
+            )
+            .await;
+            return;
+        }
+
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let thread_state = thread_state.lock().await;
@@ -307,6 +318,17 @@ impl CodexMessageProcessor {
             /*new_thread_memory_mode*/ None,
         )
         .await;
+
+        if let Some(thread) = running_thread.as_ref()
+            && let Err(err) = thread.account_thread_goal_before_external_mutation().await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to account thread goal progress before clear: {err}"),
+            )
+            .await;
+            return;
+        }
 
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;

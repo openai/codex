@@ -54,6 +54,7 @@ static BUDGET_LIMIT_PROMPT_TEMPLATE: LazyLock<Template> =
             Err(err) => panic!("embedded goals/budget_limit.md template is invalid: {err}"),
         },
     );
+const GOAL_CONTINUATION_PROMPT_PREFIX: &str = "Continue working toward the active thread goal.";
 
 #[derive(Clone, Copy)]
 pub(crate) enum BudgetLimitSteering {
@@ -440,14 +441,37 @@ impl Session {
     }
 
     pub(crate) async fn clear_cached_thread_goal_after_delete(&self) {
-        self.goal_continuation_suppressed
-            .store(false, Ordering::SeqCst);
         self.thread_goal_may_exist.store(false, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = None;
+        self.clear_stopped_thread_goal_runtime_state().await;
+    }
+
+    pub(crate) async fn clear_stopped_thread_goal_runtime_state(&self) {
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
+        if let Some(turn_context) = self.active_turn_context().await {
+            turn_context
+                .goal_accounting
+                .lock()
+                .await
+                .clear_active_goal();
+        }
         self.thread_goal_wall_clock_accounting
             .lock()
             .await
             .clear_active_goal();
+        self.idle_pending_input.lock().await.retain(|item| {
+            !matches!(
+                item,
+                ResponseInputItem::Message { role, content }
+                    if role == "developer"
+                        && matches!(
+                            content.as_slice(),
+                            [ContentItem::InputText { text }]
+                                if text.starts_with(GOAL_CONTINUATION_PROMPT_PREFIX)
+                        )
+            )
+        });
     }
 
     async fn clear_active_goal_accounting(&self, turn_context: &TurnContext) {
@@ -460,6 +484,15 @@ impl Session {
             .lock()
             .await
             .clear_active_goal();
+    }
+
+    async fn active_turn_context(&self) -> Option<Arc<TurnContext>> {
+        let active = self.active_turn.lock().await;
+        active
+            .as_ref()?
+            .tasks
+            .first()
+            .map(|(_, task)| Arc::clone(&task.turn_context))
     }
 
     pub(crate) async fn mark_thread_goal_turn_started(
@@ -611,6 +644,27 @@ impl Session {
                 tracing::debug!("skipping budget-limit goal steering because no turn is active");
             }
         }
+        Ok(())
+    }
+
+    pub(crate) async fn account_thread_goal_before_external_mutation(&self) -> anyhow::Result<()> {
+        if let Some(turn_context) = self.active_turn_context().await {
+            return self
+                .account_thread_goal_progress(
+                    turn_context.as_ref(),
+                    BudgetLimitSteering::Suppressed,
+                )
+                .await;
+        }
+
+        let Some(state_db) = self.state_db_for_thread_goals().await? else {
+            return Ok(());
+        };
+        self.account_thread_goal_wall_clock_usage(
+            &state_db,
+            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+        )
+        .await?;
         Ok(())
     }
 
