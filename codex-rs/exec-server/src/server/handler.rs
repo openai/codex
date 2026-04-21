@@ -1,12 +1,18 @@
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::ExecServerRuntimePaths;
+use crate::http_request::PendingHttpBodyStream;
 use crate::http_request::run_http_request;
+use crate::http_request::stream_http_body;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -34,15 +40,23 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
 use crate::server::session_registry::SessionRegistry;
 
+#[derive(Default)]
+struct HttpBodyStreamRegistry {
+    reserved_ids: HashMap<String, Option<JoinHandle<()>>>,
+    pending: VecDeque<PendingHttpBodyStream>,
+}
+
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
     session: StdMutex<Option<SessionHandle>>,
+    http_body_streams: Mutex<HttpBodyStreamRegistry>,
     file_system: FileSystemHandler,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -58,6 +72,7 @@ impl ExecServerHandler {
             session_registry,
             notifications,
             session: StdMutex::new(None),
+            http_body_streams: Mutex::new(HttpBodyStreamRegistry::default()),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -65,6 +80,16 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
+        let mut http_body_streams = self.http_body_streams.lock().await;
+        for task in http_body_streams
+            .reserved_ids
+            .drain()
+            .filter_map(|(_, task)| task)
+        {
+            task.abort();
+        }
+        http_body_streams.pending.clear();
+        drop(http_body_streams);
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -155,7 +180,54 @@ impl ExecServerHandler {
         params: HttpRequestParams,
     ) -> Result<HttpRequestResponse, JSONRPCErrorError> {
         self.require_initialized_for("http")?;
-        run_http_request(params, self.notifications.clone()).await
+        let request_id = if params.stream_response {
+            Some(params.request_id.clone().ok_or_else(|| {
+                invalid_params("http/request streamResponse requires requestId".to_string())
+            })?)
+        } else {
+            None
+        };
+        if let Some(request_id) = request_id.as_deref() {
+            self.reserve_http_body_stream(request_id).await?;
+        }
+        match run_http_request(params).await {
+            Ok((response, pending_stream)) => {
+                if let Some(pending_stream) = pending_stream {
+                    let mut http_body_streams = self.http_body_streams.lock().await;
+                    http_body_streams.pending.push_back(pending_stream);
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                if let Some(request_id) = request_id.as_deref() {
+                    self.release_http_body_stream(request_id).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn start_pending_http_body_streams(self: &Arc<Self>) {
+        let pending_streams = {
+            let mut http_body_streams = self.http_body_streams.lock().await;
+            http_body_streams.pending.drain(..).collect::<Vec<_>>()
+        };
+        for pending_stream in pending_streams {
+            let request_id = pending_stream.request_id.clone();
+            let finished_request_id = request_id.clone();
+            let handler = Arc::clone(self);
+            let notifications = self.notifications.clone();
+            let task = tokio::spawn(async move {
+                stream_http_body(pending_stream, notifications).await;
+                handler.release_http_body_stream(&finished_request_id).await;
+            });
+            let mut http_body_streams = self.http_body_streams.lock().await;
+            if let Some(entry) = http_body_streams.reserved_ids.get_mut(&request_id) {
+                *entry = Some(task);
+            } else {
+                task.abort();
+            }
+        }
     }
 
     pub(crate) async fn fs_read_file(
@@ -252,6 +324,24 @@ impl ExecServerHandler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
+        let mut http_body_streams = self.http_body_streams.lock().await;
+        if http_body_streams.reserved_ids.contains_key(request_id) {
+            return Err(invalid_params(format!(
+                "http/request streamResponse requestId `{request_id}` is already active"
+            )));
+        }
+        http_body_streams
+            .reserved_ids
+            .insert(request_id.to_string(), None);
+        Ok(())
+    }
+
+    async fn release_http_body_stream(&self, request_id: &str) {
+        let mut http_body_streams = self.http_body_streams.lock().await;
+        http_body_streams.reserved_ids.remove(request_id);
     }
 }
 

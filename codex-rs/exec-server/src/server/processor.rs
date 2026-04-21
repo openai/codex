@@ -106,6 +106,7 @@ async fn run_connection(
                         if outgoing_tx.send(message).await.is_err() {
                             break;
                         }
+                        handler.start_pending_http_body_streams().await;
                     } else if outgoing_tx
                         .send(RpcServerOutboundMessage::Error {
                             request_id: request.id,

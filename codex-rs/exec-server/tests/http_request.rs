@@ -5,6 +5,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -13,6 +14,7 @@ use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestBodyDeltaNotification;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
+use codex_exec_server::HttpRequestTimeout;
 use codex_exec_server::InitializeParams;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
@@ -25,6 +27,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 /// HTTP request captured by the ad-hoc TCP server in these integration tests.
@@ -59,7 +62,7 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
                     value: "buffered".to_string(),
                 }],
                 body: Some(b"request-body".to_vec().into()),
-                timeout_ms: Some(5_000),
+                timeout_ms: HttpRequestTimeout::Millis(5_000),
                 request_id: None,
                 stream_response: false,
             })?,
@@ -128,7 +131,7 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
                     value: "text/event-stream".to_string(),
                 }],
                 body: None,
-                timeout_ms: Some(5_000),
+                timeout_ms: HttpRequestTimeout::Millis(5_000),
                 request_id: Some("stream-1".to_string()),
                 stream_response: true,
             })?,
@@ -157,9 +160,15 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
     )
     .await?;
 
-    // Phase 4: assert the JSON-RPC response contains status and headers but no
+    // Phase 4: assert the JSON-RPC response reaches the wire before any body
+    // delta notifications, and that it contains status and headers but no
     // buffered body when streaming is requested.
-    let response: HttpRequestResponse = wait_for_response(&mut server, http_request_id).await?;
+    let first_event = server.next_event().await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = first_event else {
+        anyhow::bail!("expected http/request response before body deltas, got {first_event:?}");
+    };
+    assert_eq!(id, http_request_id);
+    let response: HttpRequestResponse = serde_json::from_value(result)?;
     assert_eq!(
         (
             response.status,
@@ -183,6 +192,153 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
         (seqs, body, terminal),
         (expected_seqs, b"hello world".to_vec(), Some((true, None)))
     );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// What this tests: streamed `requestId`s stay reserved until the body stream
+/// finishes, so a second in-flight request cannot reuse the same id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!(
+        "http://{}/mcp?case=duplicate-stream-id",
+        listener.local_addr()?
+    );
+    let first_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: url.clone(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: HttpRequestTimeout::None,
+                request_id: Some("stream-dup".to_string()),
+                stream_response: true,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&listener).await?;
+    let (finish_tx, finish_rx) = oneshot::channel();
+    let response_task = tokio::spawn(async move {
+        respond_with_chunked_body_until_finish(captured.stream, &[], &[b"hello"], finish_rx).await
+    });
+
+    let _: HttpRequestResponse = wait_for_response(&mut server, first_request_id).await?;
+
+    let duplicate_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url,
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: HttpRequestTimeout::Default,
+                request_id: Some("stream-dup".to_string()),
+                stream_response: true,
+            })?,
+        )
+        .await?;
+
+    let duplicate_response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &duplicate_request_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Error(JSONRPCError { error, .. }) = duplicate_response else {
+        anyhow::bail!("expected duplicate requestId error response");
+    };
+    assert_eq!(error.code, -32602);
+    assert_eq!(
+        error.message,
+        "http/request streamResponse requestId `stream-dup` is already active"
+    );
+
+    finish_tx
+        .send(())
+        .expect("response task should still be waiting");
+    response_task.await??;
+    let _ = collect_response_body_deltas(&mut server, "stream-dup").await?;
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// What this tests: `timeoutMs: null` disables the executor deadline, while an
+/// explicit short timeout still fails the same delayed response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_honors_nullable_timeout() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    initialize_exec_server(&mut server).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let delayed_url = format!(
+        "http://{}/mcp?case=nullable-timeout",
+        listener.local_addr()?
+    );
+    let no_timeout_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: delayed_url.clone(),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: HttpRequestTimeout::None,
+                request_id: None,
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&listener).await?;
+    let delayed_response = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        respond_with_status_and_headers(captured.stream, "200 OK", &[], b"slow-success").await
+    });
+    let response: HttpRequestResponse =
+        wait_for_response(&mut server, no_timeout_request_id).await?;
+    assert_eq!(response.body.into_inner(), b"slow-success".to_vec());
+    delayed_response.await??;
+
+    let timeout_request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: delayed_url,
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: HttpRequestTimeout::Millis(10),
+                request_id: None,
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&listener).await?;
+    let delayed_timeout_response = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        respond_with_status_and_headers(captured.stream, "200 OK", &[], b"too-late").await
+    });
+    let error = wait_for_error_response(&mut server, timeout_request_id).await?;
+    assert_eq!(error.code, -32603);
+    assert!(
+        error.message.starts_with("http/request failed: "),
+        "unexpected timeout error: {}",
+        error.message
+    );
+    delayed_timeout_response.await??;
 
     server.shutdown().await?;
     Ok(())
@@ -226,6 +382,25 @@ where
         anyhow::bail!("expected JSON-RPC response for {request_id:?}");
     };
     Ok(serde_json::from_value(result)?)
+}
+
+/// Waits for a JSON-RPC error with the requested id.
+async fn wait_for_error_response(
+    server: &mut ExecServerHarness,
+    request_id: RequestId,
+) -> anyhow::Result<codex_app_server_protocol::JSONRPCErrorError> {
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &request_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Error(JSONRPCError { error, .. }) = response else {
+        anyhow::bail!("expected JSON-RPC error for {request_id:?}");
+    };
+    Ok(error)
 }
 
 /// Accepts one HTTP/1.1 request and captures its wire-visible fields.
@@ -309,6 +484,35 @@ async fn respond_with_chunked_body(
         stream.write_all(b"\r\n").await?;
         stream.flush().await?;
     }
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+/// Writes a chunked response and keeps the stream open until the test allows EOF.
+async fn respond_with_chunked_body_until_finish(
+    mut stream: TcpStream,
+    headers: &[(&str, &str)],
+    chunks: &[&[u8]],
+    finish_rx: oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ntransfer-encoding: chunked\r\nconnection: close\r\n{extra_headers}\r\n",
+    );
+    stream.write_all(response.as_bytes()).await?;
+    for chunk in chunks {
+        stream
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await?;
+        stream.write_all(chunk).await?;
+        stream.write_all(b"\r\n").await?;
+        stream.flush().await?;
+    }
+    finish_rx.await?;
     stream.write_all(b"0\r\n\r\n").await?;
     stream.flush().await?;
     Ok(())

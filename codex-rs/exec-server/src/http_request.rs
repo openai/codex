@@ -20,6 +20,7 @@ use crate::protocol::HttpHeader;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::HttpRequestResponse;
+use crate::protocol::HttpRequestTimeout;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
@@ -27,14 +28,18 @@ use crate::rpc::invalid_params;
 /// Default timeout for executor HTTP requests when the protocol omits one.
 const DEFAULT_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub(crate) struct PendingHttpBodyStream {
+    pub(crate) request_id: String,
+    response: reqwest::Response,
+}
+
 /// Runs one executor HTTP request and returns the JSON-RPC response payload.
 ///
 /// When `stream_response` is set, the returned body is empty and the response
 /// bytes are emitted as ordered `http/request/bodyDelta` notifications.
 pub(crate) async fn run_http_request(
     params: HttpRequestParams,
-    notifications: RpcNotificationSender,
-) -> Result<HttpRequestResponse, JSONRPCErrorError> {
+) -> Result<(HttpRequestResponse, Option<PendingHttpBodyStream>), JSONRPCErrorError> {
     let method = Method::from_bytes(params.method.as_bytes())
         .map_err(|err| invalid_params(format!("http/request method is invalid: {err}")))?;
     let url = Url::parse(&params.url)
@@ -55,15 +60,20 @@ pub(crate) async fn run_http_request(
     } else {
         None
     };
-    let timeout = params
-        .timeout_ms
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_HTTP_REQUEST_TIMEOUT);
     let headers = build_headers(params.headers)?;
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
-        .map_err(|err| internal_error(format!("failed to build http/request client: {err}")))?;
+    let client = {
+        let client_builder = match params.timeout_ms {
+            HttpRequestTimeout::Default => {
+                reqwest::Client::builder().timeout(DEFAULT_HTTP_REQUEST_TIMEOUT)
+            }
+            HttpRequestTimeout::None => reqwest::Client::builder(),
+            HttpRequestTimeout::Millis(timeout_ms) => {
+                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
+            }
+        };
+        client_builder.build()
+    }
+    .map_err(|err| internal_error(format!("failed to build http/request client: {err}")))?;
 
     let mut request = client.request(method, url).headers(headers);
     if let Some(body) = params.body {
@@ -78,26 +88,31 @@ pub(crate) async fn run_http_request(
     let headers = response_headers(response.headers());
 
     if let Some(request_id) = request_id {
-        // The JSON-RPC response carries status and headers; the body follows as
-        // ordered notifications so callers can begin parsing streaming content
-        // without waiting for the server to close the HTTP response.
-        spawn_body_stream(request_id, response, notifications);
-        return Ok(HttpRequestResponse {
-            status,
-            headers,
-            body: Vec::new().into(),
-        });
+        return Ok((
+            HttpRequestResponse {
+                status,
+                headers,
+                body: Vec::new().into(),
+            },
+            Some(PendingHttpBodyStream {
+                request_id,
+                response,
+            }),
+        ));
     }
 
     let body = response.bytes().await.map_err(|err| {
         internal_error(format!("failed to read http/request response body: {err}"))
     })?;
 
-    Ok(HttpRequestResponse {
-        status,
-        headers,
-        body: body.to_vec().into(),
-    })
+    Ok((
+        HttpRequestResponse {
+            status,
+            headers,
+            body: body.to_vec().into(),
+        },
+        None,
+    ))
 }
 
 /// Converts protocol headers into a reqwest header map while preserving repeats.
@@ -130,63 +145,64 @@ fn response_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
         .collect()
 }
 
-/// Spawns the task that bridges a reqwest byte stream to JSON-RPC notifications.
-fn spawn_body_stream(
-    request_id: String,
-    response: reqwest::Response,
+/// Bridges one reqwest byte stream to ordered JSON-RPC notifications.
+pub(crate) async fn stream_http_body(
+    pending_stream: PendingHttpBodyStream,
     notifications: RpcNotificationSender,
 ) {
-    tokio::spawn(async move {
-        let mut seq = 1;
-        let mut body = response.bytes_stream();
-        while let Some(chunk) = body.next().await {
-            match chunk {
-                Ok(bytes) => {
-                    if !send_body_delta(
-                        &notifications,
-                        HttpRequestBodyDeltaNotification {
-                            request_id: request_id.clone(),
-                            seq,
-                            delta: bytes.to_vec().into(),
-                            done: false,
-                            error: None,
-                        },
-                    )
-                    .await
-                    {
-                        return;
-                    }
-                    seq += 1;
-                }
-                Err(err) => {
-                    let _ = send_body_delta(
-                        &notifications,
-                        HttpRequestBodyDeltaNotification {
-                            request_id,
-                            seq,
-                            delta: Vec::new().into(),
-                            done: true,
-                            error: Some(err.to_string()),
-                        },
-                    )
-                    .await;
+    let PendingHttpBodyStream {
+        request_id,
+        response,
+    } = pending_stream;
+    let mut seq = 1;
+    let mut body = response.bytes_stream();
+    while let Some(chunk) = body.next().await {
+        match chunk {
+            Ok(bytes) => {
+                if !send_body_delta(
+                    &notifications,
+                    HttpRequestBodyDeltaNotification {
+                        request_id: request_id.clone(),
+                        seq,
+                        delta: bytes.to_vec().into(),
+                        done: false,
+                        error: None,
+                    },
+                )
+                .await
+                {
                     return;
                 }
+                seq += 1;
+            }
+            Err(err) => {
+                let _ = send_body_delta(
+                    &notifications,
+                    HttpRequestBodyDeltaNotification {
+                        request_id,
+                        seq,
+                        delta: Vec::new().into(),
+                        done: true,
+                        error: Some(err.to_string()),
+                    },
+                )
+                .await;
+                return;
             }
         }
+    }
 
-        let _ = send_body_delta(
-            &notifications,
-            HttpRequestBodyDeltaNotification {
-                request_id,
-                seq,
-                delta: Vec::new().into(),
-                done: true,
-                error: None,
-            },
-        )
-        .await;
-    });
+    let _ = send_body_delta(
+        &notifications,
+        HttpRequestBodyDeltaNotification {
+            request_id,
+            seq,
+            delta: Vec::new().into(),
+            done: true,
+            error: None,
+        },
+    )
+    .await;
 }
 
 /// Sends one streamed response-body notification.
