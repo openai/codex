@@ -80,16 +80,19 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let mut http_body_streams = self.http_body_streams.lock().await;
-        for task in http_body_streams
-            .reserved_ids
-            .drain()
-            .filter_map(|(_, task)| task)
-        {
+        let tasks = {
+            let mut http_body_streams = self.http_body_streams.lock().await;
+            let tasks = http_body_streams
+                .reserved_ids
+                .drain()
+                .filter_map(|(_, task)| task)
+                .collect::<Vec<_>>();
+            http_body_streams.pending.clear();
+            tasks
+        };
+        for task in tasks {
             task.abort();
         }
-        http_body_streams.pending.clear();
-        drop(http_body_streams);
         if let Some(session) = self.session() {
             session.detach().await;
         }
