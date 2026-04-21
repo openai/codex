@@ -466,8 +466,11 @@ impl RolloutRecorder {
             search_term,
         )
         .await;
-        if listing_has_metadata_filters {
-            if let Some(db_page) = &db_page {
+        if let Some(db_page) = db_page {
+            if search_term.is_some() {
+                return Ok(db_page.into());
+            }
+            if listing_has_metadata_filters {
                 for item in &db_page.items {
                     state_db::reconcile_rollout(
                         state_db_ctx.as_deref(),
@@ -480,16 +483,22 @@ impl RolloutRecorder {
                     )
                     .await;
                 }
+                return Ok(page_from_filesystem_scan(
+                    fs_page,
+                    sort_direction,
+                    page_size,
+                    sort_key,
+                ));
             }
+            return Ok(db_page.into());
+        }
+        if listing_has_metadata_filters {
             return Ok(page_from_filesystem_scan(
                 fs_page,
                 sort_direction,
                 page_size,
                 sort_key,
             ));
-        }
-        if let Some(db_page) = db_page {
-            return Ok(db_page.into());
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
