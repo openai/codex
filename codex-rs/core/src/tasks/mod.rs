@@ -303,7 +303,11 @@ impl Session {
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.tasks.is_empty());
         {
-            let mut turn_state = turn.turn_state.lock().await;
+            let Ok(mut turn_state) = turn.turn_state.try_lock() else {
+                warn!("turn state was locked while starting a task");
+                *active = None;
+                return;
+            };
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
             turn_state.started_from_goal_continuation = started_from_goal_continuation;
             for item in startup_pending_input {
@@ -394,7 +398,10 @@ impl Session {
 
     /// Starts a regular turn for an active goal if the session is idle.
     pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
-        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        let Ok(_continuation_guard) = self.goal_continuation_lock.acquire().await else {
+            warn!("goal continuation semaphore closed");
+            return;
+        };
         let Some(items) = self.goal_continuation_items_if_active().await else {
             return;
         };
@@ -532,7 +539,10 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             let mut active = self.active_turn.lock().await;
-            turn_state.lock().await.clear_pending();
+            match turn_state.try_lock() {
+                Ok(mut turn_state) => turn_state.clear_pending(),
+                Err(err) => warn!("turn state was locked while aborting tasks: {err}"),
+            }
             *active = None;
         }
     }
