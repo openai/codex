@@ -600,6 +600,14 @@ fn report_helper_failure(
     }
 }
 
+fn helper_launch_failure_message(last_error: u32) -> String {
+    if last_error == ERROR_CANCELLED {
+        "Windows canceled the sandbox setup helper launch (error 1223). This usually means the UAC elevation prompt was dismissed or denied. Approve the prompt and try again, or use the non-admin sandbox fallback.".to_string()
+    } else {
+        format!("ShellExecuteExW failed to launch setup helper: {last_error}")
+    }
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -684,10 +692,7 @@ fn run_setup_exe(
         } else {
             SetupErrorCode::OrchestratorHelperLaunchFailed
         };
-        return Err(failure(
-            code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
-        ));
+        return Err(failure(code, helper_launch_failure_message(last_error)));
     }
     unsafe {
         WaitForSingleObject(sei.hProcess, INFINITE);
@@ -801,9 +806,11 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::ERROR_CANCELLED;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::helper_launch_failure_message;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -850,6 +857,16 @@ mod tests {
         );
         assert_eq!(loopback_proxy_port_from_url("http://127.0.0.1:0"), None);
         assert_eq!(loopback_proxy_port_from_url("localhost:8080"), None);
+    }
+
+    #[test]
+    fn canceled_helper_launch_message_explains_uac_recovery() {
+        let message = helper_launch_failure_message(ERROR_CANCELLED);
+
+        assert_eq!(
+            message,
+            "Windows canceled the sandbox setup helper launch (error 1223). This usually means the UAC elevation prompt was dismissed or denied. Approve the prompt and try again, or use the non-admin sandbox fallback."
+        );
     }
 
     #[test]
