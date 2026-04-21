@@ -229,6 +229,7 @@ impl Session {
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        inherited_rollout_trace: Option<RolloutTraceRecorder>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -365,6 +366,40 @@ impl Session {
         let rollout_path = rollout_recorder
             .as_ref()
             .map(|rec| rec.rollout_path().to_path_buf());
+        let trace_agent_path = session_configuration
+            .session_source
+            .get_agent_path()
+            .unwrap_or_else(codex_protocol::AgentPath::root);
+        let trace_task_name =
+            (!trace_agent_path.is_root()).then(|| trace_agent_path.name().to_string());
+        let trace_metadata = ThreadStartedTraceMetadata {
+            thread_id: conversation_id.to_string(),
+            agent_path: trace_agent_path.to_string(),
+            task_name: trace_task_name,
+            nickname: session_configuration.session_source.get_nickname(),
+            agent_role: session_configuration.session_source.get_agent_role(),
+            session_source: session_configuration.session_source.clone(),
+            cwd: session_configuration.cwd.to_path_buf(),
+            rollout_path: rollout_path.clone(),
+            model: session_configuration.collaboration_mode.model().to_string(),
+            provider_name: config.model_provider_id.clone(),
+            approval_policy: session_configuration.approval_policy.value().to_string(),
+            sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
+        };
+        let rollout_trace = if let Some(rollout_trace) = inherited_rollout_trace {
+            rollout_trace.record_thread_started(trace_metadata);
+            Some(rollout_trace)
+        } else if matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            // Spawned child threads are part of their root rollout tree. If
+            // the parent had no trace recorder, do not create an orphan child
+            // bundle that looks like an independent rollout.
+            None
+        } else {
+            RolloutTraceRecorder::maybe_create(conversation_id, trace_metadata)
+        };
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -644,6 +679,7 @@ impl Session {
             analytics_events_client,
             hooks,
             rollout: Mutex::new(rollout_recorder),
+            rollout_trace,
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

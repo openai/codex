@@ -35,6 +35,8 @@ use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::rollout::find_thread_name_by_id;
+use crate::rollout_trace::RolloutTraceRecorder;
+use crate::rollout_trace::ThreadStartedTraceMetadata;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
@@ -397,6 +399,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_rollout_trace: Option<RolloutTraceRecorder>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
@@ -452,6 +455,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_rollout_trace,
             parent_trace: _,
             analytics_events_client,
         } = args;
@@ -650,6 +654,7 @@ impl Codex {
             agent_control,
             environment,
             analytics_events_client,
+            inherited_rollout_trace,
         )
         .await
         .map_err(|e| {

@@ -957,6 +957,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_rollout_trace: None,
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),

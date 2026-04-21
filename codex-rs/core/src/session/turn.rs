@@ -1874,8 +1874,19 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let inference_trace = sess.services.rollout_trace.as_ref().map_or_else(
+        codex_rollout_trace::InferenceTraceContext::disabled,
+        |trace| {
+            trace.inference_trace_context(
+                sess.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+                turn_context.model_info.slug.clone(),
+                turn_context.provider.info().name.clone(),
+            )
+        },
+    );
     let mut stream = client_session
-        .stream(
+        .stream_with_trace(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
@@ -1883,6 +1894,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

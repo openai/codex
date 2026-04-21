@@ -1961,6 +1961,7 @@ dependencies = [
  "codex-response-debug-context",
  "codex-rmcp-client",
  "codex-rollout",
+ "codex-rollout-trace",
  "codex-sandboxing",
  "codex-secrets",
  "codex-shell-command",
