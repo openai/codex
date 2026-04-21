@@ -424,6 +424,11 @@ ignored = [
     "codex-v8-poc",
 ]
 
+[profile.dev]
+# Keep line tables/backtraces while avoiding expensive full variable debug info
+# across local dev builds.
+debug = 1
+
 [profile.release]
 lto = "fat"
 split-debuginfo = "off"
