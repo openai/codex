@@ -360,6 +360,18 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    DeviceKeyCreate => "device/key/create" {
+        params: v2::DeviceKeyCreateParams,
+        response: v2::DeviceKeyCreateResponse,
+    },
+    DeviceKeyPublic => "device/key/public" {
+        params: v2::DeviceKeyPublicParams,
+        response: v2::DeviceKeyPublicResponse,
+    },
+    DeviceKeySign => "device/key/sign" {
+        params: v2::DeviceKeySignParams,
+        response: v2::DeviceKeySignResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,
@@ -1448,6 +1460,12 @@ mod tests {
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
+                permission_profile:
+                    codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                        &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                        std::path::Path::new("/tmp"),
+                    )
+                    .into(),
                 reasoning_effort: None,
             },
         };
@@ -1489,6 +1507,24 @@ mod tests {
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
+                    },
+                    "permissionProfile": {
+                        "network": {
+                            "enabled": true,
+                        },
+                        "fileSystem": {
+                            "entries": [
+                                {
+                                    "path": {
+                                        "type": "special",
+                                        "value": {
+                                            "kind": "root",
+                                        },
+                                    },
+                                    "access": "write",
+                                },
+                            ],
+                        },
                     },
                     "reasoningEffort": null
                 }

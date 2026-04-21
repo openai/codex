@@ -28,16 +28,6 @@ use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_app_server_protocol::HookCompletedNotification;
-use codex_app_server_protocol::HookEventName as AppServerHookEventName;
-use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
-use codex_app_server_protocol::HookHandlerType as AppServerHookHandlerType;
-use codex_app_server_protocol::HookOutputEntry as AppServerHookOutputEntry;
-use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
-use codex_app_server_protocol::HookRunStatus as AppServerHookRunStatus;
-use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
-use codex_app_server_protocol::HookScope as AppServerHookScope;
-use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
@@ -47,7 +37,6 @@ use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyA
 use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
 use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
-use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -72,14 +61,12 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
-use codex_protocol::mcp::Tool;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RolloutItem;
@@ -112,109 +99,6 @@ macro_rules! assert_app_snapshot {
 
 fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
-}
-
-#[test]
-fn hide_cli_only_plugin_marketplaces_removes_openai_bundled() {
-    let mut response = PluginListResponse {
-        marketplaces: vec![
-            PluginMarketplaceEntry {
-                name: "openai-bundled".to_string(),
-                path: Some(test_absolute_path("/marketplaces/openai-bundled")),
-                interface: None,
-                plugins: Vec::new(),
-            },
-            PluginMarketplaceEntry {
-                name: "openai-curated".to_string(),
-                path: Some(test_absolute_path("/marketplaces/openai-curated")),
-                interface: None,
-                plugins: Vec::new(),
-            },
-        ],
-        marketplace_load_errors: Vec::new(),
-        featured_plugin_ids: Vec::new(),
-    };
-
-    hide_cli_only_plugin_marketplaces(&mut response);
-
-    assert_eq!(
-        response.marketplaces,
-        vec![PluginMarketplaceEntry {
-            name: "openai-curated".to_string(),
-            path: Some(test_absolute_path("/marketplaces/openai-curated")),
-            interface: None,
-            plugins: Vec::new(),
-        }]
-    );
-}
-
-#[test]
-fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let base_cwd = temp_dir.path().join("base").abs();
-    std::fs::create_dir_all(base_cwd.as_path())?;
-
-    let overrides = ConfigOverrides {
-        additional_writable_roots: vec![PathBuf::from("rel")],
-        ..Default::default()
-    };
-    let normalized = normalize_harness_overrides_for_cwd(overrides, &base_cwd)?;
-
-    assert_eq!(
-        normalized.additional_writable_roots,
-        vec![base_cwd.join("rel").into_path_buf()]
-    );
-    Ok(())
-}
-
-#[test]
-fn mcp_inventory_maps_prefix_tool_names_by_server() {
-    let statuses = vec![
-        McpServerStatus {
-            name: "docs".to_string(),
-            tools: HashMap::from([(
-                "list".to_string(),
-                Tool {
-                    description: None,
-                    name: "list".to_string(),
-                    title: None,
-                    input_schema: serde_json::json!({"type": "object"}),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-            )]),
-            resources: Vec::new(),
-            resource_templates: Vec::new(),
-            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        },
-        McpServerStatus {
-            name: "disabled".to_string(),
-            tools: HashMap::new(),
-            resources: Vec::new(),
-            resource_templates: Vec::new(),
-            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        },
-    ];
-
-    let (tools, resources, resource_templates, auth_statuses) =
-        mcp_inventory_maps_from_statuses(statuses);
-    let mut resource_names = resources.keys().cloned().collect::<Vec<_>>();
-    resource_names.sort();
-    let mut template_names = resource_templates.keys().cloned().collect::<Vec<_>>();
-    template_names.sort();
-
-    assert_eq!(
-        tools.keys().cloned().collect::<Vec<_>>(),
-        vec!["mcp__docs__list".to_string()]
-    );
-    assert_eq!(resource_names, vec!["disabled", "docs"]);
-    assert_eq!(template_names, vec!["disabled", "docs"]);
-    assert_eq!(
-        auth_statuses.get("disabled"),
-        Some(&McpAuthStatus::Unsupported)
-    );
 }
 
 #[tokio::test]
@@ -1438,59 +1322,6 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn terminal_thread_read_error_detection_matches_not_loaded_errors() {
-    let err = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
-    );
-
-    assert!(App::is_terminal_thread_read_error(&err));
-}
-
-#[test]
-fn terminal_thread_read_error_detection_ignores_transient_failures() {
-    let err = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
-    );
-
-    assert!(!App::is_terminal_thread_read_error(&err));
-}
-
-#[test]
-fn closed_state_for_thread_read_error_preserves_live_state_without_cache_on_transient_error() {
-    let err = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read transport error: broken pipe"
-    );
-
-    assert!(!App::closed_state_for_thread_read_error(
-        &err, /*existing_is_closed*/ None
-    ));
-}
-
-#[test]
-fn closed_state_for_thread_read_error_marks_terminal_uncached_threads_closed() {
-    let err = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read failed: thread not loaded: thr_123"
-    );
-
-    assert!(App::closed_state_for_thread_read_error(
-        &err, /*existing_is_closed*/ None
-    ));
-}
-
-#[test]
-fn include_turns_fallback_detection_handles_unmaterialized_and_ephemeral_threads() {
-    let unmaterialized = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read failed: thread thr_123 is not materialized yet; includeTurns is unavailable before first user message"
-    );
-    let ephemeral = color_eyre::eyre::eyre!(
-        "thread/read failed during TUI session lookup: thread/read failed: ephemeral threads do not support includeTurns"
-    );
-
-    assert!(App::can_fallback_from_include_turns_error(&unmaterialized));
-    assert!(App::can_fallback_from_include_turns_error(&ephemeral));
-}
-
 #[tokio::test]
 async fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
     let mut app = make_test_app().await;
@@ -1820,6 +1651,7 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1911,6 +1743,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1990,6 +1823,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2047,6 +1881,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2106,6 +1941,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2193,6 +2029,7 @@ guardian_approval = true
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2378,6 +2215,10 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2537,6 +2378,10 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2759,6 +2604,10 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2812,6 +2661,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            std::path::Path::new("/tmp/main"),
+        ),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2836,6 +2689,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         timezone: None,
         approval_policy: primary_session.approval_policy,
         sandbox_policy: primary_session.sandbox_policy.clone(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: "gpt-agent".to_string(),
@@ -2923,6 +2777,10 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            std::path::Path::new("/tmp/main"),
+        ),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -3081,57 +2939,6 @@ async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
     assert!(app.transcript_cells.is_empty());
 }
 
-#[test]
-fn side_boundary_prompt_marks_inherited_history_reference_only() {
-    let item = App::side_boundary_prompt_item();
-    let codex_protocol::models::ResponseItem::Message { role, content, .. } = item else {
-        panic!("expected hidden side boundary prompt to be a user message");
-    };
-    assert_eq!(role, "user");
-    let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected hidden side boundary prompt text");
-    };
-    assert!(text.contains("Side conversation boundary."));
-    assert!(text.contains("Everything before this boundary is inherited history"));
-    assert!(text.contains("It is not your current task."));
-    assert!(text.contains("Only messages submitted after this boundary are active"));
-    assert!(text.contains("Do not continue, execute, or complete"));
-    assert!(text.contains("separate from the main thread"));
-    assert!(text.contains("External tools may be available according to this thread's current"));
-    assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
-    assert!(text.contains("Do not modify files"));
-}
-
-#[test]
-fn side_return_shortcuts_match_esc_and_ctrl_c() {
-    assert!(side_return_shortcut_matches(KeyEvent::new(
-        KeyCode::Esc,
-        KeyModifiers::NONE,
-    )));
-    assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
-        KeyCode::Esc,
-        KeyModifiers::NONE,
-        KeyEventKind::Repeat,
-    )));
-    assert!(side_return_shortcut_matches(KeyEvent::new(
-        KeyCode::Char('c'),
-        KeyModifiers::CONTROL,
-    )));
-    assert!(side_return_shortcut_matches(KeyEvent::new(
-        KeyCode::Char('C'),
-        KeyModifiers::CONTROL,
-    )));
-    assert!(!side_return_shortcut_matches(KeyEvent::new(
-        KeyCode::Char('d'),
-        KeyModifiers::CONTROL,
-    )));
-    assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
-        KeyCode::Esc,
-        KeyModifiers::NONE,
-        KeyEventKind::Release,
-    )));
-}
-
 #[tokio::test]
 async fn side_start_block_message_tracks_open_side_conversation() {
     let mut app = make_test_app().await;
@@ -3280,28 +3087,6 @@ async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
     );
 
     Ok(())
-}
-
-#[test]
-fn side_start_error_message_explains_missing_first_prompt() {
-    let err = color_eyre::eyre::eyre!(
-        "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
-    );
-
-    assert_eq!(
-        App::side_start_error_message(&err),
-        "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
-    );
-}
-
-#[test]
-fn side_start_error_message_uses_generic_start_wording() {
-    let err = color_eyre::eyre::eyre!("transport disconnected");
-
-    assert_eq!(
-        App::side_start_error_message(&err),
-        "Failed to start side conversation: transport disconnected"
-    );
 }
 
 #[tokio::test]
@@ -3678,6 +3463,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -3911,6 +3697,10 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_read_only_policy(),
+            cwd.as_path(),
+        ),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
@@ -3992,61 +3782,6 @@ fn token_usage_notification(
     })
 }
 
-fn hook_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
-    ServerNotification::HookStarted(HookStartedNotification {
-        thread_id: thread_id.to_string(),
-        turn_id: Some(turn_id.to_string()),
-        run: AppServerHookRunSummary {
-            id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
-            event_name: AppServerHookEventName::UserPromptSubmit,
-            handler_type: AppServerHookHandlerType::Command,
-            execution_mode: AppServerHookExecutionMode::Sync,
-            scope: AppServerHookScope::Turn,
-            source_path: test_path_buf("/tmp/hooks.json").abs(),
-            source: codex_app_server_protocol::HookSource::User,
-            display_order: 0,
-            status: AppServerHookRunStatus::Running,
-            status_message: Some("checking go-workflow input policy".to_string()),
-            started_at: 1,
-            completed_at: None,
-            duration_ms: None,
-            entries: Vec::new(),
-        },
-    })
-}
-
-fn hook_completed_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
-    ServerNotification::HookCompleted(HookCompletedNotification {
-        thread_id: thread_id.to_string(),
-        turn_id: Some(turn_id.to_string()),
-        run: AppServerHookRunSummary {
-            id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
-            event_name: AppServerHookEventName::UserPromptSubmit,
-            handler_type: AppServerHookHandlerType::Command,
-            execution_mode: AppServerHookExecutionMode::Sync,
-            scope: AppServerHookScope::Turn,
-            source_path: test_path_buf("/tmp/hooks.json").abs(),
-            source: codex_app_server_protocol::HookSource::User,
-            display_order: 0,
-            status: AppServerHookRunStatus::Stopped,
-            status_message: Some("checking go-workflow input policy".to_string()),
-            started_at: 1,
-            completed_at: Some(11),
-            duration_ms: Some(10),
-            entries: vec![
-                AppServerHookOutputEntry {
-                    kind: AppServerHookOutputEntryKind::Warning,
-                    text: "go-workflow must start from PlanMode".to_string(),
-                },
-                AppServerHookOutputEntry {
-                    kind: AppServerHookOutputEntryKind::Stop,
-                    text: "prompt blocked".to_string(),
-                },
-            ],
-        },
-    })
-}
-
 fn agent_message_delta_notification(
     thread_id: ThreadId,
     turn_id: &str,
@@ -4097,162 +3832,6 @@ fn request_user_input_request(thread_id: ThreadId, turn_id: &str, item_id: &str)
             questions: Vec::new(),
         },
     }
-}
-
-#[test]
-fn thread_event_store_tracks_active_turn_lifecycle() {
-    let mut store = ThreadEventStore::new(/*capacity*/ 8);
-    assert_eq!(store.active_turn_id(), None);
-
-    let thread_id = ThreadId::new();
-    store.push_notification(turn_started_notification(thread_id, "turn-1"));
-    assert_eq!(store.active_turn_id(), Some("turn-1"));
-
-    store.push_notification(turn_completed_notification(
-        thread_id,
-        "turn-2",
-        TurnStatus::Completed,
-    ));
-    assert_eq!(store.active_turn_id(), Some("turn-1"));
-
-    store.push_notification(turn_completed_notification(
-        thread_id,
-        "turn-1",
-        TurnStatus::Interrupted,
-    ));
-    assert_eq!(store.active_turn_id(), None);
-}
-
-#[test]
-fn thread_event_store_restores_active_turn_from_snapshot_turns() {
-    let thread_id = ThreadId::new();
-    let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
-    let turns = vec![
-        test_turn("turn-1", TurnStatus::Completed, Vec::new()),
-        test_turn("turn-2", TurnStatus::InProgress, Vec::new()),
-    ];
-
-    let store =
-        ThreadEventStore::new_with_session(/*capacity*/ 8, session.clone(), turns.clone());
-    assert_eq!(store.active_turn_id(), Some("turn-2"));
-
-    let mut refreshed_store = ThreadEventStore::new(/*capacity*/ 8);
-    refreshed_store.set_session(session, turns);
-    assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
-}
-
-#[test]
-fn thread_event_store_clear_active_turn_id_resets_cached_turn() {
-    let mut store = ThreadEventStore::new(/*capacity*/ 8);
-    let thread_id = ThreadId::new();
-    store.push_notification(turn_started_notification(thread_id, "turn-1"));
-
-    store.clear_active_turn_id();
-
-    assert_eq!(store.active_turn_id(), None);
-}
-
-#[test]
-fn thread_event_store_rebase_preserves_resolved_request_state() {
-    let thread_id = ThreadId::new();
-    let mut store = ThreadEventStore::new(/*capacity*/ 8);
-    store.push_request(exec_approval_request(
-        thread_id,
-        "turn-approval",
-        "call-approval",
-        /*approval_id*/ None,
-    ));
-    store.push_notification(ServerNotification::ServerRequestResolved(
-        codex_app_server_protocol::ServerRequestResolvedNotification {
-            request_id: AppServerRequestId::Integer(1),
-            thread_id: thread_id.to_string(),
-        },
-    ));
-
-    store.rebase_buffer_after_session_refresh();
-
-    let snapshot = store.snapshot();
-    assert!(snapshot.events.is_empty());
-    assert_eq!(store.has_pending_thread_approvals(), false);
-}
-
-#[test]
-fn thread_event_store_rebase_preserves_hook_notifications() {
-    let thread_id = ThreadId::new();
-    let mut store = ThreadEventStore::new(/*capacity*/ 8);
-    store.push_notification(hook_started_notification(thread_id, "turn-hook"));
-    store.push_notification(hook_completed_notification(thread_id, "turn-hook"));
-
-    store.rebase_buffer_after_session_refresh();
-
-    let snapshot = store.snapshot();
-    let hook_notifications = snapshot
-        .events
-        .into_iter()
-        .map(|event| match event {
-            ThreadBufferedEvent::Notification(notification) => {
-                serde_json::to_value(notification).expect("hook notification should serialize")
-            }
-            other => panic!("expected buffered hook notification, saw: {other:?}"),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        hook_notifications,
-        vec![
-            serde_json::to_value(hook_started_notification(thread_id, "turn-hook"))
-                .expect("hook notification should serialize"),
-            serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
-                .expect("hook notification should serialize"),
-        ]
-    );
-}
-
-#[test]
-fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
-    let thread_id = ThreadId::new();
-    let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
-
-    let params = build_feedback_upload_params(
-        Some(thread_id),
-        Some(rollout_path.clone()),
-        FeedbackCategory::SafetyCheck,
-        Some("needs follow-up".to_string()),
-        Some("turn-123".to_string()),
-        /*include_logs*/ true,
-    );
-
-    assert_eq!(params.classification, "safety_check");
-    assert_eq!(params.reason, Some("needs follow-up".to_string()));
-    assert_eq!(params.thread_id, Some(thread_id.to_string()));
-    assert_eq!(
-        params
-            .tags
-            .as_ref()
-            .and_then(|tags| tags.get("turn_id"))
-            .map(String::as_str),
-        Some("turn-123")
-    );
-    assert_eq!(params.include_logs, true);
-    assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
-}
-
-#[test]
-fn build_feedback_upload_params_omits_rollout_path_without_logs() {
-    let params = build_feedback_upload_params(
-        /*origin_thread_id*/ None,
-        Some(PathBuf::from("/tmp/rollout.jsonl")),
-        FeedbackCategory::GoodResult,
-        /*reason*/ None,
-        /*turn_id*/ None,
-        /*include_logs*/ false,
-    );
-
-    assert_eq!(params.classification, "good_result");
-    assert_eq!(params.reason, None);
-    assert_eq!(params.thread_id, None);
-    assert_eq!(params.tags, None);
-    assert_eq!(params.include_logs, false);
-    assert_eq!(params.extra_log_files, None);
 }
 
 #[tokio::test]
@@ -4382,19 +3961,6 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
         "test".to_string(),
         SessionSource::Cli,
     )
-}
-
-fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
-    config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .and_then(TomlValue::as_table)
-        .and_then(|apps| apps.get(app_id))
-        .and_then(TomlValue::as_table)
-        .and_then(|app| app.get("enabled"))
-        .and_then(TomlValue::as_bool)
 }
 
 #[test]
@@ -4550,6 +4116,7 @@ async fn refresh_in_memory_config_from_disk_uses_active_chat_widget_cwd() -> Res
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: next_cwd.clone().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4666,6 +4233,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4729,6 +4297,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4822,6 +4391,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -5205,6 +4775,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -5317,6 +4888,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,

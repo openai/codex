@@ -89,7 +89,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -1680,6 +1679,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1738,6 +1738,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -3847,6 +3848,7 @@ fn op_kind_distinguishes_turn_ops() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -3886,6 +3888,7 @@ async fn user_turn_updates_approvals_reviewer() {
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
@@ -5123,7 +5126,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
-    let rendered = render_skills_section(
+    let rendered = build_available_skills(
         &[SkillMetadata {
             name: "repo-skill".to_string(),
             description: "desc".to_string(),
@@ -5244,12 +5247,12 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let image_output_dir = image_output_path
         .parent()
         .expect("generated image path should have a parent");
-    let image_message: ResponseItem = DeveloperInstructions::new(format!(
-        "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
-        image_output_dir.display(),
-        image_output_path.display(),
-    ))
-    .into();
+    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
+        crate::context::ImageGenerationInstructions::new(
+            image_output_dir.display(),
+            image_output_path.display(),
+        ),
+    );
     assert_eq!(history.raw_items(), &[image_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
@@ -5360,6 +5363,10 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
     let item = turn_context.to_turn_context_item();
 
     assert_eq!(item.file_system_sandbox_policy, None);
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
+    );
 }
 
 #[tokio::test]
@@ -5373,6 +5380,10 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
     assert_eq!(
         item.file_system_sandbox_policy,
         Some(file_system_sandbox_policy)
+    );
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
     );
 }
 
@@ -6546,7 +6557,9 @@ async fn sample_rollout(
             .as_ref()
             .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
     {
-        let msg = DeveloperInstructions::personality_spec_message(personality_message).into();
+        let msg = crate::context::ContextualUserFragment::into(
+            crate::context::PersonalitySpecInstructions::new(personality_message),
+        );
         let insert_at = initial_context
             .iter()
             .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))

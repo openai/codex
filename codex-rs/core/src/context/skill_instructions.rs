@@ -26,7 +26,7 @@ impl ContextualUserFragment for SkillInstructions {
 
     fn body(&self) -> String {
         format!(
-            "\n<name>{}</name>\n<path>{}</path>\n{}",
+            "\n<name>{}</name>\n<path>{}</path>\n{}\n",
             self.name, self.path, self.contents
         )
     }

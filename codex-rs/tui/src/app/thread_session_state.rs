@@ -24,6 +24,7 @@ impl App {
                 approval_policy: self.config.permissions.approval_policy.value(),
                 approvals_reviewer: self.config.approvals_reviewer,
                 sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                permission_profile: self.config.permissions.permission_profile(),
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),

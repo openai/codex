@@ -744,6 +744,78 @@
             },
             "method": {
               "enum": [
+                "device/key/create"
+              ],
+              "title": "Device/key/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeyCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "device/key/public"
+              ],
+              "title": "Device/key/publicRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeyPublicParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/publicRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "device/key/sign"
+              ],
+              "title": "Device/key/signRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeySignParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/signRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fs/readFile"
               ],
               "title": "Fs/readFileRequestMethod",
@@ -6301,6 +6373,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional full permissions profile for this command.\n\nDefaults to the user's configured permissions when omitted. Cannot be combined with `sandboxPolicy`."
+          },
           "processId": {
             "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
             "type": [
@@ -6317,7 +6400,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+            "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`."
           },
           "size": {
             "anyOf": [
@@ -7326,6 +7409,300 @@
           "summary"
         ],
         "title": "DeprecationNoticeNotification",
+        "type": "object"
+      },
+      "DeviceKeyAlgorithm": {
+        "description": "Device-key algorithm reported at enrollment and signing boundaries.",
+        "enum": [
+          "ecdsa_p256_sha256"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyCreateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Create a controller-local device key with a random key id.",
+        "properties": {
+          "accountUserId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "protectionPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/DeviceKeyProtectionPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to `hardware_only` when omitted."
+          }
+        },
+        "required": [
+          "accountUserId",
+          "clientId"
+        ],
+        "title": "DeviceKeyCreateParams",
+        "type": "object"
+      },
+      "DeviceKeyCreateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Device-key metadata and public key returned by create/public APIs.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "protectionClass": {
+            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
+          },
+          "publicKeySpkiDerBase64": {
+            "description": "SubjectPublicKeyInfo DER encoded as base64.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "keyId",
+          "protectionClass",
+          "publicKeySpkiDerBase64"
+        ],
+        "title": "DeviceKeyCreateResponse",
+        "type": "object"
+      },
+      "DeviceKeyProtectionClass": {
+        "description": "Platform protection class for a controller-local device key.",
+        "enum": [
+          "hardware_secure_enclave",
+          "hardware_tpm",
+          "os_protected_nonextractable"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyProtectionPolicy": {
+        "description": "Protection policy for creating or loading a controller-local device key.",
+        "enum": [
+          "hardware_only",
+          "allow_os_protected_nonextractable"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyPublicParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Fetch a controller-local device key public key by id.",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyId"
+        ],
+        "title": "DeviceKeyPublicParams",
+        "type": "object"
+      },
+      "DeviceKeyPublicResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Device-key public metadata returned by `device/key/public`.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "protectionClass": {
+            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
+          },
+          "publicKeySpkiDerBase64": {
+            "description": "SubjectPublicKeyInfo DER encoded as base64.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "keyId",
+          "protectionClass",
+          "publicKeySpkiDerBase64"
+        ],
+        "title": "DeviceKeyPublicResponse",
+        "type": "object"
+      },
+      "DeviceKeySignParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Sign an accepted structured payload with a controller-local device key.",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/definitions/v2/DeviceKeySignPayload"
+          }
+        },
+        "required": [
+          "keyId",
+          "payload"
+        ],
+        "title": "DeviceKeySignParams",
+        "type": "object"
+      },
+      "DeviceKeySignPayload": {
+        "description": "Structured payloads accepted by `device/key/sign`.",
+        "oneOf": [
+          {
+            "description": "Payload bound to one remote-control controller websocket `/client` connection challenge.",
+            "properties": {
+              "accountUserId": {
+                "type": "string"
+              },
+              "audience": {
+                "$ref": "#/definitions/v2/RemoteControlClientConnectionAudience"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "nonce": {
+                "type": "string"
+              },
+              "scopes": {
+                "description": "Must contain exactly `remote_control_controller_websocket`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sessionId": {
+                "description": "Backend-issued websocket session id that this proof authorizes.",
+                "type": "string"
+              },
+              "targetOrigin": {
+                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
+                "type": "string"
+              },
+              "targetPath": {
+                "description": "Websocket route path that this proof authorizes.",
+                "type": "string"
+              },
+              "tokenExpiresAt": {
+                "description": "Remote-control token expiration as Unix seconds.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "tokenSha256Base64url": {
+                "description": "SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "remoteControlClientConnection"
+                ],
+                "title": "RemoteControlClientConnectionDeviceKeySignPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accountUserId",
+              "audience",
+              "clientId",
+              "nonce",
+              "scopes",
+              "sessionId",
+              "targetOrigin",
+              "targetPath",
+              "tokenExpiresAt",
+              "tokenSha256Base64url",
+              "type"
+            ],
+            "title": "RemoteControlClientConnectionDeviceKeySignPayload",
+            "type": "object"
+          },
+          {
+            "description": "Payload bound to a remote-control client `/client/enroll` ownership challenge.",
+            "properties": {
+              "accountUserId": {
+                "type": "string"
+              },
+              "audience": {
+                "$ref": "#/definitions/v2/RemoteControlClientEnrollmentAudience"
+              },
+              "challengeExpiresAt": {
+                "description": "Enrollment challenge expiration as Unix seconds.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "challengeId": {
+                "description": "Backend-issued enrollment challenge id that this proof authorizes.",
+                "type": "string"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "deviceIdentitySha256Base64url": {
+                "description": "SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
+                "type": "string"
+              },
+              "nonce": {
+                "type": "string"
+              },
+              "targetOrigin": {
+                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
+                "type": "string"
+              },
+              "targetPath": {
+                "description": "HTTP route path that this proof authorizes.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "remoteControlClientEnrollment"
+                ],
+                "title": "RemoteControlClientEnrollmentDeviceKeySignPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accountUserId",
+              "audience",
+              "challengeExpiresAt",
+              "challengeId",
+              "clientId",
+              "deviceIdentitySha256Base64url",
+              "nonce",
+              "targetOrigin",
+              "targetPath",
+              "type"
+            ],
+            "title": "RemoteControlClientEnrollmentDeviceKeySignPayload",
+            "type": "object"
+          }
+        ]
+      },
+      "DeviceKeySignResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "ASN.1 DER signature returned by `device/key/sign`.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "signatureDerBase64": {
+            "description": "ECDSA signature DER encoded as base64.",
+            "type": "string"
+          },
+          "signedPayloadBase64": {
+            "description": "Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "signatureDerBase64",
+          "signedPayloadBase64"
+        ],
+        "title": "DeviceKeySignResponse",
         "type": "object"
       },
       "DynamicToolCallOutputContentItem": {
@@ -10523,6 +10900,53 @@
           }
         ]
       },
+      "PermissionProfile": {
+        "properties": {
+          "fileSystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PermissionProfileFileSystemPermissions": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+            },
+            "type": "array"
+          },
+          "globScanMaxDepth": {
+            "format": "uint",
+            "minimum": 1.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
       "Personality": {
         "enum": [
           "none",
@@ -11645,6 +12069,20 @@
         ],
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
+      },
+      "RemoteControlClientConnectionAudience": {
+        "description": "Audience for a remote-control client connection device-key proof.",
+        "enum": [
+          "remote_control_client_websocket"
+        ],
+        "type": "string"
+      },
+      "RemoteControlClientEnrollmentAudience": {
+        "description": "Audience for a remote-control client enrollment device-key proof.",
+        "enum": [
+          "remote_control_client_enrollment"
+        ],
+        "type": "string"
       },
       "RequestId": {
         "anyOf": [
@@ -13600,6 +14038,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the forked thread. Cannot be combined with `sandbox`."
+          },
           "sandbox": {
             "anyOf": [
               {
@@ -13668,6 +14117,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -13701,6 +14153,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
@@ -14980,6 +15433,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the resumed thread. Cannot be combined with `sandbox`."
+          },
           "personality": {
             "anyOf": [
               {
@@ -15058,6 +15522,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15091,6 +15558,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
@@ -15269,6 +15737,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
+          },
           "personality": {
             "anyOf": [
               {
@@ -15357,6 +15836,9 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "$ref": "#/definitions/v2/PermissionProfile"
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15390,6 +15872,7 @@
           "cwd",
           "model",
           "modelProvider",
+          "permissionProfile",
           "sandbox",
           "thread"
         ],
@@ -16041,6 +16524,17 @@
           },
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
           },
           "personality": {
             "anyOf": [

@@ -1386,6 +1386,70 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
@@ -2494,6 +2558,164 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+/// Device-key algorithm reported at enrollment and signing boundaries.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum DeviceKeyAlgorithm {
+    EcdsaP256Sha256,
+}
+
+/// Platform protection class for a controller-local device key.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum DeviceKeyProtectionClass {
+    HardwareSecureEnclave,
+    HardwareTpm,
+    OsProtectedNonextractable,
+}
+
+/// Protection policy for creating or loading a controller-local device key.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum DeviceKeyProtectionPolicy {
+    HardwareOnly,
+    AllowOsProtectedNonextractable,
+}
+
+/// Create a controller-local device key with a random key id.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeyCreateParams {
+    /// Defaults to `hardware_only` when omitted.
+    #[ts(optional = nullable)]
+    pub protection_policy: Option<DeviceKeyProtectionPolicy>,
+    pub account_user_id: String,
+    pub client_id: String,
+}
+
+/// Device-key metadata and public key returned by create/public APIs.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeyCreateResponse {
+    pub key_id: String,
+    /// SubjectPublicKeyInfo DER encoded as base64.
+    pub public_key_spki_der_base64: String,
+    pub algorithm: DeviceKeyAlgorithm,
+    pub protection_class: DeviceKeyProtectionClass,
+}
+
+/// Fetch a controller-local device key public key by id.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeyPublicParams {
+    pub key_id: String,
+}
+
+/// Device-key public metadata returned by `device/key/public`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeyPublicResponse {
+    pub key_id: String,
+    /// SubjectPublicKeyInfo DER encoded as base64.
+    pub public_key_spki_der_base64: String,
+    pub algorithm: DeviceKeyAlgorithm,
+    pub protection_class: DeviceKeyProtectionClass,
+}
+
+/// Audience for a remote-control client connection device-key proof.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum RemoteControlClientConnectionAudience {
+    RemoteControlClientWebsocket,
+}
+
+/// Audience for a remote-control client enrollment device-key proof.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum RemoteControlClientEnrollmentAudience {
+    RemoteControlClientEnrollment,
+}
+
+/// Structured payloads accepted by `device/key/sign`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum DeviceKeySignPayload {
+    /// Payload bound to one remote-control controller websocket `/client` connection challenge.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    RemoteControlClientConnection {
+        nonce: String,
+        audience: RemoteControlClientConnectionAudience,
+        /// Backend-issued websocket session id that this proof authorizes.
+        session_id: String,
+        /// Origin of the backend endpoint that issued the challenge and will verify this proof.
+        target_origin: String,
+        /// Websocket route path that this proof authorizes.
+        target_path: String,
+        account_user_id: String,
+        client_id: String,
+        /// Remote-control token expiration as Unix seconds.
+        #[ts(type = "number")]
+        token_expires_at: i64,
+        /// SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.
+        token_sha256_base64url: String,
+        /// Must contain exactly `remote_control_controller_websocket`.
+        scopes: Vec<String>,
+    },
+    /// Payload bound to a remote-control client `/client/enroll` ownership challenge.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    RemoteControlClientEnrollment {
+        nonce: String,
+        audience: RemoteControlClientEnrollmentAudience,
+        /// Backend-issued enrollment challenge id that this proof authorizes.
+        challenge_id: String,
+        /// Origin of the backend endpoint that issued the challenge and will verify this proof.
+        target_origin: String,
+        /// HTTP route path that this proof authorizes.
+        target_path: String,
+        account_user_id: String,
+        client_id: String,
+        /// SHA-256 of the requested device identity operation, encoded as unpadded base64url.
+        device_identity_sha256_base64url: String,
+        /// Enrollment challenge expiration as Unix seconds.
+        #[ts(type = "number")]
+        challenge_expires_at: i64,
+    },
+}
+
+/// Sign an accepted structured payload with a controller-local device key.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeySignParams {
+    pub key_id: String,
+    pub payload: DeviceKeySignPayload,
+}
+
+/// ASN.1 DER signature returned by `device/key/sign`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeviceKeySignResponse {
+    /// ECDSA signature DER encoded as base64.
+    pub signature_der_base64: String,
+    /// Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte
+    /// string directly and must not reserialize `payload`.
+    pub signed_payload_base64: String,
+    pub algorithm: DeviceKeyAlgorithm,
+}
+
 /// Read a file from the host filesystem.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2781,9 +3003,16 @@ pub struct CommandExecParams {
     /// Optional sandbox policy for this command.
     ///
     /// Uses the same shape as thread/turn execution sandbox configuration and
-    /// defaults to the user's configured policy when omitted.
+    /// defaults to the user's configured policy when omitted. Cannot be
+    /// combined with `permissionProfile`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional full permissions profile for this command.
+    ///
+    /// Defaults to the user's configured permissions when omitted. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
 }
 
 /// Final buffered result for `command/exec`.
@@ -2902,6 +3131,10 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for this thread. Cannot be combined with
+    /// `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -2970,6 +3203,7 @@ pub struct ThreadStartResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3027,6 +3261,10 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the resumed thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3059,6 +3297,7 @@ pub struct ThreadResumeResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3107,6 +3346,10 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the forked thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3139,6 +3382,7 @@ pub struct ThreadForkResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -4509,6 +4753,10 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the full permissions profile for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -7250,6 +7498,47 @@ mod tests {
     }
 
     #[test]
+    fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: CoreFileSystemAccessMode::None,
+            }],
+            glob_scan_max_depth: NonZeroUsize::new(2),
+        };
+
+        let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            PermissionProfileFileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                }],
+                glob_scan_max_depth: NonZeroUsize::new(2),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
+            "entries": [],
+            "globScanMaxDepth": 0,
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
     fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
         let read_only_path = if cfg!(windows) {
             r"C:\tmp\read-only"
@@ -7388,6 +7677,181 @@ mod tests {
         let decoded = serde_json::from_value::<FsReadFileParams>(value)
             .expect("deserialize fs/readFile params");
         assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn device_key_create_params_round_trip_uses_protection_policy() {
+        let params = DeviceKeyCreateParams {
+            protection_policy: None,
+            account_user_id: "account-user-1".to_string(),
+            client_id: "cli_123".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize device/key/create params");
+        assert_eq!(
+            value,
+            json!({
+                "accountUserId": "account-user-1",
+                "clientId": "cli_123",
+                "protectionPolicy": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<DeviceKeyCreateParams>(value)
+            .expect("deserialize device/key/create params");
+        assert_eq!(decoded, params);
+
+        let params = DeviceKeyCreateParams {
+            protection_policy: Some(DeviceKeyProtectionPolicy::AllowOsProtectedNonextractable),
+            account_user_id: "account-user-1".to_string(),
+            client_id: "cli_123".to_string(),
+        };
+        let value = serde_json::to_value(&params)
+            .expect("serialize device/key/create params with protection policy");
+        assert_eq!(
+            value,
+            json!({
+                "accountUserId": "account-user-1",
+                "clientId": "cli_123",
+                "protectionPolicy": "allow_os_protected_nonextractable",
+            })
+        );
+    }
+
+    #[test]
+    fn device_key_create_response_round_trips_protection_class() {
+        let response = DeviceKeyCreateResponse {
+            key_id: "dk_123".to_string(),
+            public_key_spki_der_base64: "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE".to_string(),
+            algorithm: DeviceKeyAlgorithm::EcdsaP256Sha256,
+            protection_class: DeviceKeyProtectionClass::OsProtectedNonextractable,
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize device/key/create response");
+        assert_eq!(
+            value,
+            json!({
+                "keyId": "dk_123",
+                "publicKeySpkiDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE",
+                "algorithm": "ecdsa_p256_sha256",
+                "protectionClass": "os_protected_nonextractable",
+            })
+        );
+
+        let decoded = serde_json::from_value::<DeviceKeyCreateResponse>(value)
+            .expect("deserialize device/key/create response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn device_key_sign_params_round_trip_uses_accepted_payload_enum() {
+        let params = DeviceKeySignParams {
+            key_id: "dk_123".to_string(),
+            payload: DeviceKeySignPayload::RemoteControlClientConnection {
+                nonce: "nonce-1".to_string(),
+                audience: RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
+                session_id: "wssess_123".to_string(),
+                target_origin: "https://chatgpt.com".to_string(),
+                target_path: "/api/codex/remote/control/client".to_string(),
+                account_user_id: "account-user-1".to_string(),
+                client_id: "cli_123".to_string(),
+                token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU".to_string(),
+                token_expires_at: 1_700_000_000,
+                scopes: vec!["remote_control_controller_websocket".to_string()],
+            },
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize device/key/sign params");
+        assert_eq!(
+            value,
+            json!({
+                "keyId": "dk_123",
+                "payload": {
+                    "type": "remoteControlClientConnection",
+                    "nonce": "nonce-1",
+                    "audience": "remote_control_client_websocket",
+                    "sessionId": "wssess_123",
+                    "targetOrigin": "https://chatgpt.com",
+                    "targetPath": "/api/codex/remote/control/client",
+                    "accountUserId": "account-user-1",
+                    "clientId": "cli_123",
+                    "tokenSha256Base64url": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+                    "tokenExpiresAt": 1_700_000_000,
+                    "scopes": ["remote_control_controller_websocket"],
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DeviceKeySignParams>(value)
+            .expect("deserialize device/key/sign params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn device_key_sign_params_round_trip_uses_enrollment_payload() {
+        let params = DeviceKeySignParams {
+            key_id: "dk_123".to_string(),
+            payload: DeviceKeySignPayload::RemoteControlClientEnrollment {
+                nonce: "nonce-1".to_string(),
+                audience: RemoteControlClientEnrollmentAudience::RemoteControlClientEnrollment,
+                challenge_id: "rch_123".to_string(),
+                target_origin: "https://chatgpt.com".to_string(),
+                target_path: "/wham/remote/control/client/enroll".to_string(),
+                account_user_id: "account-user-1".to_string(),
+                client_id: "cli_123".to_string(),
+                device_identity_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+                    .to_string(),
+                challenge_expires_at: 1_700_000_000,
+            },
+        };
+
+        let value = serde_json::to_value(&params)
+            .expect("serialize device/key/sign params with enrollment payload");
+        assert_eq!(
+            value,
+            json!({
+                "keyId": "dk_123",
+                "payload": {
+                    "type": "remoteControlClientEnrollment",
+                    "nonce": "nonce-1",
+                    "audience": "remote_control_client_enrollment",
+                    "challengeId": "rch_123",
+                    "targetOrigin": "https://chatgpt.com",
+                    "targetPath": "/wham/remote/control/client/enroll",
+                    "accountUserId": "account-user-1",
+                    "clientId": "cli_123",
+                    "deviceIdentitySha256Base64url": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+                    "challengeExpiresAt": 1_700_000_000,
+                },
+            })
+        );
+
+        let decoded = serde_json::from_value::<DeviceKeySignParams>(value)
+            .expect("deserialize device/key/sign params with enrollment payload");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn device_key_sign_response_returns_signed_payload_bytes() {
+        let response = DeviceKeySignResponse {
+            signature_der_base64: "MEUCIQD".to_string(),
+            signed_payload_base64: "eyJkb21haW4iOiJjb2RleA".to_string(),
+            algorithm: DeviceKeyAlgorithm::EcdsaP256Sha256,
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize device/key/sign response");
+        assert_eq!(
+            value,
+            json!({
+                "signatureDerBase64": "MEUCIQD",
+                "signedPayloadBase64": "eyJkb21haW4iOiJjb2RleA",
+                "algorithm": "ecdsa_p256_sha256",
+            })
+        );
+
+        let decoded = serde_json::from_value::<DeviceKeySignResponse>(value)
+            .expect("deserialize device/key/sign response");
+        assert_eq!(decoded, response);
     }
 
     #[test]
@@ -7541,6 +8005,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             }
         );
     }
@@ -7561,6 +8026,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7575,6 +8041,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
                 "outputBytesCap": null,
             })
         );
@@ -7600,6 +8067,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7616,6 +8084,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7644,6 +8113,7 @@ mod tests {
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7662,6 +8132,7 @@ mod tests {
                 },
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7731,6 +8202,7 @@ mod tests {
                 cols: 120,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7749,6 +8221,7 @@ mod tests {
                     "cols": 120,
                 },
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -9391,6 +9864,20 @@ mod tests {
             "approvalPolicy": "on-failure",
             "approvalsReviewer": "user",
             "sandbox": { "type": "dangerFullAccess" },
+            "permissionProfile": {
+                "network": { "enabled": true },
+                "fileSystem": {
+                    "entries": [
+                        {
+                            "path": {
+                                "type": "special",
+                                "value": { "kind": "root" }
+                            },
+                            "access": "write"
+                        }
+                    ]
+                }
+            },
             "reasoningEffort": null
         });
 
@@ -9430,6 +9917,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             model: None,
             service_tier: None,
             effort: None,
