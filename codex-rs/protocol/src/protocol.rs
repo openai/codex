@@ -2084,7 +2084,7 @@ pub struct ModelRerouteEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ContextCompactedEvent;
+pub struct ContextCompactedEvent {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {

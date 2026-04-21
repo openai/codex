@@ -6850,6 +6850,19 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     pretty_assertions::assert_eq!(output, expected);
 }
 
+#[test]
+fn prefix_compact_token_limit_defaults_to_sixty_percent_of_auto_compact() {
+    assert_eq!(
+        prefix_compact_token_limit(/*auto_compact_limit*/ 1_000),
+        Some(600)
+    );
+}
+
+#[test]
+fn prefix_compact_token_limit_is_none_for_tiny_auto_compact_limit() {
+    assert_eq!(prefix_compact_token_limit(/*auto_compact_limit*/ 1), None);
+}
+
 #[tokio::test]
 async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
     let temp = tempfile::tempdir()?;

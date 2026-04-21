@@ -2358,9 +2358,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
-    fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
+    fn on_context_compacted(&mut self, is_prefix: bool) {
+        self.flush_answer_stream_with_separator();
+        self.handle_stream_finished();
+        let label = if is_prefix {
+            "Context prefix compacted"
+        } else {
+            "Context compacted"
+        };
+        self.add_to_history(history_cell::new_info_event(
+            label.to_owned(),
+            /*hint*/ None,
+        ));
+        self.request_redraw();
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -6342,7 +6352,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
-                self.add_info_message("Context compacted".to_string(), /*hint*/ None);
+                self.on_context_compacted(/*is_prefix*/ false);
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -7018,7 +7028,7 @@ impl ChatWidget {
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
                 // ItemCompleted(TurnItem::AgentMessage(_)) instead.
-                self.on_agent_message(message)
+                self.finalize_completed_assistant_message(Some(&message))
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 if !message.is_empty() {
@@ -7238,6 +7248,9 @@ impl ChatWidget {
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
+                }
+                if let codex_protocol::items::TurnItem::ContextCompaction(item) = &item {
+                    self.on_context_compacted(item.is_prefix);
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
                     self.on_agent_message_item_completed(item);

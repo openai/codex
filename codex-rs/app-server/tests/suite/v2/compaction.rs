@@ -93,10 +93,13 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
     let started = wait_for_context_compaction_started(&mut mcp).await?;
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
 
-    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+    let ThreadItem::ContextCompaction { id: started_id, .. } = started.item else {
         unreachable!("started item should be context compaction");
     };
-    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+    let ThreadItem::ContextCompaction {
+        id: completed_id, ..
+    } = completed.item
+    else {
         unreachable!("completed item should be context compaction");
     };
 
@@ -174,10 +177,13 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let started = wait_for_context_compaction_started(&mut mcp).await?;
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
 
-    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+    let ThreadItem::ContextCompaction { id: started_id, .. } = started.item else {
         unreachable!("started item should be context compaction");
     };
-    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+    let ThreadItem::ContextCompaction {
+        id: completed_id, ..
+    } = completed.item
+    else {
         unreachable!("completed item should be context compaction");
     };
 
@@ -237,10 +243,13 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     let started = wait_for_context_compaction_started(&mut mcp).await?;
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
 
-    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+    let ThreadItem::ContextCompaction { id: started_id, .. } = started.item else {
         unreachable!("started item should be context compaction");
     };
-    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+    let ThreadItem::ContextCompaction {
+        id: completed_id, ..
+    } = completed.item
+    else {
         unreachable!("completed item should be context compaction");
     };
 

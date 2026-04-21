@@ -176,6 +176,7 @@ use codex_protocol::exec_output::StreamOutput;
 mod agent_task_lifecycle;
 mod handlers;
 mod mcp;
+pub(crate) mod prefix_compaction;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -185,6 +186,8 @@ pub(crate) mod turn_context;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
+#[cfg(test)]
+use self::prefix_compaction::prefix_compact_token_limit;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;

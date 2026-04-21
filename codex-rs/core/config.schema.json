@@ -440,6 +440,9 @@
             "plugins": {
               "type": "boolean"
             },
+            "prefix_compaction": {
+              "type": "boolean"
+            },
             "prevent_idle_sleep": {
               "type": "boolean"
             },
@@ -2437,6 +2440,9 @@
           "type": "boolean"
         },
         "plugins": {
+          "type": "boolean"
+        },
+        "prefix_compaction": {
           "type": "boolean"
         },
         "prevent_idle_sleep": {

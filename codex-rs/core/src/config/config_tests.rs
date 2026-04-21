@@ -6735,6 +6735,27 @@ hide_spawn_agent_metadata = false
 }
 
 #[tokio::test]
+async fn prefix_compaction_bool_feature_enables() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+prefix_compaction = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::PrefixCompaction));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 

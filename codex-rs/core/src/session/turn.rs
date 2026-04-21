@@ -39,6 +39,9 @@ use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
+use crate::session::prefix_compaction::abandon_prefix_compact;
+use crate::session::prefix_compaction::maybe_start_prefix_compact;
+use crate::session::prefix_compaction::try_apply_ready_prefix_compact;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -162,6 +165,18 @@ pub(crate) async fn run_turn(
     if pre_sampling_compacted && let Some(mut client_session) = prewarmed_client_session.take() {
         client_session.reset_websocket_session();
     }
+    // This pre-sampling kickoff captures full context before this turn records its
+    // context diff. If the candidate is later applied, that captured context can
+    // sit directly before a retained suffix that starts with the same turn's diff.
+    // This is redundant but intentional: we keep the suffix untouched and rely on
+    // the normal prefix/current-history match check before applying.
+    maybe_start_prefix_compact(
+        &sess,
+        &turn_context,
+        sess.get_total_token_usage().await,
+        auto_compact_limit,
+    )
+    .await;
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
@@ -536,6 +551,14 @@ pub(crate) async fn run_turn(
                     continue;
                 }
 
+                maybe_start_prefix_compact(
+                    &sess,
+                    &turn_context,
+                    total_usage_tokens,
+                    auto_compact_limit,
+                )
+                .await;
+
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     let stop_hook_permission_mode = match turn_context.approval_policy.value() {
@@ -822,6 +845,11 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    if try_apply_ready_prefix_compact(sess, turn_context).await? {
+        return Ok(());
+    }
+
+    abandon_prefix_compact(sess).await;
     if should_use_remote_compact_task(turn_context.provider.info()) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),

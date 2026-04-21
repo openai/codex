@@ -873,6 +873,37 @@ async fn replayed_in_progress_turn_marks_task_running() {
 }
 
 #[tokio::test]
+async fn replayed_context_compaction_renders_history_marker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-1".to_string(),
+            items: vec![AppServerThreadItem::ContextCompaction {
+                id: "compact-1".to_string(),
+            }],
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let text = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Context compacted"),
+        "expected replayed compaction marker, got {text:?}"
+    );
+}
+
+#[tokio::test]
 async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_status_header("Idle".to_string());

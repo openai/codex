@@ -199,6 +199,9 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// Precompute prefix compaction in the background before the foreground
+    /// auto-compaction threshold is reached.
+    PrefixCompaction,
     /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
     UseAgentIdentity,
     /// Enable workspace dependency support.
@@ -986,6 +989,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PrefixCompaction,
+        key: "prefix_compaction",
+        stage: Stage::Experimental {
+            name: "Prefix compaction",
+            menu_description: "Precompute history compaction in the background before the normal context compaction threshold is reached.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

@@ -8,6 +8,8 @@ use std::collections::HashSet;
 
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
+use crate::session::prefix_compaction::PrefixCompactTask;
+use crate::session::prefix_compaction::abort_prefix_compact_task;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -35,6 +37,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
+    pub(crate) prefix_compact_task: Option<PrefixCompactTask>,
     next_turn_is_first: bool,
 }
 
@@ -55,6 +58,7 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
+            prefix_compact_task: None,
             next_turn_is_first: true,
         }
     }
@@ -100,6 +104,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+        abort_prefix_compact_task(&mut self.prefix_compact_task);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {

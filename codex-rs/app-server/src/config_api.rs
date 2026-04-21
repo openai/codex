@@ -42,6 +42,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "tool_search",
     "tool_suggest",
     "tool_call_mcp_elicitation",
+    "prefix_compaction",
 ];
 
 #[async_trait]

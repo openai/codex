@@ -31,6 +31,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 
+const PREFIX_COMPACTION_MODE: &str = "prefix";
+
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -71,6 +73,71 @@ pub(crate) async fn run_remote_compact_task(
         CompactionPhase::StandaloneTurn,
     )
     .await
+}
+
+pub(crate) async fn run_remote_prefix_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    base_history: Vec<ResponseItem>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let mut history = ContextManager::new();
+    history.replace(base_history);
+    let base_instructions = sess.get_base_instructions().await;
+    if let Some(context_window) = turn_context.model_context_window()
+        && let Some(estimated_tokens) =
+            history.estimate_token_count_with_base_instructions(&base_instructions)
+        && estimated_tokens > context_window
+    {
+        info!(
+            turn_id = %turn_context.sub_id,
+            estimated_tokens,
+            context_window,
+            "prefix compaction snapshot exceeds context window"
+        );
+        return Err(CodexErr::ContextWindowExceeded);
+    }
+
+    let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let prompt = build_remote_compact_prompt(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        prompt_input,
+        base_instructions,
+    )
+    .await?;
+
+    let new_history = sess
+        .services
+        .model_client
+        .compact_conversation_history(
+            &prompt,
+            &turn_context.model_info,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            &turn_context.session_telemetry,
+            Some(PREFIX_COMPACTION_MODE),
+        )
+        .or_else(|err| async {
+            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+            let compact_request_log_data =
+                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+            log_remote_compact_failure(
+                turn_context.as_ref(),
+                &compact_request_log_data,
+                total_usage_breakdown,
+                &err,
+            );
+            Err(err)
+        })
+        .await?;
+
+    Ok(process_compacted_history(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        new_history,
+        InitialContextInjection::DoNotInject,
+    )
+    .await)
 }
 
 async fn run_remote_compact_task_inner(
@@ -140,23 +207,13 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
+    let prompt = build_remote_compact_prompt(
         sess.as_ref(),
         turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        /*skills_outcome*/ None,
-        &CancellationToken::new(),
+        prompt_input,
+        base_instructions,
     )
     .await?;
-    let prompt = Prompt {
-        input: prompt_input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
-        personality: turn_context.personality,
-        output_schema: None,
-    };
 
     let mut new_history = sess
         .services
@@ -167,6 +224,7 @@ async fn run_remote_compact_task_inner_impl(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
+            /*mode*/ None,
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
@@ -207,6 +265,31 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+async fn build_remote_compact_prompt(
+    sess: &Session,
+    turn_context: &TurnContext,
+    prompt_input: Vec<ResponseItem>,
+    base_instructions: BaseInstructions,
+) -> CodexResult<Prompt> {
+    let tool_router = built_tools(
+        sess,
+        turn_context,
+        &prompt_input,
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await?;
+    Ok(Prompt {
+        input: prompt_input,
+        tools: tool_router.model_visible_specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: None,
+    })
 }
 
 pub(crate) async fn process_compacted_history(

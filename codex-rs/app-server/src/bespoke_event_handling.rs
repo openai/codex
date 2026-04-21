@@ -1361,7 +1361,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
-        EventMsg::ContextCompacted(..) => {
+        EventMsg::ContextCompacted(_) => {
             // Core still fans out this deprecated event for legacy clients;
             // v2 clients receive the canonical ContextCompaction item instead.
             if matches!(api_version, ApiVersion::V2) {

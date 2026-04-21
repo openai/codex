@@ -104,6 +104,23 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn prefix_compaction_is_experimental_and_user_toggleable() {
+    let spec = Feature::PrefixCompaction.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Prefix compaction"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Precompute history compaction in the background before the normal context compaction threshold is reached."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::PrefixCompaction.default_enabled(), false);
+}
+
+#[test]
 fn external_migration_is_experimental_and_disabled_by_default() {
     let spec = Feature::ExternalMigration.info();
     let stage = spec.stage;
@@ -422,6 +439,21 @@ usage_hint_enabled = false
             usage_hint_text: None,
             hide_spawn_agent_metadata: None,
         }))
+    );
+}
+
+#[test]
+fn prefix_compaction_feature_config_deserializes_bool() {
+    let features: FeaturesToml = toml::from_str(
+        r#"
+prefix_compaction = true
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(
+        features.entries(),
+        BTreeMap::from([("prefix_compaction".to_string(), true)])
     );
 }
 

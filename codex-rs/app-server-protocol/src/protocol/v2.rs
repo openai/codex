@@ -7172,6 +7172,31 @@ mod tests {
     }
 
     #[test]
+    fn context_compaction_thread_item_serializes_without_kind() {
+        let item: ThreadItem = serde_json::from_value(json!({
+            "type": "contextCompaction",
+            "id": "compact-1"
+        }))
+        .expect("thread item should deserialize");
+
+        assert_eq!(
+            item,
+            ThreadItem::ContextCompaction {
+                id: "compact-1".to_string(),
+            }
+        );
+
+        let serialized = serde_json::to_value(&item).expect("thread item should serialize");
+        assert_eq!(
+            serialized,
+            json!({
+                "type": "contextCompaction",
+                "id": "compact-1"
+            })
+        );
+    }
+
+    #[test]
     fn collab_agent_state_maps_interrupted_status() {
         assert_eq!(
             CollabAgentState::from(CoreAgentStatus::Interrupted),
