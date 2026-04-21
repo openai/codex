@@ -8,7 +8,6 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
-use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -364,11 +363,11 @@ pub async fn run_main_with_transport(
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
     let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
         local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
         )?),
+        ..EnvironmentManagerArgs::default()
     }));
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);

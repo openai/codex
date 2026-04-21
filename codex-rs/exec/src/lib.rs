@@ -13,7 +13,6 @@ pub(crate) mod exec_events;
 pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
-use codex_app_server_client::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::EnvironmentManagerArgs;
@@ -500,8 +499,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         feedback: CodexFeedback::new(),
         log_db: None,
         environment_manager: std::sync::Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-            exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
             local_runtime_paths: Some(local_runtime_paths),
+            ..EnvironmentManagerArgs::default()
         })),
         config_warnings,
         session_source: SessionSource::Exec,

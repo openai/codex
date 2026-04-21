@@ -247,7 +247,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
     );
     let thread_1 = manager
@@ -298,7 +298,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         SessionSource::Exec,
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         /*analytics_events_client*/ None,
     );
@@ -435,7 +435,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         SessionSource::Exec,
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         /*analytics_events_client*/ None,
     );
@@ -538,7 +538,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         SessionSource::Exec,
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         /*analytics_events_client*/ None,
     );
@@ -631,7 +631,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         SessionSource::Exec,
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
         /*analytics_events_client*/ None,
     );

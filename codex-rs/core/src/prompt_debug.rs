@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentManagerArgs;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -38,7 +39,7 @@ pub async fn build_prompt_input(
                 .features
                 .enabled(Feature::DefaultModeRequestUserInput),
         },
-        Arc::new(EnvironmentManager::from_env()),
+        Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::default())),
         /*analytics_events_client*/ None,
     );
     let thread = thread_manager.start_thread(config).await?;

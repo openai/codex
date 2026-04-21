@@ -35,7 +35,6 @@ use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
-use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
@@ -428,7 +427,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
         Arc::new(EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs::default(),
+            codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
         )),
     )
     .await
@@ -733,11 +732,11 @@ pub async fn run_main(
     };
 
     let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
         local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
         )?),
+        ..EnvironmentManagerArgs::default()
     }));
     let cwd = cli.cwd.clone();
     let config_cwd =
@@ -1779,7 +1778,7 @@ mod tests {
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default(),
+                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
             )),
         )
         .await
@@ -1941,7 +1940,7 @@ mod tests {
             auth_token: None,
         };
         let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default());
+            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -1956,7 +1955,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
         let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default());
+            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
@@ -1977,7 +1976,7 @@ mod tests {
         let missing = temp_dir.path().join("missing");
         let target = AppServerTarget::Embedded;
         let environment_manager =
-            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default());
+            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs::default_for_tests());
 
         let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
             .expect_err("missing embedded cwd should fail");
@@ -2127,7 +2126,7 @@ mod tests {
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             Arc::new(EnvironmentManager::new(
-                codex_exec_server::EnvironmentManagerArgs::default(),
+                codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
             )),
             |_args| async { Err(std::io::Error::other("boom")) },
         )

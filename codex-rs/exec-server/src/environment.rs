@@ -39,10 +39,28 @@ pub struct EnvironmentManager {
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
 pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EnvironmentManagerArgs {
     pub exec_server_url: Option<String>,
     pub local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+impl Default for EnvironmentManagerArgs {
+    fn default() -> Self {
+        Self {
+            exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
+            local_runtime_paths: None,
+        }
+    }
+}
+
+impl EnvironmentManagerArgs {
+    pub fn default_for_tests() -> Self {
+        Self {
+            exec_server_url: None,
+            local_runtime_paths: None,
+        }
+    }
 }
 
 impl From<Option<String>> for EnvironmentManagerArgs {
@@ -61,12 +79,8 @@ impl Default for EnvironmentManager {
 }
 
 impl EnvironmentManager {
-    /// Builds a manager from process environment variables.
-    pub fn from_env() -> Self {
-        Self::new(EnvironmentManagerArgs {
-            exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
-            local_runtime_paths: None,
-        })
+    pub fn default_for_tests() -> Self {
+        Self::new(EnvironmentManagerArgs::default_for_tests())
     }
 
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
@@ -321,7 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_default_environment_caches_environment() {
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default_for_tests());
 
         let first = manager.default_environment().expect("default environment");
         let second = manager.default_environment().expect("default environment");
@@ -385,7 +399,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_environment_returns_none_for_unknown_id() {
-        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default_for_tests());
 
         assert!(manager.get_environment("does-not-exist").is_none());
     }

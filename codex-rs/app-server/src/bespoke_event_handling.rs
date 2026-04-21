@@ -3498,7 +3498,7 @@ mod tests {
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::new(
-                    codex_exec_server::EnvironmentManagerArgs::default(),
+                    codex_exec_server::EnvironmentManagerArgs::default_for_tests(),
                 )),
             ),
         );
