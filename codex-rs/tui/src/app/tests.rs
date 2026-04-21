@@ -2215,6 +2215,10 @@ async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2374,6 +2378,10 @@ async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> 
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2596,6 +2604,10 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
             ThreadSessionState {
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/agent"),
+                ),
                 rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                 ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
             },
@@ -2649,6 +2661,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            std::path::Path::new("/tmp/main"),
+        ),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -2760,6 +2776,10 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let primary_session = ThreadSessionState {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_workspace_write_policy(),
+            std::path::Path::new("/tmp/main"),
+        ),
         ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
     };
 
@@ -3675,6 +3695,10 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_read_only_policy(),
+            cwd.as_path(),
+        ),
         cwd: cwd.abs(),
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
