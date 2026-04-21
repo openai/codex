@@ -48,7 +48,7 @@ impl RemoteControlServerToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlEnrollmentResult {
     pub(super) enrollment: RemoteControlEnrollment,
-    pub(super) server_token: Option<RemoteControlServerToken>,
+    pub(super) server_token: RemoteControlServerToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,23 +286,9 @@ pub(super) async fn enroll_remote_control_server(
 
 fn remote_control_server_token_from_response(
     enrollment: &EnrollRemoteServerResponse,
-) -> io::Result<Option<RemoteControlServerToken>> {
-    let Some(remote_control_token) = enrollment.remote_control_token.as_ref() else {
-        return Ok(None);
-    };
-    let expires_at = enrollment.expires_at.as_ref().ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidData,
-            "remote control enrollment response included a token without expires_at",
-        )
-    })?;
-    let scopes = enrollment.scopes.as_ref().ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidData,
-            "remote control enrollment response included a token without scopes",
-        )
-    })?;
-    if !scopes
+) -> io::Result<RemoteControlServerToken> {
+    if !enrollment
+        .scopes
         .iter()
         .any(|scope| scope == REMOTE_CONTROL_SERVER_WEBSOCKET_SCOPE)
     {
@@ -311,7 +297,7 @@ fn remote_control_server_token_from_response(
             "remote control enrollment response token is missing server websocket scope",
         ));
     }
-    let expires_at = DateTime::parse_from_rfc3339(expires_at)
+    let expires_at = DateTime::parse_from_rfc3339(&enrollment.expires_at)
         .map_err(|err| {
             io::Error::new(
                 ErrorKind::InvalidData,
@@ -320,10 +306,10 @@ fn remote_control_server_token_from_response(
         })?
         .with_timezone(&Utc);
 
-    Ok(Some(RemoteControlServerToken {
-        bearer_token: remote_control_token.clone(),
+    Ok(RemoteControlServerToken {
+        bearer_token: enrollment.remote_control_token.clone(),
         expires_at,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -498,31 +484,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_server_token_from_response_accepts_legacy_response_without_token() {
-        assert_eq!(
-            remote_control_server_token_from_response(&EnrollRemoteServerResponse {
-                server_id: "srv_e_test".to_string(),
-                environment_id: "env_test".to_string(),
-                remote_control_token: None,
-                expires_at: None,
-                scopes: None,
-            })
-            .expect("legacy response should parse"),
-            None
-        );
-    }
-
-    #[test]
     fn remote_control_server_token_from_response_parses_scoped_token() {
         let server_token = remote_control_server_token_from_response(&EnrollRemoteServerResponse {
             server_id: "srv_e_test".to_string(),
             environment_id: "env_test".to_string(),
-            remote_control_token: Some("remote-control-token".to_string()),
-            expires_at: Some("2026-04-09T12:00:00Z".to_string()),
-            scopes: Some(vec!["remote_control_server_websocket".to_string()]),
+            remote_control_token: "remote-control-token".to_string(),
+            expires_at: "2026-04-09T12:00:00Z".to_string(),
+            scopes: vec!["remote_control_server_websocket".to_string()],
         })
-        .expect("token response should parse")
-        .expect("token should be present");
+        .expect("token response should parse");
 
         assert_eq!(server_token.bearer_token, "remote-control-token");
         assert!(
