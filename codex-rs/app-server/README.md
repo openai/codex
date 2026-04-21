@@ -810,7 +810,13 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
     "cwd": "/Users/me/project",                    // optional; defaults to server cwd
     "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names
     "size": { "rows": 40, "cols": 120 },           // optional; PTY size in character cells, only valid with tty=true
-    "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
+    "permissionProfile": {                         // optional; defaults to user config
+        "fileSystem": { "entries": [
+            { "path": { "type": "special", "value": { "kind": "root" } }, "access": "read" },
+            { "path": { "type": "special", "value": { "kind": "current_working_directory" } }, "access": "write" }
+        ] },
+        "network": { "enabled": false }
+    },
     "outputBytesCap": 1048576,                     // optional; per-stream capture cap
     "disableOutputCap": false,                     // optional; cannot be combined with outputBytesCap
     "timeoutMs": 10000,                            // optional; ms timeout; defaults to server timeout
@@ -823,12 +829,12 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 } }
 ```
 
-- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+- For clients that are already sandboxed externally, set the legacy `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
 
 Notes:
 
 - Empty `command` arrays are rejected.
-- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- Prefer `permissionProfile` for command permission overrides. The legacy `sandboxPolicy` field accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`), but cannot be combined with `permissionProfile`.
 - `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.
 - When omitted, `timeoutMs` falls back to the server default.
 - When omitted, `outputBytesCap` falls back to the server default of 1 MiB per stream.
