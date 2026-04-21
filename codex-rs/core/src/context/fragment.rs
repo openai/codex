@@ -28,12 +28,12 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
     }
 }
 
-/// Context payload that is injected as a user-authored message fragment.
+/// Context payload that is injected as a message fragment.
 ///
-/// Implementations own the response role, start/end markers used to recognize
-/// the fragment, and provide the fragment body appended directly after the
-/// start marker. The default helpers wrap that body and convert it into the
-/// response item shape expected by model input assembly.
+/// Implementations own the response role and provide the fragment body. Marked
+/// fragments also provide start/end markers used to recognize injected context
+/// later; unmarked fragments should leave both markers empty, in which case the
+/// default helpers render only the body and never match arbitrary text.
 pub(crate) trait ContextualUserFragment {
     const ROLE: &'static str;
     const START_MARKER: &'static str;
@@ -45,6 +45,10 @@ pub(crate) trait ContextualUserFragment {
     where
         Self: Sized,
     {
+        if Self::START_MARKER.is_empty() || Self::END_MARKER.is_empty() {
+            return false;
+        }
+
         let trimmed = text.trim_start();
         let starts_with_marker = trimmed
             .get(..Self::START_MARKER.len())
@@ -57,6 +61,10 @@ pub(crate) trait ContextualUserFragment {
     }
 
     fn render(&self) -> String {
+        if Self::START_MARKER.is_empty() || Self::END_MARKER.is_empty() {
+            return self.body();
+        }
+
         format!(
             "{}{}\n{}",
             Self::START_MARKER,
