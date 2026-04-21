@@ -171,6 +171,7 @@ fn normalize_additional_permissions_rejects_glob_read_grants() {
                 },
                 access: FileSystemAccessMode::Read,
             }],
+            glob_scan_max_depth: None,
         }),
         ..Default::default()
     })
@@ -192,6 +193,7 @@ fn normalize_additional_permissions_preserves_deny_globs() {
                 },
                 access: FileSystemAccessMode::None,
             }],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
         }),
         ..Default::default()
     })
@@ -207,6 +209,7 @@ fn normalize_additional_permissions_preserves_deny_globs() {
                     },
                     access: FileSystemAccessMode::None,
                 }],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(2),
             }),
             ..Default::default()
         }
@@ -285,6 +288,76 @@ fn intersect_permission_profiles_drops_explicit_empty_reads_without_grant() {
     assert_eq!(
         intersect_permission_profiles(requested, PermissionProfile::default()),
         PermissionProfile::default()
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_uses_granted_bounded_glob_scan_depth() {
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::None,
+    };
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(4),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![deny_env_files],
+                glob_scan_max_depth: std::num::NonZeroUsize::new(4),
+            }),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_uses_granted_unbounded_glob_scan_depth() {
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::None,
+    };
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted),
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![deny_env_files],
+                glob_scan_max_depth: None,
+            }),
+            ..Default::default()
+        }
     );
 }
 
@@ -400,6 +473,42 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
         }),
         true
     );
+}
+
+#[test]
+fn merge_file_system_policy_with_additional_permissions_carries_bounded_glob_scan_depth() {
+    let deny_env_files = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::None,
+    };
+    let merged_policy = merge_file_system_policy_with_additional_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]),
+        &FileSystemPermissions {
+            entries: vec![deny_env_files.clone()],
+            glob_scan_max_depth: std::num::NonZeroUsize::new(2),
+        },
+    );
+
+    assert_eq!(merged_policy, {
+        let mut policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            deny_env_files,
+        ]);
+        policy.glob_scan_max_depth = Some(2);
+        policy
+    });
 }
 
 #[test]

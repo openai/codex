@@ -19,8 +19,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
-use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
-use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
+use crate::context::ContextualUserFragment;
 use crate::goals::GoalAccountingBoundary;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
@@ -41,7 +40,6 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -64,22 +62,13 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!(
-                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
-            ),
-        }],
-        end_turn: None,
-        phase: None,
-    }
+    ContextualUserFragment::into(crate::context::TurnAborted::new(
+        crate::context::TurnAborted::INTERRUPTED_GUIDANCE,
+    ))
 }
 
 fn emit_turn_network_proxy_metric(

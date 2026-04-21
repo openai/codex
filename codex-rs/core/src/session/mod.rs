@@ -20,6 +20,7 @@ use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::goals::GoalTurnAccountingState;
@@ -156,7 +157,6 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::environment_context::EnvironmentContext;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -252,9 +252,9 @@ use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
 use crate::agents_md::AgentsMdManager;
+use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::instructions::UserInstructions;
 use crate::mcp::McpManager;
 use crate::memories;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
@@ -1789,6 +1789,10 @@ impl Session {
     /// be used to derive the available decisions via
     /// [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -1860,6 +1864,10 @@ impl Session {
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
@@ -1896,13 +1904,18 @@ impl Session {
         rx_approve
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_permissions(
-        &self,
-        turn_context: &TurnContext,
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
+        cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
-        match turn_context.approval_policy.value() {
+        match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
@@ -1923,6 +1936,72 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+            let requested_permissions = args.permissions;
+            let originating_turn_state = {
+                let active = self.active_turn.lock().await;
+                active.as_ref().map(|active| Arc::clone(&active.turn_state))
+            };
+            let review_id = crate::guardian::new_guardian_review_id();
+            let session = Arc::clone(self);
+            let turn = Arc::clone(turn_context);
+            let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
+                id: call_id,
+                turn_id: turn_context.sub_id.clone(),
+                reason: args.reason,
+                permissions: requested_permissions.clone(),
+            };
+            let review_rx = crate::guardian::spawn_approval_request_review(
+                session,
+                turn,
+                review_id,
+                request,
+                /*retry_reason*/ None,
+                cancellation_token.clone(),
+            );
+            let decision = tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => return None,
+                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+            };
+            let response = match decision {
+                ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                    RequestPermissionsResponse {
+                        permissions: requested_permissions,
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+                ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
+                    permissions: requested_permissions,
+                    scope: PermissionGrantScope::Session,
+                },
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment,
+                } => match network_policy_amendment.action {
+                    NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
+                        permissions: requested_permissions,
+                        scope: PermissionGrantScope::Turn,
+                    },
+                    NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    },
+                },
+                ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
+                    RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+            };
+            self.record_granted_request_permissions_for_turn(
+                &response,
+                originating_turn_state.as_ref(),
+            )
+            .await;
+            return Some(response);
+        }
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
@@ -1938,19 +2017,31 @@ impl Session {
             warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
         }
 
-        // TODO(ccunningham): Support auto-review for request_permissions /
-        // with_additional_permissions. V0 still routes this surface through
-        // the existing manual RequestPermissions event flow.
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
-            call_id,
+            call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
         });
-        self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        self.send_event(turn_context.as_ref(), event).await;
+        tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                let mut active = self.active_turn.lock().await;
+                if let Some(at) = active.as_mut() {
+                    let mut ts = at.turn_state.lock().await;
+                    let _ = ts.remove_pending_request_permissions(&call_id);
+                }
+                None
+            }
+            response = rx_response => response.ok(),
+        }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_user_input(
         &self,
         turn_context: &TurnContext,
@@ -1983,6 +2074,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
@@ -2008,36 +2103,33 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
         response: RequestPermissionsResponse,
     ) {
-        let mut granted_for_session = None;
-        let entry = {
+        let (entry, originating_turn_state) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
                     let entry = ts.remove_pending_request_permissions(call_id);
-                    if entry.is_some() && !response.permissions.is_empty() {
-                        match response.scope {
-                            PermissionGrantScope::Turn => {
-                                ts.record_granted_permissions(response.permissions.clone().into());
-                            }
-                            PermissionGrantScope::Session => {
-                                granted_for_session = Some(response.permissions.clone());
-                            }
-                        }
-                    }
-                    entry
+                    let originating_turn_state = entry.as_ref().map(|_| Arc::clone(&at.turn_state));
+                    (entry, originating_turn_state)
                 }
-                None => None,
+                None => (None, None),
             }
         };
-        if let Some(permissions) = granted_for_session {
-            let mut state = self.state.lock().await;
-            state.record_granted_permissions(permissions.into());
+        if entry.is_some() {
+            self.record_granted_request_permissions_for_turn(
+                &response,
+                originating_turn_state.as_ref(),
+            )
+            .await;
         }
         match entry {
             Some(tx_response) => {
@@ -2049,6 +2141,32 @@ impl Session {
         }
     }
 
+    async fn record_granted_request_permissions_for_turn(
+        &self,
+        response: &RequestPermissionsResponse,
+        originating_turn_state: Option<&Arc<Mutex<crate::state::TurnState>>>,
+    ) {
+        if response.permissions.is_empty() {
+            return;
+        }
+        match response.scope {
+            PermissionGrantScope::Turn => {
+                if let Some(turn_state) = originating_turn_state {
+                    let mut ts = turn_state.lock().await;
+                    ts.record_granted_permissions(response.permissions.clone().into());
+                }
+            }
+            PermissionGrantScope::Session => {
+                let mut state = self.state.lock().await;
+                state.record_granted_permissions(response.permissions.clone().into());
+            }
+        }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
     pub(crate) async fn granted_turn_permissions(&self) -> Option<PermissionProfile> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
@@ -2061,6 +2179,10 @@ impl Session {
         state.granted_permissions()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2082,6 +2204,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2242,6 +2368,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP app context rendering reads through the session-owned manager guard"
+    )]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2400,7 +2530,7 @@ impl Session {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
-                .serialize_to_text(),
+                .render(),
             );
         }
         if turn_context.config.include_environment_context {
@@ -2410,9 +2540,9 @@ impl Session {
                 .format_environment_context_subagents(self.conversation_id)
                 .await;
             contextual_user_sections.push(
-                EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
                     .with_subagents(subagents)
-                    .serialize_to_xml(),
+                    .render(),
             );
         }
 
@@ -2704,6 +2834,10 @@ impl Session {
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -2763,6 +2897,10 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -2836,6 +2974,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -2848,6 +2990,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
@@ -2913,6 +3059,10 @@ impl Session {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state reads must remain atomic"
+    )]
     pub async fn has_pending_input(&self) -> bool {
         let (has_turn_pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;
