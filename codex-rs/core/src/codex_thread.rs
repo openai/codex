@@ -24,7 +24,6 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -101,60 +100,28 @@ impl CodexThread {
     pub async fn apply_goal_set_runtime_effects(
         &self,
         goal_status: ThreadGoalStatus,
-        goal_id: String,
-        goal_may_have_in_flight_turn: bool,
-        goal_was_replaced: bool,
         should_continue_active_goal: bool,
     ) {
         match goal_status {
             ThreadGoalStatus::Active if should_continue_active_goal => {
                 self.codex
                     .session
-                    .mark_active_thread_goal_after_external_mutation(goal_id)
-                    .await;
-                self.codex
-                    .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
-                if goal_may_have_in_flight_turn && goal_was_replaced {
-                    self.codex
-                        .session
-                        .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                        .await;
-                }
                 self.codex
                     .session
                     .maybe_start_turn_for_active_goal_continuation()
                     .await;
             }
             ThreadGoalStatus::Active => {}
-            ThreadGoalStatus::BudgetLimited if goal_may_have_in_flight_turn => {
-                self.codex
-                    .session
-                    .clear_queued_goal_continuations_for_next_turn()
-                    .await;
-                if goal_was_replaced {
-                    self.codex
-                        .session
-                        .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                        .await;
-                }
-            }
-            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete
-                if goal_may_have_in_flight_turn =>
-            {
-                self.codex
-                    .session
-                    .clear_queued_goal_continuations_for_next_turn()
-                    .await;
-                self.codex
-                    .session
-                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-                    .await;
-            }
             ThreadGoalStatus::BudgetLimited
             | ThreadGoalStatus::Paused
-            | ThreadGoalStatus::Complete => {}
+            | ThreadGoalStatus::Complete => {
+                self.codex
+                    .session
+                    .clear_queued_goal_continuations_for_next_turn()
+                    .await;
+            }
         }
     }
 
@@ -163,17 +130,6 @@ impl CodexThread {
             .session
             .clear_cached_thread_goal_after_delete()
             .await;
-        self.codex
-            .session
-            .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
-            .await;
-    }
-
-    pub async fn account_goal_progress_before_external_mutation(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .account_thread_goal_progress_before_external_mutation()
-            .await
     }
 
     #[doc(hidden)]

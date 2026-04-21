@@ -22,7 +22,7 @@ use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
-use crate::goals::GoalAccountingState;
+use crate::goals::GoalTurnAccountingState;
 use crate::goals::GoalWallClockAccountingState;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
