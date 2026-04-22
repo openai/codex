@@ -1651,6 +1651,7 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1674,7 +1675,7 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(config.contains("approvals_reviewer = \"auto_review\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
     Ok(())
@@ -1742,6 +1743,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1821,6 +1823,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1832,7 +1835,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(config.contains("approvals_reviewer = \"auto_review\""));
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -1878,6 +1881,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1937,6 +1941,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             approval_policy: Some(guardian_approvals.approval_policy),
             approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
             sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1964,7 +1969,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     );
     assert_eq!(
         profile_config.get("approvals_reviewer"),
-        Some(&TomlValue::String("guardian_subagent".to_string()))
+        Some(&TomlValue::String("auto_review".to_string()))
     );
     Ok(())
 }
@@ -2024,6 +2029,7 @@ guardian_approval = true
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

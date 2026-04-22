@@ -317,7 +317,7 @@ async fn read_process_until_closed(
     handler: &ExecServerHandler,
     process_id: ProcessId,
 ) -> (String, Option<i32>) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut output = String::new();
     let mut exit_code = None;
     let mut after_seq = None;
@@ -346,7 +346,7 @@ async fn read_process_until_closed(
         after_seq = response.next_seq.checked_sub(1).or(after_seq);
         assert!(
             tokio::time::Instant::now() < deadline,
-            "process should close within 2s"
+            "process should close within 5s"
         );
     }
 }

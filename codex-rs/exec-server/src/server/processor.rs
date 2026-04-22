@@ -103,7 +103,9 @@ async fn run_connection(
                                 break;
                             }
                         };
-                        if outgoing_tx.send(message).await.is_err() {
+                        if let Some(message) = message
+                            && outgoing_tx.send(message).await.is_err()
+                        {
                             break;
                         }
                     } else if outgoing_tx
