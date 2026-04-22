@@ -1,4 +1,5 @@
 use super::*;
+use codex_core_skills::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -191,7 +192,7 @@ async fn live_app_server_warning_notification_renders_message() {
     chat.handle_server_notification(
         ServerNotification::Warning(WarningNotification {
             thread_id: None,
-            message: "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.".to_string(),
+            message: SKILL_METADATA_TRUNCATION_WARNING_MESSAGE.to_string(),
         }),
         /*replay_kind*/ None,
     );
@@ -201,13 +202,11 @@ async fn live_app_server_warning_notification_renders_message() {
     let rendered = lines_to_single_string(&cells[0]);
     let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        normalized.contains(
-            "Some enabled skills were not included in the model-visible skills list for this session."
-        ),
+        normalized.contains("A large number of skills are enabled, so some are excluded"),
         "expected warning notification message, got {rendered}"
     );
     assert!(
-        normalized.contains("Mention a skill by name or path if you need it."),
+        normalized.contains("Mention skills by name or path if explicitly needed."),
         "expected warning guidance, got {rendered}"
     );
 }

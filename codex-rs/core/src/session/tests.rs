@@ -14,6 +14,7 @@ use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::skills::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
@@ -4817,7 +4818,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     assert!(
         developer_texts
             .iter()
-            .all(|text| !text.contains(THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE)),
+            .all(|text| !text.contains(SKILL_METADATA_TRUNCATION_WARNING_MESSAGE)),
         "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
     );
     assert!(
@@ -4899,7 +4900,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+            if message == SKILL_METADATA_TRUNCATION_WARNING_MESSAGE
     ));
 
     let _ = session.build_initial_context(&turn_context).await;
@@ -4910,7 +4911,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+            if message == SKILL_METADATA_TRUNCATION_WARNING_MESSAGE
     ));
 }
 

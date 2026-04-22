@@ -273,6 +273,7 @@ use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skills::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
@@ -372,8 +373,6 @@ pub struct Codex {
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
-
-pub(crate) const THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE: &str = "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.";
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
 /// the unique session id.
@@ -2507,7 +2506,7 @@ impl Session {
                     self.send_event_raw(Event {
                         id: String::new(),
                         msg: EventMsg::Warning(WarningEvent {
-                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                            message: SKILL_METADATA_TRUNCATION_WARNING_MESSAGE.to_string(),
                         }),
                     })
                     .await;

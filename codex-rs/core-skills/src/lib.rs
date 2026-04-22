@@ -23,6 +23,7 @@ pub use model::SkillMetadata;
 pub use model::SkillPolicy;
 pub use model::filter_skill_load_outcome_for_product;
 pub use render::AvailableSkills;
+pub use render::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 pub use render::SkillMetadataBudget;
 pub use render::SkillRenderReport;
 pub use render::build_available_skills;

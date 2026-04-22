@@ -9,6 +9,12 @@ use codex_utils_output_truncation::approx_token_count;
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 
+/// Warning shown when enabled skill metadata exceeds the model-visible budget.
+pub const SKILL_METADATA_TRUNCATION_WARNING_MESSAGE: &str = concat!(
+    "A large number of skills are enabled, so some are excluded from the model-visible skills list ",
+    "for this session. Mention skills by name or path if explicitly needed."
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
     Tokens(usize),

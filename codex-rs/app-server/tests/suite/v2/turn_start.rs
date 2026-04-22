@@ -50,6 +50,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use codex_core::skills::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -322,10 +323,7 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     let warning: WarningNotification =
         serde_json::from_value(params).expect("deserialize warning notification");
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
-    assert_eq!(
-        warning.message,
-        "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it."
-    );
+    assert_eq!(warning.message, SKILL_METADATA_TRUNCATION_WARNING_MESSAGE);
 
     timeout(
         DEFAULT_READ_TIMEOUT,

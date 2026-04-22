@@ -16,6 +16,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
+pub use codex_core_skills::SKILL_METADATA_TRUNCATION_WARNING_MESSAGE;
 pub use codex_core_skills::SkillDependencyInfo;
 pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
