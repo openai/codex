@@ -30,8 +30,6 @@ use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
-use crate::goals::GoalRuntimeState;
-use crate::goals::GoalTurnAccountingState;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
@@ -3058,11 +3056,6 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn has_active_turn(&self) -> bool {
-        self.active_turn.lock().await.is_some()
-    }
-
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
         !self.idle_pending_input.lock().await.is_empty()
     }
@@ -3097,12 +3090,10 @@ impl Session {
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         let has_active_turn = { self.active_turn.lock().await.is_some() };
-        if has_active_turn {
-            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        } else {
-            if let Err(err) = self.pause_active_thread_goal_for_interrupt().await {
-                warn!("failed to pause active goal after idle interrupt: {err}");
-            }
+        // Even when no task is active, abort lifecycle hooks may still need to
+        // react to the interrupt for session-level work.
+        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        if !has_active_turn {
             self.cancel_mcp_startup().await;
         }
     }

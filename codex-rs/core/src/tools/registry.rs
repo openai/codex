@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
-use crate::goals::BudgetLimitSteering;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
@@ -29,7 +29,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -473,14 +472,13 @@ impl ToolRegistry {
             }
         }
 
-        if tool_name.name != UPDATE_GOAL_TOOL_NAME
-            && let Err(err) = invocation
-                .session
-                .account_thread_goal_progress(
-                    invocation.turn.as_ref(),
-                    BudgetLimitSteering::Allowed,
-                )
-                .await
+        if let Err(err) = invocation
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+                turn_context: invocation.turn.as_ref(),
+                tool_name: tool_name.name.as_str(),
+            })
+            .await
         {
             warn!("failed to account thread goal progress after tool call: {err}");
         }

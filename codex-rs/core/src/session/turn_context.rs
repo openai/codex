@@ -82,7 +82,6 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
-    pub(crate) goal_accounting: GoalTurnAccountingState,
 }
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -217,7 +216,6 @@ impl TurnContext {
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
-            goal_accounting: GoalTurnAccountingState::new(),
         }
     }
 
@@ -470,7 +468,6 @@ impl Session {
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
-            goal_accounting: GoalTurnAccountingState::new(),
         }
     }
 

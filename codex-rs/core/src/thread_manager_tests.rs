@@ -805,7 +805,16 @@ async fn resumed_thread_activates_paused_goal_and_starts_continuation() -> anyho
         .await?
         .expect("goal should still exist after resume");
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
-    assert!(resumed.thread.codex.session.has_active_turn().await);
+    assert!(
+        resumed
+            .thread
+            .codex
+            .session
+            .active_turn
+            .lock()
+            .await
+            .is_some()
+    );
 
     resumed.thread.shutdown_and_wait().await?;
     Ok(())

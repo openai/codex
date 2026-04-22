@@ -44,6 +44,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
 use crate::RolloutRecorderParams;
+use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
@@ -5991,9 +5992,7 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     );
     assert_eq!(70, goal.tokens_used);
 
-    sess.maybe_start_turn_for_pending_work_or_goal_continuation()
-        .await;
-    assert!(!sess.has_active_turn().await);
+    assert!(sess.active_turn.lock().await.is_none());
 
     Ok(())
 }
@@ -6020,15 +6019,19 @@ async fn goal_continuation_without_tool_calls_suppresses_next_continuation() -> 
         },
     )
     .await;
-    sess.mark_thread_goal_continuation_turn_started(tc.sub_id.clone())
-        .await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ContinuationTurnStarted {
+        turn_id: tc.sub_id.clone(),
+    })
+    .await?;
 
     sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
         .await;
     tokio::task::yield_now().await;
 
     assert!(
-        sess.goal_continuation_items_if_active().await.is_none(),
+        sess.goal_runtime
+            .continuation_suppressed
+            .load(std::sync::atomic::Ordering::SeqCst),
         "a continuation turn that made no tool calls should wait for new input"
     );
 
@@ -6043,7 +6046,10 @@ async fn goal_continuation_without_tool_calls_suppresses_next_continuation() -> 
     .await?;
 
     assert!(
-        sess.goal_continuation_items_if_active().await.is_some(),
+        !sess
+            .goal_runtime
+            .continuation_suppressed
+            .load(std::sync::atomic::Ordering::SeqCst),
         "mutating the goal should allow continuation again"
     );
 
@@ -6216,8 +6222,8 @@ async fn plan_mode_resume_does_not_activate_paused_goal() -> anyhow::Result<()> 
         state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
     }
 
-    let activated = sess.activate_paused_thread_goal_after_resume().await?;
-    assert!(!activated);
+    sess.goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
+        .await?;
 
     let config = sess.get_config().await;
     let state_db = codex_state::StateRuntime::init(
@@ -6252,7 +6258,11 @@ async fn plan_mode_interrupt_does_not_pause_active_goal() -> anyhow::Result<()> 
         state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
     }
 
-    sess.pause_active_thread_goal_for_interrupt().await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+        turn_context: None,
+        reason: TurnAbortReason::Interrupted,
+    })
+    .await?;
 
     let config = sess.get_config().await;
     let state_db = codex_state::StateRuntime::init(
@@ -6281,8 +6291,11 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         },
     )
     .await?;
-    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
-        .await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+        turn_context: tc.as_ref(),
+        token_usage: TokenUsage::default(),
+    })
+    .await?;
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
@@ -6306,8 +6319,11 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     )
     .await;
 
-    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::BudgetLimitSteering::Allowed)
-        .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+        turn_context: tc.as_ref(),
+        tool_name: "shell",
+    })
+    .await?;
 
     let pending_input = sess.get_pending_input().await;
     let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
@@ -6319,7 +6335,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     };
     assert!(text.contains("budget_limited"));
     assert!(text.to_lowercase().contains("wrap up this turn soon"));
-    assert!(sess.has_active_turn().await);
+    assert!(sess.active_turn.lock().await.is_some());
     while let Ok(event) = rx.try_recv() {
         assert!(
             !matches!(event.msg, EventMsg::TurnAborted(_)),
@@ -6351,8 +6367,10 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         },
     )
     .await;
-    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::BudgetLimitSteering::Suppressed)
-        .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompletedGoal {
+        turn_context: tc.as_ref(),
+    })
+    .await?;
 
     let goal = state_db
         .get_thread_goal(sess.conversation_id)
@@ -6361,17 +6379,17 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
     assert_eq!(40, goal.tokens_used);
 
-    sess.mark_thread_goal_turn_started(
-        tc.as_ref(),
-        TokenUsage {
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+        turn_context: tc.as_ref(),
+        token_usage: TokenUsage {
             input_tokens: 30,
             cached_input_tokens: 0,
             output_tokens: 10,
             reasoning_output_tokens: 0,
             total_tokens: 40,
         },
-    )
-    .await;
+    })
+    .await?;
     set_total_token_usage(
         &sess,
         TokenUsage {
@@ -6383,8 +6401,10 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         },
     )
     .await;
-    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::BudgetLimitSteering::Suppressed)
-        .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompletedGoal {
+        turn_context: tc.as_ref(),
+    })
+    .await?;
 
     let goal = state_db
         .get_thread_goal(sess.conversation_id)
@@ -6421,7 +6441,8 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
-    sess.account_thread_goal_before_external_mutation().await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
+        .await?;
 
     let config = sess.get_config().await;
     let state_db = codex_state::StateRuntime::init(
@@ -6446,9 +6467,12 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         )
         .await?
         .expect("goal status update should succeed");
-    sess.clear_stopped_thread_goal_runtime_state().await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        status: codex_state::ThreadGoalStatus::Complete,
+    })
+    .await?;
 
-    assert!(sess.has_active_turn().await);
+    assert!(sess.active_turn.lock().await.is_some());
     let goal = state_db
         .get_thread_goal(sess.conversation_id)
         .await?
@@ -6484,7 +6508,8 @@ async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> a
     .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
-    sess.account_thread_goal_before_external_mutation().await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
+        .await?;
 
     let config = sess.get_config().await;
     let state_db = codex_state::StateRuntime::init(
@@ -6509,8 +6534,10 @@ async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> a
         )
         .await?
         .expect("goal status update should succeed");
-    sess.apply_external_thread_goal_status(codex_state::ThreadGoalStatus::BudgetLimited)
-        .await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        status: codex_state::ThreadGoalStatus::BudgetLimited,
+    })
+    .await?;
 
     set_total_token_usage(
         &sess,
@@ -6523,12 +6550,12 @@ async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> a
         },
     )
     .await;
-    sess.finish_thread_goal_turn(
-        tc.as_ref(),
-        /*turn_completed*/ true,
-        /*turn_tool_calls*/ 1,
-    )
-    .await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
+        turn_context: tc.as_ref(),
+        turn_completed: true,
+        tool_calls: 1,
+    })
+    .await?;
 
     let goal = state_db
         .get_thread_goal(sess.conversation_id)

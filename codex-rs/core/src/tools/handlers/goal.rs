@@ -5,8 +5,8 @@
 //! the existing goal complete.
 
 use crate::function_tool::FunctionCallError;
-use crate::goals::BudgetLimitSteering;
 use crate::goals::CreateGoalRequest;
+use crate::goals::GoalRuntimeEvent;
 use crate::goals::SetGoalRequest;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -24,6 +24,7 @@ use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 pub struct GoalHandler;
 
@@ -96,9 +97,7 @@ impl ToolHandler for GoalHandler {
             CREATE_GOAL_TOOL_NAME => {
                 handle_create_goal(session.as_ref(), turn.as_ref(), &arguments).await
             }
-            UPDATE_GOAL_TOOL_NAME => {
-                handle_update_goal(session.as_ref(), turn.as_ref(), &arguments).await
-            }
+            UPDATE_GOAL_TOOL_NAME => handle_update_goal(&session, turn.as_ref(), &arguments).await,
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
             ))),
@@ -146,7 +145,7 @@ async fn handle_create_goal(
 }
 
 async fn handle_update_goal(
-    session: &Session,
+    session: &Arc<Session>,
     turn_context: &TurnContext,
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -158,7 +157,7 @@ async fn handle_update_goal(
         ));
     }
     session
-        .account_thread_goal_progress(turn_context, BudgetLimitSteering::Suppressed)
+        .goal_runtime_apply(GoalRuntimeEvent::ToolCompletedGoal { turn_context })
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
     let goal = session
