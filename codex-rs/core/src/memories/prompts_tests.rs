@@ -59,15 +59,16 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
 fn build_consolidation_prompt_points_to_workspace_diff_and_extension_tree() {
     let temp = tempdir().unwrap();
     let memory_root = temp.path().join("memories");
-    std::fs::create_dir_all(memory_root.join("extensions")).unwrap();
+    let memory_extensions_root = memory_root.join("extensions");
+    std::fs::create_dir_all(&memory_extensions_root).unwrap();
 
     let prompt = build_consolidation_prompt(&memory_root);
 
     assert!(prompt.contains("Memory workspace diff:"));
     assert!(prompt.contains("phase2_workspace_diff.md"));
     assert!(prompt.contains(&format!(
-        "Memory extensions (under {}/extensions/):",
-        memory_root.display()
+        "Memory extensions (under {}/):",
+        memory_extensions_root.display()
     )));
     assert!(prompt.contains("workspace diff shows deleted extension resource files"));
 }
