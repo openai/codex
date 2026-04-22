@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/title_setup.rs
+expression: "render_lines(&view, 84)"
+---
+                                                                                    
+  Configure Terminal Title                                                          
+  Select which items to display in the terminal title.                              
+                                                                                    
+  Type to search                                                                    
+  >                                                                                 
+› [x] project-name       Project name (falls back to current directory name)        
+  [x] spinner            Animated task spinner (omitted while idle or when animat…  
+  [x] run-state          Compact session run-state text (Ready, Working, Thinking)  
+  [x] thread-title       Current thread title (omitted when unavailable)            
+  [ ] app-name           Codex app name                                             
+  [ ] current-dir        Current working directory                                  
+  [ ] git-branch         Current Git branch (omitted when unavailable)              
+  [ ] context-remaining  Percentage of context window remaining (omitted when unk…  
+                                                                                    
+  my-project ⠋ Working | thread title                                               
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

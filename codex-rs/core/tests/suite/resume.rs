@@ -86,6 +86,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Record some messages".into(),
                 text_elements: text_elements.clone(),
@@ -172,6 +173,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Record reasoning messages".into(),
                 text_elements: Vec::new(),
@@ -262,6 +264,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Record initial instructions".into(),
                 text_elements: Vec::new(),
@@ -303,6 +306,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     resumed
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Resume with different model".into(),
                 text_elements: Vec::new(),
@@ -319,6 +323,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     resumed
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Second turn after resume".into(),
                 text_elements: Vec::new(),
@@ -390,6 +395,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     .await;
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Record initial instructions".into(),
                 text_elements: Vec::new(),
@@ -434,6 +440,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     resumed
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn after override".into(),
                 text_elements: Vec::new(),

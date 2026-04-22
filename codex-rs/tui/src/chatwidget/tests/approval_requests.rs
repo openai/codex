@@ -151,11 +151,14 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
         .expect("absolute read path");
     let write_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/write")))
         .expect("absolute write path");
+    let cwd =
+        AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp"))).expect("absolute cwd");
 
     let request = request_permissions_from_params(AppServerPermissionsRequestApprovalParams {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
         item_id: "item-1".to_string(),
+        cwd: cwd.clone(),
         reason: Some("Select a workspace root".to_string()),
         permissions: codex_app_server_protocol::RequestPermissionProfile {
             network: Some(AppServerAdditionalNetworkPermissions {
@@ -182,6 +185,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
             )),
         }
     );
+    assert_eq!(request.cwd, Some(cwd));
 }
 
 #[tokio::test]

@@ -65,6 +65,10 @@ common:ci --verbose_failures
 common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
 common:ci --build_metadata=ROLE=CI
 common:ci --build_metadata=VISIBILITY=PUBLIC
+# rules_rust derives debug level from Bazel toolchain/compilation-mode settings,
+# not Cargo profiles. Keep CI Rust actions explicit and lean.
+common:ci --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+common:ci --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
 
 # Disable disk cache in CI since we have a remote one and aren't using persistent workers.
 common:ci --disk_cache=

@@ -15,6 +15,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::hook_names::HookToolName;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -131,12 +132,25 @@ impl AnyToolResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
+    /// Hook-facing tool name model.
+    ///
+    /// The canonical name is serialized to hook stdin, while aliases are used
+    /// only for matcher compatibility.
+    pub(crate) tool_name: HookToolName,
+    /// Command-shaped input exposed at `tool_input.command`.
     pub(crate) command: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
+    /// Hook-facing tool name model.
+    ///
+    /// Keep this aligned with the corresponding pre-use payload so external
+    /// hook consumers can pair events by `tool_use_id`.
+    pub(crate) tool_name: HookToolName,
+    /// Command-shaped input exposed at `tool_input.command`.
     pub(crate) command: String,
+    /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
 }
 
@@ -332,6 +346,8 @@ impl ToolRegistry {
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
+                pre_tool_use_payload.tool_name.name().to_string(),
+                pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
                 pre_tool_use_payload.command.clone(),
             )
             .await
@@ -402,6 +418,8 @@ impl ToolRegistry {
                     &invocation.session,
                     &invocation.turn,
                     invocation.call_id.clone(),
+                    post_tool_use_payload.tool_name.name().to_string(),
+                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
                     post_tool_use_payload.command,
                     post_tool_use_payload.tool_response,
                 )

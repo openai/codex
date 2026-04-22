@@ -2,7 +2,7 @@ use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
-use crate::config_api::apply_runtime_feature_enablement;
+use crate::config_manager::ConfigManager;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
@@ -32,6 +32,7 @@ use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -222,8 +223,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_config::ThreadConfigLoader;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
@@ -241,9 +240,6 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::load_config_layers_state;
 use codex_core::config_loader::project_trust_key;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
@@ -275,6 +271,12 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::remote::RemoteMarketplace;
+use codex_core_plugins::remote::RemotePluginCatalogError;
+use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
+use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -290,16 +292,15 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
-use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
-use codex_mcp::collect_mcp_server_status_snapshot_with_detail_and_authorization_header;
+use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::discover_supported_scopes;
-use codex_mcp::effective_mcp_servers_with_authorization_header;
+use codex_mcp::effective_mcp_servers;
 use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -333,6 +334,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -358,16 +360,13 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams as StoreUpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -391,6 +390,7 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod plugins;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
@@ -491,10 +491,7 @@ pub(crate) struct CodexMessageProcessor {
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     thread_store: Arc<dyn ThreadStore>,
-    cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
-    cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
-    thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
@@ -651,11 +648,10 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
+    /// Startup config used as the process baseline. Fresh effective config loads
+    /// go through `config_manager`.
     pub(crate) config: Arc<Config>,
-    pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    pub(crate) runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
-    pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
-    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    pub(crate) config_manager: ConfigManager,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
 }
@@ -740,10 +736,7 @@ impl CodexMessageProcessor {
             analytics_events_client,
             arg0_paths,
             config,
-            cli_overrides,
-            runtime_feature_enablement,
-            cloud_requirements,
-            thread_config_loader,
+            config_manager,
             feedback,
             log_db,
         } = args;
@@ -755,10 +748,7 @@ impl CodexMessageProcessor {
             arg0_paths,
             thread_store: configured_thread_store(&config),
             config,
-            cli_overrides,
-            runtime_feature_enablement,
-            cloud_requirements,
-            thread_config_loader,
+            config_manager,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
@@ -776,44 +766,14 @@ impl CodexMessageProcessor {
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
-        let cloud_requirements = self.current_cloud_requirements();
-        let mut config = codex_core::config::ConfigBuilder::default()
-            .cli_overrides(self.current_cli_overrides())
-            .fallback_cwd(fallback_cwd)
-            .cloud_requirements(cloud_requirements)
-            .build()
+        self.config_manager
+            .load_latest_config(fallback_cwd)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to reload config: {err}"),
                 data: None,
-            })?;
-        apply_runtime_feature_enablement(&mut config, &self.current_runtime_feature_enablement());
-        config.codex_self_exe = self.arg0_paths.codex_self_exe.clone();
-        config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
-        config.main_execve_wrapper_exe = self.arg0_paths.main_execve_wrapper_exe.clone();
-        Ok(config)
-    }
-
-    fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
-        self.cloud_requirements
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
-    fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
-        self.cli_overrides
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
-    fn current_runtime_feature_enablement(&self) -> BTreeMap<String, bool> {
-        self.runtime_feature_enablement
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+            })
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -1211,6 +1171,11 @@ impl CodexMessageProcessor {
                 self.command_exec_terminate(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::DeviceKeyCreate { .. }
+            | ClientRequest::DeviceKeyPublic { .. }
+            | ClientRequest::DeviceKeySign { .. } => {
+                warn!("Device key request reached CodexMessageProcessor unexpectedly");
+            }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. }
@@ -1444,10 +1409,8 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
-                    let cloud_requirements = self.cloud_requirements.clone();
+                    let config_manager = self.config_manager.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let codex_home = self.config.codex_home.to_path_buf();
-                    let cli_overrides = self.current_cli_overrides();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1477,17 +1440,13 @@ impl CodexMessageProcessor {
 
                         if success {
                             auth_manager.reload();
-                            replace_cloud_requirements_loader(
-                                cloud_requirements.as_ref(),
+                            config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
-                                codex_home,
                             );
-                            sync_default_client_residency_requirement(
-                                &cli_overrides,
-                                cloud_requirements.as_ref(),
-                            )
-                            .await;
+                            config_manager
+                                .sync_default_client_residency_requirement()
+                                .await;
 
                             // Notify clients with the actual current auth mode.
                             let auth = auth_manager.auth_cached();
@@ -1561,10 +1520,8 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
-                    let cloud_requirements = self.cloud_requirements.clone();
+                    let config_manager = self.config_manager.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-                    let codex_home = self.config.codex_home.to_path_buf();
-                    let cli_overrides = self.current_cli_overrides();
                     tokio::spawn(async move {
                         let (success, error_msg) = tokio::select! {
                             _ = cancel.cancelled() => {
@@ -1591,17 +1548,13 @@ impl CodexMessageProcessor {
 
                         if success {
                             auth_manager.reload();
-                            replace_cloud_requirements_loader(
-                                cloud_requirements.as_ref(),
+                            config_manager.replace_cloud_requirements_loader(
                                 auth_manager.clone(),
                                 chatgpt_base_url,
-                                codex_home,
                             );
-                            sync_default_client_residency_requirement(
-                                &cli_overrides,
-                                cloud_requirements.as_ref(),
-                            )
-                            .await;
+                            config_manager
+                                .sync_default_client_residency_requirement()
+                                .await;
 
                             let auth = auth_manager.auth_cached();
                             let payload_v2 = AccountUpdatedNotification {
@@ -1731,14 +1684,12 @@ impl CodexMessageProcessor {
             return;
         }
         self.auth_manager.reload();
-        replace_cloud_requirements_loader(
-            self.cloud_requirements.as_ref(),
+        self.config_manager.replace_cloud_requirements_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
-            self.config.codex_home.to_path_buf(),
         );
-        let cli_overrides = self.current_cli_overrides();
-        sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
+        self.config_manager
+            .sync_default_client_residency_requirement()
             .await;
 
         self.outgoing
@@ -2053,28 +2004,12 @@ impl CodexMessageProcessor {
             });
         }
 
-        let authorization_header_value = self
-            .auth_manager
-            .chatgpt_authorization_header_for_auth(&auth)
-            .await;
-        let mut client = BackendClient::new(self.config.chatgpt_base_url.clone())
-            .map(|client| {
-                client.with_user_agent(codex_login::default_client::get_codex_user_agent())
-            })
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?;
-        if let Some(authorization_header_value) = authorization_header_value {
-            client = client.with_authorization_header_value(authorization_header_value);
-        }
-        if let Some(account_id) = auth.get_account_id() {
-            client = client.with_chatgpt_account_id(account_id);
-        }
-        if auth.is_fedramp_account() {
-            client = client.with_fedramp_routing_header();
-        }
 
         let snapshots = client
             .get_rate_limits_many()
@@ -2449,8 +2384,6 @@ impl CodexMessageProcessor {
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
-        let cloud_requirements = self.current_cloud_requirements();
-        let cli_overrides = self.current_cli_overrides();
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
@@ -2463,15 +2396,11 @@ impl CodexMessageProcessor {
             codex_home: self.config.codex_home.to_path_buf(),
         };
         let request_trace = request_context.request_trace();
-        let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let thread_config_loader = Arc::clone(&self.thread_config_loader);
+        let config_manager = self.config_manager.clone();
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
-                cli_overrides,
-                runtime_feature_enablement,
-                cloud_requirements,
-                thread_config_loader,
+                config_manager,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
@@ -2545,10 +2474,7 @@ impl CodexMessageProcessor {
     #[allow(clippy::too_many_arguments)]
     async fn thread_start_task(
         listener_task_context: ListenerTaskContext,
-        cli_overrides: Vec<(String, TomlValue)>,
-        runtime_feature_enablement: BTreeMap<String, bool>,
-        cloud_requirements: CloudRequirementsLoader,
-        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+        config_manager: ConfigManager,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -2562,16 +2488,9 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let mut config = match derive_config_from_params(
-            &cli_overrides,
-            config_overrides.clone(),
-            typesafe_overrides.clone(),
-            Arc::clone(&thread_config_loader),
-            &cloud_requirements,
-            &listener_task_context.codex_home,
-            &runtime_feature_enablement,
-        )
-        .await
+        let mut config = match config_manager
+            .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+            .await
         {
             Ok(config) => config,
             Err(err) => {
@@ -2610,6 +2529,7 @@ impl CodexMessageProcessor {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
                 .unwrap_or_else(|| config.cwd.clone());
+            let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
                 codex_core::config::set_project_trust_level(
@@ -2631,7 +2551,7 @@ impl CodexMessageProcessor {
                     project_trust_key(trust_target.as_path()),
                     TomlValue::Table(project),
                 );
-                cli_overrides_with_trust = cli_overrides
+                cli_overrides_with_trust = current_cli_overrides
                     .iter()
                     .cloned()
                     .chain(std::iter::once((
@@ -2641,19 +2561,17 @@ impl CodexMessageProcessor {
                     .collect::<Vec<_>>();
                 cli_overrides_with_trust.as_slice()
             } else {
-                &cli_overrides
+                current_cli_overrides.as_slice()
             };
 
-            config = match derive_config_from_params(
-                cli_overrides_for_reload,
-                config_overrides,
-                typesafe_overrides,
-                thread_config_loader,
-                &cloud_requirements,
-                &listener_task_context.codex_home,
-                &runtime_feature_enablement,
-            )
-            .await
+            config = match config_manager
+                .load_with_cli_overrides(
+                    cli_overrides_for_reload,
+                    config_overrides,
+                    typesafe_overrides,
+                    /*fallback_cwd*/ None,
+                )
+                .await
             {
                 Ok(config) => config,
                 Err(err) => {
@@ -4437,19 +4355,10 @@ impl CodexMessageProcessor {
             .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let cloud_requirements = self.current_cloud_requirements();
-        let cli_overrides = self.current_cli_overrides();
-        let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let config = match derive_config_for_cwd(
-            &cli_overrides,
-            request_overrides,
-            typesafe_overrides,
-            history_cwd,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
-        )
-        .await
+        let config = match self
+            .config_manager
+            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+            .await
         {
             Ok(config) => config,
             Err(err) => {
@@ -5034,19 +4943,10 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let cloud_requirements = self.current_cloud_requirements();
-        let cli_overrides = self.current_cli_overrides();
-        let runtime_feature_enablement = self.current_runtime_feature_enablement();
-        let config = match derive_config_for_cwd(
-            &cli_overrides,
-            request_overrides,
-            typesafe_overrides,
-            history_cwd,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
-        )
-        .await
+        let config = match self
+            .config_manager
+            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+            .await
         {
             Ok(config) => config,
             Err(err) => {
@@ -5827,137 +5727,135 @@ impl CodexMessageProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth_manager = Arc::clone(&self.auth_manager);
-        let auth = auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
+        let auth = self.auth_manager.auth().await;
+        let environment_manager = self.thread_manager.environment_manager();
+        let runtime_environment = match environment_manager.default_environment() {
+            Some(environment) => {
                 // Status listing has no turn cwd. This fallback is used only
                 // by executor-backed stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
+            None => McpRuntimeEnvironment::new(
+                environment_manager.local_environment(),
                 config.cwd.to_path_buf(),
             ),
-            Err(err) => {
-                // TODO(aibrahim): Investigate degrading MCP status listing when
-                // executor environment creation fails.
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request, error).await;
-                return;
-            }
         };
 
         tokio::spawn(async move {
-            let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
-                McpServerStatusDetail::Full => McpSnapshotDetail::Full,
-                McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
-            };
-
-            let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-                auth_manager
-                    .chatgpt_authorization_header_for_auth(auth)
-                    .await
-            } else {
-                None
-            };
-            let snapshot = collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                request.request_id.to_string(),
+            Self::list_mcp_server_status_task(
+                outgoing,
+                request,
+                params,
+                config,
+                mcp_config,
+                auth,
                 runtime_environment,
-                detail,
-                background_authorization_header_value.as_deref(),
             )
             .await;
-
-            let effective_servers = effective_mcp_servers_with_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                background_authorization_header_value.as_deref(),
-            );
-            let McpServerStatusSnapshot {
-                tools_by_server,
-                resources,
-                resource_templates,
-                auth_statuses,
-            } = snapshot;
-
-            let mut server_names: Vec<String> = config
-                .mcp_servers
-                .keys()
-                .cloned()
-                // Include built-in/plugin MCP servers that are present in the
-                // effective runtime config even when they are not user-declared in
-                // `config.mcp_servers`.
-                .chain(effective_servers.keys().cloned())
-                .chain(auth_statuses.keys().cloned())
-                .chain(resources.keys().cloned())
-                .chain(resource_templates.keys().cloned())
-                .collect();
-            server_names.sort();
-            server_names.dedup();
-
-            let total = server_names.len();
-            let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
-            let effective_limit = limit.min(total);
-            let start = match params.cursor {
-                Some(cursor) => match cursor.parse::<usize>() {
-                    Ok(idx) => idx,
-                    Err(_) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid cursor: {cursor}"),
-                            data: None,
-                        };
-                        outgoing.send_error(request, error).await;
-                        return;
-                    }
-                },
-                None => 0,
-            };
-
-            if start > total {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("cursor {start} exceeds total MCP servers {total}"),
-                    data: None,
-                };
-                outgoing.send_error(request, error).await;
-                return;
-            }
-
-            let end = start.saturating_add(effective_limit).min(total);
-
-            let data: Vec<McpServerStatus> = server_names[start..end]
-                .iter()
-                .map(|name| McpServerStatus {
-                    name: name.clone(),
-                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                    resources: resources.get(name).cloned().unwrap_or_default(),
-                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                    auth_status: auth_statuses
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                        .into(),
-                })
-                .collect();
-
-            let next_cursor = if end < total {
-                Some(end.to_string())
-            } else {
-                None
-            };
-
-            let response = ListMcpServerStatusResponse { data, next_cursor };
-
-            outgoing.send_response(request, response).await;
         });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        params: ListMcpServerStatusParams,
+        config: Config,
+        mcp_config: codex_mcp::McpConfig,
+        auth: Option<CodexAuth>,
+        runtime_environment: McpRuntimeEnvironment,
+    ) {
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_server_status_snapshot_with_detail(
+            &mcp_config,
+            auth.as_ref(),
+            request_id.request_id.to_string(),
+            runtime_environment,
+            detail,
+        )
+        .await;
+
+        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let McpServerStatusSnapshot {
+            tools_by_server,
+            resources,
+            resource_templates,
+            auth_statuses,
+        } = snapshot;
+
+        let mut server_names: Vec<String> = config
+            .mcp_servers
+            .keys()
+            .cloned()
+            // Include built-in/plugin MCP servers that are present in the
+            // effective runtime config even when they are not user-declared in
+            // `config.mcp_servers`.
+            .chain(effective_servers.keys().cloned())
+            .chain(auth_statuses.keys().cloned())
+            .chain(resources.keys().cloned())
+            .chain(resource_templates.keys().cloned())
+            .collect();
+        server_names.sort();
+        server_names.dedup();
+
+        let total = server_names.len();
+        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = limit.min(total);
+        let start = match params.cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total MCP servers {total}"),
+                data: None,
+            };
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+
+        let data: Vec<McpServerStatus> = server_names[start..end]
+            .iter()
+            .map(|name| McpServerStatus {
+                name: name.clone(),
+                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                resources: resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                auth_status: auth_statuses
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
+            })
+            .collect();
+
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        let response = ListMcpServerStatusResponse { data, next_cursor };
+
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn read_mcp_resource(
@@ -5999,25 +5897,14 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
-                // Resource reads without a thread have no turn cwd. This fallback
-                // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
-                config.cwd.to_path_buf(),
-            ),
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let runtime_environment = {
+            let environment_manager = self.thread_manager.environment_manager();
+            let environment = environment_manager
+                .default_environment()
+                .unwrap_or_else(|| environment_manager.local_environment());
+            // Resource reads without a thread have no turn cwd. This fallback
+            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
+            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
         };
 
         tokio::spawn(async move {
@@ -6083,17 +5970,19 @@ impl CodexMessageProcessor {
         params: McpServerToolCallParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+        let thread_id = params.thread_id.clone();
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(thread) => thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+        let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
 
         tokio::spawn(async move {
             let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, params.meta)
+                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
                 .await;
             match result {
                 Ok(result) => {
@@ -6363,8 +6252,9 @@ impl CodexMessageProcessor {
 
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
+        let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config).await;
+            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
         });
     }
 
@@ -6373,6 +6263,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
+        environment_manager: Arc<EnvironmentManager>,
     ) {
         let AppsListParams {
             cursor,
@@ -6407,12 +6298,15 @@ impl CodexMessageProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
-                &accessible_config,
-                force_refetch,
-            )
-            .await
-            .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result =
+                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                    &accessible_config,
+                    force_refetch,
+                    &environment_manager,
+                )
+                .await
+                .map(|status| status.connectors)
+                .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
@@ -6602,25 +6496,11 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => Some(environment.get_filesystem()),
-            Ok(None) => None,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to create environment: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let cli_overrides = self.current_cli_overrides();
-        let host_name = codex_config::host_name();
+        let fs = self
+            .thread_manager
+            .environment_manager()
+            .default_environment()
+            .map(|environment| environment.get_filesystem());
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
@@ -6641,17 +6521,10 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let config_layer_stack = match load_config_layers_state(
-                LOCAL_FS.as_ref(),
-                &self.config.codex_home,
-                Some(cwd_abs.clone()),
-                &cli_overrides,
-                LoaderOverrides::default(),
-                CloudRequirementsLoader::default(),
-                self.thread_config_loader.as_ref(),
-                host_name.as_deref(),
-            )
-            .await
+            let config_layer_stack = match self
+                .config_manager
+                .load_config_layers_for_cwd(cwd_abs.clone())
+                .await
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
@@ -6699,7 +6572,6 @@ impl CodexMessageProcessor {
             .send_response(request_id, SkillsListResponse { data })
             .await;
     }
-
     async fn marketplace_remove(
         &self,
         request_id: ConnectionRequestId,
@@ -6733,120 +6605,6 @@ impl CodexMessageProcessor {
             }
         }
     }
-
-    async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginListParams { cwds } = params;
-        let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
-
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
-        let auth = self.auth_manager.auth().await;
-
-        let config_for_marketplace_listing = config.clone();
-        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-        let (data, marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager_for_marketplace_listing
-                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
-            Ok::<
-                (
-                    Vec<PluginMarketplaceEntry>,
-                    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
-                ),
-                MarketplaceError,
-            >((
-                outcome
-                    .marketplaces
-                    .into_iter()
-                    .map(|marketplace| PluginMarketplaceEntry {
-                        name: marketplace.name,
-                        path: Some(marketplace.path),
-                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
-                            display_name: interface.display_name,
-                        }),
-                        plugins: marketplace
-                            .plugins
-                            .into_iter()
-                            .map(|plugin| PluginSummary {
-                                id: plugin.id,
-                                installed: plugin.installed,
-                                enabled: plugin.enabled,
-                                name: plugin.name,
-                                source: marketplace_plugin_source_to_info(plugin.source),
-                                install_policy: plugin.policy.installation.into(),
-                                auth_policy: plugin.policy.authentication.into(),
-                                interface: plugin.interface.map(local_plugin_interface_to_info),
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-                outcome
-                    .errors
-                    .into_iter()
-                    .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
-                        marketplace_path: err.path,
-                        message: err.message,
-                    })
-                    .collect(),
-            ))
-        })
-        .await
-        {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
-                self.send_marketplace_error(request_id, err, "list marketplace plugins")
-                    .await;
-                return;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to list marketplace plugins: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let featured_plugin_ids = if data
-            .iter()
-            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        {
-            match plugins_manager
-                .featured_plugin_ids_for_config(&config, auth.as_ref())
-                .await
-            {
-                Ok(featured_plugin_ids) => featured_plugin_ids,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "plugin/list featured plugin fetch failed; returning empty featured ids"
-                    );
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
-        self.outgoing
-            .send_response(
-                request_id,
-                PluginListResponse {
-                    marketplaces: data,
-                    marketplace_load_errors,
-                    featured_plugin_ids,
-                },
-            )
-            .await;
-    }
-
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
@@ -6878,106 +6636,6 @@ impl CodexMessageProcessor {
                 self.send_internal_error(request_id, message).await;
             }
         }
-    }
-
-    async fn plugin_read(&self, request_id: ConnectionRequestId, params: PluginReadParams) {
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginReadParams {
-            marketplace_path,
-            remote_marketplace_name,
-            plugin_name,
-        } = params;
-        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
-            (Some(marketplace_path), None) => marketplace_path,
-            (None, Some(remote_marketplace_name)) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "remote plugin read is not supported yet for marketplace {remote_marketplace_name}"
-                            ),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-            (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-
-        let config = match self.load_latest_config(config_cwd).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
-
-        let request = PluginReadRequest {
-            plugin_name,
-            marketplace_path,
-        };
-        let outcome = match plugins_manager
-            .read_plugin_for_config(&config, &request)
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                self.send_marketplace_error(request_id, err, "read plugin details")
-                    .await;
-                return;
-            }
-        };
-        let app_summaries =
-            plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
-        let visible_skills = outcome
-            .plugin
-            .skills
-            .iter()
-            .filter(|skill| {
-                skill.matches_product_restriction_for_product(
-                    self.thread_manager.session_source().restriction_product(),
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let plugin = PluginDetail {
-            marketplace_name: outcome.marketplace_name,
-            marketplace_path: outcome.marketplace_path,
-            summary: PluginSummary {
-                id: outcome.plugin.id,
-                name: outcome.plugin.name,
-                source: marketplace_plugin_source_to_info(outcome.plugin.source),
-                installed: outcome.plugin.installed,
-                enabled: outcome.plugin.enabled,
-                install_policy: outcome.plugin.policy.installation.into(),
-                auth_policy: outcome.plugin.policy.authentication.into(),
-                interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
-            },
-            description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
-            apps: app_summaries,
-            mcp_servers: outcome.plugin.mcp_server_names,
-        };
-
-        self.outgoing
-            .send_response(request_id, PluginReadResponse { plugin })
-            .await;
     }
 
     async fn skills_config_write(
@@ -7038,259 +6696,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
-        let PluginInstallParams {
-            marketplace_path,
-            remote_marketplace_name,
-            plugin_name,
-        } = params;
-        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
-            (Some(marketplace_path), None) => marketplace_path,
-            (None, Some(remote_marketplace_name)) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "remote plugin install is not supported yet for marketplace {remote_marketplace_name}"
-                            ),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-            (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let request = PluginInstallRequest {
-            plugin_name,
-            marketplace_path,
-        };
-
-        let install_result = plugins_manager.install_plugin(request).await;
-
-        match install_result {
-            Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
-                    Ok(config) => config,
-                    Err(err) => {
-                        warn!(
-                            "failed to reload config after plugin install, using current config: {err:?}"
-                        );
-                        self.config.as_ref().clone()
-                    }
-                };
-
-                self.clear_plugin_related_caches();
-
-                let plugin_mcp_servers =
-                    load_plugin_mcp_servers(result.installed_path.as_path()).await;
-
-                if !plugin_mcp_servers.is_empty() {
-                    if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "failed to queue MCP refresh after plugin install: {err:?}"
-                        );
-                    }
-                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                        .await;
-                }
-
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-                let auth = self.auth_manager.auth().await;
-                let apps_needing_auth = if plugin_apps.is_empty()
-                    || !config.features.apps_enabled_for_auth(
-                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
-                    ) {
-                    Vec::new()
-                } else {
-                    let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                        connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-                            &config, /*force_refetch*/ true
-                        ),
-                    );
-
-                    let all_connectors = match all_connectors_result {
-                        Ok(connectors) => connectors,
-                        Err(err) => {
-                            warn!(
-                                plugin = result.plugin_id.as_key(),
-                                "failed to load app metadata after plugin install: {err:#}"
-                            );
-                            connectors::list_cached_all_connectors(&config)
-                                .await
-                                .unwrap_or_default()
-                        }
-                    };
-                    let all_connectors =
-                        connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps);
-                    let (accessible_connectors, codex_apps_ready) =
-                        match accessible_connectors_result {
-                            Ok(status) => (status.connectors, status.codex_apps_ready),
-                            Err(err) => {
-                                warn!(
-                                    plugin = result.plugin_id.as_key(),
-                                    "failed to load accessible apps after plugin install: {err:#}"
-                                );
-                                (
-                                    connectors::list_cached_accessible_connectors_from_mcp_tools(
-                                        &config,
-                                    )
-                                    .await
-                                    .unwrap_or_default(),
-                                    false,
-                                )
-                            }
-                        };
-                    if !codex_apps_ready {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "codex_apps MCP not ready after plugin install; skipping appsNeedingAuth check"
-                        );
-                    }
-
-                    plugin_app_helpers::plugin_apps_needing_auth(
-                        &all_connectors,
-                        &accessible_connectors,
-                        &plugin_apps,
-                        codex_apps_ready,
-                    )
-                };
-
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        PluginInstallResponse {
-                            auth_policy: result.auth_policy.into(),
-                            apps_needing_auth,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-
-                match err {
-                    CorePluginInstallError::Marketplace(err) => {
-                        self.send_marketplace_error(request_id, err, "install plugin")
-                            .await;
-                    }
-                    CorePluginInstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to persist installed plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to enable remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn plugin_uninstall(
-        &self,
-        request_id: ConnectionRequestId,
-        params: PluginUninstallParams,
-    ) {
-        let PluginUninstallParams { plugin_id } = params;
-        let plugins_manager = self.thread_manager.plugins_manager();
-
-        let uninstall_result = plugins_manager.uninstall_plugin(plugin_id).await;
-
-        match uninstall_result {
-            Ok(()) => {
-                self.clear_plugin_related_caches();
-                self.outgoing
-                    .send_response(request_id, PluginUninstallResponse {})
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-
-                match err {
-                    CorePluginUninstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to clear plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::InvalidPluginId(_) => {
-                        unreachable!("invalid plugin ids are handled above");
-                    }
-                }
-            }
-        }
-    }
-
     async fn turn_start(
         &self,
         request_id: ConnectionRequestId,
@@ -7332,6 +6737,15 @@ impl CodexMessageProcessor {
         };
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
+        });
+        let environments = params.environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect()
         });
 
         // Map v2 input items to core input items.
@@ -7384,6 +6798,7 @@ impl CodexMessageProcessor {
                 thread.as_ref(),
                 Op::UserInput {
                     items: mapped_items,
+                    environments,
                     final_output_json_schema: params.output_schema,
                     responsesapi_client_metadata: params.responsesapi_client_metadata,
                 },
@@ -8807,30 +8222,25 @@ impl CodexMessageProcessor {
             WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
-        let cloud_requirements = self.current_cloud_requirements();
+        let config_manager = self.config_manager.clone();
         let command_cwd = params
             .cwd
             .map(PathBuf::from)
             .unwrap_or_else(|| config.cwd.to_path_buf());
-        let cli_overrides = self.current_cli_overrides();
-        let runtime_feature_enablement = self.current_runtime_feature_enablement();
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
         tokio::spawn(async move {
-            let derived_config = derive_config_for_cwd(
-                &cli_overrides,
-                /*request_overrides*/ None,
-                ConfigOverrides {
-                    cwd: Some(command_cwd.clone()),
-                    ..Default::default()
-                },
-                Some(command_cwd.clone()),
-                &cloud_requirements,
-                &config.codex_home,
-                &runtime_feature_enablement,
-            )
-            .await;
+            let derived_config = config_manager
+                .load_for_cwd(
+                    /*request_overrides*/ None,
+                    ConfigOverrides {
+                        cwd: Some(command_cwd.clone()),
+                        ..Default::default()
+                    },
+                    Some(command_cwd.clone()),
+                )
+                .await;
             let setup_result = match derived_config {
                 Ok(config) => {
                     let setup_request = WindowsSandboxSetupRequest {
@@ -9467,7 +8877,7 @@ fn plugin_skills_to_info(
                     default_prompt: interface.default_prompt,
                 }
             }),
-            path: skill.path_to_skills_md.clone(),
+            path: Some(skill.path_to_skills_md.clone()),
             enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
@@ -9615,116 +9025,6 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn replace_cloud_requirements_loader(
-    cloud_requirements: &RwLock<CloudRequirementsLoader>,
-    auth_manager: Arc<AuthManager>,
-    chatgpt_base_url: String,
-    codex_home: PathBuf,
-) {
-    let loader = cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home);
-    if let Ok(mut guard) = cloud_requirements.write() {
-        *guard = loader;
-    } else {
-        warn!("failed to update cloud requirements loader");
-    }
-}
-
-async fn sync_default_client_residency_requirement(
-    cli_overrides: &[(String, TomlValue)],
-    cloud_requirements: &RwLock<CloudRequirementsLoader>,
-) {
-    let loader = cloud_requirements
-        .read()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    match codex_core::config::ConfigBuilder::default()
-        .cli_overrides(cli_overrides.to_vec())
-        .cloud_requirements(loader)
-        .build()
-        .await
-    {
-        Ok(config) => set_default_client_residency_requirement(config.enforce_residency.value()),
-        Err(err) => warn!(
-            error = %err,
-            "failed to sync default client residency requirement after auth refresh"
-        ),
-    }
-}
-
-/// Derive the effective [`Config`] by layering three override sources.
-///
-/// Precedence (lowest to highest):
-/// - `cli_overrides`: process-wide startup `--config` flags.
-/// - `request_overrides`: per-request dotted-path overrides (`params.config`), converted JSON->TOML.
-/// - `typesafe_overrides`: Request objects such as `NewThreadParams` and
-///   `ThreadStartParams` support a limited set of _explicit_ config overrides, so
-///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
-///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
-///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
-async fn derive_config_from_params(
-    cli_overrides: &[(String, TomlValue)],
-    request_overrides: Option<HashMap<String, serde_json::Value>>,
-    typesafe_overrides: ConfigOverrides,
-    thread_config_loader: Arc<dyn ThreadConfigLoader>,
-    cloud_requirements: &CloudRequirementsLoader,
-    codex_home: &Path,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
-) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
-        .iter()
-        .cloned()
-        .chain(
-            request_overrides
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, v)| (k, json_to_toml(v))),
-        )
-        .collect::<Vec<_>>();
-
-    let mut config = codex_core::config::ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .cli_overrides(merged_cli_overrides)
-        .harness_overrides(typesafe_overrides)
-        .cloud_requirements(cloud_requirements.clone())
-        .thread_config_loader(thread_config_loader)
-        .build()
-        .await?;
-    apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
-    Ok(config)
-}
-
-async fn derive_config_for_cwd(
-    cli_overrides: &[(String, TomlValue)],
-    request_overrides: Option<HashMap<String, serde_json::Value>>,
-    typesafe_overrides: ConfigOverrides,
-    cwd: Option<PathBuf>,
-    cloud_requirements: &CloudRequirementsLoader,
-    codex_home: &Path,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
-) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
-        .iter()
-        .cloned()
-        .chain(
-            request_overrides
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, v)| (k, json_to_toml(v))),
-        )
-        .collect::<Vec<_>>();
-
-    let mut config = codex_core::config::ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .cli_overrides(merged_cli_overrides)
-        .harness_overrides(typesafe_overrides)
-        .fallback_cwd(cwd)
-        .cloud_requirements(cloud_requirements.clone())
-        .build()
-        .await?;
-    apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
-    Ok(config)
 }
 
 async fn read_history_cwd_from_state_db(
@@ -10008,6 +9308,32 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
             message: format!("failed to {operation} thread: {err}"),
             data: None,
         },
+    }
+}
+
+const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+
+fn with_mcp_tool_call_thread_id_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+) -> Option<serde_json::Value> {
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
     }
 }
 
@@ -10643,6 +9969,8 @@ mod tests {
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
     use codex_config::ThreadConfigSource;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
@@ -10656,6 +9984,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -10931,21 +10260,12 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
         };
-        let config = derive_config_from_params(
-            &[],
-            Some(HashMap::from([
-                ("model_provider".to_string(), json!("request")),
-                ("features.plugins".to_string(), json!(true)),
-                (
-                    "model_providers.session".to_string(),
-                    json!({
-                        "name": "request",
-                        "base_url": "http://127.0.0.1:9999/api/codex",
-                        "wire_api": "responses",
-                    }),
-                ),
-            ])),
-            ConfigOverrides::default(),
+        let config_manager = ConfigManager::new(
+            temp_dir.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
                     model_provider: Some("session".to_string()),
@@ -10956,11 +10276,24 @@ mod tests {
                     features: BTreeMap::from([("plugins".to_string(), false)]),
                 }),
             ])),
-            &CloudRequirementsLoader::default(),
-            temp_dir.path(),
-            &BTreeMap::new(),
-        )
-        .await?;
+        );
+        let config = config_manager
+            .load_with_overrides(
+                Some(HashMap::from([
+                    ("model_provider".to_string(), json!("request")),
+                    ("features.plugins".to_string(), json!(true)),
+                    (
+                        "model_providers.session".to_string(),
+                        json!({
+                            "name": "request",
+                            "base_url": "http://127.0.0.1:9999/api/codex",
+                            "wire_api": "responses",
+                        }),
+                    ),
+                ])),
+                ConfigOverrides::default(),
+            )
+            .await?;
 
         assert_eq!(config.model_provider_id, "session");
         assert_eq!(config.model_provider, session_provider);

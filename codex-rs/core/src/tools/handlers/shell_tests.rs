@@ -17,6 +17,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellHandler;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -232,6 +233,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: HookToolName::bash(),
             command: "bash -lc 'printf hi'".to_string(),
         })
     );
@@ -258,6 +260,7 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: HookToolName::bash(),
             command: "printf shell command".to_string(),
         })
     );
@@ -280,6 +283,7 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     assert_eq!(
         handler.post_tool_use_payload("call-42", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
+            tool_name: HookToolName::bash(),
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),
         })
