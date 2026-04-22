@@ -2949,8 +2949,7 @@ pub struct CommandExecTerminalSize {
     pub cols: u16,
 }
 
-/// Run a standalone command (argv vector) in the server sandbox without
-/// creating a thread or turn.
+/// Run a standalone command (argv vector) without creating a thread or turn.
 ///
 /// The final `command/exec` response is deferred until the process exits and is
 /// sent only after all `command/exec/outputDelta` notifications for that
@@ -3023,12 +3022,6 @@ pub struct CommandExecParams {
     /// true.
     #[ts(optional = nullable)]
     pub size: Option<CommandExecTerminalSize>,
-    /// Optional sandbox policy for this command.
-    ///
-    /// Uses the same shape as thread/turn execution sandbox configuration and
-    /// defaults to the user's configured policy when omitted.
-    #[ts(optional = nullable)]
-    pub sandbox_policy: Option<SandboxPolicy>,
 }
 
 /// Final buffered result for `command/exec`.
@@ -8129,7 +8122,6 @@ mod tests {
                 cwd: Some(PathBuf::from("/tmp")),
                 env: None,
                 size: None,
-                sandbox_policy: None,
             }
         );
     }
@@ -8149,7 +8141,6 @@ mod tests {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8163,7 +8154,6 @@ mod tests {
                 "cwd": null,
                 "env": null,
                 "size": null,
-                "sandboxPolicy": null,
                 "outputBytesCap": null,
             })
         );
@@ -8188,7 +8178,6 @@ mod tests {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8204,7 +8193,6 @@ mod tests {
                 "cwd": null,
                 "env": null,
                 "size": null,
-                "sandboxPolicy": null,
             })
         );
 
@@ -8232,7 +8220,6 @@ mod tests {
                 ("BAZ".to_string(), None),
             ])),
             size: None,
-            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8250,7 +8237,6 @@ mod tests {
                     "BAZ": null,
                 },
                 "size": null,
-                "sandboxPolicy": null,
             })
         );
 
@@ -8319,7 +8305,6 @@ mod tests {
                 rows: 40,
                 cols: 120,
             }),
-            sandbox_policy: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8337,7 +8322,6 @@ mod tests {
                     "rows": 40,
                     "cols": 120,
                 },
-                "sandboxPolicy": null,
             })
         );
 
