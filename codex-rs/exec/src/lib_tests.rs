@@ -361,6 +361,11 @@ async fn thread_start_params_include_review_policy_when_review_policy_is_manual_
         params.approvals_reviewer,
         Some(codex_app_server_protocol::ApprovalsReviewer::User)
     );
+    assert_eq!(params.sandbox, None);
+    assert_eq!(
+        params.permission_profile,
+        Some(config.permissions.permission_profile().into())
+    );
 }
 
 #[tokio::test]
