@@ -11921,6 +11921,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for the forked thread. Cannot be combined with `sandbox`."
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -13305,6 +13316,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for the resumed thread. Cannot be combined with `sandbox`."
+        },
         "personality": {
           "anyOf": [
             {
@@ -13597,6 +13619,17 @@
             "string",
             "null"
           ]
+        },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
         },
         "personality": {
           "anyOf": [
@@ -14389,6 +14422,17 @@
         },
         "outputSchema": {
           "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
         },
         "personality": {
           "anyOf": [
