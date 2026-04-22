@@ -526,6 +526,7 @@ impl AppServerSession {
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
         sandbox_policy: SandboxPolicy,
+        permission_profile: Option<PermissionProfile>,
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
@@ -535,6 +536,14 @@ impl AppServerSession {
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
+        let should_send_permission_profile = !self.is_remote()
+            && !matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. })
+            && permission_profile.is_some();
+        let (sandbox_policy, permission_profile) = if should_send_permission_profile {
+            (None, permission_profile.map(Into::into))
+        } else {
+            (Some(sandbox_policy.into()), None)
+        };
         self.client
             .request_typed(ClientRequest::TurnStart {
                 request_id,
@@ -546,11 +555,8 @@ impl AppServerSession {
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
-                    // This path only receives the legacy projection today; do
-                    // not synthesize a lossy profile until the active profile
-                    // is plumbed through user turns.
-                    sandbox_policy: Some(sandbox_policy.into()),
-                    permission_profile: None,
+                    sandbox_policy,
+                    permission_profile,
                     model: Some(model),
                     service_tier,
                     effort,
