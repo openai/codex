@@ -330,30 +330,15 @@ impl ToolRegistry {
         }
 
         if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
-            && let Some(reason) = run_pre_tool_use_hooks(
+            && let Some(message) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                pre_tool_use_payload.tool_name.name().to_string(),
-                pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                pre_tool_use_payload.tool_input.clone(),
+                &pre_tool_use_payload.tool_name,
+                &pre_tool_use_payload.tool_input,
             )
             .await
         {
-            // Bash hook payloads expose the executable text as tool_input.command.
-            let message = if pre_tool_use_payload.tool_name.name() == "Bash"
-                && let Some(command) = pre_tool_use_payload
-                    .tool_input
-                    .get("command")
-                    .and_then(Value::as_str)
-            {
-                format!("Command blocked by PreToolUse hook: {reason}. Command: {command}")
-            } else {
-                format!(
-                    "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
-                    pre_tool_use_payload.tool_name.name()
-                )
-            };
             return Err(FunctionCallError::RespondToModel(message));
         }
 
