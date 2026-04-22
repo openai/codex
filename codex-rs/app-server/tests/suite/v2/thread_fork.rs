@@ -548,6 +548,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
             source_kinds: None,
             archived: None,
             cwd: None,
+            use_state_db_only: false,
             search_term: None,
         })
         .await?;

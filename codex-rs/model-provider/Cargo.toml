@@ -21,7 +21,6 @@ codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-protocol = { workspace = true }
 http = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

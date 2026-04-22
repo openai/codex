@@ -103,8 +103,10 @@ mod tests {
                 sort_direction: crate::SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: true,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("archived listing");

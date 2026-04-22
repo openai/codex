@@ -122,6 +122,8 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_rollout_trace::RolloutTraceRecorder;
+use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
@@ -399,6 +401,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    /// Parent rollout-tree recorder, or a disabled recorder when this spawn has no parent trace.
+    pub(crate) inherited_rollout_trace: RolloutTraceRecorder,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
@@ -454,6 +458,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_rollout_trace,
             parent_trace: _,
             analytics_events_client,
         } = args;
@@ -649,6 +654,7 @@ impl Codex {
             agent_control,
             environment_manager,
             analytics_events_client,
+            inherited_rollout_trace,
         )
         .await
         .map_err(|e| {
@@ -1921,6 +1927,7 @@ impl Session {
                 review_id,
                 request,
                 /*retry_reason*/ None,
+                codex_analytics::GuardianApprovalRequestSource::MainTurn,
                 cancellation_token.clone(),
             );
             let decision = tokio::select! {
@@ -2977,6 +2984,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
+        self.mailbox_rx.lock().await.has_pending()
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -3034,7 +3045,6 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -3081,7 +3091,7 @@ impl Session {
         if !accepts_mailbox_delivery {
             return false;
         }
-        self.mailbox_rx.lock().await.has_pending()
+        self.has_pending_mailbox_items().await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
