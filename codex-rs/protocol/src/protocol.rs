@@ -38,6 +38,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -463,6 +464,13 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
+        /// Full permissions profile to use for tool calls such as `local_shell`.
+        ///
+        /// When omitted, `sandbox_policy` is used as a legacy compatibility
+        /// projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
         /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
@@ -531,6 +539,10 @@ pub enum Op {
         /// Updated sandbox policy for tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated permissions profile for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
 
         /// Updated Windows sandbox mode for tool execution.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -2912,6 +2924,8 @@ pub struct TurnContextItem {
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2934,6 +2948,24 @@ pub struct TurnContextItem {
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,
+}
+
+impl TurnContextItem {
+    pub fn permission_profile(&self) -> PermissionProfile {
+        self.permission_profile.clone().unwrap_or_else(|| {
+            let file_system_sandbox_policy =
+                self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                        &self.sandbox_policy,
+                        &self.cwd,
+                    )
+                });
+            PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&self.sandbox_policy),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -3564,6 +3596,10 @@ pub struct SessionConfiguredEvent {
 
     /// How to sandbox commands executed in the system
     pub sandbox_policy: SandboxPolicy,
+
+    /// Effective permissions for commands executed in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -5072,6 +5108,7 @@ mod tests {
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
@@ -5138,6 +5175,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,

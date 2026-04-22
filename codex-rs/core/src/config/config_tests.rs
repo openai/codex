@@ -53,6 +53,9 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -61,6 +64,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -395,9 +399,10 @@ fn accepts_amazon_bedrock_aws_profile_override() {
         r#"
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
-    .expect("Amazon Bedrock AWS profile override should deserialize");
+    .expect("Amazon Bedrock AWS overrides should deserialize");
 
     assert_eq!(
         cfg.model_providers
@@ -405,6 +410,13 @@ profile = "codex-bedrock"
             .and_then(|provider| provider.aws.as_ref())
             .and_then(|aws| aws.profile.as_deref()),
         Some("codex-bedrock")
+    );
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.aws.as_ref())
+            .and_then(|aws| aws.region.as_deref()),
+        Some("us-west-2")
     );
 }
 
@@ -416,9 +428,10 @@ model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
-    .expect("Amazon Bedrock AWS profile override should deserialize");
+    .expect("Amazon Bedrock AWS overrides should deserialize");
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -437,6 +450,14 @@ profile = "codex-bedrock"
             .and_then(|aws| aws.profile.as_deref()),
         Some("codex-bedrock")
     );
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.region.as_deref()),
+        Some("us-west-2")
+    );
 }
 
 #[tokio::test]
@@ -453,6 +474,7 @@ supports_websockets = true
 
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
     .expect("Amazon Bedrock unsupported overrides should deserialize");
@@ -467,7 +489,7 @@ profile = "codex-bedrock"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
     ));
 }
 
@@ -778,6 +800,44 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     assert_eq!(
         config.permissions.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_populates_runtime_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::DangerFullAccess
     );
     Ok(())
 }
