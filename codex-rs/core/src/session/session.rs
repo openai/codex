@@ -584,18 +584,30 @@ impl Session {
         {
             user_shell_override
         } else if use_zsh_fork_shell {
-            let zsh_path = config.zsh_path.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
-                )
-            })?;
+            let zsh_path = discard_thread_after_failed_session_init_on_error(
+                thread_persistence_enabled,
+                conversation_id,
+                &thread_store,
+                config.zsh_path.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
+                    )
+                }),
+            )
+            .await?;
             let zsh_path = zsh_path.to_path_buf();
-            shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
-                    zsh_path.display()
-                )
-            })?
+            discard_thread_after_failed_session_init_on_error(
+                thread_persistence_enabled,
+                conversation_id,
+                &thread_store,
+                shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
+                        zsh_path.display()
+                    )
+                }),
+            )
+            .await?
         } else {
             shell::default_user_shell()
         };
@@ -666,22 +678,29 @@ impl Session {
         let (network_proxy, session_network_proxy) =
             if let Some(spec) = config.permissions.network.as_ref() {
                 let current_exec_policy = exec_policy.current();
-                let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-                    spec,
-                    current_exec_policy.as_ref(),
-                    config.permissions.sandbox_policy.get(),
-                    network_policy_decider.as_ref().map(Arc::clone),
-                    blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_configured,
-                    network_proxy_audit_metadata,
-                )
-                .instrument(info_span!(
-                    "session_init.network_proxy",
-                    otel.name = "session_init.network_proxy",
-                    session_init.managed_network_requirements_enabled =
-                        managed_network_requirements_enabled,
-                ))
-                .await?;
+                let (network_proxy, session_network_proxy) =
+                    discard_thread_after_failed_session_init_on_error(
+                        thread_persistence_enabled,
+                        conversation_id,
+                        &thread_store,
+                        Self::start_managed_network_proxy(
+                            spec,
+                            current_exec_policy.as_ref(),
+                            config.permissions.sandbox_policy.get(),
+                            network_policy_decider.as_ref().map(Arc::clone),
+                            blocked_request_observer.as_ref().map(Arc::clone),
+                            managed_network_requirements_configured,
+                            network_proxy_audit_metadata,
+                        )
+                        .instrument(info_span!(
+                            "session_init.network_proxy",
+                            otel.name = "session_init.network_proxy",
+                            session_init.managed_network_requirements_enabled =
+                                managed_network_requirements_enabled,
+                        ))
+                        .await,
+                    )
+                    .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
                 (None, None)
@@ -707,7 +726,13 @@ impl Session {
             });
         }
 
-        let installation_id = resolve_installation_id(&config.codex_home).await?;
+        let installation_id = discard_thread_after_failed_session_init_on_error(
+            thread_persistence_enabled,
+            conversation_id,
+            &thread_store,
+            resolve_installation_id(&config.codex_home).await,
+        )
+        .await?;
         let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
             AnalyticsEventsClient::new(
                 Arc::clone(&auth_manager),
@@ -921,14 +946,13 @@ impl Session {
                     .map(|failure| format!("{}: {}", failure.server, failure.error))
                     .collect::<Vec<_>>()
                     .join("; ");
-                let err = anyhow::anyhow!("required MCP servers failed to initialize: {details}");
                 discard_thread_after_failed_session_init(
                     thread_persistence_enabled,
                     conversation_id,
                     &thread_store,
                 )
                 .await;
-                return Err(err);
+                anyhow::bail!("required MCP servers failed to initialize: {details}");
             }
         }
         sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
