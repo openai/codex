@@ -540,6 +540,7 @@ impl AppServerSession {
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy: Some(sandbox_policy.into()),
+                    permission_profile: None,
                     model: Some(model),
                     service_tier,
                     effort,
