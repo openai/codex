@@ -1727,7 +1727,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_overrides_parent_developer_instructions() {
+async fn guardian_review_session_config_clears_parent_developer_instructions() {
     let mut parent_config = test_config().await;
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
@@ -1740,8 +1740,9 @@ async fn guardian_review_session_config_overrides_parent_developer_instructions(
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }
@@ -1902,8 +1903,9 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt_with_config(
             "Use the workspace-managed guardian policy."
         ))
@@ -1939,8 +1941,9 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }

@@ -719,13 +719,14 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.include_skill_instructions = false;
-    guardian_config.developer_instructions = Some(
+    guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config
             .as_deref()
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
+    guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
