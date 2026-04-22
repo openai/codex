@@ -240,6 +240,8 @@ export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
 export type { PermissionGrantScope } from "./PermissionGrantScope";
+export type { PermissionProfile } from "./PermissionProfile";
+export type { PermissionProfileFileSystemPermissions } from "./PermissionProfileFileSystemPermissions";
 export type { PermissionsRequestApprovalParams } from "./PermissionsRequestApprovalParams";
 export type { PermissionsRequestApprovalResponse } from "./PermissionsRequestApprovalResponse";
 export type { PlanDeltaNotification } from "./PlanDeltaNotification";
