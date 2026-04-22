@@ -2285,17 +2285,17 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn deserialize_managed_hooks_requirements() -> Result<()> {
         let toml_str = r#"
-            managed_dir = "/enterprise/hooks"
-            windows_managed_dir = 'C:\enterprise\hooks'
+managed_dir = "/enterprise/hooks"
+windows_managed_dir = 'C:\enterprise\hooks'
 
-            [[PreToolUse]]
-            matcher = "^Bash$"
+[[PreToolUse]]
+matcher = "^Bash$"
 
-            [[PreToolUse.hooks]]
-            type = "command"
-            command = "python3 /enterprise/hooks/pre.py"
-            timeoutSec = 10
-            statusMessage = "checking"
+[[PreToolUse.hooks]]
+type = "command"
+command = "python3 /enterprise/hooks/pre.py"
+timeout = 10
+statusMessage = "checking"
         "#;
         let hooks: ManagedHooksRequirementsToml = from_str(toml_str)?;
 
@@ -2315,15 +2315,15 @@ allowed_approvals_reviewers = ["user"]
             RequirementSource::CloudRequirements,
             from_str::<ConfigRequirementsToml>(
                 r#"
-                    [hooks]
-                    managed_dir = "/cloud/hooks"
+[hooks]
+managed_dir = "/cloud/hooks"
 
-                    [[hooks.PreToolUse]]
-                    matcher = "^Bash$"
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
 
-                    [[hooks.PreToolUse.hooks]]
-                    type = "command"
-                    command = "python3 /cloud/hooks/pre.py"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /cloud/hooks/pre.py"
                 "#,
             )?,
         );
@@ -2333,15 +2333,15 @@ allowed_approvals_reviewers = ["user"]
             },
             from_str::<ConfigRequirementsToml>(
                 r#"
-                    [hooks]
-                    managed_dir = "/system/hooks"
+[hooks]
+managed_dir = "/system/hooks"
 
-                    [[hooks.PreToolUse]]
-                    matcher = "^Bash$"
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
 
-                    [[hooks.PreToolUse.hooks]]
-                    type = "command"
-                    command = "python3 /system/hooks/pre.py"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /system/hooks/pre.py"
                 "#,
             )?,
         );
@@ -2365,15 +2365,15 @@ allowed_approvals_reviewers = ["user"]
     fn managed_hooks_constraint_rejects_drift() -> Result<()> {
         let config: ConfigRequirementsToml = from_str(
             r#"
-                [hooks]
-                managed_dir = "/enterprise/hooks"
+[hooks]
+managed_dir = "/enterprise/hooks"
 
-                [[hooks.PreToolUse]]
-                matcher = "^Bash$"
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
 
-                [[hooks.PreToolUse.hooks]]
-                type = "command"
-                command = "python3 /enterprise/hooks/pre.py"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /enterprise/hooks/pre.py"
             "#,
         )?;
         let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;

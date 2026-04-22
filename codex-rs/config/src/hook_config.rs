@@ -30,22 +30,38 @@ pub struct HookEventsToml {
 
 impl HookEventsToml {
     pub fn is_empty(&self) -> bool {
-        self.pre_tool_use.is_empty()
-            && self.permission_request.is_empty()
-            && self.post_tool_use.is_empty()
-            && self.session_start.is_empty()
-            && self.user_prompt_submit.is_empty()
-            && self.stop.is_empty()
+        let Self {
+            pre_tool_use,
+            permission_request,
+            post_tool_use,
+            session_start,
+            user_prompt_submit,
+            stop,
+        } = self;
+        pre_tool_use.is_empty()
+            && permission_request.is_empty()
+            && post_tool_use.is_empty()
+            && session_start.is_empty()
+            && user_prompt_submit.is_empty()
+            && stop.is_empty()
     }
 
     pub fn handler_count(&self) -> usize {
+        let Self {
+            pre_tool_use,
+            permission_request,
+            post_tool_use,
+            session_start,
+            user_prompt_submit,
+            stop,
+        } = self;
         [
-            &self.pre_tool_use,
-            &self.permission_request,
-            &self.post_tool_use,
-            &self.session_start,
-            &self.user_prompt_submit,
-            &self.stop,
+            pre_tool_use,
+            permission_request,
+            post_tool_use,
+            session_start,
+            user_prompt_submit,
+            stop,
         ]
         .into_iter()
         .flatten()
@@ -79,7 +95,7 @@ pub enum HookHandlerConfig {
     #[serde(rename = "command")]
     Command {
         command: String,
-        #[serde(default, rename = "timeout", alias = "timeoutSec")]
+        #[serde(default, rename = "timeout")]
         timeout_sec: Option<u64>,
         #[serde(default)]
         r#async: bool,
@@ -102,7 +118,12 @@ pub struct ManagedHooksRequirementsToml {
 
 impl ManagedHooksRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.managed_dir.is_none() && self.windows_managed_dir.is_none() && self.hooks.is_empty()
+        let Self {
+            managed_dir,
+            windows_managed_dir,
+            hooks,
+        } = self;
+        managed_dir.is_none() && windows_managed_dir.is_none() && hooks.is_empty()
     }
 
     pub fn handler_count(&self) -> usize {
@@ -123,80 +144,5 @@ impl ManagedHooksRequirementsToml {
 }
 
 #[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::HookEventsToml;
-    use super::HooksFile;
-    use super::ManagedHooksRequirementsToml;
-
-    #[test]
-    fn hooks_file_deserializes_existing_json_shape() {
-        let parsed: HooksFile = serde_json::from_str(
-            r#"{
-              "hooks": {
-                "PreToolUse": [
-                  {
-                    "matcher": "^Bash$",
-                    "hooks": [
-                      {
-                        "type": "command",
-                        "command": "python3 /tmp/pre.py",
-                        "timeoutSec": 10,
-                        "statusMessage": "checking"
-                      }
-                    ]
-                  }
-                ]
-              }
-            }"#,
-        )
-        .expect("hooks.json should deserialize");
-
-        assert_eq!(parsed.hooks.pre_tool_use.len(), 1);
-        assert_eq!(parsed.hooks.pre_tool_use[0].hooks.len(), 1);
-    }
-
-    #[test]
-    fn hook_events_deserialize_from_toml_arrays_of_tables() {
-        let parsed: HookEventsToml = toml::from_str(
-            r#"
-                [[PreToolUse]]
-                matcher = "^Bash$"
-
-                [[PreToolUse.hooks]]
-                type = "command"
-                command = "python3 /tmp/pre.py"
-                timeoutSec = 10
-                statusMessage = "checking"
-            "#,
-        )
-        .expect("hook events TOML should deserialize");
-
-        assert_eq!(parsed.pre_tool_use.len(), 1);
-        assert_eq!(parsed.pre_tool_use[0].hooks.len(), 1);
-    }
-
-    #[test]
-    fn managed_hooks_requirements_flatten_hook_events() {
-        let parsed: ManagedHooksRequirementsToml = toml::from_str(
-            r#"
-                managed_dir = "/enterprise/place"
-
-                [[PreToolUse]]
-                matcher = "^Bash$"
-
-                [[PreToolUse.hooks]]
-                type = "command"
-                command = "python3 /enterprise/place/pre.py"
-            "#,
-        )
-        .expect("requirements hooks TOML should deserialize");
-
-        assert_eq!(
-            parsed.managed_dir.as_deref(),
-            Some(std::path::Path::new("/enterprise/place"))
-        );
-        assert_eq!(parsed.hooks.pre_tool_use.len(), 1);
-    }
-}
+#[path = "hooks_tests.rs"]
+mod tests;
