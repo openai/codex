@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -481,6 +482,12 @@ pub struct Tui {
     alt_screen_enabled: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ResizeReflowDrawStats {
+    pub(crate) reflow_flush_elapsed: Duration,
+    pub(crate) flushed_reflow_history: bool,
+}
+
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -825,16 +832,15 @@ impl Tui {
     fn flush_pending_reflow_history_lines(
         terminal: &mut Terminal,
         pending_reflow_history_lines: &mut Vec<Line<'static>>,
-        is_zellij: bool,
     ) -> Result<bool> {
         if pending_reflow_history_lines.is_empty() {
             return Ok(false);
         }
 
-        crate::insert_history::insert_history_lines_preserving_viewport(
+        crate::insert_history::insert_history_lines_with_mode(
             terminal,
             pending_reflow_history_lines.clone(),
-            is_zellij,
+            crate::insert_history::InsertHistoryMode::FullScreenReplay,
         )?;
         pending_reflow_history_lines.clear();
         Ok(true)
@@ -909,7 +915,7 @@ impl Tui {
         &mut self,
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
+    ) -> Result<ResizeReflowDrawStats> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -918,6 +924,7 @@ impl Tui {
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
         stdout().sync_update(|_| {
+            let mut stats = ResizeReflowDrawStats::default();
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -931,11 +938,14 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
-            needs_full_repaint |= Self::flush_pending_reflow_history_lines(
+            let reflow_flush_start = Instant::now();
+            let flushed_reflow_history = Self::flush_pending_reflow_history_lines(
                 terminal,
                 &mut self.pending_reflow_history_lines,
-                self.is_zellij,
             )?;
+            stats.reflow_flush_elapsed = reflow_flush_start.elapsed();
+            stats.flushed_reflow_history = flushed_reflow_history;
+            needs_full_repaint |= flushed_reflow_history;
 
             if needs_full_repaint {
                 terminal.clear()?;
@@ -958,7 +968,9 @@ impl Tui {
 
             terminal.draw(|frame| {
                 draw_fn(frame);
-            })
+            })?;
+
+            Ok(stats)
         })?
     }
 

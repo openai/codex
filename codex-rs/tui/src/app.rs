@@ -1110,8 +1110,8 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
-        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+        let terminal_resize_reflow_active = self.terminal_resize_reflow_active();
+        if terminal_resize_reflow_active && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
         } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             let size = tui.terminal.size()?;
@@ -1151,13 +1151,14 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
-                    if terminal_resize_reflow_enabled {
-                        tui.draw_with_resize_reflow(desired_height, |frame| {
+                    if terminal_resize_reflow_active {
+                        let stats = tui.draw_with_resize_reflow(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
+                        self.maybe_disable_slow_resize_reflow_flush(stats);
                     } else {
                         tui.draw(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);

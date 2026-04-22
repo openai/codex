@@ -43,6 +43,7 @@ use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SkillsConfig;
+use codex_config::types::TerminalResizeReflowToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiNotificationSettings;
@@ -497,6 +498,28 @@ fn config_toml_deserializes_model_availability_nux() {
                     ("gpt-foo".to_string(), 2),
                 ]),
             },
+            terminal_resize_reflow: TerminalResizeReflowToml::default(),
+        }
+    );
+}
+
+#[test]
+fn config_toml_deserializes_terminal_resize_reflow_config() {
+    let toml = r#"
+[tui.terminal_resize_reflow]
+slow_threshold_ms = 350
+max_rows = 9000
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for resize reflow config");
+
+    assert_eq!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .terminal_resize_reflow,
+        TerminalResizeReflowToml {
+            slow_threshold_ms: Some(350),
+            max_rows: Some(9000),
         }
     );
 }
@@ -1295,7 +1318,70 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            terminal_resize_reflow: TerminalResizeReflowToml::default(),
         }
+    );
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(
+        cfg.terminal_resize_reflow,
+        TerminalResizeReflowConfig::default()
+    );
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                terminal_resize_reflow: TerminalResizeReflowToml {
+                    slow_threshold_ms: Some(350),
+                    max_rows: Some(9000),
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load overridden config");
+
+    assert_eq!(
+        cfg.terminal_resize_reflow.slow_threshold,
+        Some(Duration::from_millis(/*millis*/ 350))
+    );
+    assert_eq!(cfg.terminal_resize_reflow.max_rows, 9000);
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                terminal_resize_reflow: TerminalResizeReflowToml {
+                    slow_threshold_ms: Some(0),
+                    max_rows: None,
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config with disabled slow threshold");
+
+    assert_eq!(cfg.terminal_resize_reflow.slow_threshold, None);
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowConfig::default().max_rows
     );
 }
 

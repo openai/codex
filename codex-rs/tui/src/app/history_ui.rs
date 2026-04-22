@@ -83,10 +83,15 @@ impl App {
     }
 
     pub(super) fn reset_app_ui_state_after_clear(&mut self) {
+        self.reset_transcript_state_after_clear();
+    }
+
+    pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
+        self.transcript_reflow.clear();
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
     }

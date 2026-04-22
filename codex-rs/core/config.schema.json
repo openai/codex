@@ -497,6 +497,9 @@
             "telepathy": {
               "type": "boolean"
             },
+            "terminal_resize_reflow": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -1930,6 +1933,27 @@
       },
       "type": "object"
     },
+    "TerminalResizeReflowToml": {
+      "additionalProperties": false,
+      "description": "Experimental terminal resize-reflow tuning knobs.",
+      "properties": {
+        "max_rows": {
+          "default": null,
+          "description": "Trim resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "slow_threshold_ms": {
+          "default": null,
+          "description": "Disable resize reflow for the current transcript when a reflow operation exceeds this many milliseconds. Set to `0` to disable the slow-reflow time limit.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2059,6 +2083,18 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "terminal_resize_reflow": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TerminalResizeReflowToml"
+            }
+          ],
+          "default": {
+            "max_rows": null,
+            "slow_threshold_ms": null
+          },
+          "description": "Experimental terminal resize-reflow tuning knobs."
         },
         "terminal_title": {
           "default": null,
@@ -2491,6 +2527,9 @@
           "type": "boolean"
         },
         "telepathy": {
+          "type": "boolean"
+        },
+        "terminal_resize_reflow": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

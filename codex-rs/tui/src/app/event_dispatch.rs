@@ -194,6 +194,9 @@ impl App {
                     self.transcript_reflow.clear();
                     return Ok(AppRunControl::Continue);
                 }
+                if !self.terminal_resize_reflow_active() {
+                    return Ok(AppRunControl::Continue);
+                }
                 let end = self.transcript_cells.len();
                 tracing::debug!(
                     "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
@@ -226,6 +229,9 @@ impl App {
             AppEvent::ConsolidateProposedPlan(source) => {
                 if !self.terminal_resize_reflow_enabled() {
                     self.transcript_reflow.clear();
+                    return Ok(AppRunControl::Continue);
+                }
+                if !self.terminal_resize_reflow_active() {
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();

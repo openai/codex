@@ -32,6 +32,8 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
+use codex_config::types::DEFAULT_TERMINAL_RESIZE_REFLOW_MAX_ROWS;
+use codex_config::types::DEFAULT_TERMINAL_RESIZE_REFLOW_SLOW_THRESHOLD_MS;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -93,6 +95,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -366,6 +369,9 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
+    /// Experimental terminal resize-reflow tuning knobs.
+    pub terminal_resize_reflow: TerminalResizeReflowConfig,
+
     /// The absolute directory that should be treated as the current working
     /// directory for the session. All relative paths inside the business-logic
     /// layer are resolved against this path.
@@ -618,6 +624,23 @@ impl Default for MultiAgentV2Config {
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalResizeReflowConfig {
+    pub slow_threshold: Option<Duration>,
+    pub max_rows: usize,
+}
+
+impl Default for TerminalResizeReflowConfig {
+    fn default() -> Self {
+        Self {
+            slow_threshold: Some(Duration::from_millis(
+                DEFAULT_TERMINAL_RESIZE_REFLOW_SLOW_THRESHOLD_MS,
+            )),
+            max_rows: DEFAULT_TERMINAL_RESIZE_REFLOW_MAX_ROWS,
         }
     }
 }
@@ -1479,6 +1502,32 @@ fn resolve_multi_agent_v2_config(
     }
 }
 
+fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
+    let defaults = TerminalResizeReflowConfig::default();
+    let Some(tui) = config_toml.tui.as_ref() else {
+        return defaults;
+    };
+
+    TerminalResizeReflowConfig {
+        slow_threshold: tui
+            .terminal_resize_reflow
+            .slow_threshold_ms
+            .map(|millis| {
+                if millis == 0 {
+                    None
+                } else {
+                    Some(Duration::from_millis(millis))
+                }
+            })
+            .unwrap_or(defaults.slow_threshold),
+        max_rows: tui
+            .terminal_resize_reflow
+            .max_rows
+            .filter(|rows| *rows > 0)
+            .unwrap_or(defaults.max_rows),
+    }
+}
+
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -1833,6 +1882,7 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
+        let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
             agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
@@ -2365,6 +2415,7 @@ impl Config {
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            terminal_resize_reflow,
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);

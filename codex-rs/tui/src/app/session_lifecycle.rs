@@ -385,13 +385,8 @@ impl App {
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.overlay = None;
-        self.transcript_cells.clear();
-        self.deferred_history_lines.clear();
+        self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
-        self.has_emitted_history_lines = false;
-        self.backtrack = BacktrackState::default();
-        self.backtrack_render_pending = false;
         Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         Ok(())
     }

@@ -15,6 +15,7 @@ use crate::chatwidget::tests::set_fast_mode_test_catalog;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
@@ -3681,6 +3682,92 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
     }
 }
 
+fn enable_terminal_resize_reflow(app: &mut App) {
+    app.config
+        .features
+        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ true)
+        .expect("feature should be configurable");
+}
+
+fn disable_resize_reflow_for_test(app: &mut App) {
+    assert!(app.transcript_reflow.record_elapsed(
+        crate::transcript_reflow::ResizeReflowDisableReason::RenderSlow,
+        std::time::Duration::from_millis(/*millis*/ 251),
+        std::time::Duration::from_millis(/*millis*/ 250),
+    ));
+}
+
+fn plain_line_cell(text: impl Into<String>) -> Arc<dyn HistoryCell> {
+    Arc::new(PlainHistoryCell::new(vec![Line::from(text.into())])) as Arc<dyn HistoryCell>
+}
+
+fn rendered_line_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+#[tokio::test]
+async fn capped_resize_reflow_renders_recent_suffix_only() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = 5;
+    app.transcript_cells = (0..20)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert!(rendered.row_cap_limited);
+    assert!(
+        rendered.rendered_cell_count < app.transcript_cells.len(),
+        "row-capped reflow should not render the whole transcript"
+    );
+    assert_eq!(rendered.lines.len(), 5);
+    assert_eq!(
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "cell 17".to_string(),
+            String::new(),
+            "cell 18".to_string(),
+            String::new(),
+            "cell 19".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = 100;
+    app.transcript_cells = (0..3)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert!(!rendered.row_cap_limited);
+    assert_eq!(rendered.rendered_cell_count, app.transcript_cells.len());
+    assert_eq!(
+        rendered
+            .lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "cell 0".to_string(),
+            String::new(),
+            "cell 1".to_string(),
+            String::new(),
+            "cell 2".to_string(),
+        ]
+    );
+}
+
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
@@ -4401,6 +4488,37 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
 }
 
 #[tokio::test]
+async fn replace_chat_widget_preserves_resize_reflow_runtime_disable() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    disable_resize_reflow_for_test(&mut app);
+
+    let replacement = ChatWidget::new_with_app_event(ChatWidgetInit {
+        config: app.config.clone(),
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        app_event_tx: app.app_event_tx.clone(),
+        initial_user_message: None,
+        enhanced_keys_supported: app.enhanced_keys_supported,
+        has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
+        model_catalog: app.model_catalog.clone(),
+        feedback: app.feedback.clone(),
+        is_first_run: false,
+        status_account_display: app.chat_widget.status_account_display().cloned(),
+        initial_plan_type: app.chat_widget.current_plan_type(),
+        model: Some(app.chat_widget.current_model().to_string()),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+        terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
+        session_telemetry: app.session_telemetry.clone(),
+    });
+
+    app.replace_chat_widget(replacement);
+
+    assert!(app.transcript_reflow.is_runtime_disabled());
+    assert!(!app.terminal_resize_reflow_active());
+}
+
+#[tokio::test]
 async fn refreshed_snapshot_session_persists_resumed_turns() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -4730,6 +4848,44 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+}
+
+#[tokio::test]
+async fn runtime_disabled_resize_reflow_is_inactive_even_when_feature_enabled() {
+    let mut app = make_test_app().await;
+    enable_terminal_resize_reflow(&mut app);
+
+    assert!(app.terminal_resize_reflow_enabled());
+    assert!(app.terminal_resize_reflow_active());
+
+    disable_resize_reflow_for_test(&mut app);
+
+    assert!(app.terminal_resize_reflow_enabled());
+    assert!(!app.terminal_resize_reflow_active());
+}
+
+#[tokio::test]
+async fn reset_app_ui_state_after_clear_resets_resize_reflow_runtime_disable() {
+    let mut app = make_test_app().await;
+    enable_terminal_resize_reflow(&mut app);
+    disable_resize_reflow_for_test(&mut app);
+
+    app.reset_app_ui_state_after_clear();
+
+    assert!(!app.transcript_reflow.is_runtime_disabled());
+    assert!(app.terminal_resize_reflow_active());
+}
+
+#[tokio::test]
+async fn reset_transcript_state_after_clear_resets_resize_reflow_runtime_disable() {
+    let mut app = make_test_app().await;
+    enable_terminal_resize_reflow(&mut app);
+    disable_resize_reflow_for_test(&mut app);
+
+    app.reset_transcript_state_after_clear();
+
+    assert!(!app.transcript_reflow.is_runtime_disabled());
+    assert!(app.terminal_resize_reflow_active());
 }
 
 #[tokio::test]

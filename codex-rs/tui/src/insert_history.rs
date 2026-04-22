@@ -1,10 +1,9 @@
 //! Inserts finalized history rows into terminal scrollback.
 //!
 //! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
-//! cell is an escape-sequence operation rather than a normal ratatui render. The legacy insertion
-//! path may move the inline viewport when new history arrives. The resize-reflow insertion path is
-//! deliberately separate because it is replaying already-owned transcript rows after a resize and
-//! must preserve the viewport position chosen by the reflow draw path.
+//! cell is an escape-sequence operation rather than a normal ratatui render. The mode determines
+//! whether new history may move the inline viewport or whether resize reflow should replay rows
+//! through full-screen scrolling while preserving the viewport chosen by the reflow draw path.
 
 use std::fmt;
 use std::io;
@@ -47,6 +46,7 @@ use ratatui::text::Span;
 pub enum InsertHistoryMode {
     Standard,
     Zellij,
+    FullScreenReplay,
 }
 
 impl InsertHistoryMode {
@@ -57,86 +57,6 @@ impl InsertHistoryMode {
             Self::Standard
         }
     }
-}
-
-/// Insert `lines` above the viewport without changing the viewport's logical row.
-///
-/// This is used by terminal resize reflow after Codex has cleared and rebuilt its owned
-/// scrollback from transcript source. Keep this path separate from `insert_history_lines_with_mode`
-/// so the default history insertion behavior remains the pre-reflow implementation.
-pub fn insert_history_lines_preserving_viewport<B>(
-    terminal: &mut crate::custom_terminal::Terminal<B>,
-    lines: Vec<Line>,
-    is_zellij: bool,
-) -> io::Result<()>
-where
-    B: Backend + Write,
-{
-    let area = terminal.viewport_area;
-    let last_cursor_pos = terminal.last_known_cursor_pos;
-    let writer = terminal.backend_mut();
-
-    let wrap_width = area.width.max(1) as usize;
-    let mut wrapped = Vec::new();
-    let mut wrapped_rows = 0usize;
-
-    for line in &lines {
-        let line_wrapped =
-            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
-                vec![line.clone()]
-            } else {
-                adaptive_wrap_line(line, RtOptions::new(wrap_width))
-            };
-        wrapped_rows += line_wrapped
-            .iter()
-            .map(|wrapped_line| wrapped_line.width().max(1).div_ceil(wrap_width))
-            .sum::<usize>();
-        wrapped.extend(line_wrapped);
-    }
-    let wrapped_lines = wrapped_rows as u16;
-
-    if is_zellij {
-        let zellij_start = wrapped.len().saturating_sub(area.top() as usize);
-        let zellij_lines = &wrapped[zellij_start..];
-        let cursor_top = area.top().saturating_sub(zellij_lines.len() as u16);
-        queue!(writer, MoveTo(0, cursor_top))?;
-
-        for (i, line) in zellij_lines.iter().enumerate() {
-            if i > 0 {
-                queue!(writer, Print("\r\n"))?;
-            }
-            write_history_line(writer, line, wrap_width)?;
-        }
-    } else if area.top() > 0 {
-        let cursor_top = area.top().saturating_sub(1);
-
-        // Limit the scroll region to rows above the viewport, then write the rebuilt transcript
-        // into that region without treating free space below the viewport as room for live output.
-        queue!(writer, SetScrollRegion(1..area.top()))?;
-        queue!(writer, MoveTo(0, cursor_top))?;
-
-        let scroll_bottom = area.top().saturating_sub(1);
-        let mut advance_row = cursor_top;
-        for line in &wrapped {
-            // Anchor each advance to avoid wrap-pending drift when the previous row reached the
-            // right edge while replaying source-backed history.
-            queue!(writer, MoveTo(0, advance_row), Print("\n"))?;
-            if advance_row < scroll_bottom {
-                advance_row += 1;
-            }
-            write_history_line(writer, line, wrap_width)?;
-        }
-
-        queue!(writer, ResetScrollRegion)?;
-    }
-
-    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
-
-    let _ = writer;
-    if wrapped_lines > 0 {
-        terminal.note_history_rows_inserted(wrapped_lines);
-    }
-    Ok(())
 }
 
 /// Insert `lines` above the viewport using the terminal's backend writer
@@ -158,7 +78,9 @@ where
 /// emits newlines at the screen bottom to create space (since Zellij ignores scroll
 /// region escapes) and writes lines at computed absolute positions. Both modes
 /// update `terminal.viewport_area` so subsequent draw passes know where the
-/// viewport moved to.
+/// viewport moved to. In `FullScreenReplay` mode every line is replayed through
+/// normal full-screen scrolling so terminals that drop scroll-region output from
+/// scrollback can still rebuild deep history after a resize.
 pub fn insert_history_lines_with_mode<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
@@ -204,9 +126,16 @@ where
     }
     let wrapped_lines = wrapped_rows as u16;
 
-    if matches!(mode, InsertHistoryMode::Zellij) {
+    if matches!(
+        mode,
+        InsertHistoryMode::Zellij | InsertHistoryMode::FullScreenReplay
+    ) {
         let space_below = screen_size.height.saturating_sub(area.bottom());
-        let shift_down = wrapped_lines.min(space_below);
+        let shift_down = if matches!(mode, InsertHistoryMode::Zellij) {
+            wrapped_lines.min(space_below)
+        } else {
+            0
+        };
         let scroll_up_amount = wrapped_lines.saturating_sub(shift_down);
 
         if scroll_up_amount > 0 {
@@ -894,19 +823,55 @@ mod tests {
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        let viewport = Rect::new(0, 4, width, 2);
+        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 2);
         term.set_viewport_area(viewport);
 
         let line: Line<'static> = Line::from("zellij history");
         insert_history_lines_with_mode(&mut term, vec![line], InsertHistoryMode::Zellij)
             .expect("insert zellij history");
 
-        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+        let start_row = 0;
+        let rows: Vec<String> = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(start_row, width)
+            .collect();
         assert!(
             rows.iter().any(|row| row.contains("zellij history")),
             "expected zellij history row in screen output, rows: {rows:?}"
         );
         assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
         assert_eq!(term.visible_history_rows(), 1);
+    }
+
+    #[test]
+    fn vt100_full_screen_replay_preserves_viewport() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 2);
+        term.set_viewport_area(viewport);
+
+        let lines: Vec<Line<'static>> = (0..12)
+            .map(|idx| Line::from(format!("reflow line {idx:02}")))
+            .collect();
+        insert_history_lines_with_mode(&mut term, lines, InsertHistoryMode::FullScreenReplay)
+            .expect("insert reflow history");
+
+        let start_row = 0;
+        let rows: Vec<String> = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(start_row, width)
+            .collect();
+        assert!(
+            rows.iter().any(|row| row.contains("reflow line 11")),
+            "expected replayed history tail in screen output, rows: {rows:?}"
+        );
+        assert_eq!(term.viewport_area, viewport);
+        assert_eq!(term.visible_history_rows(), viewport.top());
     }
 }

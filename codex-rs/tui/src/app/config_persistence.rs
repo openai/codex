@@ -21,11 +21,17 @@ impl App {
     }
 
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
+        let previous_resize_reflow_config = self.config.terminal_resize_reflow;
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
+        let resize_reflow_config_changed =
+            previous_resize_reflow_config != config.terminal_resize_reflow;
         self.config = config;
+        if resize_reflow_config_changed {
+            self.transcript_reflow.clear_runtime_disable();
+        }
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
@@ -548,6 +554,7 @@ mod tests {
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use pretty_assertions::assert_eq;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -658,6 +665,37 @@ mod tests {
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_updates_resize_reflow_config_and_clears_disable()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.transcript_reflow.record_elapsed(
+            crate::transcript_reflow::ResizeReflowDisableReason::RenderSlow,
+            Duration::from_millis(/*millis*/ 251),
+            Duration::from_millis(/*millis*/ 250),
+        );
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[tui.terminal_resize_reflow]
+slow_threshold_ms = 350
+max_rows = 9000
+"#,
+        )?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app.config.terminal_resize_reflow.slow_threshold,
+            Some(Duration::from_millis(/*millis*/ 350))
+        );
+        assert_eq!(app.config.terminal_resize_reflow.max_rows, 9000);
+        assert!(!app.transcript_reflow.is_runtime_disabled());
         Ok(())
     }
 
