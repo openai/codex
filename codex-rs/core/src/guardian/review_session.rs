@@ -635,7 +635,7 @@ async fn run_review_on_session(
         append_guardian_followup_reminder(review_session).await;
     }
 
-    let submit_result = run_before_review_deadline(
+    let prompt_items = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
         Box::pin(async {
@@ -648,59 +648,70 @@ async fn run_review_on_session(
                 )
                 .await;
 
-            let prompt_items = build_guardian_prompt_items(
+            build_guardian_prompt_items(
                 params.parent_session.as_ref(),
                 params.retry_reason.clone(),
                 params.request.clone(),
                 prompt_mode,
             )
-            .await?;
-            let token_usage_at_review_start = review_session
-                .codex
-                .session
-                .total_token_usage()
-                .await
-                .unwrap_or_default();
-
-            review_session
-                .codex
-                .submit(Op::UserTurn {
-                    items: prompt_items.items,
-                    cwd: params.parent_turn.cwd.to_path_buf(),
-                    approval_policy: AskForApproval::Never,
-                    approvals_reviewer: None,
-                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                    model: params.model.clone(),
-                    effort: params.reasoning_effort,
-                    summary: Some(params.reasoning_summary),
-                    service_tier: None,
-                    final_output_json_schema: Some(params.schema.clone()),
-                    collaboration_mode: None,
-                    personality: params.personality,
-                })
-                .await?;
-
-            Ok::<(GuardianTranscriptCursor, TokenUsage), anyhow::Error>((
-                prompt_items.transcript_cursor,
-                token_usage_at_review_start,
-            ))
+            .await
         }),
     )
     .await;
-    let submit_result = match submit_result {
-        Ok(submit_result) => submit_result,
+    let prompt_items = match prompt_items {
+        Ok(prompt_items) => prompt_items,
         Err(outcome) => return (outcome, false, analytics_result),
     };
-    let (transcript_cursor, token_usage_at_review_start) = match submit_result {
-        Ok(submit_result) => submit_result,
+    let prompt_items = match prompt_items {
+        Ok(prompt_items) => prompt_items,
         Err(err) => {
             return (
-                GuardianReviewSessionOutcome::PromptBuildFailed(err),
+                GuardianReviewSessionOutcome::PromptBuildFailed(err.into()),
                 false,
                 analytics_result,
             );
         }
     };
+    let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
+    let transcript_cursor = prompt_items.transcript_cursor;
+    let token_usage_at_review_start = review_session
+        .codex
+        .session
+        .total_token_usage()
+        .await
+        .unwrap_or_default();
+
+    let submit_result = run_before_review_deadline(
+        deadline,
+        params.external_cancel.as_ref(),
+        Box::pin(review_session.codex.submit(Op::UserTurn {
+            items: prompt_items.items,
+            cwd: params.parent_turn.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: params.model.clone(),
+            effort: params.reasoning_effort,
+            summary: Some(params.reasoning_summary),
+            service_tier: None,
+            final_output_json_schema: Some(params.schema.clone()),
+            collaboration_mode: None,
+            personality: params.personality,
+        })),
+    )
+    .await;
+    match submit_result {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            return (
+                GuardianReviewSessionOutcome::SessionFailed(err.into()),
+                false,
+                analytics_result,
+            );
+        }
+        Err(outcome) => return (outcome, false, analytics_result),
+    }
+    analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome =
         wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
