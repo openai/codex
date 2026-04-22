@@ -6448,6 +6448,82 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    sess.account_thread_goal_before_external_mutation().await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(70, goal.tokens_used);
+
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::BudgetLimited),
+                token_budget: None,
+                expected_goal_id: Some(goal.goal_id),
+            },
+        )
+        .await?
+        .expect("goal status update should succeed");
+    sess.apply_external_thread_goal_status(codex_state::ThreadGoalStatus::BudgetLimited)
+        .await;
+
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 65,
+            cached_input_tokens: 10,
+            output_tokens: 40,
+            reasoning_output_tokens: 5,
+            total_tokens: 110,
+        },
+    )
+    .await;
+    sess.finish_thread_goal_turn(tc.as_ref(), true, 1).await;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(95, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_response()
 -> anyhow::Result<()> {
     let server = start_mock_server().await;

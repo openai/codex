@@ -110,25 +110,10 @@ impl CodexThread {
     }
 
     pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
-        match status {
-            codex_state::ThreadGoalStatus::Active => {
-                self.codex
-                    .session
-                    .reset_thread_goal_continuation_suppression();
-                self.codex
-                    .session
-                    .maybe_start_turn_for_pending_work_or_goal_continuation()
-                    .await;
-            }
-            codex_state::ThreadGoalStatus::Paused
-            | codex_state::ThreadGoalStatus::BudgetLimited
-            | codex_state::ThreadGoalStatus::Complete => {
-                self.codex
-                    .session
-                    .clear_stopped_thread_goal_runtime_state()
-                    .await;
-            }
-        }
+        self.codex
+            .session
+            .apply_external_thread_goal_status(status)
+            .await;
     }
 
     pub async fn apply_external_goal_clear(&self) {
