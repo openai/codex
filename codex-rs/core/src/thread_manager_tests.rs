@@ -326,7 +326,7 @@ async fn start_thread_rejects_sticky_environment_when_environment_access_is_disa
 }
 
 #[tokio::test]
-async fn resume_and_fork_preserve_persisted_sticky_environments() {
+async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -391,18 +391,7 @@ async fn resume_and_fork_preserve_persisted_sticky_environments() {
         )
         .await
         .expect("build resumed turn context");
-    assert_eq!(
-        resumed_turn.environments.as_ref().map(|environments| {
-            environments
-                .iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id.clone(),
-                    cwd: environment.cwd.clone(),
-                })
-                .collect::<Vec<_>>()
-        }),
-        Some(environments.clone()),
-    );
+    assert_eq!(resumed_turn.environments, None);
 
     let forked = manager
         .fork_thread(
@@ -425,18 +414,7 @@ async fn resume_and_fork_preserve_persisted_sticky_environments() {
         )
         .await
         .expect("build forked turn context");
-    assert_eq!(
-        forked_turn.environments.as_ref().map(|environments| {
-            environments
-                .iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id.clone(),
-                    cwd: environment.cwd.clone(),
-                })
-                .collect::<Vec<_>>()
-        }),
-        Some(environments),
-    );
+    assert_eq!(forked_turn.environments, None);
 }
 
 #[tokio::test]
