@@ -150,6 +150,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),

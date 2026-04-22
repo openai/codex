@@ -1,19 +1,25 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
+use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::AppServerTransport;
+use crate::transport::ConnectionOrigin;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::DeviceKeySignParams;
+use codex_app_server_protocol::DeviceKeySignPayload;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCRequest;
+use codex_app_server_protocol::RemoteControlClientConnectionAudience;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -40,6 +46,7 @@ use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::SpanData;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -101,11 +108,6 @@ fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
         .expect("client request should convert to JSON-RPC")
 }
 
-fn tracing_test_guard() -> &'static tokio::sync::Mutex<()> {
-    static GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    GUARD.get_or_init(|| tokio::sync::Mutex::new(()))
-}
-
 struct TracingHarness {
     _server: MockServer,
     _codex_home: TempDir,
@@ -117,6 +119,10 @@ struct TracingHarness {
 
 impl TracingHarness {
     async fn new() -> Result<Self> {
+        Self::new_with_origin(ConnectionOrigin::WebSocket).await
+    }
+
+    async fn new_with_origin(origin: ConnectionOrigin) -> Result<Self> {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
@@ -129,7 +135,7 @@ impl TracingHarness {
             _codex_home: codex_home,
             processor,
             outgoing_rx,
-            session: Arc::new(ConnectionSessionState::default()),
+            session: Arc::new(ConnectionSessionState::new(origin)),
             tracing,
         };
 
@@ -188,6 +194,29 @@ impl TracingHarness {
         read_response(&mut self.outgoing_rx, request_id).await
     }
 
+    async fn request_error(
+        &mut self,
+        request: ClientRequest,
+        trace: Option<W3cTraceContext>,
+    ) -> JSONRPCErrorError {
+        let request_id = match request.id() {
+            RequestId::Integer(request_id) => *request_id,
+            request_id => panic!("expected integer request id in test harness, got {request_id:?}"),
+        };
+        let mut request = request_from_client_request(request);
+        request.trace = trace;
+
+        self.processor
+            .process_request(
+                TEST_CONNECTION_ID,
+                request,
+                AppServerTransport::Stdio,
+                Arc::clone(&self.session),
+            )
+            .await;
+        read_error(&mut self.outgoing_rx, request_id).await
+    }
+
     async fn start_thread(
         &mut self,
         request_id: i64,
@@ -237,15 +266,20 @@ fn build_test_processor(
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let auth_manager =
         AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false);
+    let config_manager = ConfigManager::new(
+        config.codex_home.to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+        Arg0DispatchPaths::default(),
+        Arc::new(codex_config::NoopThreadConfigLoader),
+    );
     let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
-        cli_overrides: Vec::new(),
-        loader_overrides: LoaderOverrides::default(),
-        cloud_requirements: CloudRequirementsLoader::default(),
-        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
+        config_manager,
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),
@@ -418,6 +452,36 @@ async fn read_response<T: serde::de::DeserializeOwned>(
     }
 }
 
+async fn read_error(
+    outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
+    request_id: i64,
+) -> JSONRPCErrorError {
+    loop {
+        let envelope = tokio::time::timeout(std::time::Duration::from_secs(5), outgoing_rx.recv())
+            .await
+            .expect("timed out waiting for error")
+            .expect("outgoing channel closed");
+        let crate::outgoing_message::OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+            ..
+        } = envelope
+        else {
+            continue;
+        };
+        if connection_id != TEST_CONNECTION_ID {
+            continue;
+        }
+        let crate::outgoing_message::OutgoingMessage::Error(error) = message else {
+            continue;
+        };
+        if error.id != RequestId::Integer(request_id) {
+            continue;
+        }
+        return error.error;
+    }
+}
+
 async fn read_thread_started_notification(
     outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
@@ -505,8 +569,8 @@ where
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
 
     let RemoteTrace {
@@ -584,8 +648,49 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
+async fn remote_control_origin_rejects_device_key_requests() -> Result<()> {
+    let mut harness = TracingHarness::new_with_origin(ConnectionOrigin::RemoteControl).await?;
+
+    let error = harness
+        .request_error(
+            ClientRequest::DeviceKeySign {
+                request_id: RequestId::Integer(20_004),
+                params: DeviceKeySignParams {
+                    key_id: "dk_123".to_string(),
+                    payload: DeviceKeySignPayload::RemoteControlClientConnection {
+                        nonce: "nonce-123".to_string(),
+                        audience:
+                            RemoteControlClientConnectionAudience::RemoteControlClientWebsocket,
+                        session_id: "wssess_123".to_string(),
+                        target_origin: "https://chatgpt.com".to_string(),
+                        target_path: "/api/codex/remote/control/client".to_string(),
+                        account_user_id: "acct_123".to_string(),
+                        client_id: "cli_123".to_string(),
+                        token_expires_at: 4_102_444_800,
+                        token_sha256_base64url: "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+                            .to_string(),
+                        scopes: vec!["remote_control_controller_websocket".to_string()],
+                    },
+                },
+            },
+            /*trace*/ None,
+        )
+        .await;
+
+    assert_eq!(error.code, crate::error_code::INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.message,
+        "device/key/sign is not available over remote transports"
+    );
+
+    harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
     let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();
@@ -602,6 +707,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
             ClientRequest::TurnStart {
                 request_id: RequestId::Integer(3),
                 params: TurnStartParams {
+                    environments: None,
                     thread_id,
                     input: vec![UserInput::Text {
                         text: "hello".to_string(),

@@ -22,6 +22,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -42,6 +43,13 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -106,7 +114,7 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_read_rejects_remote_marketplace_until_remote_read_is_supported() -> Result<()> {
+async fn plugin_read_rejects_remote_marketplace_when_remote_plugin_is_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -114,7 +122,7 @@ async fn plugin_read_rejects_remote_marketplace_until_remote_read_is_supported()
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
             marketplace_path: None,
-            remote_marketplace_name: Some("openai-curated".to_string()),
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
             plugin_name: "sample-plugin".to_string(),
         })
         .await?;
@@ -129,9 +137,336 @@ async fn plugin_read_rejects_remote_marketplace_until_remote_read_is_supported()
     assert!(
         err.error
             .message
-            .contains("remote plugin read is not supported yet")
+            .contains("remote plugin read is not enabled")
     );
-    assert!(err.error.message.contains("openai-curated"));
+    assert!(err.error.message.contains("chatgpt-global"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let detail_body = r#"{
+  "id": "linear@chatgpt-global",
+  "name": "linear",
+  "scope": "GLOBAL",
+  "installation_policy": "AVAILABLE",
+  "authentication_policy": "ON_USE",
+  "release": {
+    "display_name": "Linear",
+    "description": "Track work in Linear",
+    "app_ids": [],
+    "interface": {
+      "short_description": "Plan and track work",
+      "capabilities": ["Read", "Write"],
+      "logo_url": "https://example.com/linear.png",
+      "screenshot_urls": ["https://example.com/linear-shot.png"]
+    },
+    "skills": [
+      {
+        "name": "plan-work",
+        "description": "Plan work from Linear issues",
+        "plugin_release_skill_id": "skill-1",
+        "interface": {
+          "display_name": "Plan Work",
+          "short_description": "Create a plan from issues"
+        }
+      }
+    ]
+  }
+}"#;
+    let installed_body = r#"{
+  "plugins": [
+    {
+      "id": "linear@chatgpt-global",
+      "name": "linear",
+      "scope": "GLOBAL",
+      "installation_policy": "AVAILABLE",
+      "authentication_policy": "ON_USE",
+      "release": {
+        "display_name": "Linear",
+        "description": "Track work in Linear",
+        "app_ids": [],
+        "interface": {
+          "short_description": "Plan and track work",
+          "capabilities": ["Read", "Write"],
+          "logo_url": "https://example.com/linear.png",
+          "screenshot_urls": ["https://example.com/linear-shot.png"]
+        },
+        "skills": [
+          {
+            "name": "plan-work",
+            "description": "Plan work from Linear issues",
+            "plugin_release_skill_id": "skill-1",
+            "interface": {
+              "display_name": "Plan Work",
+              "short_description": "Create a plan from issues"
+            }
+          }
+        ]
+      },
+      "enabled": false,
+      "disabled_skill_names": ["plan-work"]
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "next_page_token": null
+  }
+}"#;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/linear@chatgpt-global"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(installed_body))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            plugin_name: "linear".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(response.plugin.marketplace_name, "chatgpt-global");
+    assert_eq!(response.plugin.marketplace_path, None);
+    assert_eq!(response.plugin.summary.source, PluginSource::Remote);
+    assert_eq!(response.plugin.summary.id, "linear@chatgpt-global");
+    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.installed, true);
+    assert_eq!(response.plugin.summary.enabled, false);
+    assert_eq!(
+        response.plugin.description.as_deref(),
+        Some("Track work in Linear")
+    );
+    assert_eq!(response.plugin.skills.len(), 1);
+    assert_eq!(response.plugin.skills[0].name, "plan-work");
+    assert_eq!(response.plugin.skills[0].path, None);
+    assert_eq!(response.plugin.skills[0].enabled, false);
+    assert_eq!(response.plugin.apps.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_maps_missing_remote_plugin_to_invalid_request() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/missing@chatgpt-global"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"detail":"not found"}"#))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            plugin_name: "missing".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(
+        err.error
+            .message
+            .contains("read remote plugin details: remote plugin catalog request")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_rejects_remote_marketplace_when_plugins_are_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}/backend-api/"
+
+[features]
+plugins = false
+remote_plugin = true
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            plugin_name: "linear".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(
+        err.error
+            .message
+            .contains("remote plugin read is not enabled")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_remote_plugin_catalog_config(codex_home.path(), "https://example.invalid/backend-api/")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("chatgpt-global".to_string()),
+            plugin_name: "linear/../../oops".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("invalid remote plugin id"));
+    assert!(err.error.message.contains("invalid plugin name"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_returns_canonical_openai_curated_marketplace_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "openai-curated",
+        "demo-plugin",
+        "./demo-plugin",
+    )?;
+    std::fs::create_dir_all(repo_root.path().join("demo-plugin/.codex-plugin"))?;
+    std::fs::write(
+        repo_root
+            .path()
+            .join("demo-plugin/.codex-plugin/plugin.json"),
+        r#"{
+  "name": "demo-plugin",
+  "description": "OpenAI curated plugin"
+}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."demo-plugin@openai-curated"]
+enabled = true
+"#,
+    )?;
+    write_installed_plugin(&codex_home, "openai-curated", "demo-plugin")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(marketplace_path.clone()),
+            remote_marketplace_name: None,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(response.plugin.marketplace_name, "openai-curated");
+    assert_eq!(response.plugin.marketplace_path, Some(marketplace_path));
+    assert_eq!(response.plugin.summary.id, "demo-plugin@openai-curated");
+    assert_eq!(response.plugin.summary.name, "demo-plugin");
     Ok(())
 }
 
@@ -283,7 +618,7 @@ enabled = true
     let response: PluginReadResponse = to_response(response)?;
 
     assert_eq!(response.plugin.marketplace_name, "codex-curated");
-    assert_eq!(response.plugin.marketplace_path, marketplace_path);
+    assert_eq!(response.plugin.marketplace_path, Some(marketplace_path));
     assert_eq!(response.plugin.summary.id, "demo-plugin@codex-curated");
     assert_eq!(response.plugin.summary.name, "demo-plugin");
     assert_eq!(
@@ -853,6 +1188,24 @@ mcp_oauth_credentials_store = "file"
 [features]
 plugins = true
 connectors = true
+"#
+        ),
+    )
+}
+
+fn write_remote_plugin_catalog_config(
+    codex_home: &std::path::Path,
+    base_url: &str,
+) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{base_url}"
+
+[features]
+plugins = true
+remote_plugin = true
 "#
         ),
     )

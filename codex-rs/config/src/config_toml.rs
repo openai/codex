@@ -29,6 +29,7 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -56,7 +57,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
+    AMAZON_BEDROCK_PROVIDER_ID,
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
@@ -87,6 +89,10 @@ pub struct ConfigToml {
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Optional policy instructions for the guardian auto-reviewer.
+    #[serde(default)]
+    pub auto_review: Option<AutoReviewToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -397,6 +403,12 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct AutoReviewToml {
+    /// Additional policy instructions inserted into the guardian prompt.
+    pub policy: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -780,7 +792,10 @@ pub fn validate_reserved_model_provider_ids(
 ) -> Result<(), String> {
     let mut conflicts = model_providers
         .keys()
-        .filter(|key| RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str()))
+        .filter(|key| {
+            key.as_str() != AMAZON_BEDROCK_PROVIDER_ID
+                && RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str())
+        })
         .map(|key| format!("`{key}`"))
         .collect::<Vec<_>>();
     conflicts.sort_unstable();
@@ -800,6 +815,19 @@ pub fn validate_model_providers(
 ) -> Result<(), String> {
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
+        if key == AMAZON_BEDROCK_PROVIDER_ID {
+            continue;
+        }
+        if provider.aws.is_some() {
+            return Err(format!(
+                "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
+            ));
+        }
+        if provider.name.trim().is_empty() {
+            return Err(format!(
+                "model_providers.{key}: provider name must not be empty"
+            ));
+        }
         provider
             .validate()
             .map_err(|message| format!("model_providers.{key}: {message}"))?;

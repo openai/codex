@@ -103,6 +103,12 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct TurnEnvironmentSelection {
+    pub environment_id: String,
+    pub cwd: AbsolutePathBuf,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
@@ -425,6 +431,9 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
@@ -488,6 +497,10 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -715,6 +728,7 @@ pub enum ThreadMemoryMode {
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
+            environments: None,
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -2098,6 +2112,10 @@ pub struct TurnCompleteEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
     pub duration_ms: Option<i64>,
+    /// Duration between turn start and the first model token in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub time_to_first_token_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2441,6 +2459,9 @@ pub struct DynamicToolCallResponseEvent {
     pub call_id: String,
     /// Turn ID that this dynamic tool call belongs to.
     pub turn_id: String,
+    /// Dynamic tool namespace, when one was provided.
+    #[serde(default)]
+    pub namespace: Option<String>,
     /// Dynamic tool name.
     pub tool: String,
     /// Dynamic tool call arguments.
@@ -2776,26 +2797,6 @@ impl fmt::Display for SubAgentSource {
     }
 }
 
-/// Persisted agent-task details that let a resumed thread keep using the same backend task.
-///
-/// `agent_runtime_id` is validation metadata for the globally registered agent identity, not a
-/// separate session-scoped identity. Resume only restores this task after confirming that runtime
-/// id still matches the globally registered identity; otherwise the cached task is discarded and a
-/// fresh task can be registered.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
-pub struct SessionAgentTask {
-    pub agent_runtime_id: String,
-    pub task_id: String,
-    pub registered_at: String,
-}
-
-/// Session-scoped state updates that can be appended after the canonical SessionMeta line.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
-pub struct SessionStateUpdate {
-    #[serde(default)]
-    pub agent_task: Option<SessionAgentTask>,
-}
-
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
@@ -2865,7 +2866,6 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
-    SessionState(SessionStateUpdate),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
@@ -4901,6 +4901,7 @@ mod tests {
     #[test]
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -4919,6 +4920,7 @@ mod tests {
         assert_eq!(
             op,
             Op::UserInput {
+                environments: None,
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
@@ -4939,6 +4941,7 @@ mod tests {
             "additionalProperties": false
         });
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
@@ -4960,6 +4963,7 @@ mod tests {
     #[test]
     fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: Some(HashMap::from([(

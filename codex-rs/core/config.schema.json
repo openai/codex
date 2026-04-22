@@ -292,6 +292,15 @@
         }
       ]
     },
+    "AutoReviewToml": {
+      "properties": {
+        "policy": {
+          "description": "Additional policy instructions inserted into the guardian prompt.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -452,6 +461,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "remote_plugin": {
+              "type": "boolean"
+            },
             "request_permissions": {
               "type": "boolean"
             },
@@ -519,9 +531,6 @@
               "type": "boolean"
             },
             "unified_exec": {
-              "type": "boolean"
-            },
-            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -1027,6 +1036,21 @@
       ],
       "type": "object"
     },
+    "ModelProviderAwsAuthInfo": {
+      "additionalProperties": false,
+      "description": "AWS SigV4 auth configuration for a model provider.",
+      "properties": {
+        "profile": {
+          "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
+          "type": "string"
+        },
+        "region": {
+          "description": "AWS region to use for provider-specific endpoints.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
@@ -1038,6 +1062,14 @@
             }
           ],
           "description": "Command-backed bearer-token configuration for this provider."
+        },
+        "aws": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderAwsAuthInfo"
+            }
+          ],
+          "description": "AWS SigV4 auth configuration for this provider."
         },
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
@@ -1070,6 +1102,7 @@
           "type": "object"
         },
         "name": {
+          "default": "",
           "description": "Friendly display name.",
           "type": "string"
         },
@@ -1124,9 +1157,6 @@
           "description": "Which wire protocol this provider expects."
         }
       },
-      "required": [
-        "name"
-      ],
       "type": "object"
     },
     "MultiAgentV2ConfigToml": {
@@ -2232,6 +2262,15 @@
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
+    "auto_review": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoReviewToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional policy instructions for the guardian auto-reviewer."
+    },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
@@ -2434,6 +2473,9 @@
         "remote_models": {
           "type": "boolean"
         },
+        "remote_plugin": {
+          "type": "boolean"
+        },
         "request_permissions": {
           "type": "boolean"
         },
@@ -2501,9 +2543,6 @@
           "type": "boolean"
         },
         "unified_exec": {
-          "type": "boolean"
-        },
-        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

@@ -150,6 +150,7 @@ impl AppCommand {
     ) -> Self {
         Self(Op::UserTurn {
             items,
+            environments: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
@@ -296,6 +297,7 @@ impl AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                environments: _,
             } => AppCommandView::UserTurn {
                 items,
                 cwd,

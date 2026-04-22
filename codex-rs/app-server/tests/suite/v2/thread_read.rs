@@ -548,6 +548,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             source_kinds: None,
             archived: None,
             cwd: None,
+            use_state_db_only: false,
             search_term: None,
         })
         .await?;

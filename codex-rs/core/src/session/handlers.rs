@@ -125,7 +125,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata) = match op {
+    let (items, updates, responsesapi_client_metadata, environments) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -139,6 +139,7 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             collaboration_mode,
             personality,
+            environments,
         } => {
             let collaboration_mode = collaboration_mode.or_else(|| {
                 Some(CollaborationMode {
@@ -167,10 +168,12 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_version: None,
                 },
                 None,
+                environments,
             )
         }
         Op::UserInput {
             items,
+            environments,
             final_output_json_schema,
             responsesapi_client_metadata,
         } => (
@@ -180,11 +183,15 @@ pub(super) async fn user_input_or_turn_inner(
                 ..Default::default()
             },
             responsesapi_client_metadata,
+            environments,
         ),
         _ => unreachable!(),
     };
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
+    let Ok(current_context) = sess
+        .new_turn_with_sub_id(sub_id.clone(), updates, environments)
+        .await
+    else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
@@ -468,25 +475,17 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP tool listing reads through the session-owned manager guard"
+)]
 pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let auth = sess.services.auth_manager.auth().await;
-    let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-        sess.services
-            .auth_manager
-            .chatgpt_authorization_header_for_auth(auth)
-            .await
-    } else {
-        None
-    };
     let mcp_servers = sess
         .services
         .mcp_manager
-        .effective_servers_with_authorization_header(
-            config,
-            auth.as_ref(),
-            background_authorization_header_value.as_deref(),
-        )
+        .effective_servers(config, auth.as_ref())
         .await;
     let snapshot = collect_mcp_snapshot_from_manager(
         &mcp_connection_manager,
@@ -515,8 +514,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     let plugins_manager = &sess.services.plugins_manager;
     let fs = sess
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem());
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;
@@ -546,6 +545,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             &codex_config::NoopThreadConfigLoader,
+            /*host_name*/ None,
         )
         .await
         {
