@@ -2,7 +2,7 @@ mod archive_thread;
 mod create_thread;
 mod helpers;
 mod list_threads;
-mod live_thread;
+mod live_writer;
 mod read_thread;
 mod unarchive_thread;
 mod update_thread_metadata;
@@ -76,7 +76,7 @@ impl LocalThreadStore {
 
     /// Return the live local rollout path for legacy local-only code paths.
     pub async fn live_rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<PathBuf> {
-        live_thread::rollout_path(self, thread_id).await
+        live_writer::rollout_path(self, thread_id).await
     }
 
     pub(super) async fn live_recorder(
@@ -107,31 +107,31 @@ impl ThreadStore for LocalThreadStore {
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
-        live_thread::create_thread(self, params).await
+        live_writer::create_thread(self, params).await
     }
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
-        live_thread::resume_thread(self, params).await
+        live_writer::resume_thread(self, params).await
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
-        live_thread::append_items(self, params).await
+        live_writer::append_items(self, params).await
     }
 
     async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        live_thread::persist_thread(self, thread_id).await
+        live_writer::persist_thread(self, thread_id).await
     }
 
     async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        live_thread::flush_thread(self, thread_id).await
+        live_writer::flush_thread(self, thread_id).await
     }
 
     async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        live_thread::shutdown_thread(self, thread_id).await
+        live_writer::shutdown_thread(self, thread_id).await
     }
 
     async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        live_thread::discard_thread(self, thread_id).await
+        live_writer::discard_thread(self, thread_id).await
     }
 
     async fn load_history(
@@ -195,7 +195,7 @@ mod tests {
     use crate::local::test_support::test_config;
 
     #[tokio::test]
-    async fn live_thread_lifecycle_writes_and_closes() {
+    async fn live_writer_lifecycle_writes_and_closes() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()));
         let thread_id = ThreadId::default();
