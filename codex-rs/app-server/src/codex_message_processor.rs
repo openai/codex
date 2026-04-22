@@ -8393,6 +8393,9 @@ async fn handle_thread_listener_command(
                 ))
                 .await;
         }
+        ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
+            send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
+        }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,
@@ -8551,34 +8554,7 @@ async fn handle_pending_thread_resume_request(
     .await;
     if pending.emit_thread_goal_update {
         if let Some(state_db) = pending.thread_goal_state_db {
-            match state_db.get_thread_goal(conversation_id).await {
-                Ok(Some(goal)) => {
-                    outgoing
-                        .send_server_notification(ServerNotification::ThreadGoalUpdated(
-                            ThreadGoalUpdatedNotification {
-                                thread_id: conversation_id.to_string(),
-                                turn_id: None,
-                                goal: api_thread_goal_from_state(goal),
-                            },
-                        ))
-                        .await;
-                }
-                Ok(None) => {
-                    outgoing
-                        .send_server_notification(ServerNotification::ThreadGoalCleared(
-                            ThreadGoalClearedNotification {
-                                thread_id: conversation_id.to_string(),
-                            },
-                        ))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        thread_id = %conversation_id,
-                        "failed to read thread goal for running thread resume: {err}"
-                    );
-                }
-            }
+            send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
         } else {
             tracing::warn!(
                 thread_id = %conversation_id,
@@ -8589,6 +8565,41 @@ async fn handle_pending_thread_resume_request(
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
+}
+
+async fn send_thread_goal_snapshot_notification(
+    outgoing: &Arc<OutgoingMessageSender>,
+    thread_id: ThreadId,
+    state_db: &StateDbHandle,
+) {
+    match state_db.get_thread_goal(thread_id).await {
+        Ok(Some(goal)) => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                    ThreadGoalUpdatedNotification {
+                        thread_id: thread_id.to_string(),
+                        turn_id: None,
+                        goal: api_thread_goal_from_state(goal),
+                    },
+                ))
+                .await;
+        }
+        Ok(None) => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadGoalCleared(
+                    ThreadGoalClearedNotification {
+                        thread_id: thread_id.to_string(),
+                    },
+                ))
+                .await;
+        }
+        Err(err) => {
+            tracing::warn!(
+                thread_id = %thread_id,
+                "failed to read thread goal for resume snapshot: {err}"
+            );
+        }
+    }
 }
 
 enum ThreadTurnSource<'a> {
