@@ -72,7 +72,7 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
         description: if cfg!(windows) {
             format!(
                 "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
-                windows_destructive_filesystem_guidance()
+                windows_shell_guidance()
             )
         } else {
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
@@ -173,7 +173,7 @@ Examples of valid command strings:
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
 
 {}"#,
-            windows_destructive_filesystem_guidance()
+                windows_shell_guidance()
         )
     } else {
         r#"Runs a shell command and returns its output.
@@ -244,7 +244,7 @@ Examples of valid command strings:
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
 
 {}"#,
-            windows_destructive_filesystem_guidance()
+            windows_shell_guidance()
         )
     } else {
         r#"Runs a shell command and returns its output.
@@ -421,10 +421,11 @@ fn file_system_permissions_schema() -> JsonSchema {
     )
 }
 
-fn windows_destructive_filesystem_guidance() -> &'static str {
+fn windows_shell_guidance() -> &'static str {
     r#"Windows safety rules:
 - Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
-- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked."#
+- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.
+- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."#
 }
 
 #[cfg(test)]

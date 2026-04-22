@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 fn windows_shell_safety_description() -> String {
-    format!("\n\n{}", windows_destructive_filesystem_guidance())
+    format!("\n\n{}", windows_shell_guidance())
 }
 
 #[test]
@@ -24,7 +24,7 @@ Examples of valid command strings:
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
             .to_string()
-            + &windows_shell_safety_description()
+            + &windows_shell_guidance()
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
@@ -269,7 +269,7 @@ Examples of valid command strings:
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
 
 {}"#,
-            windows_destructive_filesystem_guidance()
+            windows_shell_guidance()
         )
     } else {
         r#"Runs a shell command and returns its output.
