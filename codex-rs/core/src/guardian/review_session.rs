@@ -654,6 +654,7 @@ async fn run_review_on_session(
                 prompt_mode,
             )
             .await?;
+            let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
             let token_usage_at_review_start = review_session
                 .codex
                 .session
@@ -679,8 +680,9 @@ async fn run_review_on_session(
                 })
                 .await?;
 
-            Ok::<(GuardianTranscriptCursor, TokenUsage), anyhow::Error>((
+            Ok::<(GuardianTranscriptCursor, bool, TokenUsage), anyhow::Error>((
                 prompt_items.transcript_cursor,
+                reviewed_action_truncated,
                 token_usage_at_review_start,
             ))
         }),
@@ -690,16 +692,18 @@ async fn run_review_on_session(
         Ok(submit_result) => submit_result,
         Err(outcome) => return (outcome, false, analytics_result),
     };
-    let (transcript_cursor, token_usage_at_review_start) = match submit_result {
-        Ok(submit_result) => submit_result,
-        Err(err) => {
-            return (
-                GuardianReviewSessionOutcome::PromptBuildFailed(err),
-                false,
-                analytics_result,
-            );
-        }
-    };
+    let (transcript_cursor, reviewed_action_truncated, token_usage_at_review_start) =
+        match submit_result {
+            Ok(submit_result) => submit_result,
+            Err(err) => {
+                return (
+                    GuardianReviewSessionOutcome::PromptBuildFailed(err),
+                    false,
+                    analytics_result,
+                );
+            }
+        };
+    analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome =
         wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
