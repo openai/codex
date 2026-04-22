@@ -1,3 +1,12 @@
+//! RMCP Streamable HTTP adapter built on top of the shared `HttpClient`
+//! capability.
+//!
+//! This module runs in the orchestrator process. It turns high-level RMCP
+//! operations like `post_message` and `get_stream` into calls on
+//! `Arc<dyn HttpClient>`, which may be:
+//! - a local HTTP client that issues requests from the orchestrator, or
+//! - a remote HTTP client that forwards requests to the remote runtime
+
 use std::sync::Arc;
 
 use codex_exec_server::ExecServerError;

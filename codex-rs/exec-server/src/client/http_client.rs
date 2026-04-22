@@ -6,6 +6,12 @@
 //! - [`ExecServerClient`] forwards requests over the remote JSON-RPC transport
 //! - [`HttpResponseBodyStream`] presents buffered local bodies and streamed
 //!   remote `http/request/bodyDelta` notifications through one byte-stream API
+//!
+//! Runtime split:
+//! - orchestrator process: holds an `Arc<dyn HttpClient>` and chooses local or
+//!   remote execution
+//! - remote runtime: serves the `http/request` RPC and runs the concrete local
+//!   HTTP request there when the orchestrator uses [`ExecServerClient`]
 
 #[path = "http_body_stream.rs"]
 pub(crate) mod body_stream;

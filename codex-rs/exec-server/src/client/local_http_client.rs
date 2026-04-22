@@ -1,3 +1,10 @@
+//! Local HTTP implementation for the `HttpClient` capability.
+//!
+//! This code runs where the actual network request should originate:
+//! - in a local environment, that means the orchestrator process
+//! - in a remote environment, that means the remote runtime after the
+//!   orchestrator has forwarded `http/request` over JSON-RPC
+
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -23,8 +30,8 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 
-/// Direct host-side HTTP implementation for environments that do not proxy through
-/// a remote runtime.
+/// Direct HTTP implementation for whichever process is responsible for issuing
+/// the real network request.
 #[derive(Clone, Default)]
 pub(crate) struct LocalHttpClient;
 
@@ -35,8 +42,8 @@ pub(crate) struct PendingHttpBodyStream {
     pub(crate) response: reqwest::Response,
 }
 
-/// Validates `http/request` parameters and runs the actual local `reqwest`
-/// call used by the exec-server route and the local [`HttpClient`] backend.
+/// Validates `http/request` parameters and runs the actual `reqwest` call used
+/// by the exec-server route and the local [`HttpClient`] backend.
 pub(crate) struct HttpRequestRunner {
     client: reqwest::Client,
 }

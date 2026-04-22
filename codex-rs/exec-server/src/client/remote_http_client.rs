@@ -1,3 +1,10 @@
+//! Remote `HttpClient` implementation backed by the exec-server JSON-RPC transport.
+//!
+//! This code runs in the orchestrator process. It does not issue network
+//! requests directly; instead it forwards `http/request` to the remote runtime
+//! and then reconstructs streamed bodies from `http/request/bodyDelta`
+//! notifications on the shared connection.
+
 use std::sync::Arc;
 
 use futures::FutureExt;
@@ -61,6 +68,8 @@ impl ExecServerClient {
 }
 
 impl HttpClient for ExecServerClient {
+    /// Orchestrator-side adapter that forwards buffered HTTP requests to the
+    /// remote runtime over the shared JSON-RPC connection.
     fn http_request(
         &self,
         params: HttpRequestParams,
@@ -68,6 +77,8 @@ impl HttpClient for ExecServerClient {
         async move { ExecServerClient::http_request(self, params).await }.boxed()
     }
 
+    /// Orchestrator-side adapter that forwards streamed HTTP requests to the
+    /// remote runtime and exposes body deltas as a byte stream.
     fn http_request_stream(
         &self,
         params: HttpRequestParams,
