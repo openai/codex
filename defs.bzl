@@ -255,10 +255,9 @@ def codex_rust_crate(
         unit_test_name = name + "-unit-tests"
         unit_test_binary = name + "-unit-tests-bin"
         unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
-        unit_test_binary_kwargs = {}
-        if unit_test_shard_count:
-            unit_test_binary_kwargs["experimental_enable_sharding"] = True
-
+        # Shard at the workspace_root_test layer. rules_rust's sharding wrapper
+        # expects to run from its own runfiles cwd, while workspace_root_test
+        # deliberately changes cwd so Insta sees Cargo-like snapshot paths.
         rust_test(
             name = unit_test_binary,
             crate = name,
@@ -277,7 +276,6 @@ def codex_rust_crate(
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
-            **unit_test_binary_kwargs
         )
 
         unit_test_kwargs = {}

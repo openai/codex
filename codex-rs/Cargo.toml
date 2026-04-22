@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "aws-auth",
     "analytics",
     "backend-client",
     "ansi-escape",
@@ -113,6 +114,7 @@ app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
+codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
@@ -218,6 +220,10 @@ async-channel = "2.3.1"
 async-io = "2.6.0"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
+aws-config = "1"
+aws-credential-types = "1"
+aws-sigv4 = "1"
+aws-types = "1"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bm25 = "2.3.2"
