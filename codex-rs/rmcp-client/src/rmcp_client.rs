@@ -90,11 +90,28 @@ const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
-    inner: reqwest::Client,
+    inner: StreamableHttpResponseClientInner,
+}
+
+#[derive(Clone)]
+enum StreamableHttpResponseClientInner {
+    Local(reqwest::Client),
+    Remote(RemoteStreamableHttpClient),
 }
 
 impl StreamableHttpResponseClient {
-    fn new(inner: reqwest::Client) -> Self {
+    fn new(placement: StreamableHttpClientPlacement, default_headers: HeaderMap) -> Result<Self> {
+        let inner = match placement {
+            StreamableHttpClientPlacement::Local => {
+                StreamableHttpResponseClientInner::Local(build_http_client(&default_headers)?)
+            }
+            StreamableHttpClientPlacement::Remote { exec_client } => {
+                StreamableHttpResponseClientInner::Remote(RemoteStreamableHttpClient::new(
+                    exec_client,
+                    default_headers,
+                ))
+            }
+        };
         Self { inner }
     }
 }
@@ -110,26 +127,14 @@ enum StreamableHttpResponseClientError {
     SessionExpired404,
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Remote(#[from] RemoteStreamableHttpClientError),
 }
 
 #[derive(Clone)]
 enum StreamableHttpClientPlacement {
     Local,
     Remote { exec_client: ExecServerClient },
-}
-
-#[derive(Clone)]
-enum StreamableHttpTransportClient {
-    Local(StreamableHttpResponseClient),
-    Remote(RemoteStreamableHttpClient),
-}
-
-#[derive(Debug, thiserror::Error)]
-enum StreamableHttpTransportClientError {
-    #[error(transparent)]
-    Local(#[from] StreamableHttpResponseClientError),
-    #[error(transparent)]
-    Remote(#[from] RemoteStreamableHttpClientError),
 }
 
 impl StreamableHttpClient for StreamableHttpResponseClient {
@@ -142,8 +147,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        let mut request = self
-            .inner
+        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
+            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
+            return client
+                .post_message(uri, message, session_id, auth_token)
+                .await
+                .map_err(|error| {
+                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                });
+        };
+        let mut request = inner
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(auth_header) = auth_token {
@@ -246,7 +259,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session: Arc<str>,
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
-        let mut request_builder = self.inner.delete(uri.as_ref());
+        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
+            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
+            return client
+                .delete_session(uri, session, auth_token)
+                .await
+                .map_err(|error| {
+                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                });
+        };
+        let mut request_builder = inner.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
@@ -278,8 +300,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
-        let mut request_builder = self
-            .inner
+        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
+            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
+            return client
+                .get_stream(uri, session_id, last_event_id, auth_token)
+                .await
+                .map_err(|error| {
+                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                });
+        };
+        let mut request_builder = inner
             .get(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
             .header(HEADER_SESSION_ID, session_id.as_ref());
@@ -327,81 +357,6 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
     }
 }
 
-impl StreamableHttpClient for StreamableHttpTransportClient {
-    type Error = StreamableHttpTransportClientError;
-
-    async fn post_message(
-        &self,
-        uri: Arc<str>,
-        message: rmcp::model::ClientJsonRpcMessage,
-        session_id: Option<Arc<str>>,
-        auth_token: Option<String>,
-    ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        match self {
-            Self::Local(client) => client
-                .post_message(uri, message, session_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Local)
-                }),
-            Self::Remote(client) => client
-                .post_message(uri, message, session_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
-                }),
-        }
-    }
-
-    async fn delete_session(
-        &self,
-        uri: Arc<str>,
-        session: Arc<str>,
-        auth_token: Option<String>,
-    ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
-        match self {
-            Self::Local(client) => client
-                .delete_session(uri, session, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Local)
-                }),
-            Self::Remote(client) => client
-                .delete_session(uri, session, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
-                }),
-        }
-    }
-
-    async fn get_stream(
-        &self,
-        uri: Arc<str>,
-        session_id: Arc<str>,
-        last_event_id: Option<String>,
-        auth_token: Option<String>,
-    ) -> std::result::Result<
-        BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
-        StreamableHttpError<Self::Error>,
-    > {
-        match self {
-            Self::Local(client) => client
-                .get_stream(uri, session_id, last_event_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Local)
-                }),
-            Self::Remote(client) => client
-                .get_stream(uri, session_id, last_event_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
-                }),
-        }
-    }
-}
-
 fn map_streamable_http_error<FromError, ToError>(
     error: StreamableHttpError<FromError>,
     map_client_error: fn(FromError) -> ToError,
@@ -443,10 +398,10 @@ enum PendingTransport {
         transport: StdioServerTransport,
     },
     StreamableHttp {
-        transport: StreamableHttpClientTransport<StreamableHttpTransportClient>,
+        transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
+        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -1129,22 +1084,10 @@ impl RmcpClient {
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
                             let transport = StreamableHttpClientTransport::with_client(
-                                match placement.clone() {
-                                    StreamableHttpClientPlacement::Local => {
-                                        let http_client = build_http_client(&default_headers)?;
-                                        StreamableHttpTransportClient::Local(
-                                            StreamableHttpResponseClient::new(http_client),
-                                        )
-                                    }
-                                    StreamableHttpClientPlacement::Remote { exec_client } => {
-                                        StreamableHttpTransportClient::Remote(
-                                            RemoteStreamableHttpClient::new(
-                                                exec_client,
-                                                default_headers,
-                                            ),
-                                        )
-                                    }
-                                },
+                                StreamableHttpResponseClient::new(
+                                    placement.clone(),
+                                    default_headers,
+                                )?,
                                 http_config,
                             );
                             Ok(PendingTransport::StreamableHttp { transport })
@@ -1159,19 +1102,7 @@ impl RmcpClient {
                     }
 
                     let transport = StreamableHttpClientTransport::with_client(
-                        match placement.clone() {
-                            StreamableHttpClientPlacement::Local => {
-                                let http_client = build_http_client(&default_headers)?;
-                                StreamableHttpTransportClient::Local(
-                                    StreamableHttpResponseClient::new(http_client),
-                                )
-                            }
-                            StreamableHttpClientPlacement::Remote { exec_client } => {
-                                StreamableHttpTransportClient::Remote(
-                                    RemoteStreamableHttpClient::new(exec_client, default_headers),
-                                )
-                            }
-                        },
+                        StreamableHttpResponseClient::new(placement.clone(), default_headers)?,
                         http_config,
                     );
                     Ok(PendingTransport::StreamableHttp { transport })
@@ -1291,16 +1222,15 @@ impl RmcpClient {
 
         error
             .error
-            .downcast_ref::<StreamableHttpError<StreamableHttpTransportClientError>>()
+            .downcast_ref::<StreamableHttpError<StreamableHttpResponseClientError>>()
             .is_some_and(|error| {
                 matches!(
                     error,
                     StreamableHttpError::Client(
-                        StreamableHttpTransportClientError::Local(
-                            StreamableHttpResponseClientError::SessionExpired404
-                        ) | StreamableHttpTransportClientError::Remote(
-                            RemoteStreamableHttpClientError::SessionExpired404
-                        )
+                        StreamableHttpResponseClientError::SessionExpired404
+                            | StreamableHttpResponseClientError::Remote(
+                                RemoteStreamableHttpClientError::SessionExpired404
+                            )
                     )
                 )
             })
@@ -1369,7 +1299,7 @@ async fn create_oauth_transport_and_runtime(
     default_headers: HeaderMap,
     placement: StreamableHttpClientPlacement,
 ) -> Result<(
-    StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
+    StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
     OAuthPersistor,
 )> {
     let http_client = build_http_client(&default_headers)?;
@@ -1394,18 +1324,7 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        match placement {
-            StreamableHttpClientPlacement::Local => {
-                let http_client = build_http_client(&default_headers)?;
-                StreamableHttpTransportClient::Local(StreamableHttpResponseClient::new(http_client))
-            }
-            StreamableHttpClientPlacement::Remote { exec_client } => {
-                StreamableHttpTransportClient::Remote(RemoteStreamableHttpClient::new(
-                    exec_client,
-                    default_headers,
-                ))
-            }
-        },
+        StreamableHttpResponseClient::new(placement, default_headers)?,
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
