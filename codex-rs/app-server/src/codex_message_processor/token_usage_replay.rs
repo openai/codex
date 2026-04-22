@@ -60,15 +60,14 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 
 pub(super) async fn latest_token_usage_turn_id_for_thread_path(thread: &Thread) -> Option<String> {
     let rollout_path = thread.path.as_deref()?;
-    latest_token_usage_turn_id_from_rollout_path(rollout_path, thread).await
+    latest_token_usage_turn_id_from_rollout_path(rollout_path).await
 }
 
 pub(super) async fn latest_token_usage_turn_id_from_rollout_path(
     rollout_path: &Path,
-    thread: &Thread,
 ) -> Option<String> {
     let rollout_items = read_rollout_items_from_rollout(rollout_path).await.ok()?;
-    latest_token_usage_turn_id_from_rollout_items(&rollout_items, thread)
+    latest_token_usage_turn_id_from_rollout_items(&rollout_items)
 }
 
 /// Identifies the turn that was active when a `TokenCount` record appeared.
@@ -82,15 +81,15 @@ struct TokenUsageTurnOwner {
 
 pub(super) fn latest_token_usage_turn_id_from_rollout_items(
     rollout_items: &[RolloutItem],
-    thread: &Thread,
 ) -> Option<String> {
     let owner = latest_token_usage_turn_owner_from_rollout_items(rollout_items)?;
-    if thread.turns.iter().any(|turn| turn.id == owner.id) {
+    let rebuilt_turns = super::build_turns_from_rollout_items(rollout_items);
+    if rebuilt_turns.iter().any(|turn| turn.id == owner.id) {
         return Some(owner.id);
     }
     owner
         .position
-        .and_then(|position| thread.turns.get(position))
+        .and_then(|position| rebuilt_turns.get(position))
         .map(|turn| turn.id.clone())
 }
 

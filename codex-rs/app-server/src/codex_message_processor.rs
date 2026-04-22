@@ -4631,7 +4631,6 @@ impl CodexMessageProcessor {
                 let token_usage_thread = response.thread.clone();
                 let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
                     &response_history.get_rollout_items(),
-                    &token_usage_thread,
                 );
                 self.outgoing.send_response(request_id, response).await;
                 // The client needs restored usage before it starts another turn.
@@ -5297,11 +5296,7 @@ impl CodexMessageProcessor {
         {
             Some(turn_id)
         } else {
-            latest_token_usage_turn_id_from_rollout_path(
-                rollout_path.as_path(),
-                &token_usage_thread,
-            )
-            .await
+            latest_token_usage_turn_id_from_rollout_path(rollout_path.as_path()).await
         };
         self.outgoing.send_response(request_id, response).await;
         // Mirror the resume contract for forks: the new thread is usable as soon
@@ -8736,11 +8731,8 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
-    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
-        pending.rollout_path.as_path(),
-        &token_usage_thread,
-    )
-    .await;
+    let token_usage_turn_id =
+        latest_token_usage_turn_id_from_rollout_path(pending.rollout_path.as_path()).await;
     outgoing.send_response(request_id, response).await;
     // Rejoining a loaded thread has the same UI contract as a cold resume, but
     // uses the live conversation state instead of reconstructing a new session.
