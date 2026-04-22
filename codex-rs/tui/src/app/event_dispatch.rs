@@ -1667,7 +1667,8 @@ impl App {
                 key,
                 intent,
             } => {
-                self.apply_keymap_capture(context, action, key, intent).await;
+                self.apply_keymap_capture(context, action, key, intent)
+                    .await;
             }
             AppEvent::KeymapCleared { context, action } => {
                 self.apply_keymap_clear(context, action).await;

@@ -736,6 +736,7 @@ impl ChatWidget {
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Diff
+            | SlashCommand::Vim
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
@@ -768,6 +769,7 @@ impl ChatWidget {
             | SlashCommand::Skills
             | SlashCommand::Title
             | SlashCommand::Statusline
+            | SlashCommand::Keymap
             | SlashCommand::Theme => QueueDrain::Stop,
         }
     }

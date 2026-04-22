@@ -16,6 +16,6 @@ expression: terminal.backend()
 "  ctrl + g to edit in external editor        esc again to edit previous message                     "
 "  ctrl + r search history                    ctrl + c to exit                                       "
 "  ⌥ + , reasoning down                       ⌥ + . reasoning up                                     "
-"                                             ctrl + t to view transcript                            "
+"  ctrl + t to view transcript                                                                       "
 "                                                                                                    "
 "  [tui.keymap] customize shortcuts in ~/.codex/config.toml                                          "
