@@ -20,17 +20,9 @@ const OPENAI_FILE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const OPENAI_FILE_FINALIZE_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OPENAI_FILE_USE_CASE: &str = "codex";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OpenAiFileUploadOptions {
     pub store_in_library: bool,
-}
-
-impl Default for OpenAiFileUploadOptions {
-    fn default() -> Self {
-        Self {
-            store_in_library: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
