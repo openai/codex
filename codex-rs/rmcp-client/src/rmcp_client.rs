@@ -89,30 +89,21 @@ const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
 #[derive(Clone)]
-struct StreamableHttpResponseClient {
-    inner: StreamableHttpResponseClientInner,
-}
-
-#[derive(Clone)]
-enum StreamableHttpResponseClientInner {
+enum StreamableHttpResponseClient {
     Local(reqwest::Client),
     Remote(RemoteStreamableHttpClient),
 }
 
 impl StreamableHttpResponseClient {
     fn new(placement: StreamableHttpClientPlacement, default_headers: HeaderMap) -> Result<Self> {
-        let inner = match placement {
+        Ok(match placement {
             StreamableHttpClientPlacement::Local => {
-                StreamableHttpResponseClientInner::Local(build_http_client(&default_headers)?)
+                Self::Local(build_http_client(&default_headers)?)
             }
-            StreamableHttpClientPlacement::Remote { exec_client } => {
-                StreamableHttpResponseClientInner::Remote(RemoteStreamableHttpClient::new(
-                    exec_client,
-                    default_headers,
-                ))
-            }
-        };
-        Self { inner }
+            StreamableHttpClientPlacement::Remote { exec_client } => Self::Remote(
+                RemoteStreamableHttpClient::new(exec_client, default_headers),
+            ),
+        })
     }
 }
 
@@ -147,14 +138,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
-            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
-            return client
-                .post_message(uri, message, session_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
-                });
+        let inner = match self {
+            Self::Local(inner) => inner,
+            Self::Remote(client) => {
+                return client
+                    .post_message(uri, message, session_id, auth_token)
+                    .await
+                    .map_err(|error| {
+                        map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                    });
+            }
         };
         let mut request = inner
             .post(uri.as_ref())
@@ -259,14 +252,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         session: Arc<str>,
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
-        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
-            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
-            return client
-                .delete_session(uri, session, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
-                });
+        let inner = match self {
+            Self::Local(inner) => inner,
+            Self::Remote(client) => {
+                return client
+                    .delete_session(uri, session, auth_token)
+                    .await
+                    .map_err(|error| {
+                        map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                    });
+            }
         };
         let mut request_builder = inner.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
@@ -300,14 +295,16 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
-        let StreamableHttpResponseClientInner::Local(inner) = &self.inner else {
-            let StreamableHttpResponseClientInner::Remote(client) = &self.inner;
-            return client
-                .get_stream(uri, session_id, last_event_id, auth_token)
-                .await
-                .map_err(|error| {
-                    map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
-                });
+        let inner = match self {
+            Self::Local(inner) => inner,
+            Self::Remote(client) => {
+                return client
+                    .get_stream(uri, session_id, last_event_id, auth_token)
+                    .await
+                    .map_err(|error| {
+                        map_streamable_http_error(error, StreamableHttpResponseClientError::Remote)
+                    });
+            }
         };
         let mut request_builder = inner
             .get(uri.as_ref())
