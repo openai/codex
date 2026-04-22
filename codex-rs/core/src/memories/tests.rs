@@ -13,6 +13,7 @@ use codex_state::Stage1Output;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -127,6 +128,56 @@ async fn clear_memory_root_contents_rejects_symlinked_root() {
             .await
             .expect("check target file existence"),
         "rejecting a symlinked memory root should not delete the symlink target"
+    );
+}
+
+struct ConsolidatedOutputPaths {
+    memory_index: PathBuf,
+    memory_summary: PathBuf,
+    skill: PathBuf,
+}
+
+async fn write_consolidated_outputs(root: &Path) -> ConsolidatedOutputPaths {
+    let paths = ConsolidatedOutputPaths {
+        memory_index: root.join("MEMORY.md"),
+        memory_summary: root.join("memory_summary.md"),
+        skill: root.join("skills/demo/SKILL.md"),
+    };
+
+    tokio::fs::write(&paths.memory_index, "consolidated memory index\n")
+        .await
+        .expect("write memory index");
+    tokio::fs::write(&paths.memory_summary, "consolidated memory summary\n")
+        .await
+        .expect("write memory summary");
+    tokio::fs::create_dir_all(paths.skill.parent().expect("skill parent"))
+        .await
+        .expect("create skill dir");
+    tokio::fs::write(&paths.skill, "consolidated skill\n")
+        .await
+        .expect("write skill");
+
+    paths
+}
+
+async fn assert_consolidated_outputs_exist(paths: &ConsolidatedOutputPaths, context: &str) {
+    assert!(
+        tokio::fs::try_exists(&paths.memory_index)
+            .await
+            .expect("check memory index existence"),
+        "{context} should leave MEMORY.md untouched"
+    );
+    assert!(
+        tokio::fs::try_exists(&paths.memory_summary)
+            .await
+            .expect("check memory summary existence"),
+        "{context} should leave memory_summary.md untouched"
+    );
+    assert!(
+        tokio::fs::try_exists(&paths.skill)
+            .await
+            .expect("check skill existence"),
+        "{context} should leave skills untouched"
     );
 }
 
@@ -246,21 +297,7 @@ async fn sync_empty_inputs_preserves_consolidated_outputs() {
     tokio::fs::write(&stale_rollout_summary_path, "stale summary\n")
         .await
         .expect("write stale rollout summary");
-    let memory_index_path = root.join("MEMORY.md");
-    tokio::fs::write(&memory_index_path, "consolidated memory index\n")
-        .await
-        .expect("write memory index");
-    let memory_summary_path = root.join("memory_summary.md");
-    tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
-        .await
-        .expect("write memory summary");
-    let skill_path = root.join("skills/demo/SKILL.md");
-    tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
-        .await
-        .expect("create skill dir");
-    tokio::fs::write(&skill_path, "consolidated skill\n")
-        .await
-        .expect("write skill");
+    let outputs = write_consolidated_outputs(&root).await;
 
     sync_rollout_summaries_from_memories(
         &root,
@@ -287,24 +324,7 @@ async fn sync_empty_inputs_preserves_consolidated_outputs() {
         .await
         .expect("read raw memories");
     assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
-    assert!(
-        tokio::fs::try_exists(&memory_index_path)
-            .await
-            .expect("check memory index existence"),
-        "empty sync should not remove MEMORY.md"
-    );
-    assert!(
-        tokio::fs::try_exists(&memory_summary_path)
-            .await
-            .expect("check memory summary existence"),
-        "empty sync should not remove memory_summary.md"
-    );
-    assert!(
-        tokio::fs::try_exists(&skill_path)
-            .await
-            .expect("check skill existence"),
-        "empty sync should not remove skills"
-    );
+    assert_consolidated_outputs_exist(&outputs, "empty sync").await;
 }
 
 #[tokio::test]
@@ -677,9 +697,6 @@ mod phase2 {
     async fn dispatch_skips_when_memory_workspace_is_not_dirty() {
         let harness = DispatchHarness::new().await;
         let root = memory_root(&harness.config.codex_home);
-        let memory_index_path = root.join("MEMORY.md");
-        let memory_summary_path = root.join("memory_summary.md");
-        let skill_path = root.join("skills/demo/SKILL.md");
         rebuild_raw_memories_file_from_memories(
             &root,
             &[],
@@ -687,18 +704,7 @@ mod phase2 {
         )
         .await
         .expect("write empty raw memories baseline");
-        tokio::fs::write(&memory_index_path, "consolidated memory index\n")
-            .await
-            .expect("write memory index baseline");
-        tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
-            .await
-            .expect("write memory summary baseline");
-        tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
-            .await
-            .expect("create skill dir baseline");
-        tokio::fs::write(&skill_path, "consolidated skill\n")
-            .await
-            .expect("write skill baseline");
+        let outputs = super::write_consolidated_outputs(&root).await;
         prepare_memory_workspace(&root)
             .await
             .expect("commit empty memory workspace as baseline");
@@ -706,24 +712,7 @@ mod phase2 {
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
-        assert!(
-            tokio::fs::try_exists(&memory_index_path)
-                .await
-                .expect("check memory index existence"),
-            "clean no-input phase2 should leave MEMORY.md untouched"
-        );
-        assert!(
-            tokio::fs::try_exists(&memory_summary_path)
-                .await
-                .expect("check memory summary existence"),
-            "clean no-input phase2 should leave memory_summary.md untouched"
-        );
-        assert!(
-            tokio::fs::try_exists(&skill_path)
-                .await
-                .expect("check skill existence"),
-            "clean no-input phase2 should leave skills untouched"
-        );
+        super::assert_consolidated_outputs_exist(&outputs, "clean no-input phase2").await;
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 0);
     }
@@ -966,25 +955,7 @@ mod phase2 {
         tokio::fs::write(&raw_memories_path, "stale raw memories\n")
             .await
             .expect("write stale raw memories");
-        let memory_index_path = root.join("MEMORY.md");
-        tokio::fs::write(&memory_index_path, "stale memory index\n")
-            .await
-            .expect("write stale memory index");
-        let memory_summary_path = root.join("memory_summary.md");
-        tokio::fs::write(&memory_summary_path, "stale memory summary\n")
-            .await
-            .expect("write stale memory summary");
-        let stale_skill_file = root.join("skills/demo/SKILL.md");
-        tokio::fs::create_dir_all(
-            stale_skill_file
-                .parent()
-                .expect("skills subdirectory parent should exist"),
-        )
-        .await
-        .expect("create stale skills dir");
-        tokio::fs::write(&stale_skill_file, "stale skill\n")
-            .await
-            .expect("write stale skill");
+        let outputs = super::write_consolidated_outputs(&root).await;
 
         harness
             .state_db
@@ -1004,24 +975,7 @@ mod phase2 {
             .await
             .expect("read rebuilt raw memories");
         pretty_assertions::assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
-        assert!(
-            tokio::fs::try_exists(&memory_index_path)
-                .await
-                .expect("check memory index existence"),
-            "empty consolidation should leave MEMORY.md to the consolidation agent"
-        );
-        assert!(
-            tokio::fs::try_exists(&memory_summary_path)
-                .await
-                .expect("check memory summary existence"),
-            "empty consolidation should leave memory_summary.md to the consolidation agent"
-        );
-        assert!(
-            tokio::fs::try_exists(&stale_skill_file)
-                .await
-                .expect("check stale skill existence"),
-            "empty consolidation should leave skills to the consolidation agent"
-        );
+        super::assert_consolidated_outputs_exist(&outputs, "empty consolidation").await;
         let next_claim = harness
             .state_db
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
@@ -1052,21 +1006,7 @@ mod phase2 {
         rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
             .await
             .expect("sync selected raw memories");
-        let memory_index_path = root.join("MEMORY.md");
-        let memory_summary_path = root.join("memory_summary.md");
-        let skill_path = root.join("skills/demo/SKILL.md");
-        tokio::fs::write(&memory_index_path, "consolidated memory index\n")
-            .await
-            .expect("write memory index");
-        tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
-            .await
-            .expect("write memory summary");
-        tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
-            .await
-            .expect("create skill dir");
-        tokio::fs::write(&skill_path, "consolidated skill\n")
-            .await
-            .expect("write skill");
+        let outputs = super::write_consolidated_outputs(&root).await;
         prepare_memory_workspace(&root)
             .await
             .expect("commit current memory workspace as baseline");
@@ -1102,24 +1042,7 @@ mod phase2 {
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
-        assert!(
-            tokio::fs::try_exists(&memory_index_path)
-                .await
-                .expect("check memory index existence"),
-            "empty selected phase2 should leave MEMORY.md to the consolidation agent"
-        );
-        assert!(
-            tokio::fs::try_exists(&memory_summary_path)
-                .await
-                .expect("check memory summary existence"),
-            "empty selected phase2 should leave memory_summary.md to the consolidation agent"
-        );
-        assert!(
-            tokio::fs::try_exists(&skill_path)
-                .await
-                .expect("check skill existence"),
-            "empty selected phase2 should leave skills to the consolidation agent"
-        );
+        super::assert_consolidated_outputs_exist(&outputs, "empty selected phase2").await;
         let workspace_diff = tokio::fs::read_to_string(root.join("phase2_workspace_diff.md"))
             .await
             .expect("read workspace diff");
