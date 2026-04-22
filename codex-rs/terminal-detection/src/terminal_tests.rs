@@ -456,6 +456,44 @@ fn detects_wezterm() {
         "WezTerm",
         "wezterm_empty_user_agent"
     );
+
+    let env = FakeEnvironment::new().with_var("TERM", "wezterm");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::WezTerm,
+            /*term_program*/ None,
+            /*version*/ None,
+            Some("wezterm"),
+            /*multiplexer*/ None
+        ),
+        "wezterm_term_info"
+    );
+    assert_eq!(
+        terminal.user_agent_token(),
+        "wezterm",
+        "wezterm_term_user_agent"
+    );
+
+    let env = FakeEnvironment::new().with_var("TERM", "wezterm-mux");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::WezTerm,
+            /*term_program*/ None,
+            /*version*/ None,
+            Some("wezterm-mux"),
+            /*multiplexer*/ None
+        ),
+        "wezterm_mux_term_info"
+    );
+    assert_eq!(
+        terminal.user_agent_token(),
+        "wezterm-mux",
+        "wezterm_mux_term_user_agent"
+    );
 }
 
 #[test]

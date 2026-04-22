@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "event": {
+      "description": "Serialized `codex_protocol::protocol::GuardianAssessmentEvent`."
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "threadId"
+  ],
+  "title": "ThreadApproveGuardianDeniedActionParams",
+  "type": "object"
+}

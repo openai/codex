@@ -1,7 +1,11 @@
 # codex-git-utils
 
 Helpers for interacting with git, including patch application and worktree
-snapshot utilities.
+snapshot utilities. The crate also exposes a lightweight baseline API for
+internal directories that use git only as a resettable diff mechanism:
+`reset_git_repository` replaces `root/.git` with a fresh one-commit baseline,
+and `diff_since_latest_init` returns structured file changes plus a unified
+diff from that baseline to the current directory contents.
 
 ```rust,no_run
 use std::path::Path;

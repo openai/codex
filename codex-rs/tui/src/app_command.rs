@@ -150,6 +150,7 @@ impl AppCommand {
     ) -> Self {
         Self(Op::UserTurn {
             items,
+            environments: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
@@ -183,6 +184,7 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
+            permission_profile: None,
             windows_sandbox_level,
             model,
             effort,
@@ -296,6 +298,7 @@ impl AppCommand {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                environments: _,
             } => AppCommandView::UserTurn {
                 items,
                 cwd,
@@ -315,6 +318,7 @@ impl AppCommand {
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
+                permission_profile: _,
                 windows_sandbox_level,
                 model,
                 effort,

@@ -1,6 +1,7 @@
 use crate::models::FileSystemPermissions;
 use crate::models::NetworkPermissions;
 use crate::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -70,4 +71,7 @@ pub struct RequestPermissionsEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<AbsolutePathBuf>,
 }

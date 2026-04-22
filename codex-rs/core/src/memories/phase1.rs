@@ -1,7 +1,7 @@
 use crate::Prompt;
 use crate::RolloutRecorder;
 use crate::config::Config;
-use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
+use crate::context::is_memory_excluded_contextual_user_fragment;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
@@ -23,6 +23,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
+use codex_rollout_trace::InferenceTraceContext;
 use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -341,6 +342,7 @@ mod job {
             },
             personality: None,
             output_schema: Some(output_schema()),
+            output_schema_strict: true,
         };
 
         let mut client_session = session.services.model_client.new_session();
@@ -353,6 +355,7 @@ mod job {
                 stage_one_context.reasoning_summary,
                 stage_one_context.service_tier,
                 stage_one_context.turn_metadata_header.as_deref(),
+                &InferenceTraceContext::disabled(),
             )
             .await?;
 

@@ -49,7 +49,6 @@
       "$ref": "#/definitions/PostToolUseToolInput"
     },
     "tool_name": {
-      "const": "Bash",
       "type": "string"
     },
     "tool_response": true,

@@ -30,14 +30,20 @@ pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
+#[cfg(test)]
+pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::review_approval_request;
+#[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
+pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "codex-auto-review";
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
+pub(crate) const MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN: u32 = 3;
+pub(crate) const MAX_TOTAL_GUARDIAN_DENIALS_PER_TURN: u32 = 10;
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 2_000;
@@ -47,7 +53,7 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
 
 /// Structured output contract that the guardian reviewer must satisfy.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
@@ -59,6 +65,56 @@ pub(crate) struct GuardianAssessment {
 pub(crate) struct GuardianRejection {
     pub(crate) rationale: String,
     pub(crate) source: GuardianAssessmentDecisionSource,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GuardianRejectionCircuitBreaker {
+    turns: std::collections::HashMap<String, GuardianRejectionCircuitBreakerTurn>,
+}
+
+#[derive(Debug, Default)]
+struct GuardianRejectionCircuitBreakerTurn {
+    consecutive_denials: u32,
+    total_denials: u32,
+    interrupt_triggered: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GuardianRejectionCircuitBreakerAction {
+    Continue,
+    InterruptTurn {
+        consecutive_denials: u32,
+        total_denials: u32,
+    },
+}
+
+impl GuardianRejectionCircuitBreaker {
+    pub(crate) fn clear_turn(&mut self, turn_id: &str) {
+        self.turns.remove(turn_id);
+    }
+
+    pub(crate) fn record_denial(&mut self, turn_id: &str) -> GuardianRejectionCircuitBreakerAction {
+        let turn = self.turns.entry(turn_id.to_string()).or_default();
+        turn.consecutive_denials = turn.consecutive_denials.saturating_add(1);
+        turn.total_denials = turn.total_denials.saturating_add(1);
+        if !turn.interrupt_triggered
+            && (turn.consecutive_denials >= MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN
+                || turn.total_denials >= MAX_TOTAL_GUARDIAN_DENIALS_PER_TURN)
+        {
+            turn.interrupt_triggered = true;
+            GuardianRejectionCircuitBreakerAction::InterruptTurn {
+                consecutive_denials: turn.consecutive_denials,
+                total_denials: turn.total_denials,
+            }
+        } else {
+            GuardianRejectionCircuitBreakerAction::Continue
+        }
+    }
+
+    pub(crate) fn record_non_denial(&mut self, turn_id: &str) {
+        let turn = self.turns.entry(turn_id.to_string()).or_default();
+        turn.consecutive_denials = 0;
+    }
 }
 
 #[cfg(test)]
