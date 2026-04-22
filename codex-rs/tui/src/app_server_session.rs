@@ -526,6 +526,7 @@ impl AppServerSession {
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
         sandbox_policy: SandboxPolicy,
+        permission_profile: Option<PermissionProfile>,
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
@@ -535,12 +536,15 @@ impl AppServerSession {
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
-        let sandbox_policy = if self.is_remote()
-            || matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. })
-        {
-            Some(sandbox_policy.into())
+        let is_external_sandbox = matches!(&sandbox_policy, SandboxPolicy::ExternalSandbox { .. });
+        let should_send_permission_profile =
+            !self.is_remote() && !is_external_sandbox && permission_profile.is_some();
+        let (sandbox_policy, permission_profile) = if should_send_permission_profile {
+            (None, permission_profile.map(Into::into))
+        } else if self.is_remote() || is_external_sandbox {
+            (Some(sandbox_policy.into()), None)
         } else {
-            None
+            (None, None)
         };
         self.client
             .request_typed(ClientRequest::TurnStart {
@@ -553,11 +557,8 @@ impl AppServerSession {
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
-                    // Embedded sessions already installed their full profile
-                    // at thread start/resume/fork. Avoid sending a lossy
-                    // legacy projection until user turns carry profiles.
                     sandbox_policy,
-                    permission_profile: None,
+                    permission_profile,
                     model: Some(model),
                     service_tier,
                     effort,
