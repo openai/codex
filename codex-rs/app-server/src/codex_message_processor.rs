@@ -2072,7 +2072,16 @@ impl CodexMessageProcessor {
             env: env_overrides,
             size,
             sandbox_policy,
+            permission_profile,
         } = params;
+        if sandbox_policy.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -2204,13 +2213,52 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
         let (
             effective_policy,
             effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+        ) = if let Some(permission_profile) = permission_profile {
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from(permission_profile);
+            let sandbox_policy = match permission_profile.to_legacy_sandbox_policy(&sandbox_cwd) {
+                Ok(sandbox_policy) => sandbox_policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            };
+            match self
+                .config
+                .permissions
+                .sandbox_policy
+                .can_set(&sandbox_policy)
+            {
+                Ok(()) => {
+                    let (file_system_sandbox_policy, network_sandbox_policy) =
+                        permission_profile.to_runtime_permissions();
+                    (
+                        sandbox_policy,
+                        file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    )
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            }
+        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+            match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
@@ -2227,12 +2275,13 @@ impl CodexMessageProcessor {
                     self.outgoing.send_error(request, error).await;
                     return;
                 }
-            },
-            None => (
+            }
+        } else {
+            (
                 self.config.permissions.sandbox_policy.get().clone(),
                 self.config.permissions.file_system_sandbox_policy.clone(),
                 self.config.permissions.network_sandbox_policy,
-            ),
+            )
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
