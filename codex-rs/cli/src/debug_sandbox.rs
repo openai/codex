@@ -341,7 +341,9 @@ async fn run_command_under_windows_session(
 
     let session = std::sync::Arc::new(spawned.session);
     let tokio_runtime = tokio::runtime::Handle::current();
-    let output_drain_timeout = std::time::Duration::from_millis(500);
+    // Give large or slow tail output a better chance to finish draining
+    // without letting rare EOF issues hang the wrapper indefinitely.
+    let output_drain_timeout = std::time::Duration::from_secs(5);
     // A helper thread watches our stdin. When the input source closes it,
     // the thread tells the main async code so we can also close stdin for
     // the sandboxed child process.
