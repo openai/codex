@@ -448,7 +448,14 @@ impl Session {
         }
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_input_item(self, &turn_context, pending_input_item, None).await {
+                match inspect_input_item(
+                    self,
+                    &turn_context,
+                    pending_input_item,
+                    /*original_user_input*/ None,
+                )
+                .await
+                {
                     InputItemHookDisposition::Accepted(pending_input) => {
                         record_input_item(self, &turn_context, *pending_input).await;
                     }

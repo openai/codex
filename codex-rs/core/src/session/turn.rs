@@ -382,7 +382,14 @@ pub(crate) async fn run_turn(
         if !pending_input.is_empty() {
             let mut pending_input_iter = pending_input.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
-                match inspect_input_item(&sess, &turn_context, pending_input_item, None).await {
+                match inspect_input_item(
+                    &sess,
+                    &turn_context,
+                    pending_input_item,
+                    /*original_user_input*/ None,
+                )
+                .await
+                {
                     InputItemHookDisposition::Accepted(pending_input) => {
                         accepted_pending_input.push(*pending_input);
                     }
