@@ -57,5 +57,5 @@ async fn reset_memory_workspace_baseline_removes_generated_diff() {
 #[test]
 fn previous_char_boundary_handles_multibyte_text() {
     let text = "aé";
-    assert_eq!(previous_char_boundary(text, 2), 1);
+    assert_eq!(previous_char_boundary(text, /*max_bytes*/ 2), 1);
 }
