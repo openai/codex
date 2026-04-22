@@ -324,7 +324,7 @@ impl CodexAuth {
             .to_string();
         let record = verified_agent_identity_record(jwt, &base_url).await?;
         let auth = AgentIdentityAuth::new(record);
-        auth.ensure_runtime(Some(base_url)).await?;
+        auth.ensure_run_task(Some(base_url)).await?;
         Ok(Self::AgentIdentity(auth))
     }
 

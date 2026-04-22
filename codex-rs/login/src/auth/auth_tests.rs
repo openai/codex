@@ -304,15 +304,15 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         .mount(&server)
         .await;
 
-    agent_auth.ensure_runtime(Some(server.uri())).await?;
-    reused.ensure_runtime(Some(server.uri())).await?;
+    agent_auth.ensure_run_task(Some(server.uri())).await?;
+    reused.ensure_run_task(Some(server.uri())).await?;
 
     assert_eq!(
         agent_auth.record().agent_runtime_id,
         reused.record().agent_runtime_id
     );
-    assert_eq!(agent_auth.process_task_id(), Some("task-123"));
-    assert_eq!(reused.process_task_id(), Some("task-123"));
+    assert_eq!(agent_auth.run_task_id(), Some("task-123".to_string()));
+    assert_eq!(reused.run_task_id(), Some("task-123".to_string()));
     assert_eq!(agent_auth.record().agent_runtime_id, "agent-runtime-123");
     assert_eq!(agent_auth.record().account_id, "account-123");
     assert_eq!(agent_auth.record().chatgpt_user_id, "user-12345");
@@ -933,7 +933,7 @@ async fn load_auth_reads_access_token_from_env() {
         panic!("env auth should load as agent identity");
     };
     assert_eq!(agent_identity.record(), &expected_record);
-    assert_eq!(agent_identity.process_task_id(), Some("task-123"));
+    assert_eq!(agent_identity.run_task_id(), Some("task-123".to_string()));
     assert!(
         !get_auth_file(codex_home.path()).exists(),
         "env auth should not write auth.json"

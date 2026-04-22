@@ -26,6 +26,7 @@ use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
 use tokio::time::timeout;
 
+use crate::auth::ProviderAuthScope;
 use crate::auth::resolve_provider_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -87,7 +88,13 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         let auth = self.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
-        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
+        let api_auth = resolve_provider_auth(
+            self.auth_manager.clone(),
+            auth.as_ref(),
+            &self.provider_info,
+            ProviderAuthScope::UnscopedProcess,
+        )
+        .await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
