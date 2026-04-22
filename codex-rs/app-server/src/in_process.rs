@@ -727,13 +727,27 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn temp_codex_home() -> PathBuf {
+        tempfile::tempdir()
+            .expect("create temporary codex home")
+            .keep()
+    }
 
     async fn build_test_config() -> Config {
-        match ConfigBuilder::default().build().await {
+        let codex_home = temp_codex_home();
+        match ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .build()
+            .await
+        {
             Ok(config) => config,
-            Err(_) => Config::load_default_with_cli_overrides(Vec::new())
-                .await
-                .expect("default config should load"),
+            Err(_) => {
+                Config::load_default_with_cli_overrides_for_codex_home(codex_home, Vec::new())
+                    .await
+                    .expect("default config should load")
+            }
         }
     }
 

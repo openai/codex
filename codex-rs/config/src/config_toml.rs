@@ -56,6 +56,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -65,7 +66,7 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
 ];
 
 /// Backward-compatible shape for workspace restrictions in config.toml.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
 pub enum ForcedChatgptWorkspaceIds {
     Single(String),
@@ -78,6 +79,59 @@ impl ForcedChatgptWorkspaceIds {
             Self::Single(value) => vec![value],
             Self::Multiple(values) => values,
         }
+    }
+}
+
+impl Serialize for ForcedChatgptWorkspaceIds {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Single(value) => vec![value.clone()].serialize(serializer),
+            Self::Multiple(values) => values.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_legacy_string_and_serializes_as_list() {
+        let config: ConfigToml = toml::from_str(r#"forced_chatgpt_workspace_id = "workspace-1""#)
+            .expect("legacy workspace string should parse");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .clone()
+                .map(ForcedChatgptWorkspaceIds::into_vec),
+            Some(vec!["workspace-1".to_string()])
+        );
+        assert_eq!(
+            serde_json::to_value(&config)
+                .expect("config should serialize")
+                .get("forced_chatgpt_workspace_id"),
+            Some(&json!(["workspace-1"]))
+        );
+    }
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_workspace_list() {
+        let config: ConfigToml =
+            toml::from_str(r#"forced_chatgpt_workspace_id = ["workspace-1", "workspace-2"]"#)
+                .expect("workspace list should parse");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_vec),
+            Some(vec!["workspace-1".to_string(), "workspace-2".to_string()])
+        );
     }
 }
 

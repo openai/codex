@@ -19,6 +19,8 @@ use toml::Value as TomlValue;
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
     pub ignore_user_config: bool,
+    pub ignore_system_config: bool,
+    pub ignore_system_requirements: bool,
     pub ignore_user_and_project_exec_policy_rules: bool,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
     #[cfg(target_os = "macos")]
@@ -45,11 +47,23 @@ impl LoaderOverrides {
         Self {
             managed_config_path: Some(managed_config_path),
             ignore_user_config: false,
+            ignore_system_config: false,
+            ignore_system_requirements: false,
             ignore_user_and_project_exec_policy_rules: false,
             #[cfg(target_os = "macos")]
             managed_preferences_base64: Some(String::new()),
             macos_managed_config_requirements_base64: Some(String::new()),
         }
+    }
+
+    /// Ignores host-level system config and requirements while preserving layer metadata.
+    ///
+    /// This is intended for integration tests that spawn a real binary on a
+    /// developer machine where `/etc/codex` may contain managed defaults.
+    pub fn without_system_config_for_tests(mut self) -> Self {
+        self.ignore_system_config = true;
+        self.ignore_system_requirements = true;
+        self
     }
 }
 

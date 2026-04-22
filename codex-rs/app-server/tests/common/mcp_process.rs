@@ -106,6 +106,7 @@ pub struct McpProcess {
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+const DISABLE_SYSTEM_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_SYSTEM_CONFIG";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -152,6 +153,7 @@ impl McpProcess {
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
             codex_home.join("managed_config.toml"),
         );
+        cmd.env(DISABLE_SYSTEM_CONFIG_ENV_VAR, "1");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);
 

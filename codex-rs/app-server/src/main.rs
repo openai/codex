@@ -13,6 +13,7 @@ use std::path::PathBuf;
 // managed config file without writing to /etc.
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+const DISABLE_SYSTEM_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_SYSTEM_CONFIG";
 
 #[derive(Debug, Parser)]
 struct AppServerArgs {
@@ -41,13 +42,16 @@ struct AppServerArgs {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
-        let loader_overrides = if disable_managed_config_from_debug_env() {
+        let mut loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {
             managed_config_path_from_debug_env()
                 .map(LoaderOverrides::with_managed_config_path_for_tests)
                 .unwrap_or_default()
         };
+        if disable_system_config_from_debug_env() {
+            loader_overrides = loader_overrides.without_system_config_for_tests();
+        }
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
@@ -70,6 +74,17 @@ fn disable_managed_config_from_debug_env() -> bool {
     #[cfg(debug_assertions)]
     {
         if let Ok(value) = std::env::var(DISABLE_MANAGED_CONFIG_ENV_VAR) {
+            return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+        }
+    }
+
+    false
+}
+
+fn disable_system_config_from_debug_env() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(value) = std::env::var(DISABLE_SYSTEM_CONFIG_ENV_VAR) {
             return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
         }
     }

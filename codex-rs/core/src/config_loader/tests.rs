@@ -153,6 +153,41 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn ignore_system_config_keeps_empty_system_layer() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default().without_system_config_for_tests(),
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
+    )
+    .await?;
+
+    let layer_entries = layers.layers_high_to_low();
+    let system_layer = layer_entries
+        .into_iter()
+        .find(|layer| {
+            matches!(
+                layer.name,
+                codex_app_server_protocol::ConfigLayerSource::System { .. }
+            )
+        })
+        .expect("expected a system layer even when system config is ignored");
+    assert_eq!(
+        system_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected ignored system config to preserve only layer metadata"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");

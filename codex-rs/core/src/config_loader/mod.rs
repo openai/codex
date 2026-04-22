@@ -135,6 +135,8 @@ pub async fn load_config_layers_state(
     host_name: Option<&str>,
 ) -> io::Result<ConfigLayerStack> {
     let ignore_user_config = overrides.ignore_user_config;
+    let ignore_system_config = overrides.ignore_system_config;
+    let ignore_system_requirements = overrides.ignore_system_requirements;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
@@ -158,15 +160,17 @@ pub async fn load_config_layers_state(
     )
     .await?;
 
-    // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file()?;
-    load_requirements_toml(
-        fs,
-        &mut config_requirements_toml,
-        &requirements_toml_file,
-        host_name,
-    )
-    .await?;
+    if !ignore_system_requirements {
+        // Honor the system requirements.toml location.
+        let requirements_toml_file = system_requirements_toml_file()?;
+        load_requirements_toml(
+            fs,
+            &mut config_requirements_toml,
+            &requirements_toml_file,
+            host_name,
+        )
+        .await?;
+    }
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -207,7 +211,14 @@ pub async fn load_config_layers_state(
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = system_config_toml_file()?;
-    let system_layer =
+    let system_layer = if ignore_system_config {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::System {
+                file: system_config_toml_file.clone(),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        )
+    } else {
         load_config_toml_for_required_layer(fs, &system_config_toml_file, |config_toml| {
             ConfigLayerEntry::new(
                 ConfigLayerSource::System {
@@ -216,7 +227,8 @@ pub async fn load_config_layers_state(
                 config_toml,
             )
         })
-        .await?;
+        .await?
+    };
     layers.push(system_layer);
 
     // Add a layer for $CODEX_HOME/config.toml so folder-derived resources such
