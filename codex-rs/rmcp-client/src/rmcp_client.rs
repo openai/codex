@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::ExecServerClient;
 use futures::FutureExt;
@@ -68,6 +69,7 @@ use crate::streamable_http_remote_client::RemoteStreamableHttpClientError;
 use crate::streamable_http_transport_client::StreamableHttpTransportClient;
 use crate::streamable_http_transport_client::StreamableHttpTransportClientError;
 use crate::streamable_http_transport_client::StreamableHttpTransportMode;
+use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -970,7 +972,8 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
     OAuthPersistor,
 )> {
-    let http_client = build_http_client(&default_headers)?;
+    let builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
+    let http_client = build_reqwest_client_with_custom_ca(builder)?;
     // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
     // local/remote transport_mode abstraction instead of always creating the local
     // reqwest metadata client here.
