@@ -172,7 +172,9 @@ impl Session {
             .context("failed to initialize sqlite state db for thread goals")?
         };
 
-        if let Some(rollout_path) = self.current_rollout_path().await {
+        let thread_metadata_present =
+            matches!(state_db.get_thread(self.conversation_id).await, Ok(Some(_)));
+        if !thread_metadata_present && let Some(rollout_path) = self.current_rollout_path().await {
             reconcile_rollout(
                 Some(&state_db),
                 rollout_path.as_path(),
