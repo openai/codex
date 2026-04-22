@@ -198,14 +198,24 @@ pub(crate) async fn handle_mcp_tool_call(
                 maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
                 let start = Instant::now();
+                // Capture the rewritten arguments here so PostToolUse hooks see
+                // the same input that is sent to the MCP server.
+                let rewrite = rewrite_mcp_tool_input(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    arguments_value.clone(),
+                    metadata.as_ref(),
+                )
+                .await;
+                let tool_input = tool_input_for_rewrite(&rewrite, arguments_value.clone());
                 let result = async {
+                    let rewritten_arguments = rewrite?;
                     execute_mcp_tool_call(
                         sess.as_ref(),
                         turn_context.as_ref(),
                         &server,
                         &tool_name,
-                        arguments_value.clone(),
-                        metadata.as_ref(),
+                        rewritten_arguments,
                         request_meta.clone(),
                     )
                     .await
@@ -232,10 +242,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     invocation,
                     mcp_app_resource_uri: mcp_app_resource_uri.clone(),
                     duration,
-                    result: result
-                        .as_ref()
-                        .map(|result| result.result.clone())
-                        .map_err(Clone::clone),
+                    result: result.clone(),
                 });
                 notify_mcp_tool_call_event(
                     sess.as_ref(),
@@ -260,7 +267,10 @@ pub(crate) async fn handle_mcp_tool_call(
                     Some(duration),
                 );
 
-                return build_handled_mcp_tool_call(result, arguments_value);
+                return HandledMcpToolCall {
+                    result: CallToolResult::from_result(result),
+                    tool_input,
+                };
             }
             McpToolApprovalDecision::Decline { message } => {
                 let message = message.unwrap_or_else(|| "user rejected MCP tool call".to_string());
@@ -322,14 +332,24 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
     let start = Instant::now();
+    // Capture the rewritten arguments here so PostToolUse hooks see the same
+    // input that is sent to the MCP server.
+    let rewrite = rewrite_mcp_tool_input(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        arguments_value.clone(),
+        metadata.as_ref(),
+    )
+    .await;
+    let tool_input = tool_input_for_rewrite(&rewrite, arguments_value.clone());
     let result = async {
+        let rewritten_arguments = rewrite?;
         execute_mcp_tool_call(
             sess.as_ref(),
             turn_context.as_ref(),
             &server,
             &tool_name,
-            arguments_value.clone(),
-            metadata.as_ref(),
+            rewritten_arguments,
             request_meta,
         )
         .await
@@ -356,10 +376,7 @@ pub(crate) async fn handle_mcp_tool_call(
         invocation,
         mcp_app_resource_uri,
         duration,
-        result: result
-            .as_ref()
-            .map(|result| result.result.clone())
-            .map_err(Clone::clone),
+        result: result.clone(),
     });
 
     notify_mcp_tool_call_event(
@@ -380,7 +397,10 @@ pub(crate) async fn handle_mcp_tool_call(
         Some(duration),
     );
 
-    build_handled_mcp_tool_call(result, arguments_value)
+    HandledMcpToolCall {
+        result: CallToolResult::from_result(result),
+        tool_input,
+    }
 }
 
 pub(crate) struct HandledMcpToolCall {
@@ -388,25 +408,32 @@ pub(crate) struct HandledMcpToolCall {
     pub(crate) tool_input: JsonValue,
 }
 
-struct ExecutedMcpToolCall {
-    result: CallToolResult,
-    arguments: Option<JsonValue>,
+async fn rewrite_mcp_tool_input(
+    sess: &Session,
+    turn_context: &TurnContext,
+    arguments_value: Option<JsonValue>,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> Result<Option<JsonValue>, String> {
+    rewrite_mcp_tool_arguments_for_openai_files(
+        sess,
+        turn_context,
+        arguments_value,
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+    )
+    .await
 }
 
-fn build_handled_mcp_tool_call(
-    result: Result<ExecutedMcpToolCall, String>,
+fn tool_input_for_rewrite(
+    rewrite: &Result<Option<JsonValue>, String>,
     fallback_arguments: Option<JsonValue>,
-) -> HandledMcpToolCall {
-    let tool_input = result
+) -> JsonValue {
+    rewrite
         .as_ref()
         .ok()
-        .and_then(|result| result.arguments.clone())
+        .cloned()
+        .flatten()
         .or(fallback_arguments)
-        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-    HandledMcpToolCall {
-        result: CallToolResult::from_result(result.map(|result| result.result)),
-        tool_input,
-    }
+        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()))
 }
 
 fn emit_mcp_call_metrics(
@@ -515,18 +542,9 @@ async fn execute_mcp_tool_call(
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
-    arguments_value: Option<JsonValue>,
-    metadata: Option<&McpToolApprovalMetadata>,
+    rewritten_arguments: Option<JsonValue>,
     request_meta: Option<JsonValue>,
-) -> Result<ExecutedMcpToolCall, String> {
-    let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
-        sess,
-        turn_context,
-        arguments_value,
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
-    )
-    .await?;
-    let arguments = rewritten_arguments.clone();
+) -> Result<CallToolResult, String> {
     let request_meta =
         with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
     let request_meta =
@@ -537,14 +555,13 @@ async fn execute_mcp_tool_call(
         .call_tool(server, tool_name, rewritten_arguments, request_meta)
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
-    let result = sanitize_mcp_tool_result_for_model(
+    sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
             .input_modalities
             .contains(&InputModality::Image),
         Ok(result),
-    )?;
-    Ok(ExecutedMcpToolCall { result, arguments })
+    )
 }
 
 #[expect(
