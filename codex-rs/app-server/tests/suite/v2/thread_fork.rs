@@ -50,7 +50,7 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const INTERNAL_ERROR_CODE: i64 = -32603;
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
@@ -242,7 +242,7 @@ async fn thread_fork_can_load_source_by_path() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_by_path_rejects_remote_thread_store() -> Result<()> {
+async fn thread_fork_by_path_uses_remote_thread_store_error() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_with_remote_thread_store(codex_home.path(), &server.uri())?;
@@ -263,10 +263,10 @@ async fn thread_fork_by_path_rejects_remote_thread_store() -> Result<()> {
     )
     .await??;
 
-    assert_eq!(fork_err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(fork_err.error.code, INTERNAL_ERROR_CODE);
     assert_eq!(
         fork_err.error.message,
-        "rollout path queries are only supported with the local thread store"
+        "failed to read thread: thread-store internal error: remote thread store does not support read_thread_by_rollout_path"
     );
 
     Ok(())

@@ -2640,7 +2640,7 @@ pub struct ConversationPathResponseEvent {
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
-    pub rollout_path: PathBuf,
+    pub rollout_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
