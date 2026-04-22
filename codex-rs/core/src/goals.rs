@@ -454,6 +454,27 @@ impl Session {
         self.clear_stopped_thread_goal_runtime_state().await;
     }
 
+    pub(crate) async fn apply_external_thread_goal_status(
+        self: &Arc<Self>,
+        status: codex_state::ThreadGoalStatus,
+    ) {
+        match status {
+            codex_state::ThreadGoalStatus::Active => {
+                self.reset_thread_goal_continuation_suppression();
+                self.maybe_start_turn_for_pending_work_or_goal_continuation()
+                    .await;
+            }
+            codex_state::ThreadGoalStatus::BudgetLimited => {
+                if self.active_turn_contexts().await.is_empty() {
+                    self.clear_stopped_thread_goal_runtime_state().await;
+                }
+            }
+            codex_state::ThreadGoalStatus::Paused | codex_state::ThreadGoalStatus::Complete => {
+                self.clear_stopped_thread_goal_runtime_state().await;
+            }
+        }
+    }
+
     pub(crate) async fn clear_stopped_thread_goal_runtime_state(&self) {
         self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
