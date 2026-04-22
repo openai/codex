@@ -496,7 +496,7 @@ impl BottomPaneView for AppLinkView {
     }
 
     fn terminal_title_requires_action(&self) -> bool {
-        true
+        self.is_tool_suggestion()
     }
 }
 
@@ -632,6 +632,52 @@ mod tests {
             view.action_labels(),
             vec!["Manage on ChatGPT", "Disable app", "Back"]
         );
+    }
+
+    #[test]
+    fn regular_app_link_does_not_require_terminal_title_action() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
+            },
+            tx,
+        );
+
+        assert!(!view.terminal_title_requires_action());
+    }
+
+    #[test]
+    fn tool_suggestion_requires_terminal_title_action() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Enable this app to use it for the current request.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Enable),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        assert!(view.terminal_title_requires_action());
     }
 
     #[test]

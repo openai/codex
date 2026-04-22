@@ -507,7 +507,7 @@ impl ChatWidget {
             }
             StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
-            StatusLineItem::Status => Some(self.terminal_title_status_text()),
+            StatusLineItem::Status => Some(self.run_state_status_text()),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
                 let total = usage.tokens_in_context_window();
@@ -581,7 +581,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::AppName => return Some("codex".to_string()),
             StatusSurfacePreviewItem::ProjectName => return self.terminal_title_project_name(),
             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
-            StatusSurfacePreviewItem::Status => return Some(self.terminal_title_status_text()),
+            StatusSurfacePreviewItem::Status => return Some(self.run_state_status_text()),
             StatusSurfacePreviewItem::TaskProgress => return self.terminal_title_task_progress(),
             StatusSurfacePreviewItem::CurrentDir => StatusLineItem::CurrentDir,
             StatusSurfacePreviewItem::ThreadTitle => StatusLineItem::ThreadTitle,
@@ -619,7 +619,7 @@ impl ChatWidget {
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
-            TerminalTitleItem::Status => Some(self.terminal_title_status_text()),
+            TerminalTitleItem::Status => Some(self.run_state_status_text()),
             TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
                 let trimmed = name.trim();
                 if trimmed.is_empty() {
@@ -687,17 +687,13 @@ impl ChatWidget {
         format!("{} {label}{fast_label}", self.model_display_name())
     }
 
-    /// Computes the compact runtime status label used by the terminal title.
+    /// Computes the compact runtime status label used by word-based status items.
     ///
     /// Startup takes precedence over normal task states, and idle state renders
     /// as `Ready` regardless of the last active status bucket.
-    pub(super) fn terminal_title_status_text(&self) -> String {
+    pub(super) fn run_state_status_text(&self) -> String {
         if self.mcp_startup_status.is_some() {
             return "Starting".to_string();
-        }
-
-        if self.terminal_title_shows_action_required() {
-            return TERMINAL_TITLE_ACTION_REQUIRED_PREFIX.to_string();
         }
 
         match self.terminal_title_status_kind {
