@@ -1,13 +1,13 @@
 mod auth_status;
 mod elicitation_client_service;
 mod executor_process_transport;
+mod http_client_adapter;
 mod logging_client_handler;
 mod oauth;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
 mod stdio_server_launcher;
-mod streamable_http;
 mod utils;
 
 pub use auth_status::StreamableHttpOAuthDiscovery;

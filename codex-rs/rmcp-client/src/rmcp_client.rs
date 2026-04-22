@@ -59,14 +59,14 @@ use tokio::time;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
+use crate::http_client_adapter::StreamableHttpClientAdapter;
+use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::streamable_http::http_client_adapter::StreamableHttpClientAdapter;
-use crate::streamable_http::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;

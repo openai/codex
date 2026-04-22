@@ -7,11 +7,17 @@
 //! - a local HTTP client that issues requests from the orchestrator, or
 //! - a remote HTTP client that forwards requests to the remote runtime
 
+use std::io;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::HttpClient;
+use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestParams;
+use codex_exec_server::HttpResponseBodyStream;
+use futures::StreamExt;
+use futures::stream;
 use futures::stream::BoxStream;
 use reqwest::StatusCode;
 use reqwest::header::ACCEPT;
@@ -26,22 +32,12 @@ use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
+use sse_stream::SseStream;
 
-use crate::streamable_http::common::EVENT_STREAM_MIME_TYPE;
-use crate::streamable_http::common::HEADER_SESSION_ID;
-use crate::streamable_http::common::JSON_MIME_TYPE;
-use crate::streamable_http::common::body_preview;
-use crate::streamable_http::common::insert_header;
-use crate::streamable_http::common::is_streamable_http_content_type;
-
-#[path = "http_response.rs"]
-mod response;
-
-use response::collect_body;
-use response::protocol_headers;
-use response::response_header;
-use response::sse_stream_from_body;
-use response::status_is_success;
+const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
+const JSON_MIME_TYPE: &str = "application/json";
+const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
+const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 pub(crate) struct StreamableHttpClientAdapter {
@@ -299,4 +295,97 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 
         Ok(sse_stream_from_body(body_stream))
     }
+}
+
+fn body_preview(body: impl Into<String>) -> String {
+    let mut body_preview = body.into();
+    let body_len = body_preview.len();
+    if body_len > NON_JSON_RESPONSE_BODY_PREVIEW_BYTES {
+        let mut boundary = NON_JSON_RESPONSE_BODY_PREVIEW_BYTES;
+        while !body_preview.is_char_boundary(boundary) {
+            boundary = boundary.saturating_sub(1);
+        }
+        body_preview.truncate(boundary);
+        body_preview.push_str(&format!(
+            "... (truncated {} bytes)",
+            body_len.saturating_sub(boundary)
+        ));
+    }
+    body_preview
+}
+
+fn insert_header<Error>(
+    headers: &mut HeaderMap,
+    name: HeaderName,
+    value: String,
+    map_error: impl FnOnce(String) -> Error,
+) -> std::result::Result<(), StreamableHttpError<Error>>
+where
+    Error: std::error::Error + Send + Sync + 'static,
+{
+    let value = reqwest::header::HeaderValue::from_str(&value)
+        .map_err(|error| StreamableHttpError::Client(map_error(error.to_string())))?;
+    headers.insert(name, value);
+    Ok(())
+}
+
+fn is_streamable_http_content_type(content_type: &str) -> bool {
+    content_type
+        .as_bytes()
+        .starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
+        || content_type
+            .as_bytes()
+            .starts_with(JSON_MIME_TYPE.as_bytes())
+}
+
+fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            Some(HttpHeader {
+                name: name.as_str().to_string(),
+                value: value.to_str().ok()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<String> {
+    let name = name.as_ref();
+    headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| header.value.clone())
+}
+
+fn status_is_success(status: u16) -> bool {
+    StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
+}
+
+async fn collect_body(
+    body_stream: &mut HttpResponseBodyStream,
+) -> std::result::Result<Vec<u8>, StreamableHttpError<StreamableHttpClientAdapterError>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = body_stream
+        .recv()
+        .await
+        .map_err(StreamableHttpClientAdapterError::from)
+        .map_err(StreamableHttpError::Client)?
+    {
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn sse_stream_from_body(
+    body_stream: HttpResponseBodyStream,
+) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
+    SseStream::from_byte_stream(stream::unfold(body_stream, |mut body_stream| async move {
+        match body_stream.recv().await {
+            Ok(Some(bytes)) => Some((Ok(Bytes::from(bytes)), body_stream)),
+            Ok(None) => None,
+            Err(error) => Some((Err(io::Error::other(error)), body_stream)),
+        }
+    }))
+    .boxed()
 }
