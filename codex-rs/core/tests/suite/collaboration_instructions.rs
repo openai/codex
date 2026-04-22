@@ -186,6 +186,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             approval_policy: test.config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: Some(
@@ -307,6 +308,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             approval_policy: test.config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: Some(
