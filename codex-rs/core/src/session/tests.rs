@@ -1,3 +1,4 @@
+use super::turn_context::TurnEnvironment;
 use super::turn_context::TurnEnvironmentOverride;
 use super::*;
 use crate::config::ConfigBuilder;
@@ -4141,7 +4142,7 @@ async fn default_turn_uses_stored_thread_environments() {
 #[tokio::test]
 async fn default_turn_honors_empty_stored_thread_environments() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let session_cwd = session.get_config().await.cwd;
+    let session_cwd = session.get_config().await.cwd.clone();
 
     {
         let mut state = session.state.lock().await;

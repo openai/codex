@@ -161,7 +161,12 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
-        next_configuration.cwd = absolute_cwd;
+        next_configuration.cwd = absolute_cwd.clone();
+        if cwd_changed
+            && let Some(primary_environment) = next_configuration.environments.first_mut()
+        {
+            primary_environment.cwd = absolute_cwd;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let sandbox_policy = permission_profile

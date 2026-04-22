@@ -740,9 +740,14 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        let turn_environments = self
-            .resolve_turn_environments(session_configuration.environments.clone())
-            .expect("session environments are validated before being stored");
+        let turn_environments =
+            match self.resolve_turn_environments(session_configuration.environments.clone()) {
+                Ok(turn_environments) => turn_environments,
+                Err(err) => {
+                    warn!("failed to resolve stored session environments: {err}");
+                    Vec::new()
+                }
+            };
 
         self.new_turn_from_configuration(
             sub_id,
