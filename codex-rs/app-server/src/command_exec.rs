@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CommandExecOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecOutputStream;
 use codex_app_server_protocol::CommandExecResizeParams;
@@ -209,11 +210,11 @@ impl CommandExecManager {
                         outgoing
                             .send_response(
                                 request_id,
-                                CommandExecResponse {
+                                ClientResponsePayload::OneOffCommandExec(CommandExecResponse {
                                     exit_code: output.exit_code,
                                     stdout: output.stdout.text,
                                     stderr: output.stderr.text,
-                                },
+                                }),
                             )
                             .await;
                     }
@@ -554,11 +555,11 @@ async fn run_command(params: RunCommandParams) {
     outgoing
         .send_response(
             request_id,
-            CommandExecResponse {
+            ClientResponsePayload::OneOffCommandExec(CommandExecResponse {
                 exit_code,
                 stdout,
                 stderr,
-            },
+            }),
         )
         .await;
 }

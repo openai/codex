@@ -153,6 +153,43 @@ macro_rules! client_request_definitions {
                     })
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
+
+            pub fn into_jsonrpc_parts(
+                self,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant { request_id, response } => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                }
+            }
+        }
+
+        #[derive(Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
+        pub enum ClientResponsePayload {
+            $( $variant($response), )*
+            InterruptConversation(v1::InterruptConversationResponse),
+        }
+
+        impl ClientResponsePayload {
+            pub fn into_jsonrpc_parts(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result))
+                    }
+                }
+            }
         }
 
         impl crate::experimental_api::ExperimentalApi for ClientRequest {

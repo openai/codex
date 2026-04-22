@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
@@ -185,10 +186,10 @@ impl ThreadScopedOutgoingMessageSender {
             .await
     }
 
-    pub(crate) async fn send_response<T: Serialize>(
+    pub(crate) async fn send_response(
         &self,
         request_id: ConnectionRequestId,
-        response: T,
+        response: ClientResponsePayload,
     ) {
         self.outgoing.send_response(request_id, response).await;
     }
@@ -469,18 +470,15 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_response<T: Serialize>(
+    pub(crate) async fn send_response(
         &self,
         request_id: ConnectionRequestId,
-        response: T,
+        response: ClientResponsePayload,
     ) {
         let request_context = self.take_request_context(&request_id).await;
-        match serde_json::to_value(response) {
-            Ok(result) => {
-                let outgoing_message = OutgoingMessage::Response(OutgoingResponse {
-                    id: request_id.request_id.clone(),
-                    result,
-                });
+        match response.into_jsonrpc_parts(request_id.request_id.clone()) {
+            Ok((id, result)) => {
+                let outgoing_message = OutgoingMessage::Response(OutgoingResponse { id, result });
                 self.send_outgoing_message_to_connection(
                     request_context,
                     request_id.connection_id,
@@ -850,7 +848,12 @@ mod tests {
         };
 
         outgoing
-            .send_response(request_id.clone(), json!({ "ok": true }))
+            .send_response(
+                request_id.clone(),
+                ClientResponsePayload::ThreadArchive(
+                    codex_app_server_protocol::ThreadArchiveResponse {},
+                ),
+            )
             .await;
 
         let envelope = timeout(Duration::from_secs(1), rx.recv())
@@ -869,7 +872,7 @@ mod tests {
                     panic!("expected response message");
                 };
                 assert_eq!(response.id, request_id.request_id);
-                assert_eq!(response.result, json!({ "ok": true }));
+                assert_eq!(response.result, json!({}));
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }
@@ -894,7 +897,12 @@ mod tests {
         assert_eq!(outgoing.request_context_count().await, 1);
 
         outgoing
-            .send_response(request_id, json!({ "ok": true }))
+            .send_response(
+                request_id,
+                ClientResponsePayload::ThreadArchive(
+                    codex_app_server_protocol::ThreadArchiveResponse {},
+                ),
+            )
             .await;
 
         assert_eq!(outgoing.request_context_count().await, 0);
