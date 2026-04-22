@@ -22,6 +22,8 @@ use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+use common::DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG;
+use common::current_test_binary_helper_paths;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 
@@ -320,6 +322,77 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
     Ok(())
 }
 
+async fn assert_exec_process_retains_output_after_exit_until_streams_close(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let (helper_binary, _) = current_test_binary_helper_paths()?;
+    let process_id = "proc-output-after-exit".to_string();
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone().into(),
+            argv: vec![
+                helper_binary.to_string_lossy().into_owned(),
+                DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
+            ],
+            cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    assert_eq!(session.process.process_id().as_str(), process_id);
+
+    let StartedExecProcess { process } = session;
+
+    let exit_response = timeout(
+        Duration::from_secs(2),
+        process.read(
+            /*after_seq*/ None,
+            /*max_bytes*/ None,
+            /*wait_ms*/ Some(2_000),
+        ),
+    )
+    .await??;
+    assert!(
+        exit_response.chunks.is_empty(),
+        "parent should exit before child writes delayed output"
+    );
+    assert_eq!(exit_response.exit_code, Some(0));
+    assert!(!exit_response.closed);
+    let exit_seq = exit_response
+        .next_seq
+        .checked_sub(1)
+        .context("exit response should advance next_seq")?;
+
+    let late_response = timeout(
+        Duration::from_secs(2),
+        process.read(
+            /*after_seq*/ Some(exit_seq),
+            /*max_bytes*/ None,
+            /*wait_ms*/ Some(2_000),
+        ),
+    )
+    .await??;
+    let mut late_output = String::new();
+    for chunk in late_response.chunks {
+        assert_eq!(chunk.stream, ExecOutputStream::Stdout);
+        late_output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+    }
+    assert_eq!(late_output, "late output after exit\n");
+
+    let wake_rx = process.subscribe_wake();
+    let actual = collect_process_output_from_reads(process, wake_rx).await?;
+    assert_eq!(
+        actual,
+        ("late output after exit\n".to_string(), Some(0), true)
+    );
+    Ok(())
+}
+
 async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let process_id = "proc-stdin".to_string();
@@ -584,6 +657,17 @@ async fn exec_process_pushes_events(use_remote: bool) -> Result<()> {
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_replays_events_after_close(use_remote: bool) -> Result<()> {
     assert_exec_process_replays_events_after_close(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
+async fn exec_process_retains_output_after_exit_until_streams_close(
+    use_remote: bool,
+) -> Result<()> {
+    assert_exec_process_retains_output_after_exit_until_streams_close(use_remote).await
 }
 
 #[test_case(false ; "local")]
