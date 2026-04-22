@@ -267,6 +267,8 @@ pub enum ExecServerError {
     Disconnected(String),
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("HTTP request failed: {0}")]
+    HttpRequest(String),
     #[error("exec-server protocol error: {0}")]
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]

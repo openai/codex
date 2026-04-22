@@ -12,8 +12,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
-use crate::client::http_client::ExecutorHttpRequestRunner;
-use crate::client::http_client::ExecutorPendingHttpBodyStream;
+use crate::client::http_client::HttpRequestRunner;
+use crate::client::http_client::PendingHttpBodyStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -178,9 +178,7 @@ impl ExecServerHandler {
         if stream_response {
             self.reserve_http_body_stream(&http_request_id).await?;
         }
-        let response = ExecutorHttpRequestRunner::new(params.timeout_ms)?
-            .run(params)
-            .await;
+        let response = HttpRequestRunner::new(params.timeout_ms)?.run(params).await;
         if response.is_err() && stream_response {
             self.release_http_body_stream(&http_request_id).await;
         }
@@ -304,10 +302,7 @@ impl ExecServerHandler {
             .clone()
     }
 
-    async fn start_http_body_stream(
-        self: &Arc<Self>,
-        pending_stream: ExecutorPendingHttpBodyStream,
-    ) {
+    async fn start_http_body_stream(self: &Arc<Self>, pending_stream: PendingHttpBodyStream) {
         let request_id = pending_stream.request_id.clone();
         if self.background_task_shutdown.is_cancelled() {
             self.release_http_body_stream(&request_id).await;
@@ -320,7 +315,7 @@ impl ExecServerHandler {
         self.background_tasks.spawn(async move {
             tokio::select! {
                 _ = shutdown.cancelled() => {}
-                _ = ExecutorHttpRequestRunner::stream_body(pending_stream, notifications) => {}
+                _ = HttpRequestRunner::stream_body(pending_stream, notifications) => {}
             }
             handler.release_http_body_stream(&finished_request_id).await;
         });

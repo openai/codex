@@ -6,11 +6,13 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context as _;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecServerClient;
 use codex_exec_server::RemoteExecServerConnectArgs;
 use codex_rmcp_client::ElicitationAction;
@@ -89,6 +91,7 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
     )
     .await?;
 
@@ -112,19 +115,20 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
     Ok(client)
 }
 
-/// Creates a Streamable HTTP RMCP client that sends traffic through exec-server.
+/// Creates a Streamable HTTP RMCP client that sends traffic through the remote
+/// runtime HTTP API.
 pub(crate) async fn create_remote_client(
     base_url: &str,
-    exec_client: ExecServerClient,
+    http_client: ExecServerClient,
 ) -> anyhow::Result<RmcpClient> {
-    let client = RmcpClient::new_remote_streamable_http_client(
+    let client = RmcpClient::new_streamable_http_client(
         "test-streamable-http-remote",
         &format!("{base_url}/mcp"),
         Some("test-bearer".to_string()),
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
-        exec_client,
+        Arc::new(http_client),
     )
     .await?;
 

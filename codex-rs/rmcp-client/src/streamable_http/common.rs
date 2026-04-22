@@ -1,15 +1,10 @@
-use std::borrow::Cow;
-
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
-use reqwest::header::WWW_AUTHENTICATE;
-use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 
 pub(crate) const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 pub(crate) const JSON_MIME_TYPE: &str = "application/json";
-pub(crate) const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 pub(crate) const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
@@ -37,28 +32,6 @@ pub(crate) fn is_streamable_http_content_type(content_type: &str) -> bool {
         || content_type
             .as_bytes()
             .starts_with(JSON_MIME_TYPE.as_bytes())
-}
-
-pub(crate) fn www_authenticate_error<Error>(
-    headers: &HeaderMap,
-) -> std::result::Result<Option<AuthRequiredError>, StreamableHttpError<Error>>
-where
-    Error: std::error::Error + Send + Sync + 'static,
-{
-    let Some(header) = headers.get(WWW_AUTHENTICATE) else {
-        return Ok(None);
-    };
-    let header = header
-        .to_str()
-        .map_err(|_| {
-            StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(
-                "invalid www-authenticate header value",
-            ))
-        })?
-        .to_string();
-    Ok(Some(AuthRequiredError {
-        www_authenticate_header: header,
-    }))
 }
 
 pub(crate) fn insert_header<Error>(
