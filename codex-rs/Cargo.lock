@@ -2927,11 +2927,19 @@ dependencies = [
  "codex-api",
  "codex-aws-auth",
  "codex-client",
+ "codex-feedback",
  "codex-login",
  "codex-model-provider-info",
+ "codex-models-manager",
+ "codex-otel",
  "codex-protocol",
+ "codex-response-debug-context",
  "http 1.4.0",
  "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -2955,32 +2963,20 @@ dependencies = [
 name = "codex-models-manager"
 version = "0.0.0"
 dependencies = [
- "base64 0.22.1",
+ "async-trait",
  "chrono",
- "codex-api",
  "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
- "codex-config",
- "codex-feedback",
- "codex-login",
- "codex-model-provider",
- "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
- "codex-response-debug-context",
- "codex-utils-absolute-path",
  "codex-utils-output-truncation",
  "codex-utils-template",
- "core_test_support",
- "http 1.4.0",
  "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "wiremock",
 ]
 
 [[package]]

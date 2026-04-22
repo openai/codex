@@ -933,7 +933,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     Ok(())
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) {
+async fn wait_for_model_available(manager: &Arc<dyn ModelsManager>, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;

@@ -411,8 +411,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
 }
 
-#[tokio::test]
-async fn new_uses_configured_openai_provider_for_model_refresh() {
+async fn new_uses_active_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
 
@@ -422,11 +421,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
     config.model_catalog = None;
-    config
-        .model_providers
-        .get_mut("openai")
-        .expect("openai provider should exist")
-        .base_url = Some(server.uri());
+    config.model_provider.base_url = Some(server.uri());
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());

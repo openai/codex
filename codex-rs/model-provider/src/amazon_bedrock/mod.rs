@@ -1,6 +1,8 @@
 mod auth;
+mod catalog;
 mod mantle;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_api::Provider;
@@ -9,14 +11,19 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::Result;
+use codex_protocol::openai_models::ModelsResponse;
 
 use crate::provider::ModelProvider;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use auth::resolve_provider_auth;
 use auth::resolve_region;
+pub(crate) use catalog::static_model_catalog;
 use mantle::base_url;
 
 /// Runtime provider for Amazon Bedrock's OpenAI-compatible Mantle endpoint.
@@ -24,6 +31,22 @@ use mantle::base_url;
 pub(crate) struct AmazonBedrockModelProvider {
     pub(crate) info: ModelProviderInfo,
     pub(crate) aws: ModelProviderAwsAuthInfo,
+}
+
+impl AmazonBedrockModelProvider {
+    pub(crate) fn new(provider_info: ModelProviderInfo) -> Self {
+        let aws = provider_info
+            .aws
+            .clone()
+            .unwrap_or(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+            });
+        Self {
+            info: provider_info,
+            aws,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -56,6 +79,19 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
         resolve_provider_auth(&self.aws).await
+    }
+
+    fn models_manager(
+        &self,
+        _codex_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Arc<dyn ModelsManager> {
+        Arc::new(StaticModelsManager::new(
+            /*auth_mode*/ None,
+            config_model_catalog.unwrap_or_else(static_model_catalog),
+            collaboration_modes_config,
+        ))
     }
 }
 

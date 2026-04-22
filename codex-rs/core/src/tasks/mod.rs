@@ -128,7 +128,7 @@ impl SessionTaskContext {
         Arc::clone(&self.session.services.auth_manager)
     }
 
-    pub(crate) fn models_manager(&self) -> Arc<ModelsManager> {
+    pub(crate) fn models_manager(&self) -> Arc<dyn ModelsManager> {
         Arc::clone(&self.session.services.models_manager)
     }
 }

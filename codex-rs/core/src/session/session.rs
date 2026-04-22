@@ -270,7 +270,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
-        models_manager: Arc<ModelsManager>,
+        models_manager: Arc<dyn ModelsManager>,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
