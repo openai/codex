@@ -777,6 +777,13 @@
             "chatgptAuthTokens"
           ],
           "type": "string"
+        },
+        {
+          "description": "Programmatic Codex auth backed by a registered Agent Identity.",
+          "enum": [
+            "agentIdentity"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -7651,6 +7658,64 @@
         }
       ]
     },
+    "PermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PermissionProfileFileSystemPermissions": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/FileSystemSandboxEntry"
+          },
+          "type": "array"
+        },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "PermissionProfileNetworkPermissions": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -7727,7 +7792,14 @@
           "type": "string"
         },
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mcpServers": {
           "items": {
@@ -7748,7 +7820,6 @@
       "required": [
         "apps",
         "marketplaceName",
-        "marketplacePath",
         "mcpServers",
         "skills",
         "summary"
@@ -11250,7 +11321,14 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "shortDescription": {
           "type": [
@@ -11262,8 +11340,7 @@
       "required": [
         "description",
         "enabled",
-        "name",
-        "path"
+        "name"
       ],
       "type": "object"
     },
@@ -11942,6 +12019,18 @@
         "modelProvider": {
           "type": "string"
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -11953,7 +12042,12 @@
           ]
         },
         "sandbox": {
-          "$ref": "#/definitions/SandboxPolicy"
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            }
+          ],
+          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
         },
         "serviceTier": {
           "anyOf": [
@@ -12668,6 +12762,19 @@
         }
       ]
     },
+    "ThreadListCwdFilter": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "ThreadListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -12686,11 +12793,15 @@
           ]
         },
         "cwd": {
-          "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadListCwdFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
         },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -12749,6 +12860,10 @@
             "array",
             "null"
           ]
+        },
+        "useStateDbOnly": {
+          "description": "If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
+          "type": "boolean"
         }
       },
       "title": "ThreadListParams",
@@ -13332,6 +13447,18 @@
         "modelProvider": {
           "type": "string"
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -13343,7 +13470,12 @@
           ]
         },
         "sandbox": {
-          "$ref": "#/definitions/SandboxPolicy"
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            }
+          ],
+          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
         },
         "serviceTier": {
           "anyOf": [
@@ -13631,6 +13763,18 @@
         "modelProvider": {
           "type": "string"
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -13642,7 +13786,12 @@
           ]
         },
         "sandbox": {
-          "$ref": "#/definitions/SandboxPolicy"
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            }
+          ],
+          "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
         },
         "serviceTier": {
           "anyOf": [
@@ -14152,6 +14301,21 @@
         "turnId"
       ],
       "title": "TurnDiffUpdatedNotification",
+      "type": "object"
+    },
+    "TurnEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "environmentId"
+      ],
       "type": "object"
     },
     "TurnError": {

@@ -15,6 +15,7 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
+use codex_app_server_client::EnvironmentManagerArgs;
 use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
@@ -508,8 +509,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         log_db: None,
-        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env_with_runtime_paths(
-            Some(local_runtime_paths),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::new(
+            EnvironmentManagerArgs::from_env(local_runtime_paths),
         )),
         config_warnings,
         session_source: SessionSource::Exec,
@@ -755,6 +756,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
                         responsesapi_client_metadata: None,
+                        environments: None,
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
@@ -1265,6 +1267,7 @@ async fn resolve_resume_thread_id(
                         source_kinds: Some(all_thread_source_kinds()),
                         archived: Some(false),
                         cwd: None,
+                        use_state_db_only: false,
                         search_term: None,
                     },
                 },
@@ -1328,6 +1331,7 @@ async fn resolve_resume_thread_id(
                     source_kinds: Some(all_thread_source_kinds()),
                     archived: Some(false),
                     cwd: None,
+                    use_state_db_only: false,
                     search_term: Some(session_id.to_string()),
                 },
             },

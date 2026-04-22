@@ -48,6 +48,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 fn expect_text_output(output: &FunctionToolOutput) -> String {
@@ -634,7 +635,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         skills_manager,
         plugins_manager,
         mcp_manager,

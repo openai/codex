@@ -104,6 +104,7 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
 async fn submit_user_turn(codex: &Arc<CodexThread>, text: &str) -> Result<()> {
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),

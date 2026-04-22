@@ -12,8 +12,75 @@ if errorlevel 1 exit /b 1
 
 set "INSTA_WORKSPACE_ROOT=%workspace_root%"
 cd /d "%workspace_root%" || exit /b 1
+
+set "TOTAL_SHARDS=%RULES_RUST_TEST_TOTAL_SHARDS%"
+if not defined TOTAL_SHARDS set "TOTAL_SHARDS=%TEST_TOTAL_SHARDS%"
+if defined TOTAL_SHARDS if not "%TOTAL_SHARDS%"=="0" (
+  call :run_sharded_libtest %*
+  exit /b !ERRORLEVEL!
+)
+
 "%test_bin%" %*
 exit /b %ERRORLEVEL%
+
+:run_sharded_libtest
+if defined TEST_SHARD_STATUS_FILE if defined TEST_TOTAL_SHARDS if not "%TEST_TOTAL_SHARDS%"=="0" (
+  type nul > "%TEST_SHARD_STATUS_FILE%"
+)
+
+if not "%~1"=="" (
+  "%test_bin%" %*
+  exit /b !ERRORLEVEL!
+)
+
+set "SHARD_INDEX=%RULES_RUST_TEST_SHARD_INDEX%"
+if not defined SHARD_INDEX set "SHARD_INDEX=%TEST_SHARD_INDEX%"
+if not defined SHARD_INDEX (
+  >&2 echo TEST_SHARD_INDEX or RULES_RUST_TEST_SHARD_INDEX must be set when sharding is enabled
+  exit /b 1
+)
+
+set "TEMP_ROOT=%TEST_TMPDIR%"
+if not defined TEMP_ROOT set "TEMP_ROOT=%TEMP%"
+if not defined TEMP_ROOT set "TEMP_ROOT=."
+:CREATE_TEMP_DIR
+set "TEMP_DIR=%TEMP_ROOT%\workspace_root_test_sharding_!RANDOM!_!RANDOM!_!RANDOM!"
+mkdir "!TEMP_DIR!" 2>nul
+if errorlevel 1 goto :CREATE_TEMP_DIR
+set "TEMP_LIST=!TEMP_DIR!\list.txt"
+set "TEMP_SHARD_LIST=!TEMP_DIR!\shard.txt"
+
+"%test_bin%" --list --format terse > "!TEMP_LIST!"
+if errorlevel 1 (
+  rmdir /s /q "!TEMP_DIR!" 2>nul
+  exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$tests = @(Get-Content -LiteralPath $env:TEMP_LIST | Where-Object { $_.EndsWith(': test') } | ForEach-Object { $_.Substring(0, $_.Length - 6) });" ^
+  "[Array]::Sort($tests, [StringComparer]::Ordinal);" ^
+  "$totalShards = [uint32]$env:TOTAL_SHARDS; $shardIndex = [uint32]$env:SHARD_INDEX;" ^
+  "$fnvPrime = [uint64]16777619; $u32Mask = [uint64]4294967295;" ^
+  "foreach ($test in $tests) { $hash = [uint32]2166136261; foreach ($byte in [Text.Encoding]::UTF8.GetBytes($test)) { $hash = [uint32](([uint64]($hash -bxor $byte) * $fnvPrime) -band $u32Mask) }; if (($hash %% $totalShards) -eq $shardIndex) { $test } }" ^
+  > "!TEMP_SHARD_LIST!"
+if errorlevel 1 (
+  rmdir /s /q "!TEMP_DIR!" 2>nul
+  exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$testBin = $env:test_bin;" ^
+  "$tests = @(Get-Content -LiteralPath $env:TEMP_SHARD_LIST);" ^
+  "$failed = $false; $limit = 7000; $batch = @(); $batchChars = $testBin.Length + 8;" ^
+  "function Invoke-TestBatch { if ($script:batch.Count -eq 0) { return }; & $script:testBin @script:batch '--exact'; if ($LASTEXITCODE -ne 0) { $script:failed = $true }; $script:batch = @(); $script:batchChars = $script:testBin.Length + 8 }" ^
+  "foreach ($test in $tests) { $argChars = $test.Length + 3; if (($batch.Count -gt 0) -and ($batchChars + $argChars -gt $limit)) { Invoke-TestBatch }; $batch += $test; $batchChars += $argChars }" ^
+  "Invoke-TestBatch; if ($failed) { exit 1 }"
+set "TEST_EXIT=%ERRORLEVEL%"
+
+rmdir /s /q "!TEMP_DIR!" 2>nul
+exit /b !TEST_EXIT!
 
 :resolve_runfile
 setlocal EnableExtensions EnableDelayedExpansion

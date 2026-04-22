@@ -452,6 +452,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "remote_plugin": {
+              "type": "boolean"
+            },
             "request_permissions": {
               "type": "boolean"
             },
@@ -519,9 +522,6 @@
               "type": "boolean"
             },
             "unified_exec": {
-              "type": "boolean"
-            },
-            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -1033,6 +1033,10 @@
       "properties": {
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
+          "type": "string"
+        },
+        "region": {
+          "description": "AWS region to use for provider-specific endpoints.",
           "type": "string"
         }
       },
@@ -2451,6 +2455,9 @@
         "remote_models": {
           "type": "boolean"
         },
+        "remote_plugin": {
+          "type": "boolean"
+        },
         "request_permissions": {
           "type": "boolean"
         },
@@ -2518,9 +2525,6 @@
           "type": "boolean"
         },
         "unified_exec": {
-          "type": "boolean"
-        },
-        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

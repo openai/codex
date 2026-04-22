@@ -10,6 +10,7 @@ use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -172,6 +173,37 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct ExecServerClient {
     inner: Arc<Inner>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LazyRemoteExecServerClient {
+    websocket_url: String,
+    client: Arc<OnceCell<ExecServerClient>>,
+}
+
+impl LazyRemoteExecServerClient {
+    pub(crate) fn new(websocket_url: String) -> Self {
+        Self {
+            websocket_url,
+            client: Arc::new(OnceCell::new()),
+        }
+    }
+
+    pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
+        self.client
+            .get_or_try_init(|| async {
+                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+                    websocket_url: self.websocket_url.clone(),
+                    client_name: "codex-environment".to_string(),
+                    connect_timeout: Duration::from_secs(5),
+                    initialize_timeout: Duration::from_secs(5),
+                    resume_session_id: None,
+                })
+                .await
+            })
+            .await
+            .cloned()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -16,12 +16,16 @@ use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -239,6 +243,21 @@ fn write_permissions_for_paths(
     normalize_additional_permissions(permissions).ok()
 }
 
+/// Extracts the raw patch text used as the command-shaped hook input for apply_patch.
+///
+/// The apply_patch tool can arrive as the older JSON/function shape or as a
+/// freeform custom tool call. Both represent the same file edit operation, so
+/// hooks see the raw patch body in `tool_input.command` either way.
+fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
+            .ok()
+            .map(|args| args.input),
+        ToolPayload::Custom { input } => Some(input.clone()),
+        _ => None,
+    }
+}
+
 async fn effective_patch_permissions(
     session: &Session,
     turn: &TurnContext,
@@ -292,6 +311,27 @@ impl ToolHandler for ApplyPatchHandler {
 
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        apply_patch_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            command,
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            command: apply_patch_payload_command(payload)?,
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
