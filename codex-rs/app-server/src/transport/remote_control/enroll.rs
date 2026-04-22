@@ -2,6 +2,7 @@ use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
+use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -27,9 +28,8 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) server_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlConnectionAuth {
-    pub(super) auth_headers: HeaderMap,
+    pub(super) auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
 }
 
@@ -199,10 +199,12 @@ pub(super) async fn enroll_remote_control_server(
         app_server_version: env!("CARGO_PKG_VERSION"),
     };
     let client = build_reqwest_client();
+    let mut auth_headers = HeaderMap::new();
+    auth.auth_provider.add_auth_headers(&mut auth_headers);
     let http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
-        .headers(auth.auth_headers.clone())
+        .headers(auth_headers)
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .json(&request);
 
@@ -445,7 +447,7 @@ mod tests {
         let err = enroll_remote_control_server(
             &remote_control_target,
             &RemoteControlConnectionAuth {
-                auth_headers: HeaderMap::new(),
+                auth_provider: codex_model_provider::unauthenticated_auth_provider(),
                 account_id: "account_id".to_string(),
             },
         )

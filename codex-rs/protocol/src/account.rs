@@ -37,9 +37,15 @@ impl PlanType {
     }
 
     pub fn is_workspace_account(self) -> bool {
-        self.is_team_like()
-            || self.is_business_like()
-            || matches!(self, Self::Enterprise | Self::Edu)
+        matches!(
+            self,
+            Self::Team
+                | Self::SelfServeBusinessUsageBased
+                | Self::Business
+                | Self::EnterpriseCbpUsageBased
+                | Self::Enterprise
+                | Self::Edu
+        )
     }
 }
 
@@ -89,7 +95,10 @@ mod tests {
         assert_eq!(PlanType::Business.is_business_like(), true);
         assert_eq!(PlanType::EnterpriseCbpUsageBased.is_business_like(), true);
         assert_eq!(PlanType::Team.is_business_like(), false);
+    }
 
+    #[test]
+    fn workspace_account_helper_includes_usage_based_workspace_plans() {
         assert_eq!(PlanType::Team.is_workspace_account(), true);
         assert_eq!(
             PlanType::SelfServeBusinessUsageBased.is_workspace_account(),

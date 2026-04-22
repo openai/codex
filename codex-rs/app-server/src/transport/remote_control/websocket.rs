@@ -680,7 +680,9 @@ fn build_remote_control_websocket_request(
         "x-codex-protocol-version",
         REMOTE_CONTROL_PROTOCOL_VERSION,
     )?;
-    headers.extend(auth.auth_headers.clone());
+    let mut auth_headers = tungstenite::http::HeaderMap::new();
+    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    headers.extend(auth_headers);
     set_remote_control_header(headers, REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)?;
     if let Some(subscribe_cursor) = subscribe_cursor {
         set_remote_control_header(
@@ -727,7 +729,7 @@ pub(crate) async fn load_remote_control_auth(
     }
 
     Ok(RemoteControlConnectionAuth {
-        auth_headers: codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers(),
+        auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
         account_id: auth.get_account_id().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::WouldBlock,

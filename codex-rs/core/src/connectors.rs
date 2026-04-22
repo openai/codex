@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use async_channel::unbounded;
+use codex_api::SharedAuthProvider;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
@@ -252,8 +253,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         });
     }
 
-    let auth_status_entries =
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        auth.as_ref(),
+    )
+    .await;
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
@@ -274,6 +279,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),
+        auth.as_ref(),
     )
     .await;
 
@@ -440,7 +446,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         Some(account_id) if !account_id.is_empty() => account_id,
         _ => return Ok(Vec::new()),
     };
-    let auth_headers = codex_model_provider::auth_provider_from_auth(auth).to_auth_headers();
+    let auth_provider = codex_model_provider::auth_provider_from_auth(auth);
     let is_workspace_account = auth.is_workspace_account();
     let cache_key = AllConnectorsCacheKey::new(
         config.chatgpt_base_url.clone(),
@@ -454,12 +460,12 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         is_workspace_account,
         /*force_refetch*/ false,
         |path| {
-            let auth_headers = auth_headers.clone();
+            let auth_provider = auth_provider.clone();
             async move {
-                chatgpt_get_request_with_auth_headers::<DirectoryListResponse>(
+                chatgpt_get_request_with_auth_provider::<DirectoryListResponse>(
                     config,
                     path,
-                    auth_headers,
+                    auth_provider,
                 )
                 .await
             }
@@ -468,16 +474,16 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     .await
 }
 
-async fn chatgpt_get_request_with_auth_headers<T: DeserializeOwned>(
+async fn chatgpt_get_request_with_auth_provider<T: DeserializeOwned>(
     config: &Config,
     path: String,
-    auth_headers: http::HeaderMap,
+    auth_provider: SharedAuthProvider,
 ) -> anyhow::Result<T> {
     let client = create_client();
     let url = format!("{}{}", config.chatgpt_base_url, path);
     let response = client
         .get(&url)
-        .headers(auth_headers)
+        .headers(auth_provider.to_auth_headers())
         .header("Content-Type", "application/json")
         .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
         .send()
