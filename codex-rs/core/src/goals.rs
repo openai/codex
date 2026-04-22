@@ -1540,6 +1540,7 @@ mod tests {
         });
 
         assert!(prompt.contains("finish the stack"));
+        assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("call update_goal with status \"complete\""));
         assert!(prompt.contains(
@@ -1563,6 +1564,7 @@ mod tests {
         });
 
         assert!(prompt.contains("finish the stack"));
+        assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("Tokens used: 10100"));
         assert!(prompt.to_lowercase().contains("wrap up this turn soon"));
