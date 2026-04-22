@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
@@ -470,6 +471,7 @@ async fn handle_exec_approval(
                 justification: None,
             },
             reason,
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         await_approval_with_cancel(
@@ -572,6 +574,7 @@ async fn handle_patch_approval(
                 patch,
             },
             reason.clone(),
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         Some(
@@ -688,6 +691,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::DelegatedSubagent,
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
