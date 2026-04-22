@@ -173,7 +173,7 @@ Examples of valid command strings:
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
 
 {}"#,
-                windows_shell_guidance()
+            windows_shell_guidance()
         )
     } else {
         r#"Runs a shell command and returns its output.
