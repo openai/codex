@@ -443,8 +443,11 @@ mod tests {
             std::env::current_exe().expect("current exe").as_path(),
         )
         .expect("absolute current exe");
-        let sandbox = crate::FileSystemSandboxContext::new(
-            codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+        let sandbox = crate::FileSystemSandboxContext::from_permission_profile(
+            codex_protocol::models::PermissionProfile::from_runtime_permissions(
+                &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(Vec::new()),
+                codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+            ),
         );
 
         let err = environment
