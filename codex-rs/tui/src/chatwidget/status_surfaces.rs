@@ -762,14 +762,6 @@ impl ChatWidget {
             && self.terminal_title_has_active_progress()
     }
 
-    pub(super) fn status_line_uses_status(&self) -> bool {
-        self.config.tui_status_line.as_ref().is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item == "run-state" || item == "status")
-        })
-    }
-
     pub(super) fn should_animate_terminal_title_action_required(&self) -> bool {
         self.config.animations && self.terminal_title_shows_action_required()
     }
