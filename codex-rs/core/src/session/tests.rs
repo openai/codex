@@ -2811,6 +2811,16 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     }
 }
 
+fn turn_environments_for_tests(
+    environment: &Arc<codex_exec_server::Environment>,
+    cwd: &codex_utils_absolute_path::AbsolutePathBuf,
+) -> Vec<TurnEnvironment> {
+    vec![TurnEnvironment {
+        environment: Arc::clone(environment),
+        cwd: cwd.clone(),
+    }]
+}
+
 #[tokio::test]
 async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;
@@ -3342,10 +3352,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = vec![TurnEnvironment {
-        environment: Arc::clone(&environment),
-        cwd: session_configuration.cwd.clone(),
-    }];
+    let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
@@ -4705,10 +4712,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
-    let turn_environments = vec![TurnEnvironment {
-        environment: Arc::clone(&environment),
-        cwd: session_configuration.cwd.clone(),
-    }];
+    let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Arc::new(Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
