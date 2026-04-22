@@ -8,11 +8,9 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
-use crate::protocol::HTTP_REQUEST_METHOD;
-use crate::protocol::HttpRequestParams;
+use crate::rpc::RequestRouteOutcome;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
-use crate::rpc::decode_request_params;
 use crate::rpc::encode_server_message;
 use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
@@ -99,47 +97,17 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                    if request.method == HTTP_REQUEST_METHOD {
-                        let request_id = request.id.clone();
-                        let params =
-                            match decode_request_params::<HttpRequestParams>(request.params) {
-                                Ok(params) => params,
-                                Err(error) => {
-                                    if outgoing_tx
-                                        .send(RpcServerOutboundMessage::Error { request_id, error })
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                    continue;
-                                }
-                            };
-                        let response = tokio::select! {
-                            response = handler.http_request(request_id.clone(), params) => response,
+                    if let Some(route) = router.request_route(request.method.as_str()) {
+                        let outcome = tokio::select! {
+                            outcome = route(Arc::clone(&handler), request) => outcome,
                             _ = disconnected_rx.changed() => {
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
                         };
-                        if let Err(error) = response {
-                            if outgoing_tx
-                                .send(RpcServerOutboundMessage::Error { request_id, error })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    } else if let Some(route) = router.request_route(request.method.as_str()) {
-                        let message = tokio::select! {
-                            message = route(Arc::clone(&handler), request) => message,
-                            _ = disconnected_rx.changed() => {
-                                debug!("exec-server transport disconnected while handling request");
-                                break;
-                            }
-                        };
-                        if outgoing_tx.send(message).await.is_err() {
+                        if let RequestRouteOutcome::Message(message) = outcome
+                            && outgoing_tx.send(message).await.is_err()
+                        {
                             break;
                         }
                     } else if outgoing_tx

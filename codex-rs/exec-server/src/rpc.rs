@@ -37,7 +37,7 @@ pub(crate) enum RpcCallError {
 type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type RequestRoute<S> =
-    Box<dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<RpcServerOutboundMessage> + Send + Sync>;
+    Box<dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<RequestRouteOutcome> + Send + Sync>;
 type NotificationRoute<S> =
     Box<dyn Fn(Arc<S>, JSONRPCNotification) -> BoxFuture<Result<(), String>> + Send + Sync>;
 
@@ -59,6 +59,11 @@ pub(crate) enum RpcServerOutboundMessage {
     },
     #[allow(dead_code)]
     Notification(JSONRPCNotification),
+}
+
+pub(crate) enum RequestRouteOutcome {
+    Message(RpcServerOutboundMessage),
+    AlreadySent,
 }
 
 #[allow(dead_code)]
@@ -131,18 +136,69 @@ where
                     let response = match response {
                         Ok(response) => response.await,
                         Err(error) => {
-                            return RpcServerOutboundMessage::Error { request_id, error };
+                            return RequestRouteOutcome::Message(RpcServerOutboundMessage::Error {
+                                request_id,
+                                error,
+                            });
                         }
                     };
                     match response {
-                        Ok(result) => match serde_json::to_value(result) {
-                            Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
-                            Err(err) => RpcServerOutboundMessage::Error {
+                        Ok(result) => {
+                            match serde_json::to_value(result) {
+                                Ok(result) => RequestRouteOutcome::Message(
+                                    RpcServerOutboundMessage::Response { request_id, result },
+                                ),
+                                Err(err) => {
+                                    RequestRouteOutcome::Message(RpcServerOutboundMessage::Error {
+                                        request_id,
+                                        error: internal_error(err.to_string()),
+                                    })
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            RequestRouteOutcome::Message(RpcServerOutboundMessage::Error {
                                 request_id,
-                                error: internal_error(err.to_string()),
-                            },
-                        },
-                        Err(error) => RpcServerOutboundMessage::Error { request_id, error },
+                                error,
+                            })
+                        }
+                    }
+                })
+            }),
+        );
+    }
+
+    pub(crate) fn request_already_sent<P, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request_routes.insert(
+            method,
+            Box::new(move |state, request| {
+                let request_id = request.id;
+                let params = request.params;
+                let response = decode_request_params::<P>(params)
+                    .map(|params| handler(state, request_id.clone(), params));
+                Box::pin(async move {
+                    let response = match response {
+                        Ok(response) => response.await,
+                        Err(error) => {
+                            return RequestRouteOutcome::Message(RpcServerOutboundMessage::Error {
+                                request_id,
+                                error,
+                            });
+                        }
+                    };
+                    match response {
+                        Ok(()) => RequestRouteOutcome::AlreadySent,
+                        Err(error) => {
+                            RequestRouteOutcome::Message(RpcServerOutboundMessage::Error {
+                                request_id,
+                                error,
+                            })
+                        }
                     }
                 })
             }),
