@@ -6222,6 +6222,40 @@ async fn plan_mode_resume_does_not_activate_paused_goal() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+async fn plan_mode_interrupt_does_not_pause_active_goal() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
+    }
+
+    sess.pause_active_thread_goal_for_interrupt().await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
     let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
