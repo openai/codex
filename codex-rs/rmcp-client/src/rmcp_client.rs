@@ -65,9 +65,9 @@ use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
 use crate::streamable_http_remote_client::RemoteStreamableHttpClientError;
-use crate::streamable_http_response_client::StreamableHttpClientPlacement;
-use crate::streamable_http_response_client::StreamableHttpResponseClient;
-use crate::streamable_http_response_client::StreamableHttpResponseClientError;
+use crate::streamable_http_transport_client::StreamableHttpTransportClient;
+use crate::streamable_http_transport_client::StreamableHttpTransportClientError;
+use crate::streamable_http_transport_client::StreamableHttpTransportMode;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -76,10 +76,10 @@ enum PendingTransport {
         transport: StdioServerTransport,
     },
     StreamableHttp {
-        transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
+        transport: StreamableHttpClientTransport<StreamableHttpTransportClient>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
+        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -107,7 +107,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-        placement: StreamableHttpClientPlacement,
+        transport_mode: StreamableHttpTransportMode,
     },
 }
 
@@ -313,7 +313,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
-            StreamableHttpClientPlacement::Local,
+            StreamableHttpTransportMode::Local,
         )
         .await
     }
@@ -335,7 +335,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
-            StreamableHttpClientPlacement::Remote { exec_client },
+            StreamableHttpTransportMode::Remote { exec_client },
         )
         .await
     }
@@ -348,7 +348,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-        placement: StreamableHttpClientPlacement,
+        transport_mode: StreamableHttpTransportMode,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -357,7 +357,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
-            placement,
+            transport_mode,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -709,7 +709,7 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
-                placement,
+                transport_mode,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
@@ -734,7 +734,7 @@ impl RmcpClient {
                         initial_tokens.clone(),
                         *store_mode,
                         default_headers.clone(),
-                        placement.clone(),
+                        transport_mode.clone(),
                     )
                     .await
                     {
@@ -762,8 +762,8 @@ impl RmcpClient {
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
                             let transport = StreamableHttpClientTransport::with_client(
-                                StreamableHttpResponseClient::new(
-                                    placement.clone(),
+                                StreamableHttpTransportClient::new(
+                                    transport_mode.clone(),
                                     default_headers,
                                 )?,
                                 http_config,
@@ -780,7 +780,10 @@ impl RmcpClient {
                     }
 
                     let transport = StreamableHttpClientTransport::with_client(
-                        StreamableHttpResponseClient::new(placement.clone(), default_headers)?,
+                        StreamableHttpTransportClient::new(
+                            transport_mode.clone(),
+                            default_headers,
+                        )?,
                         http_config,
                     );
                     Ok(PendingTransport::StreamableHttp { transport })
@@ -900,13 +903,13 @@ impl RmcpClient {
 
         error
             .error
-            .downcast_ref::<StreamableHttpError<StreamableHttpResponseClientError>>()
+            .downcast_ref::<StreamableHttpError<StreamableHttpTransportClientError>>()
             .is_some_and(|error| {
                 matches!(
                     error,
                     StreamableHttpError::Client(
-                        StreamableHttpResponseClientError::SessionExpired404
-                            | StreamableHttpResponseClientError::Remote(
+                        StreamableHttpTransportClientError::SessionExpired404
+                            | StreamableHttpTransportClientError::Remote(
                                 RemoteStreamableHttpClientError::SessionExpired404
                             )
                     )
@@ -975,14 +978,14 @@ async fn create_oauth_transport_and_runtime(
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
-    placement: StreamableHttpClientPlacement,
+    transport_mode: StreamableHttpTransportMode,
 ) -> Result<(
-    StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
+    StreamableHttpClientTransport<AuthClient<StreamableHttpTransportClient>>,
     OAuthPersistor,
 )> {
     let http_client = build_http_client(&default_headers)?;
     // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
-    // local/remote placement abstraction instead of always creating the local
+    // local/remote transport_mode abstraction instead of always creating the local
     // reqwest metadata client here.
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
@@ -1002,7 +1005,7 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpResponseClient::new(placement, default_headers)?,
+        StreamableHttpTransportClient::new(transport_mode, default_headers)?,
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();

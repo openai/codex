@@ -8,7 +8,7 @@ mod program_resolver;
 mod rmcp_client;
 mod stdio_server_launcher;
 mod streamable_http_remote_client;
-mod streamable_http_response_client;
+mod streamable_http_transport_client;
 mod utils;
 
 pub use auth_status::StreamableHttpOAuthDiscovery;
