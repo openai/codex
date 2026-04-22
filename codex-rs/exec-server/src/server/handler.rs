@@ -6,10 +6,15 @@ use std::sync::atomic::Ordering;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use serde_json::to_value;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::ExecServerRuntimePaths;
-use crate::client::http_client::ExecutorHttpClient;
+use crate::client::http_client::ExecutorPendingHttpBodyStream;
+use crate::client::http_client::run_executor_http_request;
+use crate::client::http_client::stream_executor_http_body;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -38,6 +43,7 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::internal_error;
+use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
@@ -48,7 +54,7 @@ pub(crate) struct ExecServerHandler {
     notifications: RpcNotificationSender,
     outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
     session: StdMutex<Option<SessionHandle>>,
-    http_client: Arc<ExecutorHttpClient>,
+    body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
     file_system: FileSystemHandler,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -63,10 +69,10 @@ impl ExecServerHandler {
     ) -> Self {
         Self {
             session_registry,
-            http_client: Arc::new(ExecutorHttpClient::new(notifications.clone())),
             notifications,
             outgoing_tx,
             session: StdMutex::new(None),
+            body_streams: Mutex::new(HashMap::new()),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -74,7 +80,16 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.http_client.shutdown().await;
+        let tasks = {
+            let mut body_streams = self.body_streams.lock().await;
+            body_streams
+                .drain()
+                .filter_map(|(_, task)| task)
+                .collect::<Vec<_>>()
+        };
+        for task in tasks {
+            task.abort();
+        }
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -166,13 +181,21 @@ impl ExecServerHandler {
         params: HttpRequestParams,
     ) -> Result<(), JSONRPCErrorError> {
         self.require_initialized_for("http")?;
-        let (response, mut pending_stream) = self.http_client.run_http_request(params).await?;
+        let stream_response = params.stream_response;
+        let http_request_id = params.request_id.clone();
+        if stream_response {
+            self.reserve_http_body_stream(&http_request_id).await?;
+        }
+        let mut response = run_executor_http_request(params).await;
+        if response.is_err() && stream_response {
+            self.release_http_body_stream(&http_request_id).await;
+        }
+        let (response, mut pending_stream) = response?;
         let message = match to_value(response) {
             Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
             Err(err) => {
                 if let Some(pending_stream) = pending_stream.take() {
-                    self.http_client
-                        .release_http_body_stream(&pending_stream.request_id)
+                    self.release_http_body_stream(&pending_stream.request_id)
                         .await;
                 }
                 RpcServerOutboundMessage::Error {
@@ -185,9 +208,7 @@ impl ExecServerHandler {
             internal_error("RPC connection closed while sending http/request response".into())
         })?;
         if let Some(pending_stream) = pending_stream {
-            self.http_client
-                .start_http_body_stream(pending_stream)
-                .await;
+            self.start_http_body_stream(pending_stream).await;
         }
         Ok(())
     }
@@ -286,6 +307,42 @@ impl ExecServerHandler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    async fn start_http_body_stream(
+        self: &Arc<Self>,
+        pending_stream: ExecutorPendingHttpBodyStream,
+    ) {
+        let request_id = pending_stream.request_id.clone();
+        let finished_request_id = request_id.clone();
+        let handler = Arc::clone(self);
+        let notifications = self.notifications.clone();
+        let task = tokio::spawn(async move {
+            stream_executor_http_body(pending_stream, notifications).await;
+            handler.release_http_body_stream(&finished_request_id).await;
+        });
+        let mut body_streams = self.body_streams.lock().await;
+        if let Some(entry) = body_streams.get_mut(&request_id) {
+            *entry = Some(task);
+        } else {
+            task.abort();
+        }
+    }
+
+    async fn release_http_body_stream(&self, request_id: &str) {
+        let mut body_streams = self.body_streams.lock().await;
+        body_streams.remove(request_id);
+    }
+
+    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
+        let mut body_streams = self.body_streams.lock().await;
+        if body_streams.contains_key(request_id) {
+            return Err(invalid_params(format!(
+                "http/request streamResponse requestId `{request_id}` is already active"
+            )));
+        }
+        body_streams.insert(request_id.to_string(), None);
+        Ok(())
     }
 }
 

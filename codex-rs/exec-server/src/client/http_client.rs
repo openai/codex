@@ -13,10 +13,8 @@ use reqwest::header::HeaderValue;
 use serde_json::Value;
 use serde_json::from_value;
 use tokio::runtime::Handle;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::task::JoinHandle;
 use tracing::debug;
 
 use super::ExecServerClient;
@@ -40,11 +38,6 @@ pub(crate) struct ExecutorPendingHttpBodyStream {
     response: reqwest::Response,
 }
 
-pub(crate) struct ExecutorHttpClient {
-    notifications: RpcNotificationSender,
-    body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
-}
-
 /// Request-scoped stream of body chunks for an executor HTTP response.
 ///
 /// The initial `http/request` call returns status and headers. This stream then
@@ -58,84 +51,6 @@ pub struct HttpResponseBodyStream {
     // Terminal frames can carry a final chunk; return that once, then EOF.
     pending_eof: bool,
     closed: bool,
-}
-
-impl ExecutorHttpClient {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
-        Self {
-            notifications,
-            body_streams: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub(crate) async fn shutdown(&self) {
-        let tasks = {
-            let mut body_streams = self.body_streams.lock().await;
-            body_streams
-                .drain()
-                .filter_map(|(_, task)| task)
-                .collect::<Vec<_>>()
-        };
-        for task in tasks {
-            task.abort();
-        }
-    }
-
-    pub(crate) async fn run_http_request(
-        &self,
-        params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
-    {
-        let stream_response = params.stream_response;
-        let request_id = params.request_id.clone();
-        if stream_response {
-            self.reserve_http_body_stream(&request_id).await?;
-        }
-
-        let result = run_executor_http_request(params).await;
-        if result.is_err() && stream_response {
-            self.release_http_body_stream(&request_id).await;
-        }
-        result
-    }
-
-    pub(crate) async fn start_http_body_stream(
-        self: &Arc<Self>,
-        pending_stream: ExecutorPendingHttpBodyStream,
-    ) {
-        let request_id = pending_stream.request_id.clone();
-        let finished_request_id = request_id.clone();
-        let http_client = Arc::clone(self);
-        let notifications = self.notifications.clone();
-        let task = tokio::spawn(async move {
-            stream_executor_http_body(pending_stream, notifications).await;
-            http_client
-                .release_http_body_stream(&finished_request_id)
-                .await;
-        });
-        let mut body_streams = self.body_streams.lock().await;
-        if let Some(entry) = body_streams.get_mut(&request_id) {
-            *entry = Some(task);
-        } else {
-            task.abort();
-        }
-    }
-
-    pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
-        let mut body_streams = self.body_streams.lock().await;
-        body_streams.remove(request_id);
-    }
-
-    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
-        let mut body_streams = self.body_streams.lock().await;
-        if body_streams.contains_key(request_id) {
-            return Err(invalid_params(format!(
-                "http/request streamResponse requestId `{request_id}` is already active"
-            )));
-        }
-        body_streams.insert(request_id.to_string(), None);
-        Ok(())
-    }
 }
 
 impl HttpResponseBodyStream {
@@ -431,7 +346,7 @@ fn spawn_remove_http_body_stream(inner: Arc<Inner>, request_id: String) {
     }
 }
 
-async fn run_executor_http_request(
+pub(crate) async fn run_executor_http_request(
     params: HttpRequestParams,
 ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError> {
     let method = Method::from_bytes(params.method.as_bytes())
@@ -523,7 +438,7 @@ fn executor_response_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
         .collect()
 }
 
-async fn stream_executor_http_body(
+pub(crate) async fn stream_executor_http_body(
     pending_stream: ExecutorPendingHttpBodyStream,
     notifications: RpcNotificationSender,
 ) {
