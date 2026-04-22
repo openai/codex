@@ -170,6 +170,8 @@ async fn long_poll_read_fails_after_session_resume() {
         .expect("initialize");
     first_handler.initialized().expect("initialized");
 
+    // Keep the process quiet and alive so the pending read can only complete
+    // after session resume, not because the process produced output or exited.
     first_handler
         .exec(exec_params_with_argv(
             "proc-long-poll",
