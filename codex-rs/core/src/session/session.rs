@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ConstraintError;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -26,7 +27,6 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     pub(super) js_repl: Arc<JsReplHandle>,
     pub(super) next_internal_sub_id: AtomicU64,
-    pub(super) agent_task_registration_lock: Semaphore,
 }
 
 #[derive(Clone)]
@@ -91,6 +91,13 @@ impl SessionConfiguration {
         &self.codex_home
     }
 
+    pub(super) fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -99,6 +106,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
+            permission_profile: self.permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
@@ -132,13 +140,6 @@ impl SessionConfiguration {
         if let Some(approvals_reviewer) = updates.approvals_reviewer {
             next_configuration.approvals_reviewer = approvals_reviewer;
         }
-        let mut sandbox_policy_changed = false;
-        if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            next_configuration.sandbox_policy.set(sandbox_policy)?;
-            next_configuration.network_sandbox_policy =
-                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
-            sandbox_policy_changed = true;
-        }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
@@ -159,13 +160,33 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed {
+
+        if let Some(permission_profile) = updates.permission_profile.clone() {
+            let sandbox_policy = permission_profile
+                .to_legacy_sandbox_policy(&next_configuration.cwd)
+                .map_err(|err| ConstraintError::InvalidValue {
+                    field_name: "permission_profile",
+                    candidate: format!("{permission_profile:?}"),
+                    allowed: format!(
+                        "permission profiles that can be represented by the active sandbox constraints: {err}"
+                    ),
+                    requirement_source: codex_config::RequirementSource::Unknown,
+                })?;
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
+            let (file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
+            next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
+            next_configuration.network_sandbox_policy = network_sandbox_policy;
+        } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
             next_configuration.file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     next_configuration.sandbox_policy.get(),
                     &next_configuration.cwd,
                     &self.file_system_sandbox_policy,
                 );
+            next_configuration.network_sandbox_policy =
+                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
         } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
@@ -191,6 +212,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -228,7 +250,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
-        environment: Option<Arc<Environment>>,
+        environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -337,20 +359,8 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let authorization_header_value = match auth.as_ref() {
-                Some(auth) => {
-                    auth_manager_clone
-                        .chatgpt_authorization_header_for_auth(auth)
-                        .await
-                }
-                None => None,
-            };
             let mcp_servers = mcp_manager_for_mcp
-                .effective_servers_with_authorization_header(
-                    &config_for_mcp,
-                    auth.as_ref(),
-                    authorization_header_value.as_deref(),
-                )
+                .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
@@ -636,11 +646,6 @@ impl Session {
                 config.analytics_enabled,
             )
         });
-        let agent_identity_manager = Arc::new(AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        ));
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -663,7 +668,6 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
-            agent_identity_manager: Arc::clone(&agent_identity_manager),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -695,7 +699,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: environment.clone(),
+            environment_manager,
         };
         services
             .model_client
@@ -726,7 +730,6 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -747,6 +750,7 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value(),
                 approvals_reviewer: session_configuration.approvals_reviewer,
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+                permission_profile: Some(session_configuration.permission_profile()),
                 cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,
@@ -790,9 +794,10 @@ impl Session {
             tx_event.clone(),
             session_configuration.sandbox_policy.get().clone(),
             McpRuntimeEnvironment::new(
-                environment
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                sess.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
                 session_configuration.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),
@@ -853,7 +858,6 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
-        sess.start_agent_identity_registration();
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));

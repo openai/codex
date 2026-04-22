@@ -228,7 +228,6 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
                 .features
                 .disable(Feature::GhostCommit)
                 .expect("test config should allow feature update");
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -407,7 +406,6 @@ async fn process_sse_failed_event_logs_missing_error() {
                 .features
                 .disable(Feature::GhostCommit)
                 .expect("test config should allow feature update");
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -1132,7 +1130,11 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("user_approved_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "user_approved_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )
@@ -1200,7 +1202,11 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("user_approved_session_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "user_approved_session_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )
@@ -1267,7 +1273,11 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("sandbox_retry_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "sandbox_retry_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )
@@ -1334,7 +1344,11 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("user_denied_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "user_denied_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )
@@ -1401,7 +1415,11 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("sandbox_session_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "sandbox_session_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )
@@ -1468,7 +1486,11 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/date"]),
+            ev_local_shell_call(
+                "sandbox_deny_call",
+                "completed",
+                vec!["/usr/bin/touch", "codex-otel-approval-test"],
+            ),
             ev_completed("done"),
         ]),
     )

@@ -138,6 +138,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
@@ -379,6 +380,7 @@ use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod reasoning_shortcuts;
 mod side;
 mod status_surfaces;
 use self::status_surfaces::CachedProjectRootName;
@@ -1394,6 +1396,7 @@ fn thread_session_state_to_legacy_event(
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
         sandbox_policy: session.sandbox_policy,
+        permission_profile: Some(session.permission_profile),
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
         history_log_id: session.history_log_id,
@@ -1896,7 +1899,11 @@ impl ChatWidget {
             .config
             .tui_terminal_title
             .as_ref()
-            .is_some_and(|items| items.iter().any(|item| item == "status"));
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item == "run-state" || item == "status")
+            });
         let title_uses_spinner = self
             .config
             .tui_terminal_title
@@ -2098,6 +2105,12 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy(&event.sandbox_policy, &event.cwd)
+        });
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -2134,6 +2147,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -5276,6 +5291,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_reasoning_shortcut(key_event) {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            return;
+        }
+
         match key_event {
             // Ctrl+O - copy last agent response from the main view.
             KeyEvent {
@@ -5932,11 +5954,20 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
+        let permission_profile = if matches!(
+            self.config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            None
+        } else {
+            Some(self.config.permissions.permission_profile())
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,
@@ -7662,13 +7693,7 @@ impl ChatWidget {
     fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
         let mut preview_data = self.status_surface_preview_data();
         let now = Instant::now();
-        for item in [
-            TerminalTitleItem::Project,
-            TerminalTitleItem::Thread,
-            TerminalTitleItem::GitBranch,
-            TerminalTitleItem::Model,
-            TerminalTitleItem::TaskProgress,
-        ] {
+        for item in TerminalTitleItem::iter() {
             let Some(preview_item) = item.preview_item() else {
                 continue;
             };
@@ -7679,7 +7704,6 @@ impl ChatWidget {
         }
         preview_data
     }
-
     fn open_theme_picker(&mut self) {
         let codex_home = crate::legacy_core::config::find_codex_home().ok();
         let terminal_width = self

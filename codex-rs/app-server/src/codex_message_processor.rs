@@ -102,6 +102,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PermissionProfile as ApiPermissionProfile;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -260,6 +261,7 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -281,9 +283,9 @@ use codex_login::run_login_server;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
-use codex_mcp::collect_mcp_server_status_snapshot_with_detail_and_authorization_header;
+use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::discover_supported_scopes;
-use codex_mcp::effective_mcp_servers_with_authorization_header;
+use codex_mcp::effective_mcp_servers;
 use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -1970,28 +1972,12 @@ impl CodexMessageProcessor {
             });
         }
 
-        let authorization_header_value = self
-            .auth_manager
-            .chatgpt_authorization_header_for_auth(&auth)
-            .await;
-        let mut client = BackendClient::new(self.config.chatgpt_base_url.clone())
-            .map(|client| {
-                client.with_user_agent(codex_login::default_client::get_codex_user_agent())
-            })
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?;
-        if let Some(authorization_header_value) = authorization_header_value {
-            client = client.with_authorization_header_value(authorization_header_value);
-        }
-        if let Some(account_id) = auth.get_account_id() {
-            client = client.with_chatgpt_account_id(account_id);
-        }
-        if auth.is_fedramp_account() {
-            client = client.with_fedramp_routing_header();
-        }
 
         let snapshots = client
             .get_rate_limits_many()
@@ -2063,7 +2049,16 @@ impl CodexMessageProcessor {
             env: env_overrides,
             size,
             sandbox_policy,
+            permission_profile,
         } = params;
+        if sandbox_policy.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -2195,13 +2190,52 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
         let (
             effective_policy,
             effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+        ) = if let Some(permission_profile) = permission_profile {
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from(permission_profile);
+            let sandbox_policy = match permission_profile.to_legacy_sandbox_policy(&sandbox_cwd) {
+                Ok(sandbox_policy) => sandbox_policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            };
+            match self
+                .config
+                .permissions
+                .sandbox_policy
+                .can_set(&sandbox_policy)
+            {
+                Ok(()) => {
+                    let (file_system_sandbox_policy, network_sandbox_policy) =
+                        permission_profile.to_runtime_permissions();
+                    (
+                        sandbox_policy,
+                        file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    )
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            }
+        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+            match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
@@ -2218,12 +2252,13 @@ impl CodexMessageProcessor {
                     self.outgoing.send_error(request, error).await;
                     return;
                 }
-            },
-            None => (
+            }
+        } else {
+            (
                 self.config.permissions.sandbox_policy.get().clone(),
                 self.config.permissions.file_system_sandbox_policy.clone(),
                 self.config.permissions.network_sandbox_policy,
-            ),
+            )
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
@@ -2341,6 +2376,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config,
             service_name,
             base_instructions,
@@ -2353,6 +2389,14 @@ impl CodexMessageProcessor {
             session_start_source,
             persist_extended_history,
         } = params;
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2361,6 +2405,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             personality,
@@ -2704,6 +2749,7 @@ impl CodexMessageProcessor {
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
+                    permission_profile: config_snapshot.permission_profile.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
                 if listener_task_context.general_analytics_enabled {
@@ -2761,6 +2807,7 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
+        permission_profile: Option<ApiPermissionProfile>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -2775,6 +2822,7 @@ impl CodexMessageProcessor {
             approvals_reviewer: approvals_reviewer
                 .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
+            permission_profile: permission_profile.map(Into::into),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
@@ -4290,12 +4338,21 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
             personality,
             persist_extended_history,
         } = params;
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -4324,6 +4381,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             personality,
@@ -4426,6 +4484,7 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
+                let permission_profile = codex_thread.config_snapshot().await.permission_profile;
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4437,6 +4496,7 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
+                    permission_profile: permission_profile.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
                 if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -4820,12 +4880,21 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config: cli_overrides,
             base_instructions,
             developer_instructions,
             ephemeral,
             persist_extended_history,
         } = params;
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4902,6 +4971,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             /*personality*/ None,
@@ -5071,6 +5141,7 @@ impl CodexMessageProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        let permission_profile = forked_thread.config_snapshot().await.permission_profile;
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5082,6 +5153,7 @@ impl CodexMessageProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
+            permission_profile: permission_profile.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
         if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -5692,137 +5764,135 @@ impl CodexMessageProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth_manager = Arc::clone(&self.auth_manager);
-        let auth = auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
+        let auth = self.auth_manager.auth().await;
+        let environment_manager = self.thread_manager.environment_manager();
+        let runtime_environment = match environment_manager.default_environment() {
+            Some(environment) => {
                 // Status listing has no turn cwd. This fallback is used only
                 // by executor-backed stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
+            None => McpRuntimeEnvironment::new(
+                environment_manager.local_environment(),
                 config.cwd.to_path_buf(),
             ),
-            Err(err) => {
-                // TODO(aibrahim): Investigate degrading MCP status listing when
-                // executor environment creation fails.
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request, error).await;
-                return;
-            }
         };
 
         tokio::spawn(async move {
-            let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
-                McpServerStatusDetail::Full => McpSnapshotDetail::Full,
-                McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
-            };
-
-            let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-                auth_manager
-                    .chatgpt_authorization_header_for_auth(auth)
-                    .await
-            } else {
-                None
-            };
-            let snapshot = collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                request.request_id.to_string(),
+            Self::list_mcp_server_status_task(
+                outgoing,
+                request,
+                params,
+                config,
+                mcp_config,
+                auth,
                 runtime_environment,
-                detail,
-                background_authorization_header_value.as_deref(),
             )
             .await;
-
-            let effective_servers = effective_mcp_servers_with_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                background_authorization_header_value.as_deref(),
-            );
-            let McpServerStatusSnapshot {
-                tools_by_server,
-                resources,
-                resource_templates,
-                auth_statuses,
-            } = snapshot;
-
-            let mut server_names: Vec<String> = config
-                .mcp_servers
-                .keys()
-                .cloned()
-                // Include built-in/plugin MCP servers that are present in the
-                // effective runtime config even when they are not user-declared in
-                // `config.mcp_servers`.
-                .chain(effective_servers.keys().cloned())
-                .chain(auth_statuses.keys().cloned())
-                .chain(resources.keys().cloned())
-                .chain(resource_templates.keys().cloned())
-                .collect();
-            server_names.sort();
-            server_names.dedup();
-
-            let total = server_names.len();
-            let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
-            let effective_limit = limit.min(total);
-            let start = match params.cursor {
-                Some(cursor) => match cursor.parse::<usize>() {
-                    Ok(idx) => idx,
-                    Err(_) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid cursor: {cursor}"),
-                            data: None,
-                        };
-                        outgoing.send_error(request, error).await;
-                        return;
-                    }
-                },
-                None => 0,
-            };
-
-            if start > total {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("cursor {start} exceeds total MCP servers {total}"),
-                    data: None,
-                };
-                outgoing.send_error(request, error).await;
-                return;
-            }
-
-            let end = start.saturating_add(effective_limit).min(total);
-
-            let data: Vec<McpServerStatus> = server_names[start..end]
-                .iter()
-                .map(|name| McpServerStatus {
-                    name: name.clone(),
-                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                    resources: resources.get(name).cloned().unwrap_or_default(),
-                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                    auth_status: auth_statuses
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                        .into(),
-                })
-                .collect();
-
-            let next_cursor = if end < total {
-                Some(end.to_string())
-            } else {
-                None
-            };
-
-            let response = ListMcpServerStatusResponse { data, next_cursor };
-
-            outgoing.send_response(request, response).await;
         });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        params: ListMcpServerStatusParams,
+        config: Config,
+        mcp_config: codex_mcp::McpConfig,
+        auth: Option<CodexAuth>,
+        runtime_environment: McpRuntimeEnvironment,
+    ) {
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_server_status_snapshot_with_detail(
+            &mcp_config,
+            auth.as_ref(),
+            request_id.request_id.to_string(),
+            runtime_environment,
+            detail,
+        )
+        .await;
+
+        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let McpServerStatusSnapshot {
+            tools_by_server,
+            resources,
+            resource_templates,
+            auth_statuses,
+        } = snapshot;
+
+        let mut server_names: Vec<String> = config
+            .mcp_servers
+            .keys()
+            .cloned()
+            // Include built-in/plugin MCP servers that are present in the
+            // effective runtime config even when they are not user-declared in
+            // `config.mcp_servers`.
+            .chain(effective_servers.keys().cloned())
+            .chain(auth_statuses.keys().cloned())
+            .chain(resources.keys().cloned())
+            .chain(resource_templates.keys().cloned())
+            .collect();
+        server_names.sort();
+        server_names.dedup();
+
+        let total = server_names.len();
+        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = limit.min(total);
+        let start = match params.cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total MCP servers {total}"),
+                data: None,
+            };
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+
+        let data: Vec<McpServerStatus> = server_names[start..end]
+            .iter()
+            .map(|name| McpServerStatus {
+                name: name.clone(),
+                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                resources: resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                auth_status: auth_statuses
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
+            })
+            .collect();
+
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        let response = ListMcpServerStatusResponse { data, next_cursor };
+
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn read_mcp_resource(
@@ -5864,25 +5934,14 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
-                // Resource reads without a thread have no turn cwd. This fallback
-                // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
-                config.cwd.to_path_buf(),
-            ),
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let runtime_environment = {
+            let environment_manager = self.thread_manager.environment_manager();
+            let environment = environment_manager
+                .default_environment()
+                .unwrap_or_else(|| environment_manager.local_environment());
+            // Resource reads without a thread have no turn cwd. This fallback
+            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
+            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
         };
 
         tokio::spawn(async move {
@@ -6230,8 +6289,9 @@ impl CodexMessageProcessor {
 
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
+        let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config).await;
+            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
         });
     }
 
@@ -6240,6 +6300,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
+        environment_manager: Arc<EnvironmentManager>,
     ) {
         let AppsListParams {
             cursor,
@@ -6274,12 +6335,15 @@ impl CodexMessageProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
-                &accessible_config,
-                force_refetch,
-            )
-            .await
-            .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result =
+                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                    &accessible_config,
+                    force_refetch,
+                    &environment_manager,
+                )
+                .await
+                .map(|status| status.connectors)
+                .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
@@ -6469,23 +6533,11 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => Some(environment.get_filesystem()),
-            Ok(None) => None,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to create environment: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
+        let fs = self
+            .thread_manager
+            .environment_manager()
+            .default_environment()
+            .map(|environment| environment.get_filesystem());
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
@@ -6801,8 +6853,13 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let app_summaries =
-            plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
+        let environment_manager = self.thread_manager.environment_manager();
+        let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
+            &config,
+            &outcome.plugin.apps,
+            &environment_manager,
+        )
+        .await;
         let visible_skills = outcome
             .plugin
             .skills
@@ -6979,10 +7036,11 @@ impl CodexMessageProcessor {
                     ) {
                     Vec::new()
                 } else {
+                    let environment_manager = self.thread_manager.environment_manager();
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(
                         connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                        connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-                            &config, /*force_refetch*/ true
+                        connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                            &config, /*force_refetch*/ true, &environment_manager
                         ),
                     );
 
@@ -7203,12 +7261,22 @@ impl CodexMessageProcessor {
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
+            || params.permission_profile.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
             || collaboration_mode.is_some()
             || params.personality.is_some();
+
+        if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -7223,6 +7291,7 @@ impl CodexMessageProcessor {
                             .approvals_reviewer
                             .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                        permission_profile: params.permission_profile.map(Into::into),
                         windows_sandbox_level: None,
                         model: params.model,
                         effort: params.effort.map(Some),
@@ -8937,6 +9006,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile,
         cwd,
         reasoning_effort,
         ..
@@ -8952,6 +9022,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
+        permission_profile: permission_profile.into(),
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
@@ -9133,6 +9204,16 @@ fn collect_resume_override_mismatches(
             mismatch_details.push(format!(
                 "sandbox requested={requested_sandbox:?} active={:?}",
                 config_snapshot.sandbox_policy
+            ));
+        }
+    }
+    if let Some(requested_permission_profile) = request.permission_profile.as_ref() {
+        let requested_permission_profile =
+            codex_protocol::models::PermissionProfile::from(requested_permission_profile.clone());
+        if requested_permission_profile != config_snapshot.permission_profile {
+            mismatch_details.push(format!(
+                "permission_profile requested={requested_permission_profile:?} active={:?}",
+                config_snapshot.permission_profile
             ));
         }
     }
@@ -10352,7 +10433,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::RwLock;
     use tempfile::TempDir;
 
     #[test]
@@ -10628,10 +10708,9 @@ mod tests {
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
-            Arc::new(RwLock::new(Vec::new())),
-            Arc::new(RwLock::new(BTreeMap::new())),
+            Vec::new(),
             LoaderOverrides::default(),
-            Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            CloudRequirementsLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
@@ -10681,6 +10760,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
+            permission_profile: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,
@@ -10694,6 +10774,11 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    std::path::Path::new("/tmp"),
+                ),
             cwd: test_path_buf("/tmp").abs(),
             ephemeral: false,
             reasoning_effort: None,

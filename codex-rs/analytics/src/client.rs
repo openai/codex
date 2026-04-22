@@ -297,7 +297,7 @@ impl AnalyticsEventsClient {
 }
 
 async fn send_track_events(
-    auth_manager: &Arc<AuthManager>,
+    auth_manager: &AuthManager,
     base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
@@ -310,11 +310,9 @@ async fn send_track_events(
     if !auth.is_chatgpt_auth() {
         return;
     }
-    let Some(authorization_header_value) = auth_manager
-        .chatgpt_authorization_header_for_auth(&auth)
-        .await
-    else {
-        return;
+    let access_token = match auth.get_token() {
+        Ok(token) => token,
+        Err(_) => return,
     };
     let Some(account_id) = auth.get_account_id() else {
         return;
@@ -324,17 +322,15 @@ async fn send_track_events(
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let mut request = create_client()
+    let response = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .header("authorization", authorization_header_value)
+        .bearer_auth(&access_token)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
-        .json(&payload);
-    if auth.is_fedramp_account() {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
-    let response = request.send().await;
+        .json(&payload)
+        .send()
+        .await;
 
     match response {
         Ok(response) if response.status().is_success() => {}

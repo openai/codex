@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
+use codex_core::config_loader::ConfigLayerStack;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::PermissionsInstructions;
 use codex_core::load_exec_policy;
@@ -103,6 +104,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -231,6 +233,7 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -317,6 +320,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -419,6 +423,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -533,6 +538,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.config_layer_stack = ConfigLayerStack::default();
     });
     let test = builder.build(&server).await?;
 
