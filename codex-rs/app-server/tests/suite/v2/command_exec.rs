@@ -56,7 +56,6 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
     let terminate_request_id = mcp
@@ -108,7 +107,6 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -124,6 +122,55 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             stderr: "legacy-err".to_string(),
         }
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_ignores_read_only_sandbox_config() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let project = TempDir::new()?;
+    let output_path = project.path().join("command-exec-write.txt");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf 'unsandboxed' > command-exec-write.txt; cat command-exec-write.txt"
+                    .to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: Some(project.path().to_path_buf()),
+            env: None,
+            size: None,
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "unsandboxed".to_string(),
+            stderr: String::new(),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(output_path)?, "unsandboxed");
 
     Ok(())
 }
@@ -166,7 +213,6 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
                 ("RUST_LOG".to_string(), None),
             ])),
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -208,7 +254,6 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -245,7 +290,6 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -282,7 +326,6 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -319,7 +362,6 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -360,7 +402,6 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -407,7 +448,6 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -470,7 +510,6 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -545,7 +584,6 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
             cwd: None,
             env: None,
             size: None,
-            sandbox_policy: None,
         })
         .await?;
 
@@ -618,7 +656,6 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
                 rows: 31,
                 cols: 101,
             }),
-            sandbox_policy: None,
         })
         .await?;
 

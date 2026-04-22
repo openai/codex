@@ -228,7 +228,6 @@ use codex_core::ThreadManager;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
@@ -2070,7 +2069,6 @@ impl CodexMessageProcessor {
             cwd,
             env: env_overrides,
             size,
-            sandbox_policy,
         } = params;
 
         if size.is_some() && !tty {
@@ -2138,33 +2136,6 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
-        let managed_network_requirements_enabled =
-            self.config.managed_network_requirements_enabled();
-        let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec
-                .start_proxy(
-                    self.config.permissions.sandbox_policy.get(),
-                    /*policy_decider*/ None,
-                    /*blocked_request_observer*/ None,
-                    managed_network_requirements_enabled,
-                    NetworkProxyAuditMetadata::default(),
-                )
-                .await
-            {
-                Ok(started) => Some(started),
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to start managed network proxy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            },
-            None => None,
-        };
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let output_bytes_cap = if disable_output_cap {
             None
         } else {
@@ -2190,11 +2161,9 @@ impl CodexMessageProcessor {
             expiration,
             capture_policy,
             env,
-            network: started_network_proxy
-                .as_ref()
-                .map(codex_core::config::StartedNetworkProxy::proxy),
+            network: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: self
                 .config
                 .permissions
@@ -2203,41 +2172,14 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
-        let (
-            effective_policy,
-            effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
-                Ok(()) => {
-                    let file_system_sandbox_policy =
-                        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
-                    let network_sandbox_policy =
-                        codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
-                    (policy, file_system_sandbox_policy, network_sandbox_policy)
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid sandbox policy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            },
-            None => (
-                self.config.permissions.sandbox_policy.get().clone(),
-                self.config.permissions.file_system_sandbox_policy.clone(),
-                self.config.permissions.network_sandbox_policy,
-            ),
-        };
+        let sandbox_policy = codex_protocol::protocol::SandboxPolicy::DangerFullAccess;
+        let file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted();
+        let network_sandbox_policy = codex_protocol::permissions::NetworkSandboxPolicy::Enabled;
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
-        let started_network_proxy_for_task = started_network_proxy;
         let use_legacy_landlock = self.config.features.use_legacy_landlock();
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
@@ -2250,9 +2192,9 @@ impl CodexMessageProcessor {
 
         match codex_core::exec::build_exec_request(
             exec_params,
-            &effective_policy,
-            &effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
+            &sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             &sandbox_cwd,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
@@ -2265,7 +2207,7 @@ impl CodexMessageProcessor {
                         request_id: request_for_task,
                         process_id,
                         exec_request,
-                        started_network_proxy: started_network_proxy_for_task,
+                        started_network_proxy: None,
                         tty,
                         stream_stdin,
                         stream_stdout_stderr,

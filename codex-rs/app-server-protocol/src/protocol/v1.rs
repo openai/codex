@@ -12,7 +12,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 pub use codex_protocol::protocol::GitSha;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -181,7 +180,6 @@ pub struct ExecOneOffCommandParams {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
     pub cwd: Option<PathBuf>,
-    pub sandbox_policy: Option<SandboxPolicy>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
