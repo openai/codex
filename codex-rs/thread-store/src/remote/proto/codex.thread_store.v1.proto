@@ -14,9 +14,15 @@ message ListThreadsRequest {
   optional ModelProviderFilter model_provider_filter = 5;
   bool archived = 6;
   optional string search_term = 7;
+  optional CwdFilter cwd_filter = 8;
+  bool use_state_db_only = 9;
 }
 
 message ModelProviderFilter {
+  repeated string values = 1;
+}
+
+message CwdFilter {
   repeated string values = 1;
 }
 

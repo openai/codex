@@ -70,6 +70,7 @@ fn resume_history(
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             })),
         ],
         rollout_path: rollout_path.to_path_buf(),

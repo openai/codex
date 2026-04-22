@@ -3,7 +3,6 @@ use std::sync::Arc;
 use codex_api::AuthError;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
-use codex_aws_auth::AwsAuthConfig;
 use codex_aws_auth::AwsAuthContext;
 use codex_aws_auth::AwsAuthError;
 use codex_aws_auth::AwsRequestToSign;
@@ -14,7 +13,6 @@ use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use http::HeaderMap;
-use tokio::sync::OnceCell;
 
 use crate::BearerAuthProvider;
 
@@ -25,14 +23,8 @@ const AWS_BEARER_TOKEN_BEDROCK_ENV_VAR: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const LEGACY_SESSION_ID_HEADER: &str = "session_id";
 
 enum BedrockAuthMethod {
-    EnvBearerToken {
-        token: String,
-        region: String,
-    },
-    AwsSdkAuth {
-        config: AwsAuthConfig,
-        context: AwsAuthContext,
-    },
+    EnvBearerToken { token: String, region: String },
+    AwsSdkAuth { context: AwsAuthContext },
 }
 
 async fn resolve_auth_method(aws: &ModelProviderAwsAuthInfo) -> Result<BedrockAuthMethod> {
@@ -42,10 +34,10 @@ async fn resolve_auth_method(aws: &ModelProviderAwsAuthInfo) -> Result<BedrockAu
     }
 
     let config = aws_auth_config(aws);
-    let context = AwsAuthContext::load(config.clone())
+    let context = AwsAuthContext::load(config)
         .await
         .map_err(aws_auth_error_to_codex_error)?;
-    Ok(BedrockAuthMethod::AwsSdkAuth { config, context })
+    Ok(BedrockAuthMethod::AwsSdkAuth { context })
 }
 
 pub(super) async fn resolve_provider_auth(
@@ -57,9 +49,9 @@ pub(super) async fn resolve_provider_auth(
             account_id: None,
             is_fedramp_account: false,
         })),
-        BedrockAuthMethod::AwsSdkAuth { config, context } => Ok(Arc::new(
-            BedrockMantleSigV4AuthProvider::with_context(config, context),
-        )),
+        BedrockAuthMethod::AwsSdkAuth { context } => {
+            Ok(Arc::new(BedrockMantleSigV4AuthProvider::new(context)))
+        }
     }
 }
 
@@ -109,25 +101,12 @@ fn remove_headers_not_preserved_by_bedrock_mantle(headers: &mut HeaderMap) {
 /// AWS SigV4 auth provider for Bedrock Mantle OpenAI-compatible requests.
 #[derive(Debug)]
 struct BedrockMantleSigV4AuthProvider {
-    config: AwsAuthConfig,
-    context: OnceCell<AwsAuthContext>,
+    context: AwsAuthContext,
 }
 
 impl BedrockMantleSigV4AuthProvider {
-    fn with_context(config: AwsAuthConfig, context: AwsAuthContext) -> Self {
-        let cell = OnceCell::new();
-        let _ = cell.set(context);
-        Self {
-            config,
-            context: cell,
-        }
-    }
-
-    async fn context(&self) -> std::result::Result<&AwsAuthContext, AuthError> {
-        self.context
-            .get_or_try_init(|| AwsAuthContext::load(self.config.clone()))
-            .await
-            .map_err(aws_auth_error_to_auth_error)
+    fn new(context: AwsAuthContext) -> Self {
+        Self { context }
     }
 }
 
@@ -139,8 +118,8 @@ impl AuthProvider for BedrockMantleSigV4AuthProvider {
         let mut request = request;
         remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
         let prepared = request.prepare_body_for_send().map_err(AuthError::Build)?;
-        let context = self.context().await?;
-        let signed = context
+        let signed = self
+            .context
             .sign(AwsRequestToSign {
                 method: request.method.clone(),
                 url: request.url.clone(),

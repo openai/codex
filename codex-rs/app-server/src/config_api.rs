@@ -45,6 +45,7 @@ use tracing::warn;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "apps",
+    "memories",
     "plugins",
     "tool_search",
     "tool_suggest",

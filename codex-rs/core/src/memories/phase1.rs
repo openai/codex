@@ -23,6 +23,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
+use codex_rollout_trace::InferenceTraceContext;
 use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -354,6 +355,7 @@ mod job {
                 stage_one_context.reasoning_summary,
                 stage_one_context.service_tier,
                 stage_one_context.turn_metadata_header.as_deref(),
+                &InferenceTraceContext::disabled(),
             )
             .await?;
 

@@ -731,6 +731,7 @@ pub fn cloud_requirements_loader_for_storage(
         codex_home.clone(),
         enable_codex_api_key_env,
         credentials_store_mode,
+        Some(chatgpt_base_url.clone()),
     );
     cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
@@ -858,6 +859,7 @@ mod tests {
             tmp.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         ))
     }
 
@@ -882,6 +884,7 @@ mod tests {
             tmp.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         ))
     }
 
@@ -990,6 +993,7 @@ mod tests {
                 home.path().to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
+                /*chatgpt_base_url*/ None,
             )),
             _home: home,
         }
@@ -1399,6 +1403,7 @@ enabled = false
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         ));
 
         write_auth_json(
@@ -1472,6 +1477,7 @@ enabled = false
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         ));
 
         write_auth_json(
@@ -1603,6 +1609,7 @@ enabled = false
             auth_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         ));
 
         let fetcher = Arc::new(UnauthorizedFetcher {
