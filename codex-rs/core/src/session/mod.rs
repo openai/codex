@@ -1919,6 +1919,7 @@ impl Session {
                 review_id,
                 request,
                 /*retry_reason*/ None,
+                codex_analytics::GuardianApprovalRequestSource::MainTurn,
                 cancellation_token.clone(),
             );
             let decision = tokio::select! {
