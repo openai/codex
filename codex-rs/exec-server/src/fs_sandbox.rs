@@ -21,6 +21,7 @@ use tokio::process::Command;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
+use crate::file_system::file_system_policy_has_cwd_dependent_entries;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
@@ -52,12 +53,12 @@ impl FileSystemSandboxRunner {
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let cwd = sandbox_cwd(sandbox)?;
         let mut file_system_policy = sandbox.permissions.file_system_sandbox_policy();
-        let helper_read_root = if sandbox.use_legacy_landlock {
-            None
+        let helper_read_roots = if sandbox.use_legacy_landlock {
+            Vec::new()
         } else {
-            helper_read_root(&self.runtime_paths)
+            helper_read_roots(&self.runtime_paths)
         };
-        add_helper_runtime_permissions(&mut file_system_policy, helper_read_root, cwd.as_path());
+        add_helper_runtime_permissions(&mut file_system_policy, &helper_read_roots, cwd.as_path());
         normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let network_policy = NetworkSandboxPolicy::Restricted;
         let sandbox_policy =
@@ -133,33 +134,24 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
         .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))
 }
 
-fn file_system_policy_has_cwd_dependent_entries(
-    file_system_policy: &FileSystemSandboxPolicy,
-) -> bool {
-    file_system_policy
-        .entries
-        .iter()
-        .any(|entry| match &entry.path {
-            FileSystemPath::GlobPattern { pattern } => !std::path::Path::new(pattern).is_absolute(),
-            FileSystemPath::Special {
-                value:
-                    FileSystemSpecialPath::CurrentWorkingDirectory
-                    | FileSystemSpecialPath::ProjectRoots { .. },
-            } => true,
-            FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => false,
-        })
-}
-
-fn helper_read_root(runtime_paths: &ExecServerRuntimePaths) -> Option<AbsolutePathBuf> {
-    runtime_paths
-        .codex_self_exe
-        .parent()
-        .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
+    let mut roots = Vec::new();
+    for path in std::iter::once(runtime_paths.codex_self_exe.as_path())
+        .chain(runtime_paths.codex_linux_sandbox_exe.as_deref().into_iter())
+    {
+        if let Some(parent) = path.parent()
+            && let Ok(root) = AbsolutePathBuf::from_absolute_path(parent)
+            && !roots.contains(&root)
+        {
+            roots.push(root);
+        }
+    }
+    roots
 }
 
 fn add_helper_runtime_permissions(
     file_system_policy: &mut FileSystemSandboxPolicy,
-    helper_read_root: Option<AbsolutePathBuf>,
+    helper_read_roots: &[AbsolutePathBuf],
     cwd: &std::path::Path,
 ) {
     if !file_system_policy.has_full_disk_read_access() {
@@ -174,19 +166,18 @@ fn add_helper_runtime_permissions(
         }
     }
 
-    let Some(helper_read_root) = helper_read_root else {
-        return;
-    };
-    if file_system_policy.can_read_path_with_cwd(helper_read_root.as_path(), cwd) {
-        return;
-    }
+    for helper_read_root in helper_read_roots {
+        if file_system_policy.can_read_path_with_cwd(helper_read_root.as_path(), cwd) {
+            continue;
+        }
 
-    file_system_policy.entries.push(FileSystemSandboxEntry {
-        path: FileSystemPath::Path {
-            path: helper_read_root,
-        },
-        access: FileSystemAccessMode::Read,
-    });
+        file_system_policy.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: helper_read_root.clone(),
+            },
+            access: FileSystemAccessMode::Read,
+        });
+    }
 }
 
 fn compatibility_sandbox_policy(
@@ -371,7 +362,7 @@ mod tests {
     use super::helper_env;
     use super::helper_env_from_vars;
     use super::helper_env_key_is_allowed;
-    use super::helper_read_root;
+    use super::helper_read_roots;
     use super::sandbox_cwd;
 
     #[test]
@@ -388,7 +379,7 @@ mod tests {
         let mut policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
 
-        add_helper_runtime_permissions(&mut policy, /*helper_read_root*/ None, cwd.as_path());
+        add_helper_runtime_permissions(&mut policy, /*helper_read_roots*/ &[], cwd.as_path());
 
         assert!(policy.include_platform_defaults());
     }
@@ -410,7 +401,7 @@ mod tests {
         let mut policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
 
-        add_helper_runtime_permissions(&mut policy, /*helper_read_root*/ None, cwd.as_path());
+        add_helper_runtime_permissions(&mut policy, /*helper_read_roots*/ &[], cwd.as_path());
 
         assert!(policy.include_platform_defaults());
     }
@@ -449,7 +440,7 @@ mod tests {
 
         add_helper_runtime_permissions(
             &mut policy,
-            helper_read_root(&runtime_paths),
+            &helper_read_roots(&runtime_paths),
             cwd.as_path(),
         );
 
@@ -611,10 +602,44 @@ mod tests {
 
         add_helper_runtime_permissions(
             &mut policy,
-            helper_read_root(&runtime_paths),
+            &helper_read_roots(&runtime_paths),
             cwd.as_path(),
         );
 
         assert!(policy.can_read_path_with_cwd(readable.as_path(), cwd.as_path()));
+    }
+
+    #[test]
+    fn helper_permissions_include_linux_sandbox_alias_parent() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let codex_self_exe = root.path().join("bin").join("codex");
+        let codex_linux_sandbox_exe = root.path().join("aliases").join("codex-linux-sandbox");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe, Some(codex_linux_sandbox_exe))
+                .expect("runtime paths");
+        let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+            .expect("absolute cwd");
+        let sandbox_policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        };
+        let mut policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
+        let codex_parent = AbsolutePathBuf::from_absolute_path(root.path().join("bin"))
+            .expect("absolute codex parent");
+        let alias_parent = AbsolutePathBuf::from_absolute_path(root.path().join("aliases"))
+            .expect("absolute alias parent");
+
+        add_helper_runtime_permissions(
+            &mut policy,
+            &helper_read_roots(&runtime_paths),
+            cwd.as_path(),
+        );
+
+        assert!(policy.can_read_path_with_cwd(codex_parent.as_path(), cwd.as_path()));
+        assert!(policy.can_read_path_with_cwd(alias_parent.as_path(), cwd.as_path()));
     }
 }

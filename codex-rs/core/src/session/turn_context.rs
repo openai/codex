@@ -612,8 +612,7 @@ impl Session {
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
-            mcp_connection_manager
-                .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
+            mcp_connection_manager.set_sandbox_policy(session_configuration.sandbox_policy.get());
         }
 
         let model_info = self
