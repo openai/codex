@@ -1792,7 +1792,7 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
-        self.refresh_terminal_title();
+        self.refresh_status_surfaces();
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -1911,7 +1911,7 @@ impl ChatWidget {
             || (title_uses_spinner
                 && self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing)
         {
-            self.refresh_terminal_title();
+            self.refresh_status_surfaces();
         }
     }
 
@@ -2287,7 +2287,6 @@ impl ChatWidget {
                 self.add_boxed_history(Box::new(cell));
             }
             self.thread_name = event.thread_name;
-            self.refresh_terminal_title();
             self.refresh_status_surfaces();
             self.request_redraw();
             self.maybe_send_next_queued_input();
@@ -2491,7 +2490,6 @@ impl ChatWidget {
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.latest_proposed_plan_markdown = None;
-        self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
@@ -3563,7 +3561,7 @@ impl ChatWidget {
         self.update_task_running_state();
         if restored_task_running && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
-            self.refresh_terminal_title();
+            self.refresh_status_surfaces();
         }
         self.refresh_pending_input_preview();
         self.request_redraw();
@@ -3585,7 +3583,7 @@ impl ChatWidget {
             })
             .count();
         self.last_plan_progress = (total > 0).then_some((completed, total));
-        self.refresh_terminal_title();
+        self.refresh_status_surfaces();
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
