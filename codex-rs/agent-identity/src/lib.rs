@@ -128,14 +128,14 @@ struct RegisterTaskResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct RegisterAgentRequest {
-    abom: AgentBillOfMaterials,
+struct CreateCodexAgentIdentityRequest {
     agent_public_key: String,
-    capabilities: Vec<String>,
+    ttl: Option<u64>,
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct RegisterAgentResponse {
+struct CreateCodexAgentIdentityResponse {
     agent_runtime_id: String,
 }
 
@@ -267,13 +267,13 @@ pub async fn register_agent_identity(
     account_id: &str,
     is_fedramp_account: bool,
     key_material: &GeneratedAgentKeyMaterial,
-    abom: AgentBillOfMaterials,
+    name: &str,
 ) -> Result<AgentRuntimeId> {
     let url = agent_registration_url(chatgpt_base_url);
-    let request = RegisterAgentRequest {
-        abom,
+    let request = CreateCodexAgentIdentityRequest {
         agent_public_key: key_material.public_key_ssh.clone(),
-        capabilities: Vec::new(),
+        ttl: None,
+        name: name.to_string(),
     };
 
     let mut request_builder = client
@@ -292,7 +292,7 @@ pub async fn register_agent_identity(
         .with_context(|| format!("failed to send agent identity registration request to {url}"))?
         .error_for_status()
         .with_context(|| format!("agent identity registration failed for {url}"))?
-        .json::<RegisterAgentResponse>()
+        .json::<CreateCodexAgentIdentityResponse>()
         .await
         .with_context(|| format!("failed to parse agent identity response from {url}"))?;
 
@@ -365,21 +365,45 @@ pub fn curve25519_secret_key_from_private_key_pkcs8_base64(
 }
 
 pub fn agent_registration_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/register")
+    format!("{}/agent-identities", codex_api_base_url(chatgpt_base_url))
 }
 
 pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
+    let api_path = format!("/v1/agent/{agent_runtime_id}/task/register");
+    if matches!(
+        trimmed,
+        "https://chatgpt.com/backend-api" | "https://chat.openai.com/backend-api"
+    ) {
+        return format!("https://auth.openai.com/api/accounts{api_path}");
+    }
+    if trimmed == "https://chatgpt-staging.com/backend-api" {
+        return format!("https://auth.api.openai.org/api/accounts{api_path}");
+    }
+    if matches!(
+        trimmed,
+        "https://auth.openai.com" | "https://auth.api.openai.org"
+    ) {
+        return format!("{trimmed}/api/accounts{api_path}");
+    }
+    format!("{trimmed}{api_path}")
 }
 
 pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
+    format!(
+        "{}/agent-identities/jwks",
+        codex_api_base_url(chatgpt_base_url)
+    )
+}
+
+fn codex_api_base_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
-    if trimmed.contains("/backend-api") {
-        format!("{trimmed}/wham/agent-identities/jwks")
+    if trimmed.ends_with("/api/codex") || trimmed.ends_with("/backend-api/codex") {
+        trimmed.to_string()
+    } else if trimmed.ends_with("/backend-api") {
+        format!("{trimmed}/codex")
     } else {
-        format!("{trimmed}/agent-identities/jwks")
+        format!("{trimmed}/api/codex")
     }
 }
 
@@ -776,14 +800,45 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
     }
 
     #[test]
+    fn agent_registration_url_uses_codex_backend_api_base_url() {
+        assert_eq!(
+            agent_registration_url("https://chatgpt.com/backend-api"),
+            "https://chatgpt.com/backend-api/codex/agent-identities"
+        );
+        assert_eq!(
+            agent_registration_url("http://localhost:8080/api/codex/"),
+            "http://localhost:8080/api/codex/agent-identities"
+        );
+        assert_eq!(
+            agent_registration_url("http://localhost:8080"),
+            "http://localhost:8080/api/codex/agent-identities"
+        );
+    }
+
+    #[test]
+    fn agent_task_registration_url_uses_public_authapi_for_chatgpt_base_url() {
+        assert_eq!(
+            agent_task_registration_url("https://chatgpt.com/backend-api", "agent-runtime-id"),
+            "https://auth.openai.com/api/accounts/v1/agent/agent-runtime-id/task/register"
+        );
+        assert_eq!(
+            agent_task_registration_url(
+                "https://chatgpt-staging.com/backend-api",
+                "agent-runtime-id"
+            ),
+            "https://auth.api.openai.org/api/accounts/v1/agent/agent-runtime-id/task/register"
+        );
+    }
+
+    #[test]
     fn agent_identity_jwks_url_uses_backend_api_base_url() {
         assert_eq!(
             agent_identity_jwks_url("https://chatgpt.com/backend-api"),
-            "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
+            "https://chatgpt.com/backend-api/codex/agent-identities/jwks"
         );
         assert_eq!(
             agent_identity_jwks_url("https://chatgpt.com/backend-api/"),
-            "https://chatgpt.com/backend-api/wham/agent-identities/jwks"
+            "https://chatgpt.com/backend-api/codex/agent-identities/jwks"
         );
     }
 

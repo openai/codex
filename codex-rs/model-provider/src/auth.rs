@@ -20,12 +20,15 @@ struct AgentIdentityAuthProvider {
 impl AuthProvider for AgentIdentityAuthProvider {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
         let record = self.auth.record();
+        let Some(task_id) = self.auth.process_task_id() else {
+            return;
+        };
         let header_value = authorization_header_for_agent_task(
             AgentIdentityKey {
                 agent_runtime_id: &record.agent_runtime_id,
                 private_key_pkcs8_base64: &record.agent_private_key,
             },
-            self.auth.process_task_id(),
+            task_id,
         )
         .map_err(std::io::Error::other);
 
