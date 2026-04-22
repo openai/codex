@@ -35,11 +35,6 @@ use crate::rpc::invalid_params;
 /// Maximum queued body frames per streamed executor HTTP response.
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: usize = 256;
 
-#[derive(Default)]
-struct ExecutorHttpBodyStreamRegistry {
-    reserved_ids: HashMap<String, Option<JoinHandle<()>>>,
-}
-
 pub(crate) struct ExecutorPendingHttpBodyStream {
     pub(crate) request_id: String,
     response: reqwest::Response,
@@ -47,7 +42,7 @@ pub(crate) struct ExecutorPendingHttpBodyStream {
 
 pub(crate) struct ExecutorHttpClient {
     notifications: RpcNotificationSender,
-    body_streams: Mutex<ExecutorHttpBodyStreamRegistry>,
+    body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
 }
 
 /// Request-scoped stream of body chunks for an executor HTTP response.
@@ -69,7 +64,7 @@ impl ExecutorHttpClient {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
             notifications,
-            body_streams: Mutex::new(ExecutorHttpBodyStreamRegistry::default()),
+            body_streams: Mutex::new(HashMap::new()),
         }
     }
 
@@ -77,7 +72,6 @@ impl ExecutorHttpClient {
         let tasks = {
             let mut body_streams = self.body_streams.lock().await;
             body_streams
-                .reserved_ids
                 .drain()
                 .filter_map(|(_, task)| task)
                 .collect::<Vec<_>>()
@@ -120,7 +114,7 @@ impl ExecutorHttpClient {
                 .await;
         });
         let mut body_streams = self.body_streams.lock().await;
-        if let Some(entry) = body_streams.reserved_ids.get_mut(&request_id) {
+        if let Some(entry) = body_streams.get_mut(&request_id) {
             *entry = Some(task);
         } else {
             task.abort();
@@ -129,19 +123,17 @@ impl ExecutorHttpClient {
 
     pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
         let mut body_streams = self.body_streams.lock().await;
-        body_streams.reserved_ids.remove(request_id);
+        body_streams.remove(request_id);
     }
 
     async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
         let mut body_streams = self.body_streams.lock().await;
-        if body_streams.reserved_ids.contains_key(request_id) {
+        if body_streams.contains_key(request_id) {
             return Err(invalid_params(format!(
                 "http/request streamResponse requestId `{request_id}` is already active"
             )));
         }
-        body_streams
-            .reserved_ids
-            .insert(request_id.to_string(), None);
+        body_streams.insert(request_id.to_string(), None);
         Ok(())
     }
 }
