@@ -17,7 +17,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 
-use super::HttpBackedStreamableHttpClientError;
+use super::StreamableHttpClientAdapterError;
 
 pub(super) fn protocol_headers(headers: &reqwest::header::HeaderMap) -> Vec<HttpHeader> {
     headers
@@ -45,12 +45,12 @@ pub(super) fn status_is_success(status: u16) -> bool {
 
 pub(super) async fn collect_body(
     body_stream: &mut HttpResponseBodyStream,
-) -> std::result::Result<Vec<u8>, StreamableHttpError<HttpBackedStreamableHttpClientError>> {
+) -> std::result::Result<Vec<u8>, StreamableHttpError<StreamableHttpClientAdapterError>> {
     let mut body = Vec::new();
     while let Some(chunk) = body_stream
         .recv()
         .await
-        .map_err(HttpBackedStreamableHttpClientError::from)
+        .map_err(StreamableHttpClientAdapterError::from)
         .map_err(StreamableHttpError::Client)?
     {
         body.extend_from_slice(&chunk);

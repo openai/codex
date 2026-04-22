@@ -1,4 +1,4 @@
-//! Local HTTP implementation for the `HttpClient` capability.
+//! Direct HTTP implementation for the `HttpClient` capability.
 //!
 //! This code runs where the actual network request should originate:
 //! - in a local environment, that means the orchestrator process
@@ -33,22 +33,22 @@ use crate::rpc::invalid_params;
 /// Direct HTTP implementation for whichever process is responsible for issuing
 /// the real network request.
 #[derive(Clone, Default)]
-pub(crate) struct LocalHttpClient;
+pub(crate) struct DirectHttpClient;
 
 /// Local streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
-pub(crate) struct PendingHttpBodyStream {
+pub(crate) struct PendingDirectHttpBodyStream {
     pub(crate) request_id: String,
     pub(crate) response: reqwest::Response,
 }
 
 /// Validates `http/request` parameters and runs the actual `reqwest` call used
 /// by the exec-server route and the local [`HttpClient`] backend.
-pub(crate) struct HttpRequestRunner {
+pub(crate) struct DirectHttpRequestRunner {
     client: reqwest::Client,
 }
 
-impl LocalHttpClient {
+impl DirectHttpClient {
     fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
         let builder = match timeout_ms {
             None => reqwest::Client::builder(),
@@ -61,13 +61,13 @@ impl LocalHttpClient {
     }
 }
 
-impl HttpClient for LocalHttpClient {
+impl HttpClient for DirectHttpClient {
     fn http_request(
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
-            let runner = HttpRequestRunner::new(params.timeout_ms)
+            let runner = DirectHttpRequestRunner::new(params.timeout_ms)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, _) = runner
                 .run(HttpRequestParams {
@@ -86,7 +86,7 @@ impl HttpClient for LocalHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
-            let runner = HttpRequestRunner::new(params.timeout_ms)
+            let runner = DirectHttpRequestRunner::new(params.timeout_ms)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, pending_stream) = runner
                 .run(HttpRequestParams {
@@ -109,9 +109,9 @@ impl HttpClient for LocalHttpClient {
     }
 }
 
-impl HttpRequestRunner {
+impl DirectHttpRequestRunner {
     pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
-        let client = LocalHttpClient::build_client(timeout_ms)
+        let client = DirectHttpClient::build_client(timeout_ms)
             .map_err(|error| internal_error(error.to_string()))?;
         Ok(Self { client })
     }
@@ -119,7 +119,7 @@ impl HttpRequestRunner {
     pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<PendingHttpBodyStream>), JSONRPCErrorError> {
+    ) -> Result<(HttpRequestResponse, Option<PendingDirectHttpBodyStream>), JSONRPCErrorError> {
         let method = Method::from_bytes(params.method.as_bytes())
             .map_err(|error| invalid_params(format!("http/request method is invalid: {error}")))?;
         let url = Url::parse(&params.url)
@@ -153,7 +153,7 @@ impl HttpRequestRunner {
                     headers,
                     body: Vec::new().into(),
                 },
-                Some(PendingHttpBodyStream {
+                Some(PendingDirectHttpBodyStream {
                     request_id: params.request_id,
                     response,
                 }),
@@ -177,10 +177,10 @@ impl HttpRequestRunner {
     }
 
     pub(crate) async fn stream_body(
-        pending_stream: PendingHttpBodyStream,
+        pending_stream: PendingDirectHttpBodyStream,
         notifications: RpcNotificationSender,
     ) {
-        let PendingHttpBodyStream {
+        let PendingDirectHttpBodyStream {
             request_id,
             response,
         } = pending_stream;

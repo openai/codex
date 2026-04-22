@@ -65,8 +65,8 @@ use crate::oauth::StoredOAuthTokens;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::streamable_http::transport_client::HttpBackedStreamableHttpClient;
-use crate::streamable_http::transport_client::HttpBackedStreamableHttpClientError;
+use crate::streamable_http::http_client_adapter::StreamableHttpClientAdapter;
+use crate::streamable_http::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -76,10 +76,10 @@ enum PendingTransport {
         transport: StdioServerTransport,
     },
     StreamableHttp {
-        transport: StreamableHttpClientTransport<HttpBackedStreamableHttpClient>,
+        transport: StreamableHttpClientTransport<StreamableHttpClientAdapter>,
     },
     StreamableHttpWithOAuth {
-        transport: StreamableHttpClientTransport<AuthClient<HttpBackedStreamableHttpClient>>,
+        transport: StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -719,7 +719,7 @@ impl RmcpClient {
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
                             let transport = StreamableHttpClientTransport::with_client(
-                                HttpBackedStreamableHttpClient::new(
+                                StreamableHttpClientAdapter::new(
                                     Arc::clone(http_client),
                                     default_headers,
                                 ),
@@ -737,10 +737,7 @@ impl RmcpClient {
                     }
 
                     let transport = StreamableHttpClientTransport::with_client(
-                        HttpBackedStreamableHttpClient::new(
-                            Arc::clone(http_client),
-                            default_headers,
-                        ),
+                        StreamableHttpClientAdapter::new(Arc::clone(http_client), default_headers),
                         http_config,
                     );
                     Ok(PendingTransport::StreamableHttp { transport })
@@ -860,12 +857,12 @@ impl RmcpClient {
 
         error
             .error
-            .downcast_ref::<StreamableHttpError<HttpBackedStreamableHttpClientError>>()
+            .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
             .is_some_and(|error| {
                 matches!(
                     error,
                     StreamableHttpError::Client(
-                        HttpBackedStreamableHttpClientError::SessionExpired404
+                        StreamableHttpClientAdapterError::SessionExpired404
                     )
                 )
             })
@@ -934,7 +931,7 @@ async fn create_oauth_transport_and_runtime(
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
 ) -> Result<(
-    StreamableHttpClientTransport<AuthClient<HttpBackedStreamableHttpClient>>,
+    StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
     let builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
@@ -961,7 +958,7 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        HttpBackedStreamableHttpClient::new(http_client, default_headers),
+        StreamableHttpClientAdapter::new(http_client, default_headers),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();

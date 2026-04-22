@@ -4,4 +4,4 @@
 //! shared `HttpClient` capability exposed by `codex-exec-server`.
 
 pub(crate) mod common;
-pub(crate) mod transport_client;
+pub(crate) mod http_client_adapter;

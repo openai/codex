@@ -1,4 +1,4 @@
-//! Remote `HttpClient` implementation backed by the exec-server JSON-RPC transport.
+//! JSON-RPC-backed `HttpClient` implementation.
 //!
 //! This code runs in the orchestrator process. It does not issue network
 //! requests directly; instead it forwards `http/request` to the remote runtime

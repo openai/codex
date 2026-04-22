@@ -34,7 +34,7 @@ use crate::streamable_http::common::body_preview;
 use crate::streamable_http::common::insert_header;
 use crate::streamable_http::common::is_streamable_http_content_type;
 
-#[path = "transport_response.rs"]
+#[path = "http_response.rs"]
 mod response;
 
 use response::collect_body;
@@ -44,13 +44,13 @@ use response::sse_stream_from_body;
 use response::status_is_success;
 
 #[derive(Clone)]
-pub(crate) struct HttpBackedStreamableHttpClient {
+pub(crate) struct StreamableHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum HttpBackedStreamableHttpClientError {
+pub(crate) enum StreamableHttpClientAdapterError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
     #[error(transparent)]
@@ -59,7 +59,7 @@ pub(crate) enum HttpBackedStreamableHttpClientError {
     Header(String),
 }
 
-impl HttpBackedStreamableHttpClient {
+impl StreamableHttpClientAdapter {
     pub(crate) fn new(http_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
         Self {
             http_client,
@@ -68,8 +68,8 @@ impl HttpBackedStreamableHttpClient {
     }
 }
 
-impl StreamableHttpClient for HttpBackedStreamableHttpClient {
-    type Error = HttpBackedStreamableHttpClientError;
+impl StreamableHttpClient for StreamableHttpClientAdapter {
+    type Error = StreamableHttpClientAdapterError;
 
     async fn post_message(
         &self,
@@ -83,20 +83,20 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
             &mut headers,
             ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
-            HttpBackedStreamableHttpClientError::Header,
+            StreamableHttpClientAdapterError::Header,
         )?;
         insert_header(
             &mut headers,
             CONTENT_TYPE,
             JSON_MIME_TYPE.to_string(),
-            HttpBackedStreamableHttpClientError::Header,
+            StreamableHttpClientAdapterError::Header,
         )?;
         if let Some(auth_token) = auth_token {
             insert_header(
                 &mut headers,
                 AUTHORIZATION,
                 format!("Bearer {auth_token}"),
-                HttpBackedStreamableHttpClientError::Header,
+                StreamableHttpClientAdapterError::Header,
             )?;
         }
         if let Some(session_id_value) = session_id.as_ref() {
@@ -104,7 +104,7 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 &mut headers,
                 HeaderName::from_static("mcp-session-id"),
                 session_id_value.to_string(),
-                HttpBackedStreamableHttpClientError::Header,
+                StreamableHttpClientAdapterError::Header,
             )?;
         }
 
@@ -121,12 +121,12 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 stream_response: true,
             })
             .await
-            .map_err(HttpBackedStreamableHttpClientError::from)
+            .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
-                HttpBackedStreamableHttpClientError::SessionExpired404,
+                StreamableHttpClientAdapterError::SessionExpired404,
             ));
         }
         if response.status == StatusCode::UNAUTHORIZED.as_u16()
@@ -180,14 +180,14 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 &mut headers,
                 AUTHORIZATION,
                 format!("Bearer {auth_token}"),
-                HttpBackedStreamableHttpClientError::Header,
+                StreamableHttpClientAdapterError::Header,
             )?;
         }
         insert_header(
             &mut headers,
             HeaderName::from_static("mcp-session-id"),
             session.to_string(),
-            HttpBackedStreamableHttpClientError::Header,
+            StreamableHttpClientAdapterError::Header,
         )?;
 
         let response = self
@@ -202,7 +202,7 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 stream_response: false,
             })
             .await
-            .map_err(HttpBackedStreamableHttpClientError::from)
+            .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
@@ -231,20 +231,20 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
             &mut headers,
             ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
-            HttpBackedStreamableHttpClientError::Header,
+            StreamableHttpClientAdapterError::Header,
         )?;
         insert_header(
             &mut headers,
             HeaderName::from_static("mcp-session-id"),
             session_id.to_string(),
-            HttpBackedStreamableHttpClientError::Header,
+            StreamableHttpClientAdapterError::Header,
         )?;
         if let Some(last_event_id) = last_event_id {
             insert_header(
                 &mut headers,
                 HeaderName::from_static("last-event-id"),
                 last_event_id,
-                HttpBackedStreamableHttpClientError::Header,
+                StreamableHttpClientAdapterError::Header,
             )?;
         }
         if let Some(auth_token) = auth_token {
@@ -252,7 +252,7 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 &mut headers,
                 AUTHORIZATION,
                 format!("Bearer {auth_token}"),
-                HttpBackedStreamableHttpClientError::Header,
+                StreamableHttpClientAdapterError::Header,
             )?;
         }
 
@@ -268,7 +268,7 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
                 stream_response: true,
             })
             .await
-            .map_err(HttpBackedStreamableHttpClientError::from)
+            .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
@@ -276,7 +276,7 @@ impl StreamableHttpClient for HttpBackedStreamableHttpClient {
         }
         if response.status == StatusCode::NOT_FOUND.as_u16() {
             return Err(StreamableHttpError::Client(
-                HttpBackedStreamableHttpClientError::SessionExpired404,
+                StreamableHttpClientAdapterError::SessionExpired404,
             ));
         }
         if !status_is_success(response.status) {
