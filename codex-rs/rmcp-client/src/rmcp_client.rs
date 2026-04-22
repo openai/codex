@@ -306,16 +306,25 @@ impl RmcpClient {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
-        Self::new_streamable_http_client_with_placement(
-            server_name,
-            url,
+        let transport_recipe = TransportRecipe::StreamableHttp {
+            server_name: server_name.to_string(),
+            url: url.to_string(),
             bearer_token,
             http_headers,
             env_http_headers,
             store_mode,
-            StreamableHttpTransportMode::Local,
-        )
-        .await
+            transport_mode: StreamableHttpTransportMode::Local,
+        };
+        let transport = Self::create_pending_transport(&transport_recipe).await?;
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Semaphore::new(/*permits*/ 1),
+            elicitation_pause_state: ElicitationPauseState::new(),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -328,28 +337,6 @@ impl RmcpClient {
         store_mode: OAuthCredentialsStoreMode,
         exec_client: ExecServerClient,
     ) -> Result<Self> {
-        Self::new_streamable_http_client_with_placement(
-            server_name,
-            url,
-            bearer_token,
-            http_headers,
-            env_http_headers,
-            store_mode,
-            StreamableHttpTransportMode::Remote { exec_client },
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn new_streamable_http_client_with_placement(
-        server_name: &str,
-        url: &str,
-        bearer_token: Option<String>,
-        http_headers: Option<HashMap<String, String>>,
-        env_http_headers: Option<HashMap<String, String>>,
-        store_mode: OAuthCredentialsStoreMode,
-        transport_mode: StreamableHttpTransportMode,
-    ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
             url: url.to_string(),
@@ -357,7 +344,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
-            transport_mode,
+            transport_mode: StreamableHttpTransportMode::Remote { exec_client },
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {

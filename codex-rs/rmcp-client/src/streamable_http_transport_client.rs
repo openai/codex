@@ -20,10 +20,6 @@ pub(crate) struct StreamableHttpTransportClient {
 }
 
 #[derive(Clone)]
-struct RemoteStreamableHttpTransportClient {
-    inner: RemoteStreamableHttpClient,
-}
-
 impl StreamableHttpTransportClient {
     pub(crate) fn new(
         transport_mode: StreamableHttpTransportMode,
@@ -33,11 +29,9 @@ impl StreamableHttpTransportClient {
             StreamableHttpTransportMode::Local => {
                 Arc::new(LocalStreamableHttpClient::new(default_headers)?)
             }
-            StreamableHttpTransportMode::Remote { exec_client } => {
-                Arc::new(RemoteStreamableHttpTransportClient {
-                    inner: RemoteStreamableHttpClient::new(exec_client, default_headers),
-                })
-            }
+            StreamableHttpTransportMode::Remote { exec_client } => Arc::new(
+                RemoteStreamableHttpClient::new(exec_client, default_headers),
+            ),
         };
         Ok(Self { backend })
     }
@@ -104,7 +98,7 @@ pub(crate) trait StreamableHttpTransportBackend: Send + Sync {
     >;
 }
 
-impl StreamableHttpTransportBackend for RemoteStreamableHttpTransportClient {
+impl StreamableHttpTransportBackend for RemoteStreamableHttpClient {
     fn post_message(
         &self,
         uri: Arc<str>,
@@ -119,8 +113,7 @@ impl StreamableHttpTransportBackend for RemoteStreamableHttpTransportClient {
         >,
     > {
         async move {
-            self.inner
-                .post_message(uri, message, session_id, auth_token)
+            StreamableHttpClient::post_message(self, uri, message, session_id, auth_token)
                 .await
                 .map_err(|error| {
                     map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
@@ -139,8 +132,7 @@ impl StreamableHttpTransportBackend for RemoteStreamableHttpTransportClient {
         std::result::Result<(), StreamableHttpError<StreamableHttpTransportClientError>>,
     > {
         async move {
-            self.inner
-                .delete_session(uri, session, auth_token)
+            StreamableHttpClient::delete_session(self, uri, session, auth_token)
                 .await
                 .map_err(|error| {
                     map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
@@ -163,8 +155,7 @@ impl StreamableHttpTransportBackend for RemoteStreamableHttpTransportClient {
         >,
     > {
         async move {
-            self.inner
-                .get_stream(uri, session_id, last_event_id, auth_token)
+            StreamableHttpClient::get_stream(self, uri, session_id, last_event_id, auth_token)
                 .await
                 .map_err(|error| {
                     map_streamable_http_error(error, StreamableHttpTransportClientError::Remote)
