@@ -507,7 +507,7 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    let stop_hook_permission_mode = match turn_context.approval_policy.value() {
+                    let stop_hook_permission_mode = match turn_context.approval_policy() {
                         AskForApproval::Never => "bypassPermissions",
                         AskForApproval::UnlessTrusted
                         | AskForApproval::OnFailure
@@ -697,8 +697,8 @@ async fn track_turn_resolved_config_analytics(
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context.config.service_tier,
-            approval_policy: turn_context.approval_policy.value(),
-            approvals_reviewer: turn_context.config.approvals_reviewer,
+            approval_policy: turn_context.approval_policy(),
+            approvals_reviewer: turn_context.approvals_reviewer(),
             sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
             collaboration_mode: turn_context.collaboration_mode.mode,
             personality: turn_context.personality,
@@ -1871,7 +1871,7 @@ async fn try_run_sampling_request(
 ) -> CodexResult<SamplingRequestResult> {
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
-        approval_policy = turn_context.approval_policy.value(),
+        approval_policy = turn_context.approval_policy(),
         sandbox_policy = turn_context.sandbox_policy.get(),
         effort = turn_context.reasoning_effort,
         auth_mode = sess.services.auth_manager.auth_mode(),

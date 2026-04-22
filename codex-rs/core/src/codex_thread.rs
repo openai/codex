@@ -116,6 +116,18 @@ impl CodexThread {
             .await
     }
 
+    pub async fn override_active_turn_context(
+        &self,
+        expected_turn_id: &str,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    ) -> CodexResult<String> {
+        self.codex
+            .session
+            .override_active_turn_context(expected_turn_id, approval_policy, approvals_reviewer)
+            .await
+    }
+
     pub async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,

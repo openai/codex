@@ -260,7 +260,7 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     config
         .permissions
         .approval_policy
-        .set(turn.approval_policy.value())
+        .set(turn.approval_policy())
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
         })?;

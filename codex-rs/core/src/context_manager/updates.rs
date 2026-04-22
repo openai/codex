@@ -50,7 +50,7 @@ fn build_permissions_update_item(
 
     let prev = previous?;
     if prev.sandbox_policy == *next.sandbox_policy.get()
-        && prev.approval_policy == next.approval_policy.value()
+        && prev.approval_policy == next.approval_policy()
     {
         return None;
     }
@@ -58,8 +58,8 @@ fn build_permissions_update_item(
     Some(
         PermissionsInstructions::from_policy(
             next.sandbox_policy.get(),
-            next.approval_policy.value(),
-            next.config.approvals_reviewer,
+            next.approval_policy(),
+            next.approvals_reviewer(),
             exec_policy,
             &next.cwd,
             next.features.enabled(Feature::ExecPermissionApprovals),

@@ -4950,6 +4950,34 @@ pub struct TurnSteerResponse {
     pub turn_id: String,
 }
 
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnOverrideActiveContextParams {
+    pub thread_id: String,
+    /// Required active turn id precondition. The request fails when it does not
+    /// match the currently active turn.
+    pub expected_turn_id: String,
+    /// Override the active turn approval policy and the default for subsequent
+    /// turns.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on the active
+    /// turn and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnOverrideActiveContextResponse {
+    pub turn_id: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -8819,6 +8847,30 @@ mod tests {
                         mcp_elicitations: true,
                     }),
                     ..Default::default()
+                },
+            },
+        );
+
+        assert_eq!(reason, Some("askForApproval.granular"));
+    }
+
+    #[test]
+    fn client_request_turn_override_active_context_granular_approval_policy_is_marked_experimental()
+    {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+            &crate::ClientRequest::TurnOverrideActiveContext {
+                request_id: crate::RequestId::Integer(5),
+                params: TurnOverrideActiveContextParams {
+                    thread_id: "thr_123".to_string(),
+                    expected_turn_id: "turn_123".to_string(),
+                    approval_policy: Some(AskForApproval::Granular {
+                        sandbox_approval: false,
+                        rules: true,
+                        skill_approval: false,
+                        request_permissions: false,
+                        mcp_elicitations: true,
+                    }),
+                    approvals_reviewer: None,
                 },
             },
         );

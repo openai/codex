@@ -158,6 +158,7 @@ Example with notification opt-out:
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
+- `turn/overrideActiveContext` — update approval policy or approvals reviewer for the currently active regular turn and subsequent turns; returns the active `turnId`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
@@ -734,6 +735,23 @@ not emit `turn/started` and does not accept turn context overrides.
 `expectedTurnId` is required. If there is no active turn, `expectedTurnId` does not match the
 active turn, or the active turn kind does not accept same-turn steering (for example review or
 manual compaction), the request fails with an `invalid request` error.
+
+Use `turn/overrideActiveContext` to change approval behavior for an already in-flight regular turn
+without sending additional input. The same values become the defaults for subsequent turns.
+
+```json
+{ "method": "turn/overrideActiveContext", "id": 33, "params": {
+    "threadId": "thr_123",
+    "expectedTurnId": "turn_456",
+    "approvalPolicy": "never",
+    "approvalsReviewer": "user"
+} }
+{ "id": 33, "result": { "turnId": "turn_456" } }
+```
+
+`expectedTurnId` is required. At least one of `approvalPolicy` or `approvalsReviewer` must be set.
+If there is no active turn, `expectedTurnId` does not match the active turn, or the active turn kind
+does not support active context overrides, the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 

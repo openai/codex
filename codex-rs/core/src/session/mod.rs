@@ -1310,6 +1310,85 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn override_active_turn_context(
+        &self,
+        expected_turn_id: &str,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    ) -> CodexResult<String> {
+        if expected_turn_id.is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "expected turn id must not be empty".to_string(),
+            ));
+        }
+        if approval_policy.is_none() && approvals_reviewer.is_none() {
+            return Err(CodexErr::InvalidRequest(
+                "at least one of approval_policy or approvals_reviewer must be set".to_string(),
+            ));
+        }
+
+        let turn_contexts = {
+            let active = self.active_turn.lock().await;
+            let active_turn = active.as_ref().ok_or_else(|| {
+                CodexErr::InvalidRequest("no active turn to override".to_string())
+            })?;
+
+            let Some((active_turn_id, active_task)) = active_turn.tasks.first() else {
+                return Err(CodexErr::InvalidRequest(
+                    "no active turn to override".to_string(),
+                ));
+            };
+
+            if expected_turn_id != active_turn_id {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "expected active turn id `{expected_turn_id}` but found `{active_turn_id}`"
+                )));
+            }
+
+            if active_task.kind != crate::state::TaskKind::Regular {
+                return Err(CodexErr::InvalidRequest(
+                    "only regular turns support active context overrides".to_string(),
+                ));
+            }
+
+            active_turn
+                .tasks
+                .values()
+                .map(|task| Arc::clone(&task.turn_context))
+                .collect::<Vec<_>>()
+        };
+
+        let updated_approval_policy = {
+            let updates = SessionSettingsUpdate {
+                approval_policy,
+                approvals_reviewer,
+                ..Default::default()
+            };
+            let mut state = self.state.lock().await;
+            let updated = state
+                .session_configuration
+                .apply(&updates)
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+            let updated_approval_policy = approval_policy.map(|_| updated.approval_policy.clone());
+            state.session_configuration = updated;
+            updated_approval_policy
+        };
+
+        for turn_context in turn_contexts {
+            turn_context.override_active_approval_context(approval_policy, approvals_reviewer);
+        }
+
+        if let Some(approval_policy) = updated_approval_policy {
+            self.services
+                .mcp_connection_manager
+                .read()
+                .await
+                .set_approval_policy(&approval_policy);
+        }
+
+        Ok(expected_turn_id.to_string())
+    }
+
     pub(crate) async fn set_session_startup_prewarm(
         &self,
         startup_prewarm: SessionStartupPrewarmHandle,
@@ -1882,7 +1961,7 @@ impl Session {
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
-        match turn_context.as_ref().approval_policy.value() {
+        match turn_context.as_ref().approval_policy() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
@@ -2412,8 +2491,8 @@ impl Session {
             developer_sections.push(
                 PermissionsInstructions::from_policy(
                     turn_context.sandbox_policy.get(),
-                    turn_context.approval_policy.value(),
-                    turn_context.config.approvals_reviewer,
+                    turn_context.approval_policy(),
+                    turn_context.approvals_reviewer(),
                     self.services.exec_policy.current().as_ref(),
                     &turn_context.cwd,
                     turn_context

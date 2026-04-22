@@ -569,6 +569,23 @@ pub enum Op {
         personality: Option<Personality>,
     },
 
+    /// Override approval settings for the currently active turn and future turns.
+    ///
+    /// This is intentionally narrower than [`Op::OverrideTurnContext`]: it only
+    /// affects approval behavior that can safely change while a turn is running.
+    OverrideActiveTurnContext {
+        /// Active turn id that must match before the override is applied.
+        turn_id: String,
+
+        /// Updated command approval policy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_policy: Option<AskForApproval>,
+
+        /// Updated approval reviewer for approval prompts.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    },
+
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving
@@ -803,6 +820,7 @@ impl Op {
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
+            Self::OverrideActiveTurnContext { .. } => "override_active_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",

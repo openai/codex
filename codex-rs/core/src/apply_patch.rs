@@ -37,7 +37,7 @@ pub(crate) async fn apply_patch(
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
-        turn_context.approval_policy.value(),
+        turn_context.approval_policy(),
         turn_context.sandbox_policy.get(),
         file_system_sandbox_policy,
         &turn_context.cwd,

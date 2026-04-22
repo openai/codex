@@ -225,11 +225,12 @@ impl Session {
             guard.cancel();
             *guard = CancellationToken::new();
         }
+        let approval_policy = turn_context.approval_policy_constrained();
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
             auth_statuses,
-            &turn_context.config.permissions.approval_policy,
+            &approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.sandbox_policy.get().clone(),

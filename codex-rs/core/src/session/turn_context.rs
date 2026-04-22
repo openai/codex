@@ -3,6 +3,7 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use std::sync::RwLock;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(
@@ -34,6 +35,12 @@ pub(crate) struct TurnEnvironment {
     pub(crate) cwd: AbsolutePathBuf,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ActiveTurnContextOverrides {
+    approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -63,6 +70,7 @@ pub(crate) struct TurnContext {
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) active_overrides: RwLock<ActiveTurnContextOverrides>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
@@ -84,6 +92,47 @@ pub(crate) struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
 impl TurnContext {
+    pub(crate) fn approval_policy(&self) -> AskForApproval {
+        self.active_overrides
+            .read()
+            .ok()
+            .and_then(|overrides| overrides.approval_policy)
+            .unwrap_or_else(|| self.approval_policy.value())
+    }
+
+    pub(crate) fn approval_policy_constrained(&self) -> Constrained<AskForApproval> {
+        let mut approval_policy = self.approval_policy.clone();
+        approval_policy
+            .set(self.approval_policy())
+            .unwrap_or_else(|err| {
+                panic!("active approval policy override was validated before being applied: {err}")
+            });
+        approval_policy
+    }
+
+    pub(crate) fn approvals_reviewer(&self) -> ApprovalsReviewer {
+        self.active_overrides
+            .read()
+            .ok()
+            .and_then(|overrides| overrides.approvals_reviewer)
+            .unwrap_or(self.config.approvals_reviewer)
+    }
+
+    pub(crate) fn override_active_approval_context(
+        &self,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    ) {
+        if let Ok(mut overrides) = self.active_overrides.write() {
+            if let Some(approval_policy) = approval_policy {
+                overrides.approval_policy = Some(approval_policy);
+            }
+            if let Some(approvals_reviewer) = approvals_reviewer {
+                overrides.approvals_reviewer = Some(approvals_reviewer);
+            }
+        }
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         PermissionProfile::from_runtime_permissions(
             &self.file_system_sandbox_policy,
@@ -144,6 +193,11 @@ impl TurnContext {
             Some(reasoning_effort),
             /*developer_instructions*/ None,
         );
+        let active_overrides = self
+            .active_overrides
+            .read()
+            .map(|overrides| *overrides)
+            .unwrap_or_default();
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -197,6 +251,7 @@ impl TurnContext {
             collaboration_mode,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
+            active_overrides: RwLock::new(active_overrides),
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
@@ -270,7 +325,7 @@ impl TurnContext {
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
-            approval_policy: self.approval_policy.value(),
+            approval_policy: self.approval_policy(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
@@ -449,6 +504,7 @@ impl Session {
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
+            active_overrides: RwLock::new(ActiveTurnContextOverrides::default()),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,

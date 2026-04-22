@@ -449,7 +449,7 @@ impl ShellHandler {
             || {
                 normalize_and_validate_additional_permissions(
                     additional_permissions_allowed,
-                    turn.approval_policy.value(),
+                    turn.approval_policy(),
                     effective_additional_permissions.sandbox_permissions,
                     effective_additional_permissions.additional_permissions,
                     effective_additional_permissions.permissions_preapproved,
@@ -468,11 +468,11 @@ impl ShellHandler {
             .requests_sandbox_override()
             && !effective_additional_permissions.permissions_preapproved
             && !matches!(
-                turn.approval_policy.value(),
+                turn.approval_policy(),
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
-            let approval_policy = turn.approval_policy.value();
+            let approval_policy = turn.approval_policy();
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
@@ -514,7 +514,7 @@ impl ShellHandler {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &exec_params.command,
-                approval_policy: turn.approval_policy.value(),
+                approval_policy: turn.approval_policy(),
                 sandbox_policy: turn.sandbox_policy.get(),
                 file_system_sandbox_policy: &turn.file_system_sandbox_policy,
                 sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
@@ -559,13 +559,7 @@ impl ShellHandler {
             tool_name,
         };
         let out = orchestrator
-            .run(
-                &mut runtime,
-                &req,
-                &tool_ctx,
-                &turn,
-                turn.approval_policy.value(),
-            )
+            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy())
             .await
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(
