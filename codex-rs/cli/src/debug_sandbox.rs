@@ -152,14 +152,7 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            run_command_under_windows_session(
-                &config,
-                command,
-                cwd,
-                sandbox_policy_cwd,
-                env,
-            )
-            .await;
+            run_command_under_windows_session(&config, command, cwd, sandbox_policy_cwd, env).await;
         }
         #[cfg(not(target_os = "windows"))]
         {

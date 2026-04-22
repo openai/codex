@@ -329,10 +329,10 @@ pub(crate) fn prepare_elevated_spawn_context(
 
 #[cfg(test)]
 mod tests {
+    use super::SandboxPolicy;
     use super::prepare_legacy_spawn_context;
     use super::prepare_spawn_context_common;
     use super::should_apply_network_block;
-    use super::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;
