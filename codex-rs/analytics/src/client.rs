@@ -8,6 +8,9 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexResponsesApiCallFact;
+use crate::facts::CodexResponsesApiCallInput;
+use crate::facts::CodexResponsesApiItemPhase;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
@@ -20,6 +23,7 @@ use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
+use crate::response_items::response_items_metadata;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
@@ -212,6 +216,45 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
         )));
+    }
+
+    pub fn track_responses_api_call(
+        &self,
+        tracking: TrackEventsContext,
+        input: CodexResponsesApiCallInput,
+    ) {
+        let mut items =
+            response_items_metadata(CodexResponsesApiItemPhase::Input, &input.input_items);
+        items.extend(response_items_metadata(
+            CodexResponsesApiItemPhase::Output,
+            &input.output_items,
+        ));
+        let token_usage = input.token_usage;
+        let event = CodexResponsesApiCallFact {
+            thread_id: tracking.thread_id,
+            turn_id: tracking.turn_id,
+            responses_id: input.responses_id,
+            turn_responses_call_index: input.turn_responses_call_index,
+            status: input.status,
+            error: input.error,
+            started_at: input.started_at,
+            completed_at: input.completed_at,
+            duration_ms: input.duration_ms,
+            input_item_count: input.input_items.len(),
+            output_item_count: input.output_items.len(),
+            input_tokens: token_usage.as_ref().map(|usage| usage.input_tokens),
+            cached_input_tokens: token_usage.as_ref().map(|usage| usage.cached_input_tokens),
+            output_tokens: token_usage.as_ref().map(|usage| usage.output_tokens),
+            reasoning_output_tokens: token_usage
+                .as_ref()
+                .map(|usage| usage.reasoning_output_tokens),
+            total_tokens: token_usage.as_ref().map(|usage| usage.total_tokens),
+            items,
+        };
+
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ResponsesApiCall(Box::new(event)),
+        ));
     }
 
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
