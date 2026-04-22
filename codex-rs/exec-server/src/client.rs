@@ -209,25 +209,6 @@ impl LazyRemoteExecServerClient {
     }
 }
 
-impl HttpClient for ExecServerClient {
-    fn http_request(
-        &self,
-        params: crate::HttpRequestParams,
-    ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
-        async move { ExecServerClient::http_request(self, params).await }.boxed()
-    }
-
-    fn http_request_stream(
-        &self,
-        params: crate::HttpRequestParams,
-    ) -> BoxFuture<
-        '_,
-        Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
-    > {
-        async move { ExecServerClient::http_request_stream(self, params).await }.boxed()
-    }
-}
-
 impl HttpClient for LazyRemoteExecServerClient {
     fn http_request(
         &self,
