@@ -1101,6 +1101,13 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
         ));
     }
 
+    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+        return Err(
+            "windows elevated sandbox cannot enforce workspace-write filesystem boundaries directly; refusing to widen sandbox semantics"
+                .to_string(),
+        );
+    }
+
     if !file_system_sandbox_policy
         .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
         .is_empty()
