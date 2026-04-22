@@ -6510,7 +6510,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
             sess.conversation_id,
             "Keep improving the benchmark",
             codex_state::ThreadGoalStatus::Active,
-            None,
+            /*token_budget*/ None,
         )
         .await?;
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
