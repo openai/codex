@@ -743,6 +743,22 @@ impl JsReplManager {
     fn summarize_tool_call_response(response: &ResponseInputItem) -> JsReplToolCallResponseSummary {
         match response {
             ResponseInputItem::Message { content, .. } => Self::summarize_message_payload(content),
+            ResponseInputItem::FunctionCall { arguments, .. } => {
+                let payload_text_preview = (!arguments.is_empty()).then(|| {
+                    truncate_text(
+                        arguments,
+                        TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                    )
+                });
+                JsReplToolCallResponseSummary {
+                    response_type: Some("function_call".to_string()),
+                    payload_kind: Some(JsReplToolCallPayloadKind::FunctionText),
+                    payload_text_preview,
+                    payload_text_length: Some(arguments.len()),
+                    payload_item_count: Some(1),
+                    ..Default::default()
+                }
+            }
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let payload_kind = if output.content_items().is_some() {
                     JsReplToolCallPayloadKind::FunctionContentItems

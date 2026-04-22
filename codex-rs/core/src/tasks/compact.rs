@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TurnTaskInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
-use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy, Default)]
@@ -23,7 +23,7 @@ impl SessionTask for CompactTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
@@ -40,7 +40,7 @@ impl SessionTask for CompactTask {
                 /*inc*/ 1,
                 &[("type", "local")],
             );
-            crate::compact::run_compact_task(session.clone(), ctx, input).await
+            crate::compact::run_compact_task(session.clone(), ctx, input.user_input).await
         };
         None
     }

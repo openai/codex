@@ -14,6 +14,7 @@ use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::user_input::UserInput;
 use codex_utils_template::Template;
 use tokio_util::sync::CancellationToken;
 
@@ -25,11 +26,11 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
-use codex_protocol::user_input::UserInput;
 use std::sync::LazyLock;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TurnTaskInput;
 
 static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     let normalized =
@@ -60,7 +61,7 @@ impl SessionTask for ReviewTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         session.session.services.session_telemetry.counter(
@@ -73,7 +74,7 @@ impl SessionTask for ReviewTask {
         let output = match start_review_conversation(
             session.clone(),
             ctx.clone(),
-            input,
+            input.user_input,
             cancellation_token.clone(),
         )
         .await

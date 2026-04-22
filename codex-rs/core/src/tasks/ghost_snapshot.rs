@@ -1,3 +1,4 @@
+use super::TurnTaskInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -9,7 +10,6 @@ use codex_git_utils::create_ghost_commit_with_report;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
-use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ impl SessionTask for GhostSnapshotTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         tokio::task::spawn(async move {

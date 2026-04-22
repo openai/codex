@@ -8,12 +8,12 @@ use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::user_input::UserInput;
 use tracing::Instrument;
 use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TurnTaskInput;
 
 #[derive(Default)]
 pub(crate) struct RegularTask;
@@ -37,7 +37,7 @@ impl SessionTask for RegularTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
@@ -77,7 +77,7 @@ impl SessionTask for RegularTask {
             if !sess.has_pending_input().await {
                 return last_agent_message;
             }
-            next_input = Vec::new();
+            next_input = TurnTaskInput::default();
         }
     }
 }

@@ -493,6 +493,18 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                 content_items_to_code_mode_result(&items)
             }
         },
+        ResponseInputItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            call_id,
+        } => serde_json::json!({
+            "type": "function_call",
+            "name": name,
+            "namespace": namespace,
+            "arguments": arguments,
+            "call_id": call_id,
+        }),
         ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
         ResponseInputItem::McpToolCallOutput { output, .. } => {
             output.code_mode_result(&ToolPayload::Mcp {

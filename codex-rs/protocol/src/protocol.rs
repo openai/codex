@@ -443,12 +443,34 @@ pub enum Op {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
+    /// User input plus prefetched tool-call/result pairs to place immediately
+    /// before the user-visible input in the model-visible turn history.
+    UserInputWithPrefetchedToolResults {
+        /// User input items, see `InputItem`.
+        items: Vec<UserInput>,
+        /// Synthetic Responses API function_call/function_call_output items.
+        prefetched_tool_results: Vec<ResponseInputItem>,
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
+    },
+
     /// Similar to [`Op::UserInput`], but first applies persistent turn-context
     /// overrides in the same queued operation. This preserves submission order
     /// and prevents the input from starting if the overrides are rejected.
     UserInputWithTurnContext {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Synthetic Responses API function_call/function_call_output items to
+        /// place before the user-visible input in the model-visible turn history.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        prefetched_tool_results: Vec<ResponseInputItem>,
         /// Optional turn-scoped environment selections.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -878,6 +900,9 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithPrefetchedToolResults { .. } => {
+                "user_input_with_prefetched_tool_results"
+            }
             Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",

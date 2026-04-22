@@ -2695,6 +2695,27 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
     }
 
     #[test]
+    fn experimental_type_fields_ts_filter_removes_turn_start_params_fields() -> Result<()> {
+        let registered_fields = experimental_fields();
+        assert!(registered_fields.iter().any(|field| {
+            field.type_name == "TurnStartParams" && field.field_name == "responsesapiClientMetadata"
+        }));
+        let turn_start_ts = v2::TurnStartParams::export_to_string()?;
+        assert!(type_body_brace_span(&turn_start_ts).is_some());
+        let mut tree = BTreeMap::from([(PathBuf::from("v2/TurnStartParams.ts"), turn_start_ts)]);
+        filter_experimental_ts_tree(&mut tree)?;
+
+        let filtered = tree
+            .get(Path::new("v2/TurnStartParams.ts"))
+            .context("missing filtered TurnStartParams.ts")?;
+        assert_eq!(filtered.contains("responsesapiClientMetadata"), false);
+        assert_eq!(filtered.contains("prefetchedToolResults"), false);
+        assert_eq!(filtered.contains("environments"), false);
+        assert_eq!(filtered.contains("cwd"), true);
+        Ok(())
+    }
+
+    #[test]
     fn stable_schema_filter_removes_mock_experimental_method() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;

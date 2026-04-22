@@ -535,6 +535,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
                     responsesapi_client_metadata: None,
+                    prefetched_tool_results: None,
                     environments: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),

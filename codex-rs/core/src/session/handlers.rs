@@ -30,6 +30,7 @@ use crate::review_prompts::resolve_review_request;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::read_session_meta_line;
 use crate::tasks::CompactTask;
+use crate::tasks::TurnTaskInput;
 use crate::tasks::UndoTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
@@ -129,119 +130,140 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, environments) = match op {
-        Op::UserTurn {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = collaboration_mode.or_else(|| {
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: model.clone(),
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    },
-                })
-            });
-            (
+    let (items, prefetched_tool_results, updates, responsesapi_client_metadata, environments) =
+        match op {
+            Op::UserTurn {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
                 items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer,
-                    sandbox_policy: Some(sandbox_policy),
-                    permission_profile: None,
-                    windows_sandbox_level: None,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                None,
+                collaboration_mode,
+                personality,
                 environments,
-            )
-        }
-        Op::UserInputWithTurnContext {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
+            } => {
+                let collaboration_mode = collaboration_mode.or_else(|| {
+                    Some(CollaborationMode {
+                        mode: ModeKind::Default,
+                        settings: Settings {
+                            model: model.clone(),
+                            reasoning_effort: effort,
+                            developer_instructions: None,
+                        },
+                    })
+                });
+                (
+                    items,
+                    Vec::new(),
+                    SessionSettingsUpdate {
+                        cwd: Some(cwd),
+                        approval_policy: Some(approval_policy),
+                        approvals_reviewer,
+                        sandbox_policy: Some(sandbox_policy),
+                        permission_profile: None,
+                        windows_sandbox_level: None,
+                        collaboration_mode,
+                        reasoning_summary: summary,
+                        service_tier,
+                        final_output_json_schema: Some(final_output_json_schema),
+                        personality,
+                        app_server_client_name: None,
+                        app_server_client_version: None,
+                    },
+                    None,
+                    environments,
                 )
-            };
-            (
+            }
+            Op::UserInputWithTurnContext {
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
                 items,
+                prefetched_tool_results,
+                responsesapi_client_metadata,
+                collaboration_mode,
+                personality,
+                environments,
+            } => {
+                let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+                    Some(collab_mode)
+                } else {
+                    let state = sess.state.lock().await;
+                    Some(
+                        state
+                            .session_configuration
+                            .collaboration_mode
+                            .with_updates(model, effort, /*developer_instructions*/ None),
+                    )
+                };
+                (
+                    items,
+                    prefetched_tool_results,
+                    SessionSettingsUpdate {
+                        cwd,
+                        approval_policy,
+                        approvals_reviewer,
+                        sandbox_policy,
+                        permission_profile,
+                        windows_sandbox_level,
+                        collaboration_mode,
+                        reasoning_summary: summary,
+                        service_tier,
+                        final_output_json_schema: Some(final_output_json_schema),
+                        personality,
+                        app_server_client_name: None,
+                        app_server_client_version: None,
+                    },
+                    responsesapi_client_metadata,
+                    environments,
+                )
+            }
+            Op::UserInput {
+                items,
+                environments,
+                final_output_json_schema,
+                responsesapi_client_metadata,
+            } => (
+                items,
+                Vec::new(),
                 SessionSettingsUpdate {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
+                    ..Default::default()
                 },
                 responsesapi_client_metadata,
                 environments,
-            )
-        }
-        Op::UserInput {
-            items,
-            environments,
-            final_output_json_schema,
-            responsesapi_client_metadata,
-        } => (
-            items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
-                ..Default::default()
-            },
-            responsesapi_client_metadata,
-            environments,
-        ),
-        _ => unreachable!(),
-    };
+            ),
+            Op::UserInputWithPrefetchedToolResults {
+                items,
+                prefetched_tool_results,
+                environments,
+                final_output_json_schema,
+                responsesapi_client_metadata,
+            } => (
+                items,
+                prefetched_tool_results,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    ..Default::default()
+                },
+                responsesapi_client_metadata,
+                environments,
+            ),
+            _ => unreachable!(),
+        };
 
     let Ok(current_context) = sess
         .new_turn_with_sub_id(sub_id.clone(), updates, environments)
@@ -252,14 +274,17 @@ pub(super) async fn user_input_or_turn_inner(
     };
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
-    let accepted_items = match sess
-        .steer_input(
+    let steer_result = if prefetched_tool_results.is_empty() {
+        sess.steer_input(
             items.clone(),
             /*expected_turn_id*/ None,
             responsesapi_client_metadata.clone(),
         )
         .await
-    {
+    } else {
+        Err(SteerInputError::NoActiveTurn(items.clone()))
+    };
+    let accepted_items = match steer_result {
         Ok(_) => {
             current_context.session_telemetry.user_prompt(&items);
             Some(items)
@@ -276,7 +301,10 @@ pub(super) async fn user_input_or_turn_inner(
             let accepted_items = items.clone();
             sess.spawn_task(
                 Arc::clone(&current_context),
-                items,
+                TurnTaskInput {
+                    user_input: items,
+                    prefetched_tool_results,
+                },
                 crate::tasks::RegularTask::new(),
             )
             .await;
@@ -1153,6 +1181,7 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. }
+                | Op::UserInputWithPrefetchedToolResults { .. }
                 | Op::UserInputWithTurnContext { .. }
                 | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;

@@ -2839,7 +2839,7 @@ impl Session {
             .run(
                 Arc::new(SessionTaskContext::new(self.clone())),
                 turn_context.clone(),
-                Vec::new(),
+                crate::tasks::TurnTaskInput::default(),
                 cancellation_token,
             )
             .await;
