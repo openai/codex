@@ -144,6 +144,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if requirements_toml.guardian_policy_config.is_some() {
+        requirement_lines.push(requirement_line(
+            "guardian_policy_config",
+            "configured".to_string(),
+            requirements.guardian_policy_config_source.as_ref(),
+        ));
+    }
+
     if let Some(feature_requirements) = requirements.feature_requirements.as_ref() {
         let value = join_or_empty(
             feature_requirements
@@ -633,6 +641,7 @@ mod tests {
                     file: requirements_file.clone(),
                 },
             )),
+            guardian_policy_config_source: Some(RequirementSource::CloudRequirements),
             ..ConfigRequirements::default()
         };
 
@@ -640,8 +649,9 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            guardian_policy_config: None,
+            guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -680,7 +690,7 @@ mod tests {
             rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
         );
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(
             rendered.contains(
@@ -695,6 +705,9 @@ mod tests {
             rendered.contains(
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
+        );
+        assert!(
+            rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
         );
         assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
@@ -732,7 +745,7 @@ mod tests {
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(!rendered.contains("Requirements:\n  <none>"));
     }
@@ -843,6 +856,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,

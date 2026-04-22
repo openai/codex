@@ -57,6 +57,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -130,6 +131,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("stream failed");
@@ -181,6 +183,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -255,6 +258,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("stream failed");
@@ -290,6 +294,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -369,6 +374,7 @@ async fn responses_respects_model_info_overrides_from_config() {
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("stream failed");

@@ -139,7 +139,6 @@ impl OnboardingScreen {
                 error: None,
             }))
         }
-        // TODO: add git warning.
         Self {
             request_frame: tui.frame_requester(),
             steps,

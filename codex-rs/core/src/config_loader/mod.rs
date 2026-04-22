@@ -9,6 +9,8 @@ use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::ThreadConfigContext;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_exec_server::ExecutorFileSystem;
@@ -52,6 +54,7 @@ pub use codex_config::NetworkDomainPermissionsToml;
 pub use codex_config::NetworkRequirementsToml;
 pub use codex_config::NetworkUnixSocketPermissionToml;
 pub use codex_config::NetworkUnixSocketPermissionsToml;
+pub use codex_config::RemoteSandboxConfigToml;
 pub use codex_config::RequirementSource;
 pub use codex_config::ResidencyRequirement;
 pub use codex_config::SandboxModeRequirement;
@@ -120,6 +123,7 @@ pub(crate) async fn first_layer_config_error_from_entries(
 /// associated with it such that `cwd` should be `Some(...)`. Only for
 /// thread-agnostic config loading (e.g., for the app server's `/config`
 /// endpoint) should `cwd` be `None`.
+#[allow(clippy::too_many_arguments)]
 pub async fn load_config_layers_state(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
@@ -127,6 +131,8 @@ pub async fn load_config_layers_state(
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: &dyn ThreadConfigLoader,
+    host_name: Option<&str>,
 ) -> io::Result<ConfigLayerStack> {
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
@@ -134,8 +140,12 @@ pub async fn load_config_layers_state(
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
-        config_requirements_toml
-            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+        merge_requirements_with_remote_sandbox_config(
+            &mut config_requirements_toml,
+            RequirementSource::CloudRequirements,
+            requirements,
+            host_name,
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -144,12 +154,19 @@ pub async fn load_config_layers_state(
         overrides
             .macos_managed_config_requirements_base64
             .as_deref(),
+        host_name,
     )
     .await?;
 
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;
-    load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
+    load_requirements_toml(
+        fs,
+        &mut config_requirements_toml,
+        &requirements_toml_file,
+        host_name,
+    )
+    .await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -158,8 +175,18 @@ pub async fn load_config_layers_state(
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
+        host_name,
     )
     .await?;
+
+    let thread_config_context = ThreadConfigContext {
+        thread_id: None,
+        cwd: cwd.clone(),
+    };
+    let thread_config_layers = thread_config_loader
+        .load_config_layers(thread_config_context)
+        .await
+        .map_err(io::Error::other)?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
@@ -283,6 +310,10 @@ pub async fn load_config_layers_state(
         ));
     }
 
+    for thread_config_layer in thread_config_layers {
+        insert_layer_by_precedence(&mut layers, thread_config_layer);
+    }
+
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // config layer on top of everything else. For fields in
     // `managed_config.toml` that do not have an equivalent in
@@ -330,6 +361,16 @@ pub async fn load_config_layers_state(
         config_requirements_toml.into_toml(),
     )?
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+}
+
+fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
+    match layers
+        .iter()
+        .position(|existing| existing.name.precedence() > layer.name.precedence())
+    {
+        Some(index) => layers.insert(index, layer),
+        None => layers.push(layer),
+    }
 }
 
 /// Attempts to load a config.toml file from `config_toml`.
@@ -387,6 +428,7 @@ async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
+    host_name: Option<&str>,
 ) -> io::Result<()> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
@@ -413,11 +455,13 @@ async fn load_requirements_toml(
                         ),
                     )
                 })?;
-            config_requirements_toml.merge_unset_fields(
+            merge_requirements_with_remote_sandbox_config(
+                config_requirements_toml,
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_toml_file.clone(),
                 },
                 requirements_config,
+                host_name,
             );
         }
         Err(e) => {
@@ -532,6 +576,7 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
 async fn load_requirements_from_legacy_scheme(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     loaded_config_layers: LoadedConfigLayers,
+    host_name: Option<&str>,
 ) -> io::Result<()> {
     // In this implementation, earlier layers cannot be overwritten by later
     // layers, so list managed_config_from_mdm first because it has the highest
@@ -564,11 +609,25 @@ async fn load_requirements_from_legacy_scheme(
                 )
             })?;
 
-        let new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
-        config_requirements_toml.merge_unset_fields(source, new_requirements_toml);
+        merge_requirements_with_remote_sandbox_config(
+            config_requirements_toml,
+            source,
+            ConfigRequirementsToml::from(legacy_config),
+            host_name,
+        );
     }
 
     Ok(())
+}
+
+pub(super) fn merge_requirements_with_remote_sandbox_config(
+    target: &mut ConfigRequirementsWithSources,
+    source: RequirementSource,
+    mut requirements: ConfigRequirementsToml,
+    host_name: Option<&str>,
+) {
+    requirements.apply_remote_sandbox_config(host_name);
+    target.merge_unset_fields(source, requirements);
 }
 
 struct ProjectTrustContext {
@@ -966,8 +1025,8 @@ async fn load_project_layers(
 ///
 /// If present, re-interpret `managed_config.toml` as a `requirements.toml`
 /// where each specified field is treated as a constraint. Most fields allow
-/// only the specified value. `approvals_reviewer = "guardian_subagent"` also
-/// allows `user` so people can opt out of the guardian reviewer.
+/// only the specified value. `approvals_reviewer = "auto_review"` also allows
+/// `user` so people can opt out of the auto-reviewer.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
@@ -1086,7 +1145,7 @@ foo = "xyzzy"
             requirements.allowed_approvals_reviewers,
             Some(vec![
                 ApprovalsReviewer::GuardianSubagent,
-                ApprovalsReviewer::User
+                ApprovalsReviewer::User,
             ])
         );
     }

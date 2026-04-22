@@ -35,6 +35,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -94,6 +96,7 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
@@ -138,6 +141,7 @@ pub(crate) struct AppServerSession {
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
     pub(crate) forked_from_id: Option<ThreadId>,
+    pub(crate) fork_parent_title: Option<String>,
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
     pub(crate) model_provider_id: String,
@@ -369,7 +373,12 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_resume_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
@@ -391,13 +400,43 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(response, &config).await
+        let fork_parent_title = self
+            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+            .await;
+        let mut started = started_thread_from_fork_response(response, &config).await?;
+        started.session.fork_parent_title = fork_parent_title;
+        Ok(started)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
             AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
             AppServerClient::Remote(_) => ThreadParamsMode::Remote,
+        }
+    }
+
+    async fn fork_parent_title_from_app_server(
+        &mut self,
+        forked_from_id: Option<&str>,
+    ) -> Option<String> {
+        let forked_from_id = forked_from_id?;
+        let forked_from_id = match ThreadId::from_string(forked_from_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::warn!("Failed to parse fork parent thread id from app server: {err}");
+                return None;
+            }
+        };
+
+        match self
+            .thread_read(forked_from_id, /*include_turns*/ false)
+            .await
+        {
+            Ok(thread) => thread.name,
+            Err(err) => {
+                tracing::warn!("Failed to read fork parent metadata from app server: {err}");
+                None
+            }
         }
     }
 
@@ -496,10 +535,12 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
                     responsesapi_client_metadata: None,
+                    environments: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy: Some(sandbox_policy.into()),
+                    permission_profile: None,
                     model: Some(model),
                     service_tier,
                     effort,
@@ -670,6 +711,27 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_approve_guardian_denied_action(
+        &mut self,
+        thread_id: ThreadId,
+        event: &GuardianAssessmentEvent,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadApproveGuardianDeniedActionResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadApproveGuardianDeniedAction {
+                request_id,
+                params: ThreadApproveGuardianDeniedActionParams {
+                    thread_id: thread_id.to_string(),
+                    event: serde_json::to_value(event)
+                        .wrap_err("failed to serialize Guardian denial event")?,
+                },
+            })
+            .await
+            .wrap_err("thread/approveGuardianDeniedAction failed in TUI")?;
         Ok(())
     }
 
@@ -880,12 +942,12 @@ pub(crate) fn status_account_display_from_auth_mode(
 ) -> Option<StatusAccountDisplay> {
     match auth_mode {
         Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
-        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens) => {
-            Some(StatusAccountDisplay::ChatGpt {
-                email: None,
-                plan: plan_type.map(plan_type_display_name),
-            })
-        }
+        Some(AuthMode::Chatgpt)
+        | Some(AuthMode::ChatgptAuthTokens)
+        | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {
+            email: None,
+            plan: plan_type.map(plan_type_display_name),
+        }),
         None => None,
     }
 }
@@ -1204,6 +1266,7 @@ async fn thread_session_state_from_thread_response(
     Ok(ThreadSessionState {
         thread_id,
         forked_from_id,
+        fork_parent_title: None,
         thread_name,
         model,
         model_provider_id,
@@ -1466,6 +1529,13 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
+            permission_profile: Some(
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+                    &test_path_buf("/tmp/project"),
+                )
+                .into(),
+            ),
             reasoning_effort: None,
         };
 

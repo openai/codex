@@ -15,21 +15,17 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
@@ -70,7 +66,6 @@ const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
 const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
     "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
-const WEBSOCKET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct RealtimeCallRequestCapture {
@@ -147,7 +142,7 @@ async fn wait_for_matching_websocket_request<F>(
 where
     F: Fn(&core_test_support::responses::WebSocketRequest) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + WEBSOCKET_REQUEST_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(request) = server
             .connections()
@@ -176,6 +171,11 @@ fn run_realtime_conversation_test_in_subprocess(
         .arg("--exact")
         .arg(test_name)
         .env(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR, "1");
+    // The child talks to a loopback websocket server; parent proxy settings can
+    // route that connection away from the test server in Bazel environments.
+    for &key in codex_network_proxy::PROXY_ENV_KEYS {
+        command.env_remove(key);
+    }
     match openai_api_key {
         Some(openai_api_key) => {
             command.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
@@ -202,18 +202,16 @@ async fn seed_recent_thread(
     let db = test.codex.state_db().context("state db enabled")?;
     let thread_id = ThreadId::new();
     let updated_at = Utc::now();
-    let rollout_dir = test
+    let rollout_path = test
         .codex_home_path()
-        .join("sessions")
-        .join(updated_at.format("%Y/%m/%d").to_string());
-    fs::create_dir_all(&rollout_dir)?;
-    let rollout_path = rollout_dir.join(format!(
-        "rollout-{}-{thread_id}.jsonl",
-        updated_at.format("%Y-%m-%dT%H-%M-%S")
-    ));
+        .join(format!("rollout-{thread_id}.jsonl"));
+    // This helper seeds SQLite metadata directly. Local listing drops stale metadata rows whose
+    // rollout path no longer exists, so create the placeholder path that the test metadata points
+    // at without exercising rollout writing in this realtime-context test.
+    std::fs::write(&rollout_path, "")?;
     let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
-        rollout_path.clone(),
+        rollout_path,
         updated_at,
         SessionSource::Cli,
     );
@@ -223,45 +221,6 @@ async fn seed_recent_thread(
     let mut metadata = metadata_builder.build("test-provider");
     metadata.title = title.to_string();
     metadata.first_user_message = Some(first_user_message.to_string());
-
-    let timestamp = updated_at.to_rfc3339();
-    let session_meta = RolloutLine {
-        timestamp: timestamp.clone(),
-        item: RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                id: thread_id,
-                timestamp: timestamp.clone(),
-                cwd: metadata.cwd.clone(),
-                originator: "cli".to_string(),
-                cli_version: "0.0.0".to_string(),
-                source: SessionSource::Cli,
-                model_provider: Some("test-provider".to_string()),
-                ..Default::default()
-            },
-            git: Some(GitInfo {
-                commit_hash: None,
-                branch: metadata.git_branch.clone(),
-                repository_url: None,
-            }),
-        }),
-    };
-    let user_message = RolloutLine {
-        timestamp,
-        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: first_user_message.to_string(),
-            images: None,
-            local_images: Vec::new(),
-            text_elements: Vec::new(),
-        })),
-    };
-    fs::write(
-        &rollout_path,
-        format!(
-            "{}\n{}\n",
-            serde_json::to_string(&session_meta)?,
-            serde_json::to_string(&user_message)?
-        ),
-    )?;
     db.upsert_thread(&metadata).await?;
 
     Ok(())
@@ -1937,6 +1896,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     let prefixed_user_text = format!("[USER] {user_text}");
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.to_string(),
                 text_elements: Vec::new(),
@@ -2066,6 +2026,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     );
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.clone(),
                 text_elements: Vec::new(),
@@ -2115,6 +2076,92 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     insta::assert_snapshot!(
         "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
         snapshot
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_response() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_silent", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_silent",
+                    "type": "function_call",
+                    "name": "remain_silent",
+                    "call_id": "call_silent",
+                    "arguments": "{}"
+                }
+            }),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V2;
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::NoopRequested(RealtimeNoopRequested { call_id, .. }),
+        }) if call_id == "call_silent" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let function_output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
+    assert_eq!(
+        function_output.body_json(),
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call_silent",
+                "output": ""
+            }
+        })
+    );
+
+    let realtime_response_create = timeout(Duration::from_millis(200), async {
+        wait_for_matching_websocket_request(
+            &realtime_server,
+            "unexpected realtime response request for noop tool call",
+            |request| request.body_json()["type"].as_str() == Some("response.create"),
+        )
+        .await
+    })
+    .await;
+    assert!(
+        realtime_response_create.is_err(),
+        "noop tool calls should not request a realtime response"
     );
 
     realtime_server.shutdown().await;
@@ -2569,7 +2616,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_keeps_transcript_history_after_each_handoff() -> Result<()> {
+async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2681,9 +2728,9 @@ async fn inbound_handoff_request_keeps_transcript_history_after_each_handoff() -
 
     let second_user_texts = requests[1].message_input_texts("user");
     assert!(second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: second question</transcript_delta>\n</realtime_delegation>"));
     assert!(!second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first questionsecond question</transcript_delta>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -3138,6 +3185,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".to_string(),
                 text_elements: Vec::new(),

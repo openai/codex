@@ -7,6 +7,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use codex_keyring_store::tests::MockKeyringStore;
+use codex_protocol::account::PlanType as AccountPlanType;
 use keyring::Error as KeyringError;
 
 #[tokio::test]
@@ -55,27 +56,29 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn file_storage_persists_agent_identity() -> anyhow::Result<()> {
+async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     let auth_dot_json = AuthDotJson {
-        auth_mode: Some(AuthMode::Chatgpt),
+        auth_mode: Some(AuthMode::AgentIdentity),
         openai_api_key: None,
         tokens: None,
-        last_refresh: Some(Utc::now()),
+        last_refresh: None,
         agent_identity: Some(AgentIdentityAuthRecord {
-            workspace_id: "account-123".to_string(),
-            chatgpt_user_id: Some("user-123".to_string()),
-            agent_runtime_id: "agent_123".to_string(),
-            agent_private_key: "pkcs8-base64".to_string(),
-            registered_at: "2026-04-13T12:00:00Z".to_string(),
-            background_task_id: None,
+            agent_runtime_id: "agent-runtime-id".to_string(),
+            agent_private_key: "private-key".to_string(),
+            account_id: "account-id".to_string(),
+            chatgpt_user_id: "user-id".to_string(),
+            email: "user@example.com".to_string(),
+            plan_type: AccountPlanType::Pro,
+            chatgpt_account_is_fedramp: false,
         }),
     };
 
     storage.save(&auth_dot_json)?;
 
-    assert_eq!(storage.load()?, Some(auth_dot_json));
+    let loaded = storage.load()?;
+    assert_eq!(Some(auth_dot_json), loaded);
     Ok(())
 }
 

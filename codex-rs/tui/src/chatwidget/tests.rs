@@ -51,6 +51,7 @@ pub(super) use codex_app_server_protocol::GuardianApprovalReviewStatus;
 pub(super) use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 pub(super) use codex_app_server_protocol::GuardianRiskLevel as AppServerGuardianRiskLevel;
 pub(super) use codex_app_server_protocol::GuardianUserAuthorization as AppServerGuardianUserAuthorization;
+pub(super) use codex_app_server_protocol::GuardianWarningNotification;
 pub(super) use codex_app_server_protocol::HookCompletedNotification as AppServerHookCompletedNotification;
 pub(super) use codex_app_server_protocol::HookEventName as AppServerHookEventName;
 pub(super) use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
@@ -276,6 +277,7 @@ mod side;
 mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
+mod status_surface_previews;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;

@@ -12,9 +12,11 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
@@ -28,6 +30,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -63,6 +66,74 @@ use tokio_util::sync::CancellationToken;
 fn fixed_guardian_parent_session_id() -> ThreadId {
     ThreadId::from_string("11111111-1111-4111-8111-111111111111")
         .expect("fixed parent session id should be a valid UUID")
+}
+
+#[test]
+fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 3,
+            total_denials: 3,
+        }
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+}
+
+#[test]
+fn guardian_rejection_circuit_breaker_resets_consecutive_denials_on_non_denial() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    circuit_breaker.record_non_denial("turn-1");
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 3,
+            total_denials: 4,
+        }
+    );
+}
+
+#[test]
+fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    for _ in 0..9 {
+        assert_eq!(
+            circuit_breaker.record_denial("turn-1"),
+            GuardianRejectionCircuitBreakerAction::Continue
+        );
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 1,
+            total_denials: 10,
+        }
+    );
 }
 
 async fn guardian_test_session_and_turn(
@@ -572,11 +643,12 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
 fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     let content = "prefix ".repeat(200) + &" suffix".repeat(200);
 
-    let truncated = guardian_truncate_text(&content, /*token_cap*/ 20);
+    let (truncated, was_truncated) = guardian_truncate_text(&content, /*token_cap*/ 20);
 
     assert!(truncated.starts_with("prefix"));
     assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
     assert!(truncated.ends_with("suffix"));
+    assert!(was_truncated);
 }
 
 #[test]
@@ -591,9 +663,27 @@ fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::
 
     let rendered = format_guardian_action_pretty(&action)?;
 
-    assert!(rendered.contains("\"tool\": \"apply_patch\""));
-    assert!(rendered.contains("<truncated omitted_approx_tokens="));
-    assert!(rendered.len() < patch.len());
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(rendered.text.contains("<truncated omitted_approx_tokens="));
+    assert!(rendered.text.len() < patch.len());
+    assert!(rendered.truncated);
+    Ok(())
+}
+
+#[test]
+fn format_guardian_action_pretty_reports_no_truncation_for_small_payload() -> serde_json::Result<()>
+{
+    let action = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+        files: Vec::new(),
+        patch: "line\n".to_string(),
+    };
+
+    let rendered = format_guardian_action_pretty(&action)?;
+
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(!rendered.truncated);
     Ok(())
 }
 
@@ -639,6 +729,50 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 }
 
 #[test]
+fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_json::Result<()> {
+    let cwd = test_path_buf("/repo").abs();
+    let action = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+        trigger: Some(GuardianNetworkAccessTrigger {
+            call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            command: vec!["curl".to_string(), "https://example.com".to_string()],
+            cwd: cwd.clone(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Fetch the release metadata.".to_string()),
+            tty: None,
+        }),
+    };
+
+    assert_eq!(
+        guardian_approval_request_to_json(&action)?,
+        serde_json::json!({
+            "tool": "network_access",
+            "target": "https://example.com:443",
+            "host": "example.com",
+            "protocol": "https",
+            "port": 443,
+            "trigger": {
+                "callId": "call-1",
+                "toolName": "shell",
+                "command": ["curl", "https://example.com"],
+                "cwd": cwd.to_string_lossy().to_string(),
+                "sandboxPermissions": "use_default",
+                "justification": "Fetch the release metadata.",
+            },
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
 fn guardian_assessment_action_redacts_apply_patch_patch_text() {
     let cwd = test_path_buf("/tmp").abs();
     let file = test_path_buf("/tmp/guardian.txt").abs();
@@ -669,6 +803,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
+        trigger: None,
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -686,6 +821,30 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
     );
+}
+
+#[test]
+fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+        trigger: Some(GuardianNetworkAccessTrigger {
+            call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            command: vec!["curl".to_string(), "https://example.com".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+            tty: None,
+        }),
+    };
+
+    assert_eq!(guardian_request_target_item_id(&network_access), None);
 }
 
 #[tokio::test]
@@ -706,6 +865,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
                 .to_string(),
         },
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::MainTurn,
         cancel_token,
     )
     .await;
@@ -717,7 +877,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     while let Ok(event) = rx.try_recv() {
         match event.msg {
             EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             _ => {}
         }
     }
@@ -741,7 +901,7 @@ fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
 }
 
 #[tokio::test]
-async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
+async fn routes_approval_to_guardian_requires_guardian_reviewer() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
@@ -751,6 +911,25 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
 
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     turn.config = Arc::new(config);
+
+    assert!(routes_approval_to_guardian(&turn));
+}
+
+#[tokio::test]
+async fn routes_approval_to_guardian_allows_granular_review_policy() {
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    turn.config = Arc::new(config);
+    turn.approval_policy
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }))
+        .expect("test setup should allow updating approval policy");
 
     assert!(routes_approval_to_guardian(&turn));
 }
@@ -851,9 +1030,62 @@ fn parse_guardian_assessment_extracts_embedded_json() {
     ))
     .expect("guardian assessment");
 
-    assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
-    assert_eq!(parsed.user_authorization, GuardianUserAuthorization::Low);
-    assert_eq!(parsed.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Medium,
+            user_authorization: GuardianUserAuthorization::Low,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "ok".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
+    let parsed =
+        parse_guardian_assessment(Some(r#"{"outcome":"allow"}"#)).expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Guardian returned a low-risk allow decision.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
+    let schema = guardian_output_schema();
+
+    assert_eq!(
+        schema,
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -921,12 +1153,70 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         /*external_cancel*/ None,
     )
     .await;
-    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+    let (GuardianReviewOutcome::Completed(assessment), metadata) = outcome else {
         panic!("expected guardian assessment");
     };
+    let guardian_thread_id = metadata
+        .guardian_thread_id
+        .as_deref()
+        .expect("guardian thread id");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-
+    assert_ne!(guardian_thread_id, session.conversation_id.to_string());
+    ThreadId::from_string(guardian_thread_id).expect("guardian thread id should be a valid UUID");
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
     let request = request_log.single_request();
+    let request_body = request.body_json();
+    assert_eq!(
+        request_body.pointer("/text/format/strict"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        request_body.pointer("/text/format/schema"),
+        Some(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        }))
+    );
+    let request_model = request_body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model");
+    let request_reasoning_effort = request_body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(metadata.guardian_model.as_deref(), Some(request_model));
+    assert_eq!(
+        metadata.guardian_reasoning_effort.as_deref(),
+        request_reasoning_effort
+    );
+    assert_eq!(metadata.had_prior_review_context, Some(false));
+    assert!(
+        metadata.time_to_first_token_ms.is_some(),
+        "guardian review metadata should capture TTFT when the nested turn completes"
+    );
+
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1130,18 +1420,63 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+    let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+    let (GuardianReviewOutcome::Completed(second_assessment), second_metadata) = second_outcome
+    else {
         panic!("expected second guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(third_assessment)) = third_outcome else {
+    let (GuardianReviewOutcome::Completed(third_assessment), third_metadata) = third_outcome else {
         panic!("expected third guardian assessment");
     };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(third_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert!(matches!(
+        first_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
+    assert!(matches!(
+        second_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+    assert!(matches!(
+        third_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+    ThreadId::from_string(
+        first_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("first guardian thread id"),
+    )
+    .expect("first guardian thread id should be a valid UUID");
+    ThreadId::from_string(
+        second_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("second guardian thread id"),
+    )
+    .expect("second guardian thread id should be a valid UUID");
+    ThreadId::from_string(
+        third_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("third guardian thread id"),
+    )
+    .expect("third guardian thread id should be a valid UUID");
+    assert_eq!(first_metadata.had_prior_review_context, Some(false));
+    assert_eq!(second_metadata.had_prior_review_context, Some(true));
+    assert_eq!(third_metadata.had_prior_review_context, Some(true));
+    assert_eq!(
+        first_metadata.guardian_thread_id,
+        second_metadata.guardian_thread_id
+    );
+    assert_eq!(
+        second_metadata.guardian_thread_id,
+        third_metadata.guardian_thread_id
+    );
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3);
@@ -1294,7 +1629,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let mut denial_rationales = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event.msg {
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             EventMsg::GuardianAssessment(event)
                 if event.status == GuardianAssessmentStatus::Denied =>
             {
@@ -1624,7 +1959,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_overrides_parent_developer_instructions() {
+async fn guardian_review_session_config_clears_parent_developer_instructions() {
     let mut parent_config = test_config().await;
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
@@ -1637,8 +1972,9 @@ async fn guardian_review_session_config_overrides_parent_developer_instructions(
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }
@@ -1721,7 +2057,7 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_rejects_pinned_collab_feature() {
+async fn guardian_review_session_config_allows_pinned_disabled_feature() {
     let mut parent_config = test_config().await;
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
@@ -1734,18 +2070,17 @@ async fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_review_session_config_for_test(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
     )
-    .expect_err("guardian config should fail when collab is pinned on");
+    .expect("guardian config should continue when a disabled feature is pinned on");
 
-    assert!(
-        err.to_string()
-            .contains("guardian review session requires `features.multi_agent` to be disabled")
-    );
+    assert!(guardian_config.features.enabled(Feature::Collab));
+    assert!(guardian_config.mcp_servers.get().is_empty());
+    assert!(!guardian_config.include_apps_instructions);
 }
 
 #[tokio::test]
@@ -1800,8 +2135,9 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt_with_config(
             "Use the workspace-managed guardian policy."
         ))
@@ -1837,8 +2173,9 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }

@@ -9,6 +9,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -133,7 +134,7 @@ pub(crate) struct ApprovalCtx<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionRequestPayload {
-    pub tool_name: String,
+    pub tool_name: HookToolName,
     pub command: String,
     pub description: Option<String>,
 }
@@ -376,7 +377,16 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
+                let windows_sandbox_policy_cwd =
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                        self.sandbox_cwd.to_path_buf(),
+                    )
+                    .unwrap_or_else(|_| request.cwd.clone());
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+                    request,
+                    options,
+                    windows_sandbox_policy_cwd,
+                )
             })
     }
 }

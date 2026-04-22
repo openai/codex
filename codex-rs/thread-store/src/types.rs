@@ -128,10 +128,15 @@ pub struct ListThreadsParams {
     /// Optional model provider filter. `None` means implementation default, while an empty vector
     /// means all providers.
     pub model_providers: Option<Vec<String>>,
+    /// Optional cwd filters. `None` means all working directories, while an empty vector matches no
+    /// threads.
+    pub cwd_filters: Option<Vec<PathBuf>>,
     /// Whether archived threads should be listed instead of active threads.
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
+    /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
+    pub use_state_db_only: bool,
 }
 
 /// A page of stored thread records.

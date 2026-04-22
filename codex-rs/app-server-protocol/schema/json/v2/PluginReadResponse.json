@@ -62,7 +62,14 @@
           "type": "string"
         },
         "marketplacePath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mcpServers": {
           "items": {
@@ -83,7 +90,6 @@
       "required": [
         "apps",
         "marketplaceName",
-        "marketplacePath",
         "mcpServers",
         "skills",
         "summary"
@@ -423,7 +429,14 @@
           "type": "string"
         },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "shortDescription": {
           "type": [
@@ -435,8 +448,7 @@
       "required": [
         "description",
         "enabled",
-        "name",
-        "path"
+        "name"
       ],
       "type": "object"
     }

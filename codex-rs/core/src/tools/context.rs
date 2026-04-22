@@ -15,8 +15,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
+use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
-use codex_tools::ToolSearchOutputTool;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -26,6 +26,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -40,6 +41,7 @@ pub enum ToolCallSource {
 pub struct ToolInvocation {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
+    pub cancellation_token: CancellationToken,
     pub tracker: SharedTurnDiffTracker,
     pub call_id: String,
     pub tool_name: ToolName,
@@ -86,6 +88,13 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
+    /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
+    ///
+    /// Tool handlers decide whether a tool participates in `PostToolUse`, but
+    /// this method lets the output type own any conversion from model-facing
+    /// response content to hook-facing data. Returning `None` means the output
+    /// should not produce a post-use hook payload, not merely that the tool had
+    /// empty output.
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         None
     }
@@ -184,7 +193,7 @@ impl McpToolOutput {
 
 #[derive(Clone)]
 pub struct ToolSearchOutput {
-    pub tools: Vec<ToolSearchOutputTool>,
+    pub tools: Vec<LoadableToolSpec>,
 }
 
 impl ToolOutput for ToolSearchOutput {
@@ -302,6 +311,10 @@ impl ToolOutput for ApplyPatchToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(JsonValue::String(self.text.clone()))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
