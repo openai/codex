@@ -192,6 +192,7 @@ impl AppCommand {
             service_tier,
             collaboration_mode,
             personality,
+            environments: None,
         })
     }
 
@@ -326,6 +327,7 @@ impl AppCommand {
                 service_tier,
                 collaboration_mode,
                 personality,
+                environments: _,
             } => AppCommandView::OverrideTurnContext {
                 cwd,
                 approval_policy,

@@ -490,10 +490,19 @@ impl Session {
         updates: SessionSettingsUpdate,
         environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<Arc<TurnContext>> {
-        let update_result = {
+        let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
+                    if let Some(environments) = next.environments.as_ref() {
+                        Self::validate_turn_environment_selections(
+                            &self.services.environment_manager,
+                            environments,
+                        )?;
+                    }
+                    let effective_environments = environments.or_else(|| next.environments.clone());
+                    let turn_environments =
+                        self.resolve_turn_environments(effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
@@ -502,18 +511,20 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
+                        turn_environments,
                         sandbox_policy_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
                     ))
                 }
-                Err(err) => Err(err),
+                Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
             }
         };
 
         let (
             session_configuration,
+            turn_environments,
             sandbox_policy_changed,
             previous_cwd,
             codex_home,
@@ -531,22 +542,6 @@ impl Session {
                 })
                 .await;
                 return Err(CodexErr::InvalidRequest(message));
-            }
-        };
-        let effective_environments =
-            environments.or_else(|| session_configuration.environments.clone());
-        let turn_environments = match self.resolve_turn_environments(effective_environments) {
-            Ok(turn_environments) => turn_environments,
-            Err(err) => {
-                self.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
-                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                    }),
-                })
-                .await;
-                return Err(err);
             }
         };
 
@@ -580,6 +575,11 @@ impl Session {
             return Ok(None);
         };
 
+        Self::validate_turn_environment_selections(
+            &self.services.environment_manager,
+            &environments,
+        )?;
+
         let mut turn_environments = Vec::with_capacity(environments.len());
         for selected_environment in environments {
             let environment = self
@@ -601,6 +601,35 @@ impl Session {
         }
 
         Ok(Some(turn_environments))
+    }
+
+    pub(super) fn validate_turn_environment_selections(
+        environment_manager: &EnvironmentManager,
+        environments: &[TurnEnvironmentSelection],
+    ) -> CodexResult<()> {
+        if environments.is_empty() {
+            return Ok(());
+        }
+
+        if environment_manager.default_environment().is_none() {
+            return Err(CodexErr::InvalidRequest(
+                "environment access is disabled".to_string(),
+            ));
+        }
+
+        for selected_environment in environments {
+            if environment_manager
+                .get_environment(&selected_environment.environment_id)
+                .is_none()
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "unknown turn environment id `{}`",
+                    selected_environment.environment_id
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     async fn new_turn_from_configuration(

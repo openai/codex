@@ -598,6 +598,9 @@ impl Codex {
         } else {
             dynamic_tools
         };
+        if let Some(environments) = environments.as_ref() {
+            Session::validate_turn_environment_selections(&environment_manager, environments)?;
+        }
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.

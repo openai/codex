@@ -2111,6 +2111,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                     service_tier: None,
                     collaboration_mode: None,
                     personality: None,
+                    environments: None,
                 })
                 .await?;
         }
@@ -2227,6 +2228,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
     codex

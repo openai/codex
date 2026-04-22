@@ -113,6 +113,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -246,6 +247,7 @@ async fn permissions_message_omitted_when_disabled() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -335,6 +337,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -441,6 +444,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 

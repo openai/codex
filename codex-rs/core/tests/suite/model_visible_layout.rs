@@ -466,6 +466,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
     resumed

@@ -452,6 +452,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -538,6 +539,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            environments: None,
         })
         .await?;
 
