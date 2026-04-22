@@ -12,7 +12,7 @@ use futures::future::BoxFuture;
 use tokio::sync::mpsc;
 
 use super::HttpResponseBodyStream;
-use super::body_stream::HttpBodyStreamRegistration;
+use super::response_body_stream::HttpBodyStreamRegistration;
 use crate::HttpClient;
 use crate::client::ExecServerClient;
 use crate::client::ExecServerError;
