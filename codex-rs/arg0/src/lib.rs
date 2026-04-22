@@ -199,7 +199,11 @@ where
                 .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
         };
 
-        main_fn(paths).await
+        let result = main_fn(paths).await;
+        // Keep the arg0 tempdir guard alive until the async entry point finishes;
+        // runtime paths above can point at aliases inside that directory.
+        drop(path_entry_guard);
+        result
     })
 }
 
@@ -440,8 +444,10 @@ mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::arg0_dispatch_or_else;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use anyhow::ensure;
     use std::fs;
     use std::fs::File;
     use std::path::Path;
@@ -478,6 +484,57 @@ mod tests {
             Some(alias_path),
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn arg0_dispatch_or_else_keeps_aliases_alive_until_main_returns() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let previous_codex_home = std::env::var_os("CODEX_HOME");
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("CODEX_HOME", codex_home.path());
+        }
+
+        let result = arg0_dispatch_or_else(|paths| async move {
+            let alias_path = paths
+                .codex_linux_sandbox_exe
+                .or(paths.main_execve_wrapper_exe)
+                .expect("unix dispatch should create at least one alias path");
+            ensure!(
+                alias_path.exists(),
+                "alias path disappeared before main future was polled: {}",
+                alias_path.display()
+            );
+
+            tokio::task::yield_now().await;
+
+            ensure!(
+                alias_path.exists(),
+                "alias path disappeared while main future was running: {}",
+                alias_path.display()
+            );
+            Ok(())
+        });
+
+        match previous_codex_home {
+            Some(value) => unsafe {
+                std::env::set_var("CODEX_HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("CODEX_HOME");
+            },
+        }
+        match previous_path {
+            Some(value) => unsafe {
+                std::env::set_var("PATH", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PATH");
+            },
+        }
+
+        result
     }
 
     #[test]

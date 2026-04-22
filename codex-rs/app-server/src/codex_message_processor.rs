@@ -151,6 +151,7 @@ use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -403,8 +404,9 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    cwd: Option<PathBuf>,
+    cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
+    use_state_db_only: bool,
 }
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -3730,10 +3732,11 @@ impl CodexMessageProcessor {
             source_kinds,
             archived,
             cwd,
+            use_state_db_only,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd) {
-            Ok(cwd) => cwd,
+        let cwd_filters = match normalize_thread_list_cwd_filters(cwd) {
+            Ok(cwd_filters) => cwd_filters,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -3759,8 +3762,9 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd,
+                    cwd_filters,
                     search_term,
+                    use_state_db_only,
                 },
             )
             .await;
@@ -5246,8 +5250,9 @@ impl CodexMessageProcessor {
             model_providers,
             source_kinds,
             archived,
-            cwd,
+            cwd_filters,
             search_term,
+            use_state_db_only,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -5284,28 +5289,27 @@ impl CodexMessageProcessor {
                     sort_direction: store_sort_direction,
                     allowed_sources: allowed_sources.to_vec(),
                     model_providers: model_provider_filter.clone(),
+                    cwd_filters: cwd_filters.clone(),
                     archived,
                     search_term: search_term.clone(),
+                    use_state_db_only,
                 })
                 .await
                 .map_err(thread_store_list_error)?;
 
-            let mut candidate_summaries = Vec::with_capacity(page.items.len());
+            let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
                 let Some(summary) = summary_from_stored_thread(it, fallback_provider.as_str())
                 else {
                     continue;
                 };
-                candidate_summaries.push(summary);
-            }
-
-            let mut filtered = Vec::with_capacity(candidate_summaries.len());
-            for summary in candidate_summaries {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd.as_ref().is_none_or(|expected_cwd| {
-                        path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
+                        expected_cwds.iter().any(|expected_cwd| {
+                            path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                        })
                     })
                 {
                     filtered.push(summary);
@@ -5317,25 +5321,22 @@ impl CodexMessageProcessor {
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
-            let next_cursor_value = page.next_cursor.clone();
-            next_cursor = next_cursor_value.clone();
+            next_cursor = page.next_cursor;
             if remaining == 0 {
                 break;
             }
 
-            match next_cursor_value {
-                Some(cursor_val) if remaining > 0 => {
-                    // Break if our pagination would reuse the same cursor again; this avoids
-                    // an infinite loop when filtering drops everything on the page.
-                    if last_cursor.as_ref() == Some(&cursor_val) {
-                        next_cursor = None;
-                        break;
-                    }
-                    last_cursor = Some(cursor_val.clone());
-                    cursor_obj = Some(cursor_val);
-                }
-                _ => break,
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            // Break if our pagination would reuse the same cursor again; this avoids
+            // an infinite loop when filtering drops everything on the page.
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
             }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
         }
 
         Ok((items, next_cursor))
@@ -8313,25 +8314,36 @@ impl CodexMessageProcessor {
     }
 }
 
-fn normalize_thread_list_cwd_filter(
-    cwd: Option<String>,
-) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+fn normalize_thread_list_cwd_filters(
+    cwd: Option<ThreadListCwdFilter>,
+) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
-        .map(AbsolutePathBuf::into_path_buf)
-        .map(Some)
-        .map_err(|err| JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-            data: None,
-        })
+
+    let cwds = match cwd {
+        ThreadListCwdFilter::One(cwd) => vec![cwd],
+        ThreadListCwdFilter::Many(cwds) => cwds,
+    };
+    let mut normalized_cwds = Vec::with_capacity(cwds.len());
+    for cwd in cwds {
+        let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+            .map(AbsolutePathBuf::into_path_buf)
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+                data: None,
+            })?;
+        normalized_cwds.push(cwd);
+    }
+
+    Ok(Some(normalized_cwds))
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
-    use super::normalize_thread_list_cwd_filter;
+    use super::normalize_thread_list_cwd_filters;
+    use codex_app_server_protocol::ThreadListCwdFilter;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -8345,8 +8357,9 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
-            Some(PathBuf::from(cwd))
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::One(cwd.clone())))
+                .expect("cwd filter should parse"),
+            Some(vec![PathBuf::from(cwd)])
         );
     }
 
@@ -8356,9 +8369,11 @@ mod thread_list_cwd_filter_tests {
         let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
-                .expect("cwd filter should parse"),
-            Some(expected)
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::Many(vec![String::from(
+                "repo-b"
+            ),])))
+            .expect("cwd filter should parse"),
+            Some(vec![expected])
         );
         Ok(())
     }

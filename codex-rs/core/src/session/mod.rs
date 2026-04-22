@@ -1919,6 +1919,7 @@ impl Session {
                 review_id,
                 request,
                 /*retry_reason*/ None,
+                codex_analytics::GuardianApprovalRequestSource::MainTurn,
                 cancellation_token.clone(),
             );
             let decision = tokio::select! {
@@ -2975,6 +2976,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
+        self.mailbox_rx.lock().await.has_pending()
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -3074,7 +3079,7 @@ impl Session {
         if !accepts_mailbox_delivery {
             return false;
         }
-        self.mailbox_rx.lock().await.has_pending()
+        self.has_pending_mailbox_items().await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
