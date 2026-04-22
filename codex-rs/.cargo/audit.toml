@@ -7,5 +7,4 @@ ignore = [
     "RUSTSEC-2024-0320", # yaml-rust via syntect; remove when syntect drops or updates it
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0097", # rand 0.8.5 via age/codex-secrets and zbus/keyring; remove when transitive deps move to rand >=0.9.3
-    "RUSTSEC-2026-0104", # rustls-webpki 0.103.12 via rustls/reqwest in codex-client and codex-rmcp-client; remove when the graph updates to rustls-webpki >=0.103.13
 ]
