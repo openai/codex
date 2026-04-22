@@ -115,7 +115,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 headers: protocol_headers(&headers),
                 body: Some(body.into()),
                 timeout_ms: None,
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: true,
             })
             .await
@@ -187,7 +187,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 headers: protocol_headers(&headers),
                 body: None,
                 timeout_ms: None,
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: false,
             })
             .await
@@ -245,7 +245,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 headers: protocol_headers(&headers),
                 body: None,
                 timeout_ms: None,
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: true,
             })
             .await
