@@ -1,4 +1,6 @@
 use super::*;
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ToolName;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
@@ -60,6 +62,14 @@ fn create_codex_apps_tools_cache_context(
             is_workspace_account: false,
         },
     }
+}
+
+fn provenance_for_connector(connector_id: &str) -> ToolPluginProvenance {
+    ToolPluginProvenance::from_capability_summaries(&[PluginCapabilitySummary {
+        display_name: "sample-plugin".to_string(),
+        app_connector_ids: vec![AppConnectorId(connector_id.to_string())],
+        ..PluginCapabilitySummary::default()
+    }])
 }
 
 #[test]
@@ -480,12 +490,14 @@ fn codex_apps_tools_cache_is_overwritten_by_last_write() {
 
     write_cached_codex_apps_tools(&cache_context, &tools_gateway_1);
     let cached_gateway_1 =
-        read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for first write");
+        read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default())
+            .expect("cache entry exists for first write");
     assert_eq!(cached_gateway_1[0].callable_name, "one");
 
     write_cached_codex_apps_tools(&cache_context, &tools_gateway_2);
     let cached_gateway_2 =
-        read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for second write");
+        read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default())
+            .expect("cache entry exists for second write");
     assert_eq!(cached_gateway_2[0].callable_name, "two");
 }
 
@@ -509,9 +521,11 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
     write_cached_codex_apps_tools(&cache_context_user_2, &tools_user_2);
 
     let read_user_1 =
-        read_cached_codex_apps_tools(&cache_context_user_1).expect("cache entry for user one");
+        read_cached_codex_apps_tools(&cache_context_user_1, &ToolPluginProvenance::default())
+            .expect("cache entry for user one");
     let read_user_2 =
-        read_cached_codex_apps_tools(&cache_context_user_2).expect("cache entry for user two");
+        read_cached_codex_apps_tools(&cache_context_user_2, &ToolPluginProvenance::default())
+            .expect("cache entry for user two");
 
     assert_eq!(read_user_1[0].callable_name, "one");
     assert_eq!(read_user_2[0].callable_name, "two");
@@ -546,11 +560,72 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
     ];
 
     write_cached_codex_apps_tools(&cache_context, &tools);
-    let cached = read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
+    let cached = read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default())
+        .expect("cache entry exists for user");
 
     assert_eq!(cached.len(), 1);
     assert_eq!(cached[0].callable_name, "allowed_tool");
     assert_eq!(cached[0].connector_id.as_deref(), Some("calendar"));
+}
+
+#[test]
+fn codex_apps_tools_cache_keeps_plugin_declared_openai_connector() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let tools = vec![
+        create_test_tool_with_connector(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "appgarden_tool",
+            "connector_openai_appgarden",
+            Some("Appgen"),
+        ),
+        create_test_tool_with_connector(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "hidden_tool",
+            "connector_openai_hidden",
+            Some("Hidden"),
+        ),
+    ];
+
+    write_cached_codex_apps_tools(&cache_context, &tools);
+    let cached = read_cached_codex_apps_tools(
+        &cache_context,
+        &provenance_for_connector("connector_openai_appgarden"),
+    )
+    .expect("cache entry exists for user");
+
+    assert_eq!(cached.len(), 1);
+    assert_eq!(cached[0].callable_name, "appgarden_tool");
+    assert_eq!(
+        cached[0].connector_id.as_deref(),
+        Some("connector_openai_appgarden")
+    );
+}
+
+#[test]
+fn codex_apps_tools_cache_hides_cached_openai_connector_without_current_provenance() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = create_codex_apps_tools_cache_context(
+        codex_home.path().to_path_buf(),
+        Some("account-one"),
+        Some("user-one"),
+    );
+    let tools = vec![create_test_tool_with_connector(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "appgarden_tool",
+        "connector_openai_appgarden",
+        Some("Appgen"),
+    )];
+
+    write_cached_codex_apps_tools(&cache_context, &tools);
+    let cached = read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default())
+        .expect("cache entry exists for user");
+
+    assert!(cached.is_empty());
 }
 
 #[test]
@@ -572,7 +647,9 @@ fn codex_apps_tools_cache_is_ignored_when_schema_version_mismatches() {
     .expect("serialize");
     std::fs::write(cache_path, bytes).expect("write");
 
-    assert!(read_cached_codex_apps_tools(&cache_context).is_none());
+    assert!(
+        read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default(),).is_none()
+    );
 }
 
 #[test]
@@ -589,7 +666,9 @@ fn codex_apps_tools_cache_is_ignored_when_json_is_invalid() {
     }
     std::fs::write(cache_path, b"{not json").expect("write");
 
-    assert!(read_cached_codex_apps_tools(&cache_context).is_none());
+    assert!(
+        read_cached_codex_apps_tools(&cache_context, &ToolPluginProvenance::default(),).is_none()
+    );
 }
 
 #[test]
@@ -609,6 +688,7 @@ fn startup_cached_codex_apps_tools_loads_from_disk_cache() {
     let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
         CODEX_APPS_MCP_SERVER_NAME,
         Some(&cache_context),
+        &ToolPluginProvenance::default(),
     );
     let startup_tools = startup_snapshot.expect("expected startup snapshot to load from cache");
 

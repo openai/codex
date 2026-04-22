@@ -1066,12 +1066,15 @@ impl MessageProcessor {
                     return;
                 }
             };
+            let plugin_declared_connector_ids =
+                connectors::plugin_declared_connector_ids_for_config(&config).await;
 
             let data = connectors::with_app_enabled_state(
                 connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
                     /*all_connectors_loaded*/ true,
+                    &plugin_declared_connector_ids,
                 ),
                 &config,
             );

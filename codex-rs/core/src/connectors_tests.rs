@@ -28,8 +28,15 @@ use rmcp::model::Tool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tempfile::tempdir;
+use tokio::sync::Mutex as TokioMutex;
+
+static ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK: LazyLock<TokioMutex<()>> =
+    LazyLock::new(|| TokioMutex::new(()));
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
     ToolAnnotations {
@@ -128,14 +135,51 @@ fn codex_app_tool(
     }
 }
 
-fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
+fn write_installed_plugin_app(codex_home: &Path, connector_id: &str) {
+    let plugin_root = codex_home.join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(
+        plugin_root.join(".app.json"),
+        format!(
+            r#"{{
+  "apps": {{
+    "sample": {{
+      "id": "{connector_id}"
+    }}
+  }}
+}}"#
+        ),
+    )
+    .expect("write plugin app config");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .expect("write config");
+}
+
+async fn with_accessible_connectors_cache_cleared<R, F>(f: impl FnOnce() -> F) -> R
+where
+    F: Future<Output = R>,
+{
+    let _guard = ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK.lock().await;
     let previous = {
         let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache_guard.take()
     };
-    let result = f();
+    let result = f().await;
     let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -233,6 +277,7 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
 #[tokio::test]
 async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_installed_apps() {
     let codex_home = tempdir().expect("tempdir should succeed");
+    write_installed_plugin_app(codex_home.path(), "connector_openai_appgarden");
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .build()
@@ -251,6 +296,15 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
             ),
         ),
         (
+            "mcp__codex_apps__appgarden_create_project".to_string(),
+            codex_app_tool(
+                "appgarden_create_project",
+                "connector_openai_appgarden",
+                Some("Appgen"),
+                &["appgarden-plugin"],
+            ),
+        ),
+        (
             "mcp__codex_apps__openai_hidden".to_string(),
             codex_app_tool(
                 "openai_hidden",
@@ -261,29 +315,90 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         ),
     ]);
 
-    let cached = with_accessible_connectors_cache_cleared(|| {
-        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
+    let cached = with_accessible_connectors_cache_cleared(|| async {
+        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools).await;
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
-    });
+    })
+    .await;
 
     assert_eq!(
         cached,
-        vec![AppInfo {
-            id: "calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some(connector_install_url("Google Calendar", "calendar")),
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            is_accessible: true,
-            is_enabled: true,
-            plugin_display_names: plugin_names(&["calendar-plugin"]),
-        }]
+        vec![
+            AppInfo {
+                id: "connector_openai_appgarden".to_string(),
+                name: "Appgen".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url(
+                    "Appgen",
+                    "connector_openai_appgarden"
+                )),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["appgarden-plugin"]),
+            },
+            AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
+            },
+        ]
     );
+}
+
+#[tokio::test]
+async fn list_cached_accessible_connectors_applies_current_plugin_provenance() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
+    let cached_connectors = vec![AppInfo {
+        id: "connector_openai_appgarden".to_string(),
+        name: "Appgen".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: Some(connector_install_url(
+            "Appgen",
+            "connector_openai_appgarden",
+        )),
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        is_accessible: true,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+
+    let filtered = with_accessible_connectors_cache_cleared(|| async {
+        write_cached_accessible_connectors(cache_key, &cached_connectors);
+        list_cached_accessible_connectors_from_mcp_tools(&config)
+            .await
+            .expect("cache should be readable")
+    })
+    .await;
+
+    assert_eq!(filtered, Vec::<AppInfo>::new());
 }
 
 #[test]
@@ -1038,8 +1153,11 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
 
 #[test]
 fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
-    let filtered =
-        filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")], "codex_cli");
+    let filtered = filter_disallowed_connectors(
+        vec![app("asdk_app_hidden"), app("alpha")],
+        "codex_cli",
+        &HashSet::new(),
+    );
     assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
 }
 
@@ -1052,6 +1170,7 @@ fn filter_disallowed_connectors_filters_openai_prefix() {
             app("gamma"),
         ],
         "codex_cli",
+        &HashSet::new(),
     );
     assert_eq!(filtered, vec![app("gamma")]);
 }
@@ -1065,6 +1184,7 @@ fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
             app("delta"),
         ],
         "codex_cli",
+        &HashSet::new(),
     );
     assert_eq!(filtered, vec![app("delta")]);
 }
@@ -1078,6 +1198,7 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
             app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
         ],
         "codex_atlas",
+        &HashSet::new(),
     );
     assert_eq!(
         filtered,
@@ -1107,7 +1228,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, &HashSet::new()),
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1135,6 +1256,7 @@ fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstal
             "connector_68df038e0ba48191908c8434991bbac2".to_string(),
         ]),
         "codex_cli",
+        &HashSet::new(),
     );
 
     assert_eq!(
@@ -1144,6 +1266,41 @@ fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstal
             "Gmail",
         )]
     );
+}
+
+#[test]
+fn filter_tool_suggest_discoverable_connectors_allows_plugin_declared_openai_prefix() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
+        vec![
+            named_app("connector_openai_appgarden", "Appgen"),
+            named_app("connector_openai_hidden", "Hidden"),
+        ],
+        &[],
+        &HashSet::from([
+            "connector_openai_appgarden".to_string(),
+            "connector_openai_hidden".to_string(),
+        ]),
+        "codex_cli",
+        &HashSet::from(["connector_openai_appgarden".to_string()]),
+    );
+
+    assert_eq!(
+        filtered,
+        vec![named_app("connector_openai_appgarden", "Appgen")]
+    );
+}
+
+#[test]
+fn filter_tool_suggest_discoverable_connectors_blocks_config_only_openai_prefix() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
+        vec![named_app("connector_openai_hidden", "Hidden")],
+        &[],
+        &HashSet::from(["connector_openai_hidden".to_string()]),
+        "codex_cli",
+        &HashSet::new(),
+    );
+
+    assert_eq!(filtered, Vec::<AppInfo>::new());
 }
 
 #[test]
@@ -1175,6 +1332,7 @@ fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_whe
             "connector_68df038e0ba48191908c8434991bbac2".to_string(),
         ]),
         "codex_cli",
+        &HashSet::new(),
     );
 
     assert_eq!(filtered, Vec::<AppInfo>::new());

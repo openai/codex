@@ -93,8 +93,9 @@ use url::Url;
 
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
+use codex_connectors::filter::connector_id_passes_disallow_filter;
 use codex_login::CodexAuth;
-use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
+use codex_login::default_client::originator;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 
 /// Delimiter used to separate MCP tool-name parts.
@@ -448,11 +449,11 @@ struct ManagedClient {
 }
 
 impl ManagedClient {
-    fn listed_tools(&self) -> Vec<ToolInfo> {
+    fn listed_tools(&self, tool_plugin_provenance: &ToolPluginProvenance) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
             && let CachedCodexAppsToolsLoad::Hit(tools) =
-                load_cached_codex_apps_tools(cache_context)
+                load_cached_codex_apps_tools(cache_context, tool_plugin_provenance)
         {
             emit_duration(
                 MCP_TOOLS_LIST_DURATION_METRIC,
@@ -501,9 +502,11 @@ impl AsyncManagedClient {
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
+            tool_plugin_provenance.as_ref(),
         )
         .map(|tools| filter_tools(tools, &tool_filter));
         let startup_tool_filter = tool_filter;
+        let startup_tool_plugin_provenance = Arc::clone(&tool_plugin_provenance);
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
         let fut = async move {
@@ -533,6 +536,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        tool_plugin_provenance: startup_tool_plugin_provenance,
                     },
                 )
                 .or_cancel(&cancel_token)
@@ -631,7 +635,7 @@ impl AsyncManagedClient {
             Some(startup_tools)
         } else {
             match self.client().await {
-                Ok(client) => Some(client.listed_tools()),
+                Ok(client) => Some(client.listed_tools(self.tool_plugin_provenance.as_ref())),
                 Err(_) => self.startup_snapshot.clone(),
             }
         };
@@ -939,10 +943,12 @@ impl McpConnectionManager {
     /// latest filtered tool map is returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<HashMap<String, ToolInfo>> {
-        let managed_client = self
+        let async_managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
-            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
+        let tool_plugin_provenance = Arc::clone(&async_managed_client.tool_plugin_provenance);
+        let managed_client = async_managed_client
             .client()
             .await
             .context("failed to get client")?;
@@ -954,6 +960,7 @@ impl McpConnectionManager {
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
+            tool_plugin_provenance.as_ref(),
         )
         .await
         .with_context(|| {
@@ -1438,6 +1445,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        tool_plugin_provenance,
     } = params;
     let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
@@ -1481,6 +1489,7 @@ async fn start_server_task(
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
+        tool_plugin_provenance.as_ref(),
     )
     .await
     .map_err(StartupOutcomeError::from)?;
@@ -1523,6 +1532,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 async fn make_rmcp_client(
@@ -1648,6 +1658,7 @@ fn write_cached_codex_apps_tools_if_needed(
 fn load_startup_cached_codex_apps_tools_snapshot(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
+    tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Option<Vec<ToolInfo>> {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
         return None;
@@ -1655,7 +1666,7 @@ fn load_startup_cached_codex_apps_tools_snapshot(
 
     let cache_context = cache_context?;
 
-    match load_cached_codex_apps_tools(cache_context) {
+    match load_cached_codex_apps_tools(cache_context, tool_plugin_provenance) {
         CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
@@ -1664,14 +1675,28 @@ fn load_startup_cached_codex_apps_tools_snapshot(
 #[cfg(test)]
 fn read_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
+    tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Option<Vec<ToolInfo>> {
-    match load_cached_codex_apps_tools(cache_context) {
+    match load_cached_codex_apps_tools(cache_context, tool_plugin_provenance) {
         CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
         CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
 }
 
 fn load_cached_codex_apps_tools(
+    cache_context: &CodexAppsToolsCacheContext,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> CachedCodexAppsToolsLoad {
+    match load_raw_cached_codex_apps_tools(cache_context) {
+        CachedCodexAppsToolsLoad::Hit(tools) => CachedCodexAppsToolsLoad::Hit(
+            filter_disallowed_codex_apps_tools(tools, tool_plugin_provenance),
+        ),
+        CachedCodexAppsToolsLoad::Missing => CachedCodexAppsToolsLoad::Missing,
+        CachedCodexAppsToolsLoad::Invalid => CachedCodexAppsToolsLoad::Invalid,
+    }
+}
+
+fn load_raw_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
 ) -> CachedCodexAppsToolsLoad {
     let cache_path = cache_context.cache_path();
@@ -1689,7 +1714,7 @@ fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
+    CachedCodexAppsToolsLoad::Hit(cache.tools)
 }
 
 fn write_cached_codex_apps_tools(cache_context: &CodexAppsToolsCacheContext, tools: &[ToolInfo]) {
@@ -1699,23 +1724,43 @@ fn write_cached_codex_apps_tools(cache_context: &CodexAppsToolsCacheContext, too
     {
         return;
     }
-    let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
-        tools,
+        tools: tools.to_vec(),
     }) else {
         return;
     };
     let _ = std::fs::write(cache_path, bytes);
 }
 
-fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+fn filter_disallowed_codex_apps_tools_for_server(
+    server_name: &str,
+    tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        filter_disallowed_codex_apps_tools(tools, tool_plugin_provenance)
+    } else {
+        tools
+    }
+}
+
+fn filter_disallowed_codex_apps_tools(
+    tools: Vec<ToolInfo>,
+    tool_plugin_provenance: &ToolPluginProvenance,
+) -> Vec<ToolInfo> {
+    let plugin_declared_connector_ids = tool_plugin_provenance.plugin_declared_connector_ids();
+    let originator_value = originator();
     tools
         .into_iter()
         .filter(|tool| {
-            tool.connector_id
-                .as_deref()
-                .is_none_or(is_connector_id_allowed)
+            tool.connector_id.as_deref().is_none_or(|connector_id| {
+                connector_id_passes_disallow_filter(
+                    connector_id,
+                    originator_value.value.as_str(),
+                    &plugin_declared_connector_ids,
+                )
+            })
         })
         .collect()
 }
@@ -1741,6 +1786,7 @@ async fn list_tools_for_client_uncached(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
+    tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
@@ -1782,10 +1828,11 @@ async fn list_tools_for_client_uncached(
             }
         })
         .collect();
-    if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        return Ok(filter_disallowed_codex_apps_tools(tools));
-    }
-    Ok(tools)
+    Ok(filter_disallowed_codex_apps_tools_for_server(
+        server_name,
+        tools,
+        tool_plugin_provenance,
+    ))
 }
 
 fn validate_mcp_server_name(server_name: &str) -> Result<()> {

@@ -14,6 +14,7 @@ pub use skill_dependencies::canonical_mcp_server_key;
 pub use skill_dependencies::collect_missing_mcp_dependencies;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -152,6 +153,19 @@ impl ToolPluginProvenance {
             .unwrap_or(&[])
     }
 
+    pub fn connector_id_is_plugin_declared(&self, connector_id: &str) -> bool {
+        !self
+            .plugin_display_names_for_connector_id(connector_id)
+            .is_empty()
+    }
+
+    pub fn plugin_declared_connector_ids(&self) -> HashSet<String> {
+        self.plugin_display_names_by_connector_id
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
         self.plugin_display_names_by_mcp_server_name
             .get(server_name)
@@ -159,7 +173,9 @@ impl ToolPluginProvenance {
             .unwrap_or(&[])
     }
 
-    fn from_capability_summaries(capability_summaries: &[PluginCapabilitySummary]) -> Self {
+    pub(crate) fn from_capability_summaries(
+        capability_summaries: &[PluginCapabilitySummary],
+    ) -> Self {
         let mut tool_plugin_provenance = Self::default();
         for plugin in capability_summaries {
             for connector_id in &plugin.app_connector_ids {

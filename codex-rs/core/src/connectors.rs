@@ -119,13 +119,15 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 ) -> anyhow::Result<Vec<DiscoverableTool>> {
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    let connector_ids = tool_suggest_connector_ids(config).await;
+    let plugin_declared_connector_ids = plugin_declared_connector_ids_for_config(config).await;
+    let connector_ids = tool_suggest_connector_ids(config, &plugin_declared_connector_ids);
     let discoverable_connectors =
         codex_connectors::filter::filter_tool_suggest_discoverable_connectors(
             directory_connectors,
             accessible_connectors,
             &connector_ids,
             originator().value.as_str(),
+            &plugin_declared_connector_ids,
         )
         .into_iter()
         .map(DiscoverableTool::from);
@@ -151,15 +153,17 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
         return Some(Vec::new());
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    let plugin_declared_connector_ids = plugin_declared_connector_ids_for_config(config).await;
     read_cached_accessible_connectors(&cache_key).map(|connectors| {
         codex_connectors::filter::filter_disallowed_connectors(
             connectors,
             originator().value.as_str(),
+            &plugin_declared_connector_ids,
         )
     })
 }
 
-pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
+pub(crate) async fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
     mcp_tools: &HashMap<String, ToolInfo>,
@@ -169,9 +173,11 @@ pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     }
 
     let cache_key = accessible_connectors_cache_key(config, auth);
+    let plugin_declared_connector_ids = plugin_declared_connector_ids_for_config(config).await;
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
         accessible_connectors_from_mcp_tools(mcp_tools),
         originator().value.as_str(),
+        &plugin_declared_connector_ids,
     );
     write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
@@ -207,11 +213,13 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config).await;
+    let plugin_declared_connector_ids = tool_plugin_provenance.plugin_declared_connector_ids();
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = codex_connectors::filter::filter_disallowed_connectors(
             cached_connectors,
             originator().value.as_str(),
+            &plugin_declared_connector_ids,
         );
         let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
@@ -258,7 +266,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         McpRuntimeEnvironment::new(Arc::new(Environment::default()), config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
-        ToolPluginProvenance::default(),
+        tool_plugin_provenance.clone(),
     )
     .await;
 
@@ -319,6 +327,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let accessible_connectors = codex_connectors::filter::filter_disallowed_connectors(
         accessible_connectors_from_mcp_tools(&tools),
         originator().value.as_str(),
+        &plugin_declared_connector_ids,
     );
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
@@ -387,15 +396,22 @@ fn write_cached_accessible_connectors(
     });
 }
 
-async fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    let mut connector_ids = PluginsManager::new(config.codex_home.to_path_buf())
+async fn plugin_declared_connector_ids_for_config(config: &Config) -> HashSet<String> {
+    PluginsManager::new(config.codex_home.to_path_buf())
         .plugins_for_config(config)
         .await
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())
         .map(|connector_id| connector_id.0.clone())
-        .collect::<HashSet<_>>();
+        .collect::<HashSet<_>>()
+}
+
+fn tool_suggest_connector_ids(
+    config: &Config,
+    plugin_declared_connector_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let mut connector_ids = plugin_declared_connector_ids.clone();
     connector_ids.extend(
         config
             .tool_suggest
