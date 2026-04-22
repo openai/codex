@@ -490,19 +490,14 @@ mod windows_stdio_bridge {
         // caller's stdio is simplest from a dedicated blocking thread.
         let handle = std::thread::spawn(move || {
             let mut output_rx = output_rx;
-            loop {
-                match tokio_runtime.block_on(output_rx.recv()) {
-                    Some(chunk) => {
-                        if let Err(err) = writer.write_all(&chunk) {
-                            eprintln!("windows sandbox output forwarder failed to write: {err}");
-                            break;
-                        }
-                        if let Err(err) = writer.flush() {
-                            eprintln!("windows sandbox output forwarder failed to flush: {err}");
-                            break;
-                        }
-                    }
-                    None => break,
+            while let Some(chunk) = tokio_runtime.block_on(output_rx.recv()) {
+                if let Err(err) = writer.write_all(&chunk) {
+                    eprintln!("windows sandbox output forwarder failed to write: {err}");
+                    break;
+                }
+                if let Err(err) = writer.flush() {
+                    eprintln!("windows sandbox output forwarder failed to flush: {err}");
+                    break;
                 }
             }
             let _ = done_tx.send(());
