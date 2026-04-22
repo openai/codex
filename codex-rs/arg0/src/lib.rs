@@ -185,22 +185,39 @@ where
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
     let runtime = build_runtime()?;
-    runtime.block_on(async move {
-        let current_exe = std::env::current_exe().ok();
-        let paths = Arg0DispatchPaths {
-            codex_self_exe: current_exe.clone(),
-            codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
-                linux_sandbox_exe_path(path_entry_guard.as_ref(), current_exe)
-            } else {
-                None
-            },
-            main_execve_wrapper_exe: path_entry_guard
-                .as_ref()
-                .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
-        };
+    runtime.block_on(run_main_with_arg0_guard(
+        path_entry_guard,
+        std::env::current_exe().ok(),
+        main_fn,
+    ))
+}
 
-        main_fn(paths).await
-    })
+async fn run_main_with_arg0_guard<F, Fut>(
+    path_entry_guard: Option<Arg0PathEntryGuard>,
+    current_exe: Option<PathBuf>,
+    main_fn: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    let paths = Arg0DispatchPaths {
+        codex_self_exe: current_exe.clone(),
+        codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
+            linux_sandbox_exe_path(path_entry_guard.as_ref(), current_exe)
+        } else {
+            None
+        },
+        main_execve_wrapper_exe: path_entry_guard
+            .as_ref()
+            .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
+    };
+
+    let result = main_fn(paths).await;
+    // Keep the arg0 tempdir guard alive until the async entry point finishes;
+    // runtime paths above can point at aliases inside that directory.
+    drop(path_entry_guard);
+    result
 }
 
 fn linux_sandbox_exe_path(
@@ -442,6 +459,8 @@ mod tests {
     use super::LOCK_FILENAME;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::run_main_with_arg0_guard;
+    use anyhow::ensure;
     use std::fs;
     use std::fs::File;
     use std::path::Path;
@@ -478,6 +497,49 @@ mod tests {
             Some(alias_path),
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_main_with_arg0_guard_keeps_aliases_alive_until_main_returns() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let alias_path = temp_dir.path().join("codex-helper-alias");
+        fs::write(&alias_path, b"")?;
+        let lock_file = create_lock(temp_dir.path())?;
+        let path_entry = Arg0PathEntryGuard::new(
+            temp_dir,
+            lock_file,
+            Arg0DispatchPaths {
+                codex_self_exe: Some(PathBuf::from("/usr/bin/codex")),
+                codex_linux_sandbox_exe: Some(alias_path.clone()),
+                main_execve_wrapper_exe: Some(alias_path),
+            },
+        );
+
+        super::build_runtime()?.block_on(run_main_with_arg0_guard(
+            Some(path_entry),
+            Some(PathBuf::from("/usr/bin/codex")),
+            |paths| async move {
+                let alias_path = paths
+                    .codex_linux_sandbox_exe
+                    .or(paths.main_execve_wrapper_exe)
+                    .expect("unix dispatch should create at least one alias path");
+                ensure!(
+                    alias_path.exists(),
+                    "alias path disappeared before main future was polled: {}",
+                    alias_path.display()
+                );
+
+                tokio::task::yield_now().await;
+
+                ensure!(
+                    alias_path.exists(),
+                    "alias path disappeared while main future was running: {}",
+                    alias_path.display()
+                );
+                Ok(())
+            },
+        ))
     }
 
     #[test]
