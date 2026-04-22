@@ -3,6 +3,7 @@ use crate::app_server_session::ThreadSessionState;
 use crate::read_session_model;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SandboxPolicy;
 
 impl App {
     pub(super) async fn session_state_for_thread_read(
@@ -10,6 +11,15 @@ impl App {
         thread_id: ThreadId,
         thread: &Thread,
     ) -> ThreadSessionState {
+        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
+        let permission_profile = match &sandbox_policy {
+            SandboxPolicy::ExternalSandbox { .. } => None,
+            SandboxPolicy::DangerFullAccess
+            | SandboxPolicy::ReadOnly { .. }
+            | SandboxPolicy::WorkspaceWrite { .. } => {
+                Some(self.config.permissions.permission_profile())
+            }
+        };
         let mut session = self
             .primary_session_configured
             .clone()
@@ -23,7 +33,8 @@ impl App {
                 service_tier: self.chat_widget.current_service_tier(),
                 approval_policy: self.config.permissions.approval_policy.value(),
                 approvals_reviewer: self.config.approvals_reviewer,
-                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                sandbox_policy,
+                permission_profile,
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
