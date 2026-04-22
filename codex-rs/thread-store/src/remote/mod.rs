@@ -78,6 +78,10 @@ impl ThreadStore for RemoteThreadStore {
         Err(not_implemented("shutdown_thread"))
     }
 
+    async fn discard_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
+        Err(not_implemented("discard_thread"))
+    }
+
     async fn rollout_path(&self, _thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>> {
         Err(not_implemented("rollout_path"))
     }

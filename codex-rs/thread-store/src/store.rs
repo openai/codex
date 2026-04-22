@@ -43,6 +43,13 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Flushes pending items and closes the live thread writer.
     async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
 
+    /// Discards the live thread writer without forcing pending in-memory items to become durable.
+    ///
+    /// Core calls this when session initialization fails after a live writer has been created.
+    /// Implementations should release any live writer resources for the thread while preserving
+    /// already-durable thread data.
+    async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
     /// Returns the local rollout path when this thread is backed by a filesystem rollout.
     async fn rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>>;
 

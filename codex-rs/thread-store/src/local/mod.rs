@@ -184,6 +184,15 @@ impl ThreadStore for LocalThreadStore {
         Ok(())
     }
 
+    async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
+        self.live_recorders
+            .lock()
+            .await
+            .remove(&thread_id)
+            .map(|_| ())
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
+    }
+
     async fn rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>> {
         Ok(Some(
             self.live_recorders
@@ -311,6 +320,43 @@ mod tests {
             })
             .await
             .expect_err("shutdown should remove the live thread writer");
+        assert!(
+            matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_thread_drops_unmaterialized_live_writer() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .rollout_path(thread_id)
+            .await
+            .expect("load rollout path")
+            .expect("live thread should expose rollout path");
+        store
+            .discard_thread(thread_id)
+            .await
+            .expect("discard live thread");
+
+        assert!(
+            !tokio::fs::try_exists(rollout_path.as_path())
+                .await
+                .expect("check rollout path")
+        );
+        let err = store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("write after discard")],
+            })
+            .await
+            .expect_err("discard should remove the live thread writer");
         assert!(
             matches!(err, ThreadStoreError::ThreadNotFound { thread_id: missing } if missing == thread_id)
         );
