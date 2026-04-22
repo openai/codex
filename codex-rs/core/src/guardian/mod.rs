@@ -31,8 +31,10 @@ pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::review_approval_request;
+#[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
+pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "codex-auto-review";
@@ -47,7 +49,7 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
 
 /// Structured output contract that the guardian reviewer must satisfy.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,

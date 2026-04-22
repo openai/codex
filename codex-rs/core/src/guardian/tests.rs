@@ -28,6 +28,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -741,7 +742,7 @@ fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
 }
 
 #[tokio::test]
-async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
+async fn routes_approval_to_guardian_requires_guardian_reviewer() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
@@ -751,6 +752,25 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
 
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     turn.config = Arc::new(config);
+
+    assert!(routes_approval_to_guardian(&turn));
+}
+
+#[tokio::test]
+async fn routes_approval_to_guardian_allows_granular_review_policy() {
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    turn.config = Arc::new(config);
+    turn.approval_policy
+        .set(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }))
+        .expect("test setup should allow updating approval policy");
 
     assert!(routes_approval_to_guardian(&turn));
 }
@@ -851,9 +871,62 @@ fn parse_guardian_assessment_extracts_embedded_json() {
     ))
     .expect("guardian assessment");
 
-    assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
-    assert_eq!(parsed.user_authorization, GuardianUserAuthorization::Low);
-    assert_eq!(parsed.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Medium,
+            user_authorization: GuardianUserAuthorization::Low,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "ok".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
+    let parsed =
+        parse_guardian_assessment(Some(r#"{"outcome":"allow"}"#)).expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Guardian returned a low-risk allow decision.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
+    let schema = guardian_output_schema();
+
+    assert_eq!(
+        schema,
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -927,6 +1000,36 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
 
     let request = request_log.single_request();
+    let request_body = request.body_json();
+    assert_eq!(
+        request_body.pointer("/text/format/strict"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        request_body.pointer("/text/format/schema"),
+        Some(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        }))
+    );
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1624,7 +1727,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_overrides_parent_developer_instructions() {
+async fn guardian_review_session_config_clears_parent_developer_instructions() {
     let mut parent_config = test_config().await;
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
@@ -1637,8 +1740,9 @@ async fn guardian_review_session_config_overrides_parent_developer_instructions(
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }
@@ -1721,7 +1825,7 @@ async fn guardian_review_session_config_disables_mcp_apps_and_plugins() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_rejects_pinned_collab_feature() {
+async fn guardian_review_session_config_allows_pinned_disabled_feature() {
     let mut parent_config = test_config().await;
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
@@ -1734,18 +1838,17 @@ async fn guardian_review_session_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_review_session_config_for_test(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
     )
-    .expect_err("guardian config should fail when collab is pinned on");
+    .expect("guardian config should continue when a disabled feature is pinned on");
 
-    assert!(
-        err.to_string()
-            .contains("guardian review session requires `features.multi_agent` to be disabled")
-    );
+    assert!(guardian_config.features.enabled(Feature::Collab));
+    assert!(guardian_config.mcp_servers.get().is_empty());
+    assert!(!guardian_config.include_apps_instructions);
 }
 
 #[tokio::test]
@@ -1800,8 +1903,9 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt_with_config(
             "Use the workspace-managed guardian policy."
         ))
@@ -1837,8 +1941,9 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
     )
     .expect("guardian config");
 
+    assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
-        guardian_config.developer_instructions,
+        guardian_config.base_instructions,
         Some(guardian_policy_prompt())
     );
 }

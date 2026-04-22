@@ -67,9 +67,24 @@ pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginMcpFile {
-    #[serde(default)]
+struct PluginMcpServersFile {
     mcp_servers: HashMap<String, JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PluginMcpFile {
+    McpServersObject(PluginMcpServersFile),
+    ServerMap(HashMap<String, JsonValue>),
+}
+
+impl PluginMcpFile {
+    fn into_mcp_servers(self) -> HashMap<String, JsonValue> {
+        match self {
+            Self::McpServersObject(file) => file.mcp_servers,
+            Self::ServerMap(mcp_servers) => mcp_servers,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -775,7 +790,7 @@ async fn load_mcp_servers_from_file(
     };
     normalize_plugin_mcp_servers(
         plugin_root,
-        parsed.mcp_servers,
+        parsed.into_mcp_servers(),
         mcp_config_path.to_string_lossy().as_ref(),
     )
 }
@@ -987,6 +1002,82 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plugin_mcp_file_supports_mcp_servers_object_format() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "mcpServers": {
+    "sample": {
+      "command": "sample-mcp"
+    }
+  }
+}"#,
+        )
+        .expect("parse wrapped plugin mcp config")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "sample".to_string(),
+                serde_json::json!({
+                    "command": "sample-mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn plugin_mcp_file_supports_mcp_servers_object_format_with_metadata() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "$schema": "https://example.com/plugin-mcp.schema.json",
+  "mcpServers": {
+    "sample": {
+      "command": "sample-mcp"
+    }
+  }
+}"#,
+        )
+        .expect("parse plugin mcp config with metadata")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "sample".to_string(),
+                serde_json::json!({
+                    "command": "sample-mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn plugin_mcp_file_supports_top_level_server_map_format() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "linear": {
+    "type": "http",
+    "url": "https://mcp.linear.app/mcp"
+  }
+}"#,
+        )
+        .expect("parse flat plugin mcp config")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "linear".to_string(),
+                serde_json::json!({
+                    "type": "http",
+                    "url": "https://mcp.linear.app/mcp"
+                }),
+            )])
+        );
+    }
 
     #[test]
     fn materialize_git_subdir_uses_sparse_checkout() {

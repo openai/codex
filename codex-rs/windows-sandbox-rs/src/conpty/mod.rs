@@ -6,10 +6,8 @@
 //! `tty=true`. The helpers are not tied to the IPC layer and can be reused by other
 //! Windows sandbox flows that need a PTY.
 
-mod proc_thread_attr;
-
-use self::proc_thread_attr::ProcThreadAttributeList;
 use crate::desktop::LaunchDesktop;
+use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
@@ -37,7 +35,7 @@ pub struct ConptyInstance {
     pub hpc: HANDLE,
     pub input_write: HANDLE,
     pub output_read: HANDLE,
-    _desktop: LaunchDesktop,
+    desktop: Option<LaunchDesktop>,
 }
 
 impl Drop for ConptyInstance {
@@ -58,9 +56,10 @@ impl Drop for ConptyInstance {
 
 impl ConptyInstance {
     /// Consume the instance and return raw handles without closing them.
-    pub fn into_raw(self) -> (HANDLE, HANDLE, HANDLE) {
+    pub fn into_raw(self) -> (HANDLE, HANDLE, HANDLE, Option<LaunchDesktop>) {
         let me = std::mem::ManuallyDrop::new(self);
-        (me.hpc, me.input_write, me.output_read)
+        let desktop = unsafe { std::ptr::read(&me.desktop) };
+        (me.hpc, me.input_write, me.output_read, desktop)
     }
 }
 
@@ -68,6 +67,7 @@ impl ConptyInstance {
 ///
 /// This is public so callers that need lower-level PTY setup can build on the same
 /// primitive, although the common entry point is `spawn_conpty_process_as_user`.
+#[allow(dead_code)]
 pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
     let raw = RawConPty::new(cols, rows)?;
     let (hpc, input_write, output_read) = raw.into_raw_handles();
@@ -76,9 +76,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         hpc: hpc as HANDLE,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
-        _desktop: LaunchDesktop::prepare(
-            /*use_private_desktop*/ false, /*logs_base_dir*/ None,
-        )?,
+        desktop: None,
     })
 }
 
@@ -110,7 +108,14 @@ pub fn spawn_conpty_process_as_user(
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
-    let conpty = create_conpty(/*cols*/ 80, /*rows*/ 24)?;
+    let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
+    let (hpc, input_write, output_read) = raw.into_raw_handles();
+    let conpty = ConptyInstance {
+        hpc: hpc as HANDLE,
+        input_write: input_write as HANDLE,
+        output_read: output_read as HANDLE,
+        desktop: Some(desktop),
+    };
     let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
     attrs.set_pseudoconsole(conpty.hpc)?;
     si.lpAttributeList = attrs.as_mut_ptr();
@@ -142,7 +147,5 @@ pub fn spawn_conpty_process_as_user(
             env_block.len()
         ));
     }
-    let mut conpty = conpty;
-    conpty._desktop = desktop;
     Ok((pi, conpty))
 }

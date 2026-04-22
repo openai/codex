@@ -284,20 +284,18 @@ fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
         },
     };
     let response = ToolSearchOutput {
-        tools: vec![ToolSearchOutputTool::Function(
-            codex_tools::ResponsesApiTool {
-                name: "create_event".to_string(),
-                description: String::new(),
-                strict: false,
-                defer_loading: Some(true),
-                parameters: codex_tools::JsonSchema::object(
-                    /*properties*/ Default::default(),
-                    /*required*/ None,
-                    /*additional_properties*/ None,
-                ),
-                output_schema: None,
-            },
-        )],
+        tools: vec![LoadableToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: "create_event".to_string(),
+            description: String::new(),
+            strict: false,
+            defer_loading: Some(true),
+            parameters: codex_tools::JsonSchema::object(
+                /*properties*/ Default::default(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+            output_schema: None,
+        })],
     }
     .to_response_item("search-1", &payload);
 

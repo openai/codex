@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+expression: status_line_popup_snapshot(&mut chat)
+---
+  Configure Status Line
+  Select which items to display in the status line.
+
+  Type to search
+  >
+› [x] project-name          Project name (omitted when unavailable)
+  [x] git-branch            Current Git branch (omitted when unavailable)
+  [x] thread-title          Current thread title (omitted when unavailable)
+  [ ] model                 Current model name
+  [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] current-dir           Current working directory
+  [ ] run-state             Compact session run-state text (Ready, Working, Thinking)
+  [ ] context-remaining     Percentage of context window remaining (omitted when unknown)
+
+  my-project · feature/mixed-preview · Mixed preview thread
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

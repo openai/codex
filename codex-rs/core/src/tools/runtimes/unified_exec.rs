@@ -13,6 +13,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -186,7 +187,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         req: &UnifiedExecRequest,
     ) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload {
-            tool_name: "Bash".to_string(),
+            tool_name: HookToolName::bash(),
             command: req.hook_command.clone(),
             description: req.justification.clone(),
         })

@@ -72,7 +72,6 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
@@ -1155,7 +1154,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"transcription":{"model":"gpt-4o-mini-transcribe"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"transcription":{"model":"gpt-4o-mini-transcribe"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}},{"type":"function","name":"remain_silent","description":"Call this when the best response is to say nothing. Use it instead of speaking after hidden system/control messages, after background agent updates in silent modes, or whenever acknowledging aloud would be distracting. This tool has no user-visible effect.","parameters":{"type":"object","properties":{},"additionalProperties":false}}]}"#;
     let session = normalized_json_string(session)?;
     assert_eq!(
         body,
@@ -1782,9 +1781,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
-            // Windows CI can spend several seconds starting the nested PowerShell command. This
-            // test verifies delegated shell-tool plumbing, not timeout enforcement.
-            Some(DELEGATED_SHELL_TOOL_TIMEOUT_MS),
+            Some(5000),
             "shell_call",
         )?,
         create_final_assistant_message_sse_response("shell tool finished")?,
@@ -2259,6 +2256,10 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
     assert_eq!(
         request["session"]["tools"][0]["name"].as_str(),
         Some("background_agent")
+    );
+    assert_eq!(
+        request["session"]["tools"][1]["name"].as_str(),
+        Some("remain_silent")
     );
     assert_eq!(
         request["session"]["audio"]["input"]["transcription"]["model"].as_str(),

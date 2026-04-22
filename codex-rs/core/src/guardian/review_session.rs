@@ -7,7 +7,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -29,6 +28,8 @@ use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianFollowupReviewReminder;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::session::Codex;
 use crate::session::session::Session;
@@ -48,14 +49,6 @@ use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
-const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
-    "Use prior reviews as context, not binding precedent. ",
-    "Follow the Workspace Policy. ",
-    "If the user explicitly approves a previously rejected action after being informed of the ",
-    "concrete risks, set outcome to \"allow\" unless the policy explicitly disallows user ",
-    "overwrites in such cases."
-);
-
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed(anyhow::Result<Option<String>>),
@@ -265,6 +258,10 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "review session selection and trunk spawning must stay serialized"
+    )]
     pub(crate) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
@@ -588,6 +585,7 @@ async fn run_review_on_session(
             review_session
                 .codex
                 .submit(Op::UserTurn {
+                    environments: None,
                     items: prompt_items.items,
                     cwd: params.parent_turn.cwd.to_path_buf(),
                     approval_policy: AskForApproval::Never,
@@ -630,8 +628,7 @@ async fn run_review_on_session(
 
 async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {
     let turn_context = review_session.codex.session.new_default_turn().await;
-    let reminder: ResponseItem =
-        DeveloperInstructions::new(GUARDIAN_FOLLOWUP_REVIEW_REMINDER).into();
+    let reminder: ResponseItem = ContextualUserFragment::into(GuardianFollowupReviewReminder);
     review_session
         .codex
         .session
@@ -722,13 +719,14 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.include_skill_instructions = false;
-    guardian_config.developer_instructions = Some(
+    guardian_config.base_instructions = Some(
         parent_config
             .guardian_policy_config
             .as_deref()
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
+    guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -770,8 +768,8 @@ pub(crate) fn build_guardian_review_session_config(
             )
         })?;
         if guardian_config.features.enabled(feature) {
-            anyhow::bail!(
-                "guardian review session requires `features.{}` to be disabled",
+            warn!(
+                "guardian review session could not disable `features.{}`; continuing with the feature enabled",
                 feature.key()
             );
         }

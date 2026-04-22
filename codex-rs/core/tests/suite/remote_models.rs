@@ -172,6 +172,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -248,6 +249,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -323,6 +325,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -411,6 +414,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -474,6 +478,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -636,6 +641,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -861,6 +867,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
