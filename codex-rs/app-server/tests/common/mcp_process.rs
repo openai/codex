@@ -19,6 +19,7 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecTerminateParams;
+use codex_app_server_protocol::CommandExecUnsandboxedParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
@@ -670,6 +671,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("command/exec", params).await
+    }
+
+    /// Send a `command/execUnsandboxed` JSON-RPC request (v2).
+    pub async fn send_command_exec_unsandboxed_request(
+        &mut self,
+        params: CommandExecUnsandboxedParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("command/execUnsandboxed", params).await
     }
 
     /// Send a `command/exec/write` JSON-RPC request (v2).

@@ -564,6 +564,11 @@ client_request_definitions! {
         params: v2::CommandExecParams,
         response: v2::CommandExecResponse,
     },
+    /// Execute a standalone command (argv vector) without a sandbox.
+    CommandExecUnsandboxed => "command/execUnsandboxed" {
+        params: v2::CommandExecUnsandboxedParams,
+        response: v2::CommandExecResponse,
+    },
     /// Write stdin bytes to a running `command/exec` session or close stdin.
     CommandExecWrite => "command/exec/write" {
         params: v2::CommandExecWriteParams,

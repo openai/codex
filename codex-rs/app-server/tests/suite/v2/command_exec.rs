@@ -12,6 +12,7 @@ use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::CommandExecTerminalSize;
 use codex_app_server_protocol::CommandExecTerminateParams;
+use codex_app_server_protocol::CommandExecUnsandboxedParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -124,6 +125,55 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             stderr: "legacy-err".to_string(),
         }
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_unsandboxed_runs_without_sandbox_policy_param() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let probe_file = codex_home.path().join("unsandboxed-created");
+    let command_request_id = mcp
+        .send_command_exec_unsandboxed_request(CommandExecUnsandboxedParams {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf unsandboxed > \"$1\"".to_string(),
+                "sh".to_string(),
+                probe_file.display().to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(probe_file)?, "unsandboxed");
 
     Ok(())
 }

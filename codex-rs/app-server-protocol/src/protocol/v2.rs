@@ -3031,6 +3031,81 @@ pub struct CommandExecParams {
     pub sandbox_policy: Option<SandboxPolicy>,
 }
 
+/// Run a standalone command (argv vector) without a sandbox or thread/turn.
+///
+/// The final `command/execUnsandboxed` response is deferred until the process
+/// exits and is sent only after all `command/exec/outputDelta` notifications
+/// for that connection have been emitted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecUnsandboxedParams {
+    /// Command argv vector. Empty arrays are rejected.
+    pub command: Vec<String>,
+    /// Optional client-supplied, connection-scoped process id.
+    ///
+    /// Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up
+    /// `command/exec/write`, `command/exec/resize`, and
+    /// `command/exec/terminate` calls. When omitted, buffered execution gets an
+    /// internal id that is not exposed to the client.
+    #[ts(optional = nullable)]
+    pub process_id: Option<String>,
+    /// Enable PTY mode.
+    ///
+    /// This implies `streamStdin` and `streamStdoutStderr`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tty: bool,
+    /// Allow follow-up `command/exec/write` requests to write stdin bytes.
+    ///
+    /// Requires a client-supplied `processId`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdin: bool,
+    /// Stream stdout/stderr via `command/exec/outputDelta` notifications.
+    ///
+    /// Streamed bytes are not duplicated into the final response and require a
+    /// client-supplied `processId`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stream_stdout_stderr: bool,
+    /// Optional per-stream stdout/stderr capture cap in bytes.
+    ///
+    /// When omitted, the server default applies. Cannot be combined with
+    /// `disableOutputCap`.
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub output_bytes_cap: Option<usize>,
+    /// Disable stdout/stderr capture truncation for this request.
+    ///
+    /// Cannot be combined with `outputBytesCap`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_output_cap: bool,
+    /// Disable the timeout entirely for this request.
+    ///
+    /// Cannot be combined with `timeoutMs`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_timeout: bool,
+    /// Optional timeout in milliseconds.
+    ///
+    /// When omitted, the server default applies. Cannot be combined with
+    /// `disableTimeout`.
+    #[ts(type = "number | null")]
+    #[ts(optional = nullable)]
+    pub timeout_ms: Option<i64>,
+    /// Optional working directory. Defaults to the server cwd.
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    /// Optional environment overrides merged into the server-computed
+    /// environment.
+    ///
+    /// Matching names override inherited values. Set a key to `null` to unset
+    /// an inherited variable.
+    #[ts(optional = nullable)]
+    pub env: Option<HashMap<String, Option<String>>>,
+    /// Optional initial PTY size in character cells. Only valid when `tty` is
+    /// true.
+    #[ts(optional = nullable)]
+    pub size: Option<CommandExecTerminalSize>,
+}
+
 /// Final buffered result for `command/exec`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -8170,6 +8245,44 @@ mod tests {
 
         let decoded =
             serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn command_exec_unsandboxed_params_round_trips_without_sandbox_policy() {
+        let params = CommandExecUnsandboxedParams {
+            command: vec!["sleep".to_string(), "30".to_string()],
+            process_id: Some("sleep-1".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: true,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+        };
+
+        let value =
+            serde_json::to_value(&params).expect("serialize command/execUnsandboxed params");
+        assert_eq!(
+            value,
+            json!({
+                "command": ["sleep", "30"],
+                "processId": "sleep-1",
+                "disableTimeout": true,
+                "timeoutMs": null,
+                "cwd": null,
+                "env": null,
+                "size": null,
+                "outputBytesCap": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecUnsandboxedParams>(value)
+            .expect("deserialize round-trip");
         assert_eq!(decoded, params);
     }
 

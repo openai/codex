@@ -165,6 +165,7 @@ Example with notification opt-out:
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `command/execUnsandboxed` — run a single command without the server sandbox; accepts the same execution controls as `command/exec` except there is no `sandboxPolicy` parameter.
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
@@ -833,6 +834,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 ```
 
 - For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+- Use `command/execUnsandboxed` to run the same argv-based command flow without Codex sandboxing. Its params are the same as `command/exec` except `sandboxPolicy` is not accepted, it does not validate against sandbox constraints, and follow-up `command/exec/write`, `command/exec/resize`, `command/exec/terminate`, and `command/exec/outputDelta` use the same `processId` rules.
 
 Notes:
 
