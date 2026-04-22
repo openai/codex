@@ -189,7 +189,7 @@ use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
-use self::session::SessionSettingsUpdate;
+pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
@@ -1306,6 +1306,14 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn validate_settings(
+        &self,
+        updates: &SessionSettingsUpdate,
+    ) -> ConstraintResult<()> {
+        let state = self.state.lock().await;
+        state.session_configuration.apply(updates).map(|_| ())
     }
 
     pub(crate) async fn set_session_startup_prewarm(

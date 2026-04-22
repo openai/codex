@@ -162,6 +162,7 @@ pub(super) async fn user_input_or_turn_inner(
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
                     sandbox_policy: Some(sandbox_policy),
+                    permission_profile: None,
                     windows_sandbox_level: None,
                     collaboration_mode,
                     reasoning_summary: summary,
@@ -172,6 +173,56 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_version: None,
                 },
                 None,
+                environments,
+            )
+        }
+        Op::UserInputWithTurnContext {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            final_output_json_schema,
+            items,
+            responsesapi_client_metadata,
+            collaboration_mode,
+            personality,
+            environments,
+        } => {
+            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
+                Some(collab_mode)
+            } else {
+                let state = sess.state.lock().await;
+                Some(
+                    state
+                        .session_configuration
+                        .collaboration_mode
+                        .with_updates(model, effort, /*developer_instructions*/ None),
+                )
+            };
+            (
+                items,
+                SessionSettingsUpdate {
+                    cwd,
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy,
+                    permission_profile,
+                    windows_sandbox_level,
+                    collaboration_mode,
+                    reasoning_summary: summary,
+                    service_tier,
+                    final_output_json_schema: Some(final_output_json_schema),
+                    personality,
+                    app_server_client_name: None,
+                    app_server_client_version: None,
+                },
+                responsesapi_client_metadata,
                 environments,
             )
         }
@@ -1062,6 +1113,7 @@ pub(super) async fn submission_loop(
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy,
+                    permission_profile,
                     windows_sandbox_level,
                     model,
                     effort,
@@ -1088,6 +1140,7 @@ pub(super) async fn submission_loop(
                             approval_policy,
                             approvals_reviewer,
                             sandbox_policy,
+                            permission_profile,
                             windows_sandbox_level,
                             collaboration_mode: Some(collaboration_mode),
                             reasoning_summary: summary,
@@ -1099,7 +1152,9 @@ pub(super) async fn submission_loop(
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. }
+                | Op::UserInputWithTurnContext { .. }
+                | Op::UserTurn { .. } => {
                     user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
