@@ -6,7 +6,6 @@ mod file_system;
 mod fs_helper;
 mod fs_helper_main;
 mod fs_sandbox;
-mod http_request;
 mod local_file_system;
 mod local_process;
 mod process;
