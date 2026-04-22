@@ -341,6 +341,9 @@
             "apps": {
               "type": "boolean"
             },
+            "browser_use": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -411,6 +414,9 @@
               "type": "boolean"
             },
             "image_generation": {
+              "type": "boolean"
+            },
+            "in_app_browser": {
               "type": "boolean"
             },
             "include_apply_patch_tool": {
@@ -2344,6 +2350,9 @@
         "apps": {
           "type": "boolean"
         },
+        "browser_use": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -2414,6 +2423,9 @@
           "type": "boolean"
         },
         "image_generation": {
+          "type": "boolean"
+        },
+        "in_app_browser": {
           "type": "boolean"
         },
         "include_apply_patch_tool": {
