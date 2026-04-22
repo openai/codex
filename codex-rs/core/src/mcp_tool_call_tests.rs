@@ -62,7 +62,6 @@ fn approval_metadata(
         connector_description: connector_description.map(str::to_string),
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -684,7 +683,6 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Create Event".to_string()),
         tool_description: Some("Create a calendar event.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: Some(
             serde_json::json!({
@@ -872,7 +870,6 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         connector_description: None,
         tool_title: None,
         tool_description: None,
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1437,7 +1434,6 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         connector_description: None,
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1448,6 +1444,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-1",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1510,7 +1507,6 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         connector_description: None,
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1521,6 +1517,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-guardian",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -1566,7 +1563,6 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         connector_description: None,
         tool_title: Some("Create entities".to_string()),
         tool_description: None,
-        model_tool_name: "mcp__memory__create_entities".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1577,6 +1573,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         &turn_context,
         "call-mcp-hook",
         &invocation,
+        "mcp__memory__create_entities",
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -1605,6 +1602,61 @@ async fn permission_request_hook_allows_mcp_tool_call() {
                     "entityType": "person"
                 }]
             }
+        })]
+    );
+}
+
+#[tokio::test]
+async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let log_path = install_mcp_permission_request_hook(
+        &mut session,
+        &turn_context,
+        "mcp__memory__.*",
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" }
+            }
+        }),
+    );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "memory".to_string(),
+        tool: "create_entities".to_string(),
+        arguments: Some(serde_json::json!({ "entities": [] })),
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-mcp-hook-no-metadata",
+        &invocation,
+        "mcp__memory__create_entities",
+        /*metadata*/ None,
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    let log = std::fs::read_to_string(log_path).expect("read MCP permission hook log");
+    let inputs = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs,
+        vec![serde_json::json!({
+            "session_id": session.conversation_id,
+            "turn_id": "turn_id",
+            "cwd": turn_context.cwd,
+            "transcript_path": null,
+            "model": turn_context.model_info.slug,
+            "permission_mode": "default",
+            "tool_name": "mcp__memory__create_entities",
+            "hook_event_name": "PermissionRequest",
+            "tool_input": { "entities": [] }
         })]
     );
 }
@@ -1642,7 +1694,6 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         connector_description: None,
         tool_title: Some("Create entities".to_string()),
         tool_description: None,
-        model_tool_name: "mcp__memory__create_entities".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1659,6 +1710,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         &turn_context,
         "call-mcp-remembered",
         &invocation,
+        "mcp__memory__create_entities",
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -1728,7 +1780,6 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         connector_description: None,
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Reads calendar data.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1739,6 +1790,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         &turn_context,
         "call-guardian-deny",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -1781,7 +1833,6 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         connector_description: None,
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1796,6 +1847,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &turn_context,
                 "call-prompt",
                 &invocation,
+                "mcp__test__tool",
                 Some(&metadata),
                 AppToolApproval::Prompt,
             )
@@ -1860,7 +1912,6 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1871,6 +1922,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &turn_context,
         "call-2",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1932,7 +1984,6 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         connector_description: None,
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -1943,6 +1994,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &turn_context,
         "call-2-custom",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -2004,7 +2056,6 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -2015,6 +2066,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         &turn_context,
         "call-3",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -2084,7 +2136,6 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -2100,6 +2151,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
             &turn_context,
             "call-2",
             &invocation,
+            "mcp__test__tool",
             Some(&metadata),
             approval_mode,
         )
@@ -2191,7 +2243,6 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
-        model_tool_name: "mcp__test__tool".to_string(),
         mcp_app_resource_uri: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
@@ -2202,6 +2253,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         &turn_context,
         "call-3",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )

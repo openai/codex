@@ -58,6 +58,7 @@ impl ToolHandler for McpHandler {
             session,
             turn,
             call_id,
+            tool_name: model_tool_name,
             payload,
             ..
         } = invocation;
@@ -85,6 +86,7 @@ impl ToolHandler for McpHandler {
             call_id.clone(),
             server,
             tool,
+            model_tool_name.display(),
             arguments_str,
         )
         .await;

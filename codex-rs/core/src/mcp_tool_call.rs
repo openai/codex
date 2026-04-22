@@ -82,6 +82,7 @@ pub(crate) async fn handle_mcp_tool_call(
     call_id: String,
     server: String,
     tool_name: String,
+    hook_tool_name: String,
     arguments: String,
 ) -> HandledMcpToolCall {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
@@ -186,6 +187,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context,
         &call_id,
         &invocation,
+        &hook_tool_name,
         metadata.as_ref(),
         approval_mode,
     )
@@ -722,7 +724,6 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
-    model_tool_name: String,
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
@@ -883,6 +884,7 @@ async fn maybe_request_mcp_tool_approval(
     turn_context: &Arc<TurnContext>,
     call_id: &str,
     invocation: &McpInvocation,
+    hook_tool_name: &str,
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
@@ -933,31 +935,29 @@ async fn maybe_request_mcp_tool_approval(
         return Some(McpToolApprovalDecision::Accept);
     }
 
-    if let Some(metadata) = metadata {
-        match run_permission_request_hooks(
-            sess,
-            turn_context,
-            call_id,
-            PermissionRequestPayload {
-                tool_name: HookToolName::new(metadata.model_tool_name.clone()),
-                tool_input: invocation
-                    .arguments
-                    .clone()
-                    .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
-            },
-        )
-        .await
-        {
-            Some(PermissionRequestDecision::Allow) => {
-                return Some(McpToolApprovalDecision::Accept);
-            }
-            Some(PermissionRequestDecision::Deny { message }) => {
-                return Some(McpToolApprovalDecision::Decline {
-                    message: Some(message),
-                });
-            }
-            None => {}
+    match run_permission_request_hooks(
+        sess,
+        turn_context,
+        call_id,
+        PermissionRequestPayload {
+            tool_name: HookToolName::new(hook_tool_name),
+            tool_input: invocation
+                .arguments
+                .clone()
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        },
+    )
+    .await
+    {
+        Some(PermissionRequestDecision::Allow) => {
+            return Some(McpToolApprovalDecision::Accept);
         }
+        Some(PermissionRequestDecision::Deny { message }) => {
+            return Some(McpToolApprovalDecision::Decline {
+                message: Some(message),
+            });
+        }
+        None => {}
     }
 
     let tool_call_mcp_elicitation_enabled = turn_context
@@ -1239,8 +1239,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         None
     };
 
-    let model_tool_name = tool_info.canonical_tool_name().display();
-
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
         connector_id: tool_info.connector_id,
@@ -1248,7 +1246,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
-        model_tool_name,
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
         codex_apps_meta: tool_info
             .tool
