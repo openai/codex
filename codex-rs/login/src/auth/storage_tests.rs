@@ -72,7 +72,7 @@ async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
         openai_api_key: None,
         tokens: None,
         last_refresh: None,
-        agent_identity: Some(agent_identity),
+        agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity)),
     };
 
     storage.save(&auth_dot_json)?;
@@ -107,7 +107,11 @@ async fn file_storage_loads_agent_identity_as_jwt() -> anyhow::Result<()> {
     let loaded = storage.load()?;
 
     assert_eq!(
-        loaded.expect("auth should load").agent_identity.as_deref(),
+        loaded
+            .expect("auth should load")
+            .agent_identity
+            .as_ref()
+            .and_then(AgentIdentityStorage::as_jwt),
         Some(agent_identity_jwt.as_str())
     );
     Ok(())

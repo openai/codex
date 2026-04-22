@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth::storage::AgentIdentityStorage;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
@@ -6,6 +7,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
+use codex_protocol::protocol::SessionSource;
 
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -16,6 +18,12 @@ use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -94,7 +102,9 @@ fn login_with_agent_identity_writes_only_token() {
         .expect("auth.json should parse");
     assert_eq!(auth.auth_mode, Some(AuthMode::AgentIdentity));
     assert_eq!(
-        auth.agent_identity.as_deref(),
+        auth.agent_identity
+            .as_ref()
+            .and_then(AgentIdentityStorage::as_jwt),
         Some(agent_identity.as_str())
     );
     assert!(auth.tokens.is_none(), "tokens should be cleared");
@@ -114,6 +124,107 @@ fn login_with_agent_identity_rejects_invalid_jwt() {
         !get_auth_file(dir.path()).exists(),
         "invalid Agent Identity token should not write auth.json"
     );
+}
+
+#[tokio::test]
+async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )?;
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )?
+    .expect("auth should load");
+
+    assert!(
+        auth.agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOnly,
+            /*chatgpt_base_url*/ None,
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .is_none()
+    );
+
+    let server = MockServer::start().await;
+    let target_url = format!("{}/v1/agent/register", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/authenticate_app_v2"))
+        .and(header("authorization", "Bearer test-access-token"))
+        .and(header("x-original-method", "POST"))
+        .and(header("x-original-url", target_url))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200)
+                .insert_header("x-openai-authorization", "human-biscuit"),
+        )
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/register"))
+        .and(header("x-openai-authorization", "human-biscuit"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "agent_runtime_id": "agent-runtime-123",
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    let agent_auth = auth
+        .agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOrChatgpt,
+            Some(server.uri()),
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .expect("agent identity should register");
+    let reused = auth
+        .agent_identity_auth(
+            AgentIdentityAuthPolicy::JwtOrChatgpt,
+            Some(server.uri()),
+            /*forced_chatgpt_workspace_id*/ None,
+            SessionSource::Cli,
+        )
+        .await?
+        .expect("agent identity should be reused");
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/agent-runtime-123/task/register"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "task_id": "task-123",
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    agent_auth.ensure_runtime(Some(server.uri())).await?;
+    reused.ensure_runtime(Some(server.uri())).await?;
+
+    assert_eq!(
+        agent_auth.record().agent_runtime_id,
+        reused.record().agent_runtime_id
+    );
+    assert_eq!(agent_auth.process_task_id(), Some("task-123"));
+    assert_eq!(reused.process_task_id(), Some("task-123"));
+    assert_eq!(agent_auth.record().agent_runtime_id, "agent-runtime-123");
+    assert_eq!(agent_auth.record().account_id, "account-123");
+    assert_eq!(agent_auth.record().chatgpt_user_id, "user-12345");
+    assert_eq!(
+        auth.get_agent_identity("account-123")
+            .expect("identity should persist")
+            .agent_runtime_id,
+        "agent-runtime-123"
+    );
+    Ok(())
 }
 
 #[test]
@@ -798,6 +909,7 @@ fn agent_identity_record(account_id: &str) -> AgentIdentityAuthRecord {
         email: "user@example.com".to_string(),
         plan_type: AccountPlanType::Pro,
         chatgpt_account_is_fedramp: false,
+        registered_at: None,
     }
 }
 

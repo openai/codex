@@ -43,7 +43,30 @@ pub struct AuthDotJson {
     pub last_refresh: Option<DateTime<Utc>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_identity: Option<String>,
+    pub agent_identity: Option<AgentIdentityStorage>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentIdentityStorage {
+    Jwt(String),
+    Record(AgentIdentityAuthRecord),
+}
+
+impl AgentIdentityStorage {
+    pub(crate) fn as_jwt(&self) -> Option<&str> {
+        match self {
+            Self::Jwt(jwt) => Some(jwt),
+            Self::Record(_) => None,
+        }
+    }
+
+    pub(crate) fn as_record(&self) -> Option<&AgentIdentityAuthRecord> {
+        match self {
+            Self::Jwt(_) => None,
+            Self::Record(record) => Some(record),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -55,6 +78,8 @@ pub struct AgentIdentityAuthRecord {
     pub email: String,
     pub plan_type: AccountPlanType,
     pub chatgpt_account_is_fedramp: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<String>,
 }
 
 impl AgentIdentityAuthRecord {
@@ -69,6 +94,7 @@ impl AgentIdentityAuthRecord {
             email: claims.email,
             plan_type: claims.plan_type,
             chatgpt_account_is_fedramp: claims.chatgpt_account_is_fedramp,
+            registered_at: None,
         })
     }
 }
