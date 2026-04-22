@@ -714,7 +714,7 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
 }
 
 #[tokio::test]
-async fn list_threads_metadata_filter_overlays_state_db_git_info() -> std::io::Result<()> {
+async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
 
@@ -776,6 +776,69 @@ async fn list_threads_metadata_filter_overlays_state_db_git_info() -> std::io::R
         Some("https://example.com/repo.git")
     );
     Ok(())
+}
+
+#[test]
+fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
+    let filesystem_thread_id = ThreadId::new();
+    let state_thread_id = ThreadId::new();
+    let filesystem_path = PathBuf::from("/tmp/filesystem-rollout.jsonl");
+    let state_path = PathBuf::from("/tmp/state-rollout.jsonl");
+    let mut item = ThreadItem {
+        path: filesystem_path.clone(),
+        thread_id: Some(filesystem_thread_id),
+        first_user_message: Some("filesystem message".to_string()),
+        cwd: None,
+        git_branch: None,
+        git_sha: None,
+        git_origin_url: None,
+        source: None,
+        agent_nickname: None,
+        agent_role: None,
+        model_provider: None,
+        cli_version: None,
+        created_at: None,
+        updated_at: None,
+    };
+    let state_item = ThreadItem {
+        path: state_path,
+        thread_id: Some(state_thread_id),
+        first_user_message: Some("state message".to_string()),
+        cwd: Some(PathBuf::from("/tmp/state-cwd")),
+        git_branch: Some("state-branch".to_string()),
+        git_sha: Some("state-sha".to_string()),
+        git_origin_url: Some("https://example.com/state.git".to_string()),
+        source: Some(SessionSource::Exec),
+        agent_nickname: Some("state-agent".to_string()),
+        agent_role: Some("state-role".to_string()),
+        model_provider: Some("state-provider".to_string()),
+        cli_version: Some("state-version".to_string()),
+        created_at: Some("2025-01-03T16:00:00Z".to_string()),
+        updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
+    };
+
+    fill_missing_thread_item_metadata(&mut item, state_item);
+
+    assert_eq!(item.path, filesystem_path);
+    assert_eq!(item.thread_id, Some(filesystem_thread_id));
+    assert_eq!(
+        item.first_user_message.as_deref(),
+        Some("filesystem message")
+    );
+    assert_eq!(item.cwd.as_deref(), Some(Path::new("/tmp/state-cwd")));
+    assert_eq!(item.git_branch.as_deref(), Some("state-branch"));
+    assert_eq!(item.git_sha.as_deref(), Some("state-sha"));
+    assert_eq!(
+        item.git_origin_url.as_deref(),
+        Some("https://example.com/state.git")
+    );
+    assert_eq!(item.source, Some(SessionSource::Exec));
+    assert_eq!(item.agent_nickname.as_deref(), Some("state-agent"));
+    assert_eq!(item.agent_role.as_deref(), Some("state-role"));
+    assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
+    assert_eq!(item.cli_version.as_deref(), Some("state-version"));
+    assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
+    assert_eq!(item.updated_at.as_deref(), Some("2025-01-03T16:01:02.003Z"));
 }
 
 #[tokio::test]
