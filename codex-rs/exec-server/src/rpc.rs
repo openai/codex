@@ -77,6 +77,41 @@ impl RpcNotificationSender {
         Self { outgoing_tx }
     }
 
+    pub(crate) async fn send(
+        &self,
+        message: RpcServerOutboundMessage,
+        closed_error_message: &'static str,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.outgoing_tx
+            .send(message)
+            .await
+            .map_err(|_| internal_error(closed_error_message.into()))
+    }
+
+    pub(crate) async fn respond(
+        &self,
+        request_id: RequestId,
+        result: Value,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.send(
+            RpcServerOutboundMessage::Response { request_id, result },
+            "RPC connection closed while sending response",
+        )
+        .await
+    }
+
+    pub(crate) async fn respond_error(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.send(
+            RpcServerOutboundMessage::Error { request_id, error },
+            "RPC connection closed while sending error response",
+        )
+        .await
+    }
+
     #[allow(dead_code)]
     pub(crate) async fn notify<P: Serialize>(
         &self,
@@ -84,15 +119,14 @@ impl RpcNotificationSender {
         params: &P,
     ) -> Result<(), JSONRPCErrorError> {
         let params = serde_json::to_value(params).map_err(|err| internal_error(err.to_string()))?;
-        self.outgoing_tx
-            .send(RpcServerOutboundMessage::Notification(
-                JSONRPCNotification {
-                    method: method.to_string(),
-                    params: Some(params),
-                },
-            ))
-            .await
-            .map_err(|_| internal_error("RPC connection closed while sending notification".into()))
+        self.send(
+            RpcServerOutboundMessage::Notification(JSONRPCNotification {
+                method: method.to_string(),
+                params: Some(params),
+            }),
+            "RPC connection closed while sending notification",
+        )
+        .await
     }
 }
 

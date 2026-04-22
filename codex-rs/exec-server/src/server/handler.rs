@@ -51,7 +51,7 @@ use crate::server::session_registry::SessionRegistry;
 
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
-    server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
+    notifications: RpcNotificationSender,
     session: StdMutex<Option<SessionHandle>>,
     body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
     file_system: FileSystemHandler,
@@ -62,12 +62,12 @@ pub(crate) struct ExecServerHandler {
 impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
-        server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
+        notifications: RpcNotificationSender,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
-            server_outbound_tx,
+            notifications,
             session: StdMutex::new(None),
             body_streams: Mutex::new(HashMap::new()),
             file_system: FileSystemHandler::new(runtime_paths),
@@ -201,9 +201,12 @@ impl ExecServerHandler {
                 }
             }
         };
-        self.server_outbound_tx.send(message).await.map_err(|_| {
-            internal_error("RPC connection closed while sending http/request response".into())
-        })?;
+        self.notifications
+            .send(
+                message,
+                "RPC connection closed while sending http/request response",
+            )
+            .await?;
         if let Some(pending_stream) = pending_stream {
             self.start_http_body_stream(pending_stream).await;
         }
@@ -343,7 +346,7 @@ impl ExecServerHandler {
     }
 
     fn notification_sender(&self) -> RpcNotificationSender {
-        RpcNotificationSender::new(self.server_outbound_tx.clone())
+        self.notifications.clone()
     }
 }
 

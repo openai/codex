@@ -9,6 +9,7 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::rpc::RequestRouteOutcome;
+use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
 use crate::rpc::invalid_request;
@@ -51,9 +52,10 @@ async fn run_connection(
         connection.into_parts();
     let (server_outbound_tx, mut server_outbound_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
+    let notifications = RpcNotificationSender::new(server_outbound_tx.clone());
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
-        server_outbound_tx.clone(),
+        notifications,
         runtime_paths,
     ));
 
