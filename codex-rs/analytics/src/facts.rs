@@ -13,6 +13,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
@@ -262,6 +263,91 @@ pub struct CodexCompactionEvent {
     pub duration_ms: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexResponsesApiCallStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexResponsesApiItemPhase {
+    Input,
+    Output,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexResponseItemType {
+    Message,
+    Reasoning,
+    LocalShellCall,
+    FunctionCall,
+    FunctionCallOutput,
+    CustomToolCall,
+    CustomToolCallOutput,
+    ToolSearchCall,
+    ToolSearchOutput,
+    WebSearchCall,
+    ImageGenerationCall,
+    GhostSnapshot,
+    Compaction,
+    Other,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct CodexResponsesApiItemMetadata {
+    pub item_phase: CodexResponsesApiItemPhase,
+    pub item_index: usize,
+    pub response_item_type: CodexResponseItemType,
+    pub role: Option<String>,
+    pub status: Option<String>,
+    pub message_phase: Option<MessagePhase>,
+    pub call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub payload_bytes: Option<i64>,
+    pub text_part_count: Option<usize>,
+    pub image_part_count: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CodexResponsesApiCallInput {
+    pub responses_id: Option<String>,
+    pub turn_responses_call_index: u64,
+    pub status: CodexResponsesApiCallStatus,
+    pub error: Option<String>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub input_item_count: usize,
+    pub output_item_count: usize,
+    pub items: Vec<CodexResponsesApiItemMetadata>,
+    pub token_usage: Option<TokenUsage>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CodexResponsesApiCallFact {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub responses_id: Option<String>,
+    pub turn_responses_call_index: u64,
+    pub status: CodexResponsesApiCallStatus,
+    pub error: Option<String>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub input_item_count: usize,
+    pub output_item_count: usize,
+    pub input_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub reasoning_output_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub items: Vec<CodexResponsesApiItemMetadata>,
+}
+
 #[allow(dead_code)]
 pub(crate) enum AnalyticsFact {
     Initialize {
@@ -295,6 +381,7 @@ pub(crate) enum AnalyticsFact {
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
     Compaction(Box<CodexCompactionEvent>),
+    ResponsesApiCall(Box<CodexResponsesApiCallFact>),
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),

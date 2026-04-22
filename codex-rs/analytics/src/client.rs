@@ -8,6 +8,8 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexResponsesApiCallFact;
+use crate::facts::CodexResponsesApiCallInput;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
@@ -38,6 +40,7 @@ use tokio::sync::mpsc;
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
 const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
+const RESPONSES_API_ERROR_MAX_BYTES: usize = 1024;
 
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
@@ -214,6 +217,40 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_responses_api_call(
+        &self,
+        tracking: TrackEventsContext,
+        input: CodexResponsesApiCallInput,
+    ) {
+        let token_usage = input.token_usage;
+        let error = input.error.map(truncate_responses_api_error);
+        let event = CodexResponsesApiCallFact {
+            thread_id: tracking.thread_id,
+            turn_id: tracking.turn_id,
+            responses_id: input.responses_id,
+            turn_responses_call_index: input.turn_responses_call_index,
+            status: input.status,
+            error,
+            started_at: input.started_at,
+            completed_at: input.completed_at,
+            duration_ms: input.duration_ms,
+            input_item_count: input.input_item_count,
+            output_item_count: input.output_item_count,
+            input_tokens: token_usage.as_ref().map(|usage| usage.input_tokens),
+            cached_input_tokens: token_usage.as_ref().map(|usage| usage.cached_input_tokens),
+            output_tokens: token_usage.as_ref().map(|usage| usage.output_tokens),
+            reasoning_output_tokens: token_usage
+                .as_ref()
+                .map(|usage| usage.reasoning_output_tokens),
+            total_tokens: token_usage.as_ref().map(|usage| usage.total_tokens),
+            items: input.items,
+        };
+
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ResponsesApiCall(Box::new(event)),
+        ));
+    }
+
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
@@ -294,6 +331,18 @@ impl AnalyticsEventsClient {
     pub fn track_notification(&self, notification: ServerNotification) {
         self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
     }
+}
+
+fn truncate_responses_api_error(mut error: String) -> String {
+    if error.len() <= RESPONSES_API_ERROR_MAX_BYTES {
+        return error;
+    }
+    let mut truncate_at = RESPONSES_API_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(truncate_at) {
+        truncate_at -= 1;
+    }
+    error.truncate(truncate_at);
+    error
 }
 
 async fn send_track_events(
