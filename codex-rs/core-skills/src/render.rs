@@ -560,6 +560,10 @@ mod tests {
         skill
     }
 
+    fn expected_skill_line(skill: &SkillMetadata, description: &str) -> String {
+        SkillLine::new(skill).render_with_description(description)
+    }
+
     #[test]
     fn default_budget_uses_two_percent_of_full_context_window() {
         assert_eq!(
@@ -593,8 +597,12 @@ mod tests {
             + SkillLine::new(&beta).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 6);
 
-        let rendered = build_available_skills(&[beta, alpha], budget, SkillRenderSideEffects::None)
-            .expect("skills should render");
+        let rendered = build_available_skills(
+            &[beta.clone(), alpha.clone()],
+            budget,
+            SkillRenderSideEffects::None,
+        )
+        .expect("skills should render");
 
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
@@ -603,8 +611,8 @@ mod tests {
         assert_eq!(
             rendered.skill_lines,
             vec![
-                "- alpha-skill: ab (file: /tmp/alpha-skill/SKILL.md)",
-                "- beta-skill: uv (file: /tmp/beta-skill/SKILL.md)",
+                expected_skill_line(&alpha, "ab"),
+                expected_skill_line(&beta, "uv"),
             ]
         );
     }
@@ -663,8 +671,12 @@ mod tests {
             + SkillLine::new(&long).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
         let budget = SkillMetadataBudget::Characters(minimum_cost + 11);
 
-        let rendered = build_available_skills(&[short, long], budget, SkillRenderSideEffects::None)
-            .expect("skills should render");
+        let rendered = build_available_skills(
+            &[short.clone(), long.clone()],
+            budget,
+            SkillRenderSideEffects::None,
+        )
+        .expect("skills should render");
 
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
@@ -672,8 +684,8 @@ mod tests {
         assert_eq!(
             rendered.skill_lines,
             vec![
-                "- long-skill: abcdefgh (file: /tmp/long-skill/SKILL.md)",
-                "- short-skill: x (file: /tmp/short-skill/SKILL.md)",
+                expected_skill_line(&long, "abcdefgh"),
+                expected_skill_line(&short, "x"),
             ]
         );
     }

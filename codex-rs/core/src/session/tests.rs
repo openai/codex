@@ -4744,12 +4744,13 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
     };
-    let minimum_budget = "- alpha-skill: (file: /tmp/alpha-skill/SKILL.md)\n"
-        .chars()
-        .count()
-        + "- beta-skill: (file: /tmp/beta-skill/SKILL.md)\n"
+    let minimum_skill_line_cost = |skill: &SkillMetadata| {
+        let path = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
+        format!("- {}: (file: {})\n", skill.name, path)
             .chars()
-            .count();
+            .count()
+    };
+    let minimum_budget = minimum_skill_line_cost(&alpha) + minimum_skill_line_cost(&beta);
 
     let rendered = build_available_skills(
         &[alpha, beta],
