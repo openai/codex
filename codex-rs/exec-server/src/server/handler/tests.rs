@@ -173,10 +173,7 @@ async fn long_poll_read_fails_after_session_resume() {
     first_handler
         .exec(exec_params_with_argv(
             "proc-long-poll",
-            shell_argv(
-                "sleep 0.1; printf resumed",
-                "ping -n 2 127.0.0.1 >NUL && echo resumed",
-            ),
+            shell_argv("sleep 5", "ping -n 6 127.0.0.1 >NUL"),
         ))
         .await
         .expect("start process");
