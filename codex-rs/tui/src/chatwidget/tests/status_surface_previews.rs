@@ -91,7 +91,7 @@ async fn status_line_setup_popup_live_only_snapshot() {
     chat.status_line_branch = Some("feature/live-preview-branch".to_string());
     chat.thread_name = Some("Live preview thread".to_string());
     chat.config.tui_status_line = Some(vec![
-        "project-root".to_string(),
+        "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
     ]);
@@ -127,7 +127,7 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec![
-        "project-root".to_string(),
+        "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
     ]);
@@ -167,7 +167,7 @@ async fn status_line_setup_popup_mixed_snapshot() {
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.config.tui_status_line = Some(vec![
-        "project-root".to_string(),
+        "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
     ]);
@@ -186,8 +186,8 @@ async fn terminal_title_setup_popup_live_only_snapshot() {
     chat.thread_name = Some("Live preview thread".to_string());
     chat.last_plan_progress = Some((2, 5));
     chat.config.tui_terminal_title = Some(vec![
-        "project".to_string(),
-        "thread".to_string(),
+        "project-name".to_string(),
+        "thread-title".to_string(),
         "git-branch".to_string(),
         "task-progress".to_string(),
     ]);
@@ -202,7 +202,7 @@ async fn terminal_title_setup_popup_live_only_snapshot() {
 async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_terminal_title = Some(vec![
-        "thread".to_string(),
+        "thread-title".to_string(),
         "git-branch".to_string(),
         "task-progress".to_string(),
     ]);
@@ -218,8 +218,8 @@ async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.config.tui_terminal_title = Some(vec![
-        "project".to_string(),
-        "thread".to_string(),
+        "project-name".to_string(),
+        "thread-title".to_string(),
         "task-progress".to_string(),
     ]);
 
