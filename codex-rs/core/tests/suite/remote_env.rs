@@ -59,26 +59,38 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
 }
 
 fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![absolute_path(readable_root)],
+    let readable_root = absolute_path(readable_root);
+    // The policy is evaluated in the remote container, so use a container path
+    // for cwd instead of capturing the local test runner cwd.
+    FileSystemSandboxContext::from_legacy_sandbox_policy(
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![readable_root.clone()],
+            },
+            network_access: false,
         },
-        network_access: false,
-    })
+        readable_root,
+    )
 }
 
 fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![absolute_path(writable_root)],
-        read_only_access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
+    let writable_root = absolute_path(writable_root);
+    // The policy is evaluated in the remote container, so use a container path
+    // for cwd instead of capturing the local test runner cwd.
+    FileSystemSandboxContext::from_legacy_sandbox_policy(
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![writable_root.clone()],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    })
+        writable_root,
+    )
 }
 
 fn assert_normalized_path_rejected(error: &std::io::Error) {
