@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codex-cli-bin"
+name = "openai-codex-cli-bin"
 version = "0.0.0-dev"
 description = "Pinned Codex CLI runtime for the Python SDK"
 readme = "README.md"

@@ -1316,6 +1316,7 @@ async fn status_line_branch_refreshes_after_turn_complete() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -1938,6 +1939,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -2883,6 +2885,7 @@ printf 'fenced within fenced\n'
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     for lines in drain_insert_history(&mut rx) {

@@ -6,6 +6,7 @@ import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ServiceTier } from "../ServiceTier";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
 
@@ -17,4 +18,16 @@ instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval,
 /**
  * Reviewer currently used for approval requests on this thread.
  */
-approvalsReviewer: ApprovalsReviewer, sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, };
+approvalsReviewer: ApprovalsReviewer,
+/**
+ * Legacy sandbox policy retained for compatibility. New clients should use
+ * `permissionProfile` when present as the canonical active permissions
+ * view.
+ */
+sandbox: SandboxPolicy,
+/**
+ * Canonical active permissions view for this thread when representable.
+ * This is `null` for external sandbox policies because external
+ * enforcement cannot be round-tripped as a `PermissionProfile`.
+ */
+permissionProfile: PermissionProfile | null, reasoningEffort: ReasoningEffort | null, };
