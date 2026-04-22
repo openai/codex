@@ -158,6 +158,108 @@ macro_rules! client_request_definitions {
                     })
                     .unwrap_or_else(|| "<unknown>".to_string())
             }
+
+            pub fn into_jsonrpc_parts(
+                self,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant { request_id, response } => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                }
+            }
+        }
+
+        #[derive(Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
+        pub enum ClientResponsePayload {
+            $( $variant($response), )*
+            InterruptConversation(v1::InterruptConversationResponse),
+        }
+
+        impl ClientResponsePayload {
+            pub fn into_jsonrpc_parts_and_payload(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<
+                (RequestId, crate::Result, Option<Box<ClientResponsePayload>>),
+                serde_json::Error,
+            > {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            let result = serde_json::to_value(&response)?;
+                            Ok((request_id, result, Some(Box::new(Self::$variant(response)))))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result, None))
+                    }
+                }
+            }
+
+            pub fn into_client_response(self, request_id: RequestId) -> Option<ClientResponse> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            Some(ClientResponse::$variant {
+                                request_id,
+                                response,
+                            })
+                        }
+                    )*
+                    Self::InterruptConversation(_) => None,
+                }
+            }
+
+            pub fn into_jsonrpc_parts_and_client_response(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<
+                (RequestId, crate::Result, Option<ClientResponse>),
+                serde_json::Error,
+            > {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            let result = serde_json::to_value(&response)?;
+                            let client_response = ClientResponse::$variant {
+                                request_id: request_id.clone(),
+                                response,
+                            };
+                            Ok((request_id, result, Some(client_response)))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result, None))
+                    }
+                }
+            }
+
+            pub fn into_jsonrpc_parts(
+                self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                self.to_jsonrpc_parts(request_id)
+            }
+
+            pub fn to_jsonrpc_parts(
+                &self,
+                request_id: RequestId,
+            ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
+                match self {
+                    $(
+                        Self::$variant(response) => {
+                            serde_json::to_value(response).map(|result| (request_id, result))
+                        }
+                    )*
+                    Self::InterruptConversation(response) => {
+                        serde_json::to_value(response).map(|result| (request_id, result))
+                    }
+                }
+            }
         }
 
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
@@ -1103,6 +1205,7 @@ mod tests {
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
+    use codex_protocol::protocol::TurnAbortReason;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -1538,6 +1641,45 @@ mod tests {
             }),
             serde_json::to_value(&response)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn client_response_payload_returns_jsonrpc_parts_and_client_response() -> Result<()> {
+        let (request_id, result, client_response) =
+            ClientResponsePayload::ThreadArchive(v2::ThreadArchiveResponse {})
+                .into_jsonrpc_parts_and_client_response(RequestId::Integer(7))?;
+
+        assert_eq!(request_id, RequestId::Integer(7));
+        assert_eq!(result, json!({}));
+
+        let Some(ClientResponse::ThreadArchive {
+            request_id,
+            response: _,
+        }) = client_response
+        else {
+            panic!("expected thread/archive client response");
+        };
+        assert_eq!(request_id, RequestId::Integer(7));
+        Ok(())
+    }
+
+    #[test]
+    fn interrupt_conversation_payload_stays_jsonrpc_only() -> Result<()> {
+        let (request_id, result, client_response) =
+            ClientResponsePayload::InterruptConversation(v1::InterruptConversationResponse {
+                abort_reason: TurnAbortReason::Interrupted,
+            })
+            .into_jsonrpc_parts_and_client_response(RequestId::Integer(8))?;
+
+        assert_eq!(request_id, RequestId::Integer(8));
+        assert_eq!(
+            result,
+            json!({
+                "abortReason": "interrupted",
+            })
+        );
+        assert!(client_response.is_none());
         Ok(())
     }
 

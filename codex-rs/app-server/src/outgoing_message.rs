@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
+use codex_analytics::AnalyticsEventsClient;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
@@ -117,6 +119,8 @@ pub(crate) struct OutgoingMessageSender {
     /// We keep them here because this is where responses, errors, and
     /// disconnect cleanup all get handled.
     request_contexts: Mutex<HashMap<ConnectionRequestId, RequestContext>>,
+    analytics_events_client: AnalyticsEventsClient,
+    general_analytics_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -185,10 +189,10 @@ impl ThreadScopedOutgoingMessageSender {
             .await
     }
 
-    pub(crate) async fn send_response<T: Serialize>(
+    pub(crate) async fn send_response(
         &self,
         request_id: ConnectionRequestId,
-        response: T,
+        response: ClientResponsePayload,
     ) {
         self.outgoing.send_response(request_id, response).await;
     }
@@ -203,12 +207,18 @@ impl ThreadScopedOutgoingMessageSender {
 }
 
 impl OutgoingMessageSender {
-    pub(crate) fn new(sender: mpsc::Sender<OutgoingEnvelope>) -> Self {
+    pub(crate) fn new(
+        sender: mpsc::Sender<OutgoingEnvelope>,
+        analytics_events_client: AnalyticsEventsClient,
+        general_analytics_enabled: bool,
+    ) -> Self {
         Self {
             next_server_request_id: AtomicI64::new(0),
             sender,
             request_id_to_callback: Mutex::new(HashMap::new()),
             request_contexts: Mutex::new(HashMap::new()),
+            analytics_events_client,
+            general_analytics_enabled,
         }
     }
 
@@ -469,21 +479,37 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_response<T: Serialize>(
+    pub(crate) async fn send_response(
         &self,
         request_id: ConnectionRequestId,
-        response: T,
+        response: ClientResponsePayload,
     ) {
+        let connection_id = request_id.connection_id;
+        let request_id_for_response = request_id.request_id.clone();
+        let serialized = if self.general_analytics_enabled {
+            response
+                .into_jsonrpc_parts_and_payload(request_id_for_response.clone())
+                .map(|(id, result, response)| {
+                    if let Some(response) = response {
+                        self.analytics_events_client.track_response_payload(
+                            connection_id.0,
+                            request_id_for_response,
+                            response,
+                        );
+                    }
+                    (id, result)
+                })
+        } else {
+            response.into_jsonrpc_parts(request_id_for_response)
+        };
         let request_context = self.take_request_context(&request_id).await;
-        match serde_json::to_value(response) {
-            Ok(result) => {
-                let outgoing_message = OutgoingMessage::Response(OutgoingResponse {
-                    id: request_id.request_id.clone(),
-                    result,
-                });
+
+        match serialized {
+            Ok((id, result)) => {
+                let outgoing_message = OutgoingMessage::Response(OutgoingResponse { id, result });
                 self.send_outgoing_message_to_connection(
                     request_context,
-                    request_id.connection_id,
+                    connection_id,
                     outgoing_message,
                     "response",
                 )
@@ -843,14 +869,23 @@ mod tests {
     #[tokio::test]
     async fn send_response_routes_to_target_connection() {
         let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
         let request_id = ConnectionRequestId {
             connection_id: ConnectionId(42),
             request_id: RequestId::Integer(7),
         };
 
         outgoing
-            .send_response(request_id.clone(), json!({ "ok": true }))
+            .send_response(
+                request_id.clone(),
+                ClientResponsePayload::ThreadArchive(
+                    codex_app_server_protocol::ThreadArchiveResponse {},
+                ),
+            )
             .await;
 
         let envelope = timeout(Duration::from_secs(1), rx.recv())
@@ -869,7 +904,7 @@ mod tests {
                     panic!("expected response message");
                 };
                 assert_eq!(response.id, request_id.request_id);
-                assert_eq!(response.result, json!({ "ok": true }));
+                assert_eq!(response.result, json!({}));
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }
@@ -878,7 +913,11 @@ mod tests {
     #[tokio::test]
     async fn send_response_clears_registered_request_context() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
         let request_id = ConnectionRequestId {
             connection_id: ConnectionId(42),
             request_id: RequestId::Integer(7),
@@ -894,7 +933,12 @@ mod tests {
         assert_eq!(outgoing.request_context_count().await, 1);
 
         outgoing
-            .send_response(request_id, json!({ "ok": true }))
+            .send_response(
+                request_id,
+                ClientResponsePayload::ThreadArchive(
+                    codex_app_server_protocol::ThreadArchiveResponse {},
+                ),
+            )
             .await;
 
         assert_eq!(outgoing.request_context_count().await, 0);
@@ -903,7 +947,11 @@ mod tests {
     #[tokio::test]
     async fn send_error_routes_to_target_connection() {
         let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
         let request_id = ConnectionRequestId {
             connection_id: ConnectionId(9),
             request_id: RequestId::Integer(3),
@@ -941,7 +989,11 @@ mod tests {
     #[tokio::test]
     async fn send_server_notification_to_connection_and_wait_tracks_write_completion() {
         let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
         let send_task = tokio::spawn(async move {
             outgoing
                 .send_server_notification_to_connection_and_wait(
@@ -985,7 +1037,11 @@ mod tests {
     #[tokio::test]
     async fn connection_closed_clears_registered_request_contexts() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
         let closed_connection_request = ConnectionRequestId {
             connection_id: ConnectionId(9),
             request_id: RequestId::Integer(3),
@@ -1019,7 +1075,11 @@ mod tests {
     #[tokio::test]
     async fn notify_client_error_forwards_error_to_waiter() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        );
 
         let (request_id, wait_for_result) = outgoing
             .send_request(ServerRequestPayload::ApplyPatchApproval(
@@ -1053,7 +1113,11 @@ mod tests {
     #[tokio::test]
     async fn pending_requests_for_thread_returns_thread_requests_in_request_id_order() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        ));
         let thread_id = ThreadId::new();
         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing.clone(),
@@ -1111,7 +1175,11 @@ mod tests {
     #[tokio::test]
     async fn cancel_requests_for_thread_cancels_all_thread_requests() {
         let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            false,
+        ));
         let thread_id = ThreadId::new();
         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing.clone(),
