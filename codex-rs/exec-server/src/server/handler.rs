@@ -6,9 +6,10 @@ use std::sync::atomic::Ordering;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use serde_json::to_value;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::ExecutorHttpRequestRunner;
@@ -50,7 +51,9 @@ pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
     session: StdMutex<Option<SessionHandle>>,
-    body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
+    active_body_stream_ids: Mutex<HashSet<String>>,
+    background_task_shutdown: CancellationToken,
+    background_tasks: TaskTracker,
     file_system: FileSystemHandler,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -66,7 +69,9 @@ impl ExecServerHandler {
             session_registry,
             notifications,
             session: StdMutex::new(None),
-            body_streams: Mutex::new(HashMap::new()),
+            active_body_stream_ids: Mutex::new(HashSet::new()),
+            background_task_shutdown: CancellationToken::new(),
+            background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -74,16 +79,9 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let tasks = {
-            let mut body_streams = self.body_streams.lock().await;
-            body_streams
-                .drain()
-                .filter_map(|(_, task)| task)
-                .collect::<Vec<_>>()
-        };
-        for task in tasks {
-            task.abort();
-        }
+        self.background_task_shutdown.cancel();
+        self.background_tasks.close();
+        self.background_tasks.wait().await;
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -311,34 +309,36 @@ impl ExecServerHandler {
         pending_stream: ExecutorPendingHttpBodyStream,
     ) {
         let request_id = pending_stream.request_id.clone();
+        if self.background_task_shutdown.is_cancelled() {
+            self.release_http_body_stream(&request_id).await;
+            return;
+        }
         let finished_request_id = request_id.clone();
         let handler = Arc::clone(self);
         let notifications = self.notifications.clone();
-        let task = tokio::spawn(async move {
-            ExecutorHttpRequestRunner::stream_body(pending_stream, notifications).await;
+        let shutdown = self.background_task_shutdown.clone();
+        self.background_tasks.spawn(async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {}
+                _ = ExecutorHttpRequestRunner::stream_body(pending_stream, notifications) => {}
+            }
             handler.release_http_body_stream(&finished_request_id).await;
         });
-        let mut body_streams = self.body_streams.lock().await;
-        if let Some(entry) = body_streams.get_mut(&request_id) {
-            *entry = Some(task);
-        } else {
-            task.abort();
-        }
     }
 
     async fn release_http_body_stream(&self, request_id: &str) {
-        let mut body_streams = self.body_streams.lock().await;
-        body_streams.remove(request_id);
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        active_body_stream_ids.remove(request_id);
     }
 
     async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
-        let mut body_streams = self.body_streams.lock().await;
-        if body_streams.contains_key(request_id) {
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        if active_body_stream_ids.contains(request_id) {
             return Err(invalid_params(format!(
                 "http/request streamResponse requestId `{request_id}` is already active"
             )));
         }
-        body_streams.insert(request_id.to_string(), None);
+        active_body_stream_ids.insert(request_id.to_string());
         Ok(())
     }
 }
