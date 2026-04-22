@@ -288,7 +288,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
-async fn start_thread_rejects_sticky_environment_when_environment_access_is_disabled() {
+async fn start_thread_accepts_explicit_environment_when_default_environment_is_disabled() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -302,7 +302,7 @@ async fn start_thread_rejects_sticky_environment_when_environment_access_is_disa
         disabled_environment_manager_for_tests(),
     );
 
-    let err = match manager
+    let thread = manager
         .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
             config: config.clone(),
             initial_history: InitialHistory::New,
@@ -316,14 +316,9 @@ async fn start_thread_rejects_sticky_environment_when_environment_access_is_disa
             }],
         })
         .await
-    {
-        Ok(_) => panic!("sticky environment should fail when environment access is disabled"),
-        Err(err) => err,
-    };
+        .expect("explicit sticky environment should resolve by id");
 
-    assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    assert_eq!(err.to_string(), "environment access is disabled");
-    assert!(manager.list_thread_ids().await.is_empty());
+    assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
 }
 
 #[tokio::test]

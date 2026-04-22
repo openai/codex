@@ -237,6 +237,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::project_trust_key;
+use codex_core::default_thread_environment_selections;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
@@ -2680,9 +2681,13 @@ impl CodexMessageProcessor {
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
-            listener_task_context
-                .thread_manager
-                .default_thread_environments(&config.cwd)
+            default_thread_environment_selections(
+                listener_task_context
+                    .thread_manager
+                    .environment_manager()
+                    .as_ref(),
+                &config.cwd,
+            )
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {

@@ -29,6 +29,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
+use crate::environment_selection::validate_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -470,6 +471,7 @@ impl Codex {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+        validate_environment_selections(environment_manager.as_ref(), &environments)?;
 
         let environment = environment_manager.default_environment();
         let fs = environment
@@ -598,8 +600,6 @@ impl Codex {
         } else {
             dynamic_tools
         };
-        Session::validate_turn_environment_selections(&environment_manager, &environments)?;
-
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
