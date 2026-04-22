@@ -632,6 +632,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

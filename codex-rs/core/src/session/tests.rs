@@ -107,6 +107,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -1544,6 +1545,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -2713,6 +2715,53 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     );
 }
 
+#[tokio::test]
+async fn session_configuration_apply_permission_profile_preserves_existing_deny_read_entries() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let cwd = tempfile::tempdir().expect("create temp dir");
+    session_configuration.cwd = cwd.path().abs();
+
+    let workspace_policy = SandboxPolicy::new_workspace_write_policy();
+    session_configuration.sandbox_policy =
+        codex_config::Constrained::allow_any(workspace_policy.clone());
+    let deny_entry = FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.env".to_string(),
+        },
+        access: FileSystemAccessMode::None,
+    };
+    let mut existing_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &workspace_policy,
+        session_configuration.cwd.as_path(),
+    );
+    existing_file_system_policy.glob_scan_max_depth = Some(2);
+    existing_file_system_policy.entries.push(deny_entry.clone());
+    session_configuration.file_system_sandbox_policy = existing_file_system_policy;
+
+    let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &workspace_policy,
+        session_configuration.cwd.as_path(),
+    );
+    let permission_profile = codex_protocol::models::PermissionProfile::from_runtime_permissions(
+        &requested_file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        })
+        .expect("permission profile update should succeed");
+
+    let mut expected_file_system_policy = requested_file_system_policy;
+    expected_file_system_policy.glob_scan_max_depth = Some(2);
+    expected_file_system_policy.entries.push(deny_entry);
+    assert_eq!(
+        updated.file_system_sandbox_policy,
+        expected_file_system_policy
+    );
+}
+
 #[cfg_attr(windows, ignore)]
 #[tokio::test]
 async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
@@ -3712,6 +3761,7 @@ fn op_kind_distinguishes_turn_ops() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
