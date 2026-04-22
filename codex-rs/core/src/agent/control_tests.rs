@@ -997,7 +997,7 @@ async fn spawn_agent_releases_slot_after_shutdown() {
 }
 
 #[tokio::test]
-async fn request_live_agent_shutdown_preserving_thread_releases_slot_without_untracking() {
+async fn request_live_agent_shutdown_preserving_thread_cleans_up_after_shutdown() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
         "agents.max_threads".to_string(),
@@ -1008,9 +1008,7 @@ async fn request_live_agent_shutdown_preserving_thread_releases_slot_without_unt
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.clone().to_path_buf(),
-        std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let control = manager.agent_control();
 
@@ -1027,10 +1025,13 @@ async fn request_live_agent_shutdown_preserving_thread_releases_slot_without_unt
         .await
         .expect("shutdown request should succeed");
 
-    manager
-        .get_thread(first_agent_id)
-        .await
-        .expect("thread should remain tracked after requested shutdown");
+    timeout(Duration::from_secs(5), async {
+        while manager.get_thread(first_agent_id).await.is_ok() {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("thread should be removed after shutdown completes");
 
     let second_agent_id = control
         .spawn_agent(
@@ -1044,9 +1045,7 @@ async fn request_live_agent_shutdown_preserving_thread_releases_slot_without_unt
     let report = manager
         .shutdown_all_threads_bounded(Duration::from_secs(10))
         .await;
-    let mut expected_completed = vec![first_agent_id, second_agent_id];
-    expected_completed.sort_by_key(std::string::ToString::to_string);
-    assert_eq!(report.completed, expected_completed);
+    assert_eq!(report.completed, vec![second_agent_id]);
     assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
     assert_eq!(report.timed_out, Vec::<ThreadId>::new());
     assert!(manager.list_thread_ids().await.is_empty());

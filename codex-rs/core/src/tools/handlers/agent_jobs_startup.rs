@@ -213,7 +213,12 @@ pub(super) async fn wait_for_startup_or_status_change(
 
     let active_items_ref = &*active_items;
     if active_items_ref.is_empty() {
-        if let Some(result) = startup_tasks.starting_items.join_next_with_id().await {
+        if let Ok(Some(result)) = timeout(
+            STATUS_POLL_INTERVAL,
+            startup_tasks.starting_items.join_next_with_id(),
+        )
+        .await
+        {
             let starting_items_len = startup_tasks.starting_items.len();
             handle_worker_startup_result(
                 session,
@@ -524,6 +529,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_for_startup_or_status_change_returns_when_only_startups_are_pending()
+    -> anyhow::Result<()> {
+        let home = TempDir::new()?;
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone().to_path_buf(),
+            Arc::new(EnvironmentManager::default_for_tests()),
+        );
+        let root = manager.start_thread(config.clone()).await?;
+        let session = root.thread.codex.session.clone();
+        let db = codex_state::StateRuntime::init(
+            config.codex_home.clone().to_path_buf(),
+            "test-provider".to_string(),
+        )
+        .await?;
+
+        let mut startup_tasks = StartupTasks::default();
+        spawn_tracked_startup_task(
+            &mut startup_tasks,
+            "item-1".to_string(),
+            Instant::now(),
+            std::future::pending(),
+        );
+
+        let mut active_items = HashMap::new();
+        timeout(
+            Duration::from_secs(1),
+            wait_for_startup_or_status_change(
+                session,
+                db,
+                "job-1",
+                &mut active_items,
+                &mut startup_tasks,
+            ),
+        )
+        .await
+        .expect("wait should return so stale startup reaping can run")?;
+
+        assert!(active_items.is_empty());
+        assert_eq!(startup_tasks.len(), 1);
+        assert_eq!(startup_tasks.launching_items.len(), 1);
+
+        let aborted = abort_all_startups(&mut startup_tasks).await;
+        assert_eq!(aborted, 1);
+        let report = manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        assert_eq!(report.submit_failed, Vec::new());
+        assert_eq!(report.timed_out, Vec::new());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn drain_ready_startups_reports_agent_limit_and_requeues_item() -> anyhow::Result<()> {
         let home = TempDir::new()?;
         let config = ConfigBuilder::without_managed_config_for_tests()
@@ -535,7 +599,7 @@ mod tests {
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone().to_path_buf(),
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::default_for_tests()),
         );
         let root = manager.start_thread(config.clone()).await?;
         let session = root.thread.codex.session.clone();

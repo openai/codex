@@ -691,30 +691,50 @@ impl AgentControl {
     /// Submit a shutdown request for a live agent while keeping the thread tracked until the
     /// session loop actually terminates.
     ///
-    /// This releases the spawned-agent slot immediately so callers can refill concurrency, but
-    /// it deliberately does not remove the thread from [`ThreadManagerState`]. Keeping the thread
-    /// tracked ensures later global shutdown paths can still await or abort the underlying session
-    /// loop instead of leaving an orphaned task alive on the runtime.
+    /// The spawned-agent slot is released only after a background waiter observes shutdown
+    /// completion and removes the thread from [`ThreadManagerState`]. Keeping the thread tracked
+    /// and counted until then ensures later global shutdown paths can still await or abort the
+    /// underlying session loop instead of leaving an orphaned task alive on the runtime.
     pub(crate) async fn request_live_agent_shutdown_preserving_thread(
         &self,
         agent_id: ThreadId,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = if let Ok(thread) = state.get_thread(agent_id).await {
-            thread.codex.session.ensure_rollout_materialized().await;
-            let _ = thread.codex.session.flush_rollout().await;
-            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
-                Ok(String::new())
-            } else {
-                state.send_op(agent_id, Op::Shutdown {}).await
+        let thread = match state.get_thread(agent_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.state.release_spawned_thread(agent_id);
+                return Ok(String::new());
             }
-        } else {
+        };
+        thread.codex.session.ensure_rollout_materialized().await;
+        let _ = thread.codex.session.flush_rollout().await;
+        let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
             Ok(String::new())
+        } else {
+            state.send_op(agent_id, Op::Shutdown {}).await
         };
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        } else if result.is_ok() {
+            let registry = self.state.clone();
+            tokio::spawn(async move {
+                match thread.shutdown_and_wait().await {
+                    Ok(()) | Err(CodexErr::InternalAgentDied) => {
+                        let _ = state.remove_thread(&agent_id).await;
+                        registry.release_spawned_thread(agent_id);
+                    }
+                    Err(err) => {
+                        warn!(
+                            thread_id = %agent_id,
+                            error = %err,
+                            "failed to wait for live agent shutdown; keeping thread tracked"
+                        );
+                    }
+                }
+            });
         }
-        self.state.release_spawned_thread(agent_id);
         result
     }
 
