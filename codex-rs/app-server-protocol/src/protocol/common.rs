@@ -882,6 +882,13 @@ client_request_definitions! {
         serialization: optional_command_process_id(params.process_id),
         response: v2::CommandExecResponse,
     },
+    /// Execute a standalone command (argv vector) without a sandbox.
+    CommandExecUnsandboxed => "command/execUnsandboxed" {
+        params: v2::CommandExecUnsandboxedParams,
+        serialization: optional_command_process_id(params.process_id),
+        manual_payload_conversion: manual,
+        response: v2::CommandExecResponse,
+    },
     /// Write stdin bytes to a running `command/exec` session or close stdin.
     CommandExecWrite => "command/exec/write" {
         params: v2::CommandExecWriteParams,
