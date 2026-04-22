@@ -465,15 +465,12 @@ impl Session {
             {
                 should_clear_active_turn = true;
                 let turn_state = Arc::clone(&at.turn_state);
-                if should_clear_active_turn {
-                    *active = None;
-                }
                 Some(turn_state)
             } else {
                 None
             }
         };
-        if let Some(turn_state) = turn_state {
+        if let Some(turn_state) = turn_state.as_ref() {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
             turn_had_memory_citation = ts.has_memory_citation;
@@ -594,15 +591,6 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
-        let event = EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: turn_context.sub_id.clone(),
-            last_agent_message,
-            completed_at,
-            duration_ms,
-            time_to_first_token_ms,
-        });
-        self.send_event(turn_context.as_ref(), event).await;
-
         if let Err(err) = self
             .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
                 turn_context: turn_context.as_ref(),
@@ -612,6 +600,40 @@ impl Session {
             .await
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
+        }
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_context.sub_id.clone(),
+            last_agent_message,
+            completed_at,
+            duration_ms,
+            time_to_first_token_ms,
+        });
+        self.send_event(turn_context.as_ref(), event).await;
+
+        if should_clear_active_turn {
+            let cleared_active_turn = {
+                let mut active = self.active_turn.lock().await;
+                if let Some(active_turn) = active.as_ref()
+                    && active_turn.tasks.is_empty()
+                    && turn_state
+                        .as_ref()
+                        .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
+                {
+                    *active = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            if !cleared_active_turn {
+                return;
+            }
+            if let Err(err) = self
+                .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+                .await
+            {
+                warn!("failed to apply goal runtime maybe-continue event: {err}");
+            }
         }
     }
 

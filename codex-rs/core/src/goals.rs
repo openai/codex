@@ -90,6 +90,7 @@ pub(crate) enum GoalRuntimeEvent<'a> {
         turn_completed: bool,
         tool_calls: u64,
     },
+    MaybeContinueIfIdle,
     TaskAborted {
         turn_context: Option<&'a TurnContext>,
         reason: TurnAbortReason,
@@ -316,6 +317,10 @@ impl Session {
             } => Box::pin(async move {
                 self.finish_thread_goal_turn(turn_context, turn_completed, tool_calls)
                     .await;
+                Ok(())
+            }),
+            GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
+                self.maybe_continue_goal_if_idle_runtime().await;
                 Ok(())
             }),
             GoalRuntimeEvent::TaskAborted {
@@ -817,7 +822,6 @@ impl Session {
                 .lock()
                 .await
                 .remove(&turn_context.sub_id);
-            self.maybe_continue_goal_if_idle_runtime().await;
         }
     }
 
