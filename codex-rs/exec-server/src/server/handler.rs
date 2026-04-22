@@ -180,7 +180,7 @@ impl ExecServerHandler {
         if stream_response {
             self.reserve_http_body_stream(&http_request_id).await?;
         }
-        let mut response = ExecutorHttpRequestRunner::new(params.timeout_ms)?
+        let response = ExecutorHttpRequestRunner::new(params.timeout_ms)?
             .run(params)
             .await;
         if response.is_err() && stream_response {
