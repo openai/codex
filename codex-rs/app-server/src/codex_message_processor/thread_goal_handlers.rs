@@ -373,25 +373,18 @@ impl CodexMessageProcessor {
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
-        match state_db.get_thread_goal(thread_id).await {
-            Ok(Some(goal)) => {
-                self.emit_thread_goal_updated_ordered(
-                    thread_id,
-                    api_thread_goal_from_state(goal),
-                    listener_command_tx,
-                )
-                .await;
+        if let Some(listener_command_tx) = listener_command_tx {
+            let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalSnapshot {
+                state_db: state_db.clone(),
+            };
+            if listener_command_tx.send(command).is_ok() {
+                return;
             }
-            Ok(None) => {
-                self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
-                    .await;
-            }
-            Err(err) => {
-                warn!(
-                    "failed to read thread goal before emitting resume snapshot for {thread_id}: {err}"
-                );
-            }
+            warn!(
+                "failed to enqueue thread goal snapshot for {thread_id}: listener command channel is closed"
+            );
         }
+        send_thread_goal_snapshot_notification(&self.outgoing, thread_id, &state_db).await;
     }
 
     async fn emit_thread_goal_updated_ordered(
