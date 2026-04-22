@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
-use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -78,9 +78,7 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::from_environment(
-            parent_ctx.environment.as_deref(),
-        )),
+        environment_manager: Arc::clone(&parent_session.services.environment_manager),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -185,6 +183,7 @@ pub(crate) async fn run_codex_thread_one_shot(
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
+        environments: None,
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
@@ -473,6 +472,7 @@ async fn handle_exec_approval(
                 justification: None,
             },
             reason,
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         await_approval_with_cancel(
@@ -575,6 +575,7 @@ async fn handle_patch_approval(
                 patch,
             },
             reason.clone(),
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         Some(
@@ -691,6 +692,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::DelegatedSubagent,
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(

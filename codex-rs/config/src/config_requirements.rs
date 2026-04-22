@@ -93,6 +93,8 @@ pub struct ConfigRequirements {
     pub network: Option<Sourced<NetworkConstraints>>,
     /// Managed filesystem constraints derived from requirements.
     pub filesystem: Option<Sourced<FilesystemConstraints>>,
+    /// Source for the managed guardian policy config, when one is configured.
+    pub guardian_policy_config_source: Option<RequirementSource>,
 }
 
 impl Default for ConfigRequirements {
@@ -123,6 +125,7 @@ impl Default for ConfigRequirements {
             ),
             network: None,
             filesystem: None,
+            guardian_policy_config_source: None,
         }
     }
 }
@@ -887,7 +890,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             permissions,
-            guardian_policy_config: _guardian_policy_config,
+            guardian_policy_config,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -1096,6 +1099,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             let Sourced { value, source } = sourced_permissions;
             Sourced::new(FilesystemConstraints::from(value), source)
         });
+        let guardian_policy_config_source = guardian_policy_config.map(|sourced| sourced.source);
         Ok(ConfigRequirements {
             approval_policy,
             approvals_reviewer,
@@ -1107,6 +1111,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             filesystem,
+            guardian_policy_config_source,
         })
     }
 }

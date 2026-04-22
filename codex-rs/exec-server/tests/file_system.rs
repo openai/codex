@@ -25,6 +25,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -46,7 +47,7 @@ struct FileSystemContext {
 async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContext> {
     if use_remote {
         let server = exec_server().await?;
-        let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
         Ok(FileSystemContext {
             file_system: environment.get_filesystem(),
             _helper_paths: None,
@@ -99,6 +100,31 @@ fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandb
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     })
+}
+
+#[test]
+fn sandbox_context_new_preserves_legacy_workspace_write_read_only_subpaths() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let writable_dir = tmp.path().join("writable");
+    let git_dir = writable_dir.join(".git");
+    std::fs::create_dir_all(&git_dir)?;
+
+    let sandbox = workspace_write_sandbox(writable_dir.clone());
+    let cwd = sandbox.cwd.as_ref().expect("sandbox cwd");
+    let policy = sandbox.permissions.file_system_sandbox_policy();
+    let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
+    let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
+    let git_dir = absolute_path(std::fs::canonicalize(git_dir)?);
+    let Some(writable_root) = writable_roots
+        .iter()
+        .find(|writable_root| writable_root.root == writable_dir)
+    else {
+        panic!("writable root should be preserved");
+    };
+
+    assert!(writable_root.read_only_subpaths.contains(&git_dir));
+
+    Ok(())
 }
 
 fn assert_sandbox_denied(error: &std::io::Error) {
@@ -214,7 +240,7 @@ async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<
     let helper_path = std::env::join_paths(path_entries)?;
 
     let server = exec_server_with_env([("PATH", helper_path.as_os_str())]).await?;
-    let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
+    let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
     let file_system = environment.get_filesystem();
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir_all(&workspace)?;
@@ -567,13 +593,19 @@ async fn file_system_sandboxed_write_allows_additional_write_root(use_remote: bo
     std::fs::create_dir_all(&writable_dir)?;
 
     let mut sandbox = read_only_sandbox(readable_dir);
-    sandbox.additional_permissions = Some(PermissionProfile {
+    let additional_permissions = PermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
             Some(vec![absolute_path(writable_dir)]),
         )),
-    });
+    };
+    let Some(permissions) =
+        merge_permission_profiles(Some(&sandbox.permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    sandbox.permissions = permissions;
 
     file_system
         .write_file(

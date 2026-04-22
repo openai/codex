@@ -296,6 +296,7 @@ async fn call_cwd_tool(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -429,6 +430,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -797,6 +799,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -929,6 +932,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1028,6 +1032,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1179,6 +1184,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1416,6 +1422,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1524,6 +1531,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1660,6 +1668,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1769,6 +1778,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -1893,6 +1903,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -2109,6 +2120,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 

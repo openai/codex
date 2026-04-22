@@ -3224,6 +3224,7 @@ mod tests {
             last_agent_message: None,
             completed_at: Some(TEST_TURN_COMPLETED_AT),
             duration_ms: Some(TEST_TURN_DURATION_MS),
+            time_to_first_token_ms: None,
         }
     }
 
@@ -3614,9 +3615,7 @@ mod tests {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             ),
         );
         let codex_core::NewThread {

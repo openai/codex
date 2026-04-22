@@ -13,6 +13,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -402,7 +403,7 @@ impl CoreShellActionProvider {
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
                 let permission_request = PermissionRequestPayload {
-                    tool_name: "Bash".to_string(),
+                    tool_name: HookToolName::bash(),
                     command: codex_shell_command::parse_command::shlex_join(&command),
                     description: None,
                 };

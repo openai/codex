@@ -1,6 +1,4 @@
 use super::*;
-use crate::agent_identity::RegisteredAgentTask;
-use crate::agent_identity::StoredAgentIdentity;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -19,20 +17,10 @@ use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::SecondsFormat;
-use chrono::Utc;
+
 use codex_features::Feature;
 use codex_features::Features;
-use codex_login::AgentIdentityAuthRecord;
-use codex_login::AuthCredentialsStoreMode;
-use codex_login::AuthDotJson;
 use codex_login::CodexAuth;
-use codex_login::save_auth;
-use codex_login::token_data::IdTokenInfo;
-use codex_login::token_data::TokenData;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -131,9 +119,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
-use crypto_box::SecretKey as Curve25519SecretKey;
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::pkcs8::EncodePrivateKey;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -141,20 +126,12 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
-use sha2::Digest as _;
-use sha2::Sha512;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::header;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -802,6 +779,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
                 ..Default::default()
             },
+            /*environment_selections*/ None,
         )
         .await?;
 
@@ -1294,120 +1272,6 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
-async fn record_initial_history_restores_latest_persisted_agent_task() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    let expected = RegisteredAgentTask {
-        agent_runtime_id: "agent-123".to_string(),
-        task_id: "task-123".to_string(),
-        registered_at: "2026-03-23T12:00:00Z".to_string(),
-    };
-    let rollout_items = vec![
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(expected.to_session_agent_task()),
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: None,
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(expected.to_session_agent_task()),
-        }),
-    ];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(
-        session.state.lock().await.agent_task(),
-        Some(expected.to_session_agent_task())
-    );
-}
-
-#[tokio::test]
-async fn record_initial_history_discards_persisted_agent_task_for_different_identity() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    let rollout_items = vec![RolloutItem::SessionState(
-        codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(
-                RegisteredAgentTask {
-                    agent_runtime_id: "agent-other".to_string(),
-                    task_id: "task-other".to_string(),
-                    registered_at: "2026-03-23T12:00:00Z".to_string(),
-                }
-                .to_session_agent_task(),
-            ),
-        },
-    )];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
-}
-
-#[tokio::test]
-async fn record_initial_history_honors_cleared_persisted_agent_task() {
-    let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        state.set_agent_task(
-            RegisteredAgentTask {
-                agent_runtime_id: "agent-fresh".to_string(),
-                task_id: "task-fresh".to_string(),
-                registered_at: "2026-03-23T12:01:00Z".to_string(),
-            }
-            .to_session_agent_task(),
-        );
-    }
-    let rollout_items = vec![
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(
-                RegisteredAgentTask {
-                    agent_runtime_id: "agent-123".to_string(),
-                    task_id: "task-123".to_string(),
-                    registered_at: "2026-03-23T12:00:00Z".to_string(),
-                }
-                .to_session_agent_task(),
-            ),
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: None,
-        }),
-    ];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
-}
-
-#[tokio::test]
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
@@ -1632,6 +1496,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     initial
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "fork seed".into(),
                 text_elements: Vec::new(),
@@ -1692,6 +1557,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     forked
         .thread
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "after fork".into(),
                 text_elements: Vec::new(),
@@ -1778,6 +1644,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             },
         )),
     ];
@@ -1963,6 +1830,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1988,6 +1856,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
     ])
     .await;
@@ -2065,6 +1934,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -2083,6 +1953,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -2110,6 +1981,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
     ])
     .await;
@@ -2156,6 +2028,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -2179,6 +2052,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -2202,6 +2076,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         })),
     ])
     .await;
@@ -2855,8 +2730,8 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
 
     let skill_fs = session
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem())
         .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
     let parent_outcome = session
@@ -3082,11 +2957,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Some(Arc::new(
-            codex_exec_server::Environment::create(/*exec_server_url*/ None)
-                .await
-                .expect("create environment"),
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     )
     .await;
@@ -3162,7 +3033,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -3183,8 +3055,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
-        codex_exec_server::Environment::create(/*exec_server_url*/ None)
-            .await
+        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
             .expect("create environment"),
     );
 
@@ -3211,11 +3082,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -3249,7 +3115,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment: Some(Arc::clone(&environment)),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3284,6 +3150,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &models_manager,
         /*network*/ None,
         Some(environment),
+        /*environments*/ None,
+        session_configuration.cwd.clone(),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
@@ -3308,7 +3176,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     };
 
     (session, turn_context)
@@ -3405,11 +3272,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Some(Arc::new(
-            codex_exec_server::Environment::create(/*exec_server_url*/ None)
-                .await
-                .expect("create environment"),
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     )
     .await?;
@@ -3859,6 +3722,7 @@ fn op_kind_distinguishes_turn_ops() {
     );
     assert_eq!(
         Op::UserInput {
+            environments: None,
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -3877,6 +3741,7 @@ async fn user_turn_updates_approvals_reviewer() {
         &session,
         "sub-1".to_string(),
         Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
@@ -3901,6 +3766,133 @@ async fn user_turn_updates_approvals_reviewer() {
         state.session_configuration.approvals_reviewer,
         codex_config::types::ApprovalsReviewer::GuardianSubagent
     );
+}
+
+#[tokio::test]
+async fn turn_environment_selection_sets_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let selected_cwd =
+        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
+            .expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_cwd.clone(),
+            }]),
+        )
+        .await
+        .expect("turn should start");
+
+    let turn_environments = turn_context
+        .environments
+        .as_ref()
+        .expect("turn environments should be recorded");
+    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments[0].environment_id, "local");
+    assert!(std::sync::Arc::ptr_eq(
+        turn_context
+            .environment
+            .as_ref()
+            .expect("primary environment should be set"),
+        &turn_environments[0].environment
+    ));
+    assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
+    assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
+}
+
+#[tokio::test]
+async fn multiple_turn_environment_selections_use_first_as_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let session_cwd = session.get_config().await.cwd.clone();
+    let first_cwd =
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("first")).expect("absolute path");
+    let second_cwd =
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("second")).expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![
+                codex_protocol::protocol::TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: first_cwd.clone(),
+                },
+                codex_protocol::protocol::TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: second_cwd.clone(),
+                },
+            ]),
+        )
+        .await
+        .expect("turn should start");
+
+    let turn_environments = turn_context
+        .environments
+        .as_ref()
+        .expect("turn environments should be recorded");
+    assert_eq!(turn_environments.len(), 2);
+    assert_eq!(turn_environments[0].cwd, first_cwd);
+    assert_eq!(turn_environments[1].cwd, second_cwd);
+    assert!(std::sync::Arc::ptr_eq(
+        turn_context
+            .environment
+            .as_ref()
+            .expect("primary environment should be set"),
+        &turn_environments[0].environment
+    ));
+    assert_eq!(turn_context.cwd, first_cwd);
+    assert_eq!(turn_context.config.cwd, first_cwd);
+}
+
+#[tokio::test]
+async fn empty_turn_environment_selection_clears_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![]),
+        )
+        .await
+        .expect("turn should start");
+
+    assert!(turn_context.environment.is_none());
+    assert_eq!(turn_context.cwd, session.get_config().await.cwd);
+    assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
+    assert_eq!(
+        turn_context
+            .environments
+            .as_ref()
+            .expect("turn environments should be recorded")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn unknown_turn_environment_selection_returns_error() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "missing".to_string(),
+                cwd: session.get_config().await.cwd.clone(),
+            }]),
+        )
+        .await
+        .expect_err("unknown environment should fail");
+
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("missing"));
 }
 
 #[tokio::test]
@@ -4191,25 +4183,19 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         .expect("ephemeral guardian review should receive a shutdown op");
 }
 
-async fn make_session_and_context_with_auth_and_config_and_rx<F>(
-    auth: CodexAuth,
+pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     dynamic_tools: Vec<DynamicToolSpec>,
-    configure_config: F,
 ) -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
-)
-where
-    F: FnOnce(&mut Config),
-{
+) {
     let (tx_event, rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
-    let mut config = build_test_config(codex_home.path()).await;
-    configure_config(&mut config);
+    let config = build_test_config(codex_home.path()).await;
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();
-    let auth_manager = AuthManager::from_auth_for_testing(auth);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
@@ -4265,7 +4251,8 @@ where
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -4286,8 +4273,7 @@ where
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
-        codex_exec_server::Environment::create(/*exec_server_url*/ None)
-            .await
+        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
             .expect("create environment"),
     );
 
@@ -4314,11 +4300,6 @@ where
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -4352,7 +4333,7 @@ where
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
-        environment: Some(Arc::clone(&environment)),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -4387,6 +4368,8 @@ where
         &models_manager,
         /*network*/ None,
         Some(environment),
+        /*environments*/ None,
+        session_configuration.cwd.clone(),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
@@ -4411,43 +4394,9 @@ where
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     });
 
     (session, turn_context, rx_event)
-}
-
-pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
-    dynamic_tools: Vec<DynamicToolSpec>,
-) -> (
-    Arc<Session>,
-    Arc<TurnContext>,
-    async_channel::Receiver<Event>,
-) {
-    make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        dynamic_tools,
-        |_config| {},
-    )
-    .await
-}
-
-async fn make_agent_identity_session_and_context_with_rx(
-    auth: CodexAuth,
-    chatgpt_base_url: String,
-) -> (
-    Arc<Session>,
-    Arc<TurnContext>,
-    async_channel::Receiver<Event>,
-) {
-    make_session_and_context_with_auth_and_config_and_rx(auth, Vec::new(), move |config| {
-        config.chatgpt_base_url = chatgpt_base_url;
-        config
-            .features
-            .enable(Feature::UseAgentIdentity)
-            .expect("test config should allow use_agent_identity");
-    })
-    .await
 }
 
 // Like make_session_and_context, but returns Arc<Session> and the event receiver
@@ -4458,250 +4407,6 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
-}
-
-#[tokio::test]
-async fn fail_agent_identity_registration_emits_error_without_shutdown() {
-    let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
-
-    session
-        .fail_agent_identity_registration(anyhow::anyhow!("registration exploded"))
-        .await;
-
-    let error_event = timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("error event should arrive")
-        .expect("error event should be readable");
-    match error_event.msg {
-        EventMsg::Error(ErrorEvent {
-            message,
-            codex_error_info,
-        }) => {
-            assert_eq!(
-                message,
-                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
-            );
-            assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
-        }
-        other => panic!("expected error event, got {other:?}"),
-    }
-
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn startup_agent_task_prewarm_caches_registered_task() {
-    let server = MockServer::start().await;
-    let chatgpt_base_url = server.uri();
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    let stored_identity = seed_stored_identity(&auth, "agent-123", "account-123");
-    let encrypted_task_id =
-        encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
-    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
-    Mock::given(method("POST"))
-        .and(path("/v1/agent/agent-123/task/register"))
-        .and(header("x-openai-authorization", "human-biscuit"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "encrypted_task_id": encrypted_task_id,
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let (session, _turn_context, rx_event) =
-        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
-
-    session.maybe_prewarm_agent_task_registration().await;
-
-    let cached_task = session
-        .state
-        .lock()
-        .await
-        .agent_task()
-        .expect("task should be cached");
-    assert_eq!(cached_task.agent_runtime_id, "agent-123");
-    assert_eq!(cached_task.task_id, "task_123");
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn startup_agent_task_prewarm_failure_does_not_emit_error() {
-    let server = MockServer::start().await;
-    let chatgpt_base_url = server.uri();
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
-    Mock::given(method("POST"))
-        .and(path("/v1/agent/agent-123/task/register"))
-        .and(header("x-openai-authorization", "human-biscuit"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let (session, _turn_context, rx_event) =
-        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
-
-    session.maybe_prewarm_agent_task_registration().await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn cached_agent_task_for_current_identity_clears_stale_task() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    {
-        let mut state = session.state.lock().await;
-        state.set_agent_task(
-            RegisteredAgentTask {
-                agent_runtime_id: "agent-old".to_string(),
-                task_id: "task-old".to_string(),
-                registered_at: "2026-04-15T00:00:00Z".to_string(),
-            }
-            .to_session_agent_task(),
-        );
-    }
-
-    assert_eq!(session.cached_agent_task_for_current_identity().await, None);
-    assert_eq!(session.state.lock().await.agent_task(), None);
-}
-
-fn seed_stored_identity(
-    auth: &CodexAuth,
-    agent_runtime_id: &str,
-    account_id: &str,
-) -> StoredAgentIdentity {
-    let signing_key = generate_test_signing_key();
-    let private_key_pkcs8 = signing_key
-        .to_pkcs8_der()
-        .expect("encode test signing key as PKCS#8");
-    let stored_identity = StoredAgentIdentity {
-        binding_id: format!("chatgpt-account-{account_id}"),
-        chatgpt_account_id: account_id.to_string(),
-        chatgpt_user_id: Some("user-123".to_string()),
-        agent_runtime_id: agent_runtime_id.to_string(),
-        private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
-        public_key_ssh: "ssh-ed25519 test".to_string(),
-        registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        abom: crate::agent_identity::AgentBillOfMaterials {
-            agent_version: env!("CARGO_PKG_VERSION").to_string(),
-            agent_harness_id: "codex-cli".to_string(),
-            running_location: format!("{}-{}", SessionSource::Exec, std::env::consts::OS),
-        },
-    };
-
-    auth.set_agent_identity(AgentIdentityAuthRecord {
-        workspace_id: account_id.to_string(),
-        chatgpt_user_id: stored_identity.chatgpt_user_id.clone(),
-        agent_runtime_id: stored_identity.agent_runtime_id.clone(),
-        agent_private_key: stored_identity.private_key_pkcs8_base64.clone(),
-        registered_at: stored_identity.registered_at.clone(),
-        background_task_id: None,
-    })
-    .expect("store identity");
-
-    stored_identity
-}
-
-fn encrypt_task_id_for_identity(
-    stored_identity: &StoredAgentIdentity,
-    task_id: &str,
-) -> anyhow::Result<String> {
-    let signing_key = stored_identity.signing_key()?;
-    let mut rng = crypto_box::aead::OsRng;
-    let public_key = curve25519_secret_key_from_signing_key_for_tests(&signing_key).public_key();
-    let ciphertext = public_key
-        .seal(&mut rng, task_id.as_bytes())
-        .map_err(|_| anyhow::anyhow!("failed to encrypt test task id"))?;
-    Ok(BASE64_STANDARD.encode(ciphertext))
-}
-
-fn curve25519_secret_key_from_signing_key_for_tests(
-    signing_key: &SigningKey,
-) -> Curve25519SecretKey {
-    let digest = Sha512::digest(signing_key.to_bytes());
-    let mut secret_key = [0u8; 32];
-    secret_key.copy_from_slice(&digest[..32]);
-    secret_key[0] &= 248;
-    secret_key[31] &= 127;
-    secret_key[31] |= 64;
-    Curve25519SecretKey::from(secret_key)
-}
-
-fn generate_test_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&[7u8; 32])
-}
-
-async fn mount_human_biscuit(server: &MockServer, chatgpt_base_url: &str, agent_runtime_id: &str) {
-    let biscuit_url = format!(
-        "{}/authenticate_app_v2",
-        chatgpt_base_url.trim_end_matches('/')
-    );
-    let biscuit_path = reqwest::Url::parse(&biscuit_url)
-        .expect("biscuit URL parses")
-        .path()
-        .to_string();
-    let target_url = format!(
-        "{}/v1/agent/{agent_runtime_id}/task/register",
-        chatgpt_base_url.trim_end_matches('/')
-    );
-    Mock::given(method("GET"))
-        .and(path(biscuit_path))
-        .and(header("authorization", "Bearer access-token-account-123"))
-        .and(header("x-original-method", "POST"))
-        .and(header("x-original-url", target_url))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
-        )
-        .expect(1)
-        .mount(server)
-        .await;
-}
-
-fn make_chatgpt_auth(account_id: &str, user_id: Option<&str>) -> CodexAuth {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let auth_json = AuthDotJson {
-        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token: IdTokenInfo {
-                email: None,
-                chatgpt_plan_type: None,
-                chatgpt_user_id: user_id.map(ToOwned::to_owned),
-                chatgpt_account_id: Some(account_id.to_string()),
-                chatgpt_account_is_fedramp: false,
-                raw_jwt: fake_id_token(account_id, user_id),
-            },
-            access_token: format!("access-token-{account_id}"),
-            refresh_token: "refresh-token".to_string(),
-            account_id: Some(account_id.to_string()),
-        }),
-        last_refresh: Some(Utc::now()),
-        agent_identity: None,
-    };
-    save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
-    CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth")
-}
-
-fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
-    let payload = serde_json::json!({
-        "https://api.openai.com/auth": {
-            "chatgpt_user_id": user_id,
-            "chatgpt_account_id": account_id,
-        }
-    });
-    let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
-    format!("{header}.{payload}.signature")
 }
 
 #[tokio::test]
@@ -5948,6 +5653,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id,
             last_agent_message: None,
+            time_to_first_token_ms: None,
             ..
         }) if turn_id == tc.sub_id
     ));

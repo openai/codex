@@ -13,7 +13,9 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
-use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentManagerArgs;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::DiscoverableTool;
@@ -43,7 +45,7 @@ use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
-use codex_mcp::with_codex_apps_mcp_with_authorization_header;
+use codex_mcp::with_codex_apps_mcp;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -191,6 +193,28 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    // TODO: Wire callers that already own an EnvironmentManager into
+    // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
+    // of constructing a temporary manager here.
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager =
+        EnvironmentManager::new(EnvironmentManagerArgs::from_env(local_runtime_paths));
+    list_accessible_connectors_from_mcp_tools_with_environment_manager(
+        config,
+        force_refetch,
+        &environment_manager,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: &EnvironmentManager,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
     let auth = auth_manager.auth().await;
@@ -220,20 +244,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-        auth_manager
-            .chatgpt_authorization_header_for_auth(auth)
-            .await
-    } else {
-        None
-    };
     let mcp_config = config.to_mcp_config(plugins_manager.as_ref()).await;
-    let mcp_servers = with_codex_apps_mcp_with_authorization_header(
-        HashMap::new(),
-        auth.as_ref(),
-        &mcp_config,
-        background_authorization_header_value.as_deref(),
-    );
+    let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -247,6 +259,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
+    let environment = environment_manager
+        .default_environment()
+        .unwrap_or_else(|| environment_manager.local_environment());
+
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -255,7 +271,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         SandboxPolicy::new_read_only_policy(),
-        McpRuntimeEnvironment::new(Arc::new(Environment::default()), config.cwd.to_path_buf()),
+        McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),
@@ -435,18 +451,6 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     };
     let access_token = token_data.access_token.clone();
     let account_id = account_id.to_string();
-    let is_fedramp_account = token_data.id_token.is_fedramp_account();
-    let authorization_header_value = {
-        let auth_manager =
-            AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
-        match auth {
-            Some(auth) if auth.is_chatgpt_auth() => auth_manager
-                .chatgpt_authorization_header_for_auth(auth)
-                .await
-                .unwrap_or_else(|| format!("Bearer {access_token}")),
-            _ => format!("Bearer {access_token}"),
-        }
-    };
     let is_workspace_account = token_data.id_token.is_workspace_account();
     let cache_key = AllConnectorsCacheKey::new(
         config.chatgpt_base_url.clone(),
@@ -460,15 +464,14 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         is_workspace_account,
         /*force_refetch*/ false,
         |path| {
-            let authorization_header_value = authorization_header_value.clone();
+            let access_token = access_token.clone();
             let account_id = account_id.clone();
             async move {
-                chatgpt_get_request_with_authorization_header::<DirectoryListResponse>(
+                chatgpt_get_request_with_token::<DirectoryListResponse>(
                     config,
                     path,
-                    authorization_header_value.as_str(),
+                    access_token.as_str(),
                     account_id.as_str(),
-                    is_fedramp_account,
                 )
                 .await
             }
@@ -477,25 +480,23 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     .await
 }
 
-async fn chatgpt_get_request_with_authorization_header<T: DeserializeOwned>(
+async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
     config: &Config,
     path: String,
-    authorization_header_value: &str,
+    access_token: &str,
     account_id: &str,
-    is_fedramp_account: bool,
 ) -> anyhow::Result<T> {
     let client = create_client();
     let url = format!("{}{}", config.chatgpt_base_url, path);
-    let mut request = client
+    let response = client
         .get(&url)
-        .header("authorization", authorization_header_value)
+        .bearer_auth(access_token)
         .header("chatgpt-account-id", account_id)
         .header("Content-Type", "application/json")
-        .timeout(DIRECTORY_CONNECTORS_TIMEOUT);
-    if is_fedramp_account {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
-    let response = request.send().await.context("failed to send request")?;
+        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
+        .send()
+        .await
+        .context("failed to send request")?;
 
     if response.status().is_success() {
         response

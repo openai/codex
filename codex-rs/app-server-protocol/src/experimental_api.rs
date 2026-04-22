@@ -98,6 +98,13 @@ mod tests {
         inners: HashMap<String, EnumVariantShapes>,
     }
 
+    #[allow(dead_code)]
+    #[derive(ExperimentalApi)]
+    struct ExperimentalFieldShape {
+        #[experimental("field/optionalCollection")]
+        optional_collection: Option<Vec<EnumVariantShapes>>,
+    }
+
     #[test]
     fn derive_supports_all_enum_variant_shapes() {
         assert_eq!(
@@ -165,6 +172,22 @@ mod tests {
         assert_eq!(
             ExperimentalApiTrait::experimental_reason(&NestedMapShape {
                 inners: HashMap::new(),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn derive_marks_optional_experimental_fields_when_some() {
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&ExperimentalFieldShape {
+                optional_collection: Some(Vec::new()),
+            }),
+            Some("field/optionalCollection")
+        );
+        assert_eq!(
+            ExperimentalApiTrait::experimental_reason(&ExperimentalFieldShape {
+                optional_collection: None,
             }),
             None
         );
