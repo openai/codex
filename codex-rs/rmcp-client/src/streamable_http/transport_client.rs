@@ -32,7 +32,7 @@ pub(crate) enum StreamableHttpTransportClientError {
 #[derive(Clone)]
 pub(crate) enum StreamableHttpTransportMode {
     Local,
-    Remote { exec_client: Arc<dyn HttpClient> },
+    Remote { http_client: Arc<dyn HttpClient> },
 }
 
 impl StreamableHttpTransportClient {
@@ -44,8 +44,8 @@ impl StreamableHttpTransportClient {
             StreamableHttpTransportMode::Local => {
                 Self::Local(LocalStreamableHttpClient::new(default_headers)?)
             }
-            StreamableHttpTransportMode::Remote { exec_client } => Self::Remote(
-                RemoteStreamableHttpClient::new(exec_client, default_headers),
+            StreamableHttpTransportMode::Remote { http_client } => Self::Remote(
+                RemoteStreamableHttpClient::new(http_client, default_headers),
             ),
         })
     }

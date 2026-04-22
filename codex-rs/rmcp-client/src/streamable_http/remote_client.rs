@@ -45,7 +45,7 @@ use crate::streamable_http::remote_client::RemoteStreamableHttpClientError::Head
 /// executor protocol calls and lets RMCP own MCP session and recovery behavior.
 #[derive(Clone)]
 pub(crate) struct RemoteStreamableHttpClient {
-    exec_client: Arc<dyn HttpClient>,
+    http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
 }
 
@@ -65,9 +65,9 @@ pub(crate) enum RemoteStreamableHttpClientError {
 
 impl RemoteStreamableHttpClient {
     /// Creates an adapter with shared executor client and static default headers.
-    pub(crate) fn new(exec_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
+    pub(crate) fn new(http_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
         Self {
-            exec_client,
+            http_client,
             default_headers,
         }
     }
@@ -116,7 +116,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
         let (response, mut body_stream) = self
-            .exec_client
+            .http_client
             .http_request_stream(HttpRequestParams {
                 method: "POST".to_string(),
                 url: uri.to_string(),
@@ -200,7 +200,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         )?;
 
         let response = self
-            .exec_client
+            .http_client
             .http_request(HttpRequestParams {
                 method: "DELETE".to_string(),
                 url: uri.to_string(),
@@ -267,7 +267,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         }
 
         let (response, body_stream) = self
-            .exec_client
+            .http_client
             .http_request_stream(HttpRequestParams {
                 method: "GET".to_string(),
                 url: uri.to_string(),

@@ -337,7 +337,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-        exec_client: Arc<dyn HttpClient>,
+        http_client: Arc<dyn HttpClient>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -346,7 +346,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
-            transport_mode: StreamableHttpTransportMode::Remote { exec_client },
+            transport_mode: StreamableHttpTransportMode::Remote { http_client },
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
