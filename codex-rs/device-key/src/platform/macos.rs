@@ -326,7 +326,9 @@ impl MacKeyClass {
 }
 
 fn load_private_key(key_id: &str, class: MacKeyClass) -> Result<Option<SecKey>, DeviceKeyError> {
-    load_private_key_with_optional_authentication_context(key_id, class, None)
+    load_private_key_with_optional_authentication_context(
+        key_id, class, /*authentication_context*/ None,
+    )
 }
 
 fn load_private_key_with_authentication_context(
