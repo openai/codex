@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_plugin::validate_plugin_segment;
 
 impl CodexMessageProcessor {
@@ -22,11 +23,11 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_response(
                     request_id,
-                    PluginListResponse {
+                    ClientResponsePayload::PluginList(PluginListResponse {
                         marketplaces: Vec::new(),
                         marketplace_load_errors: Vec::new(),
                         featured_plugin_ids: Vec::new(),
-                    },
+                    }),
                 )
                 .await;
             return;
@@ -161,11 +162,11 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(
                 request_id,
-                PluginListResponse {
+                ClientResponsePayload::PluginList(PluginListResponse {
                     marketplaces: data,
                     marketplace_load_errors,
                     featured_plugin_ids,
-                },
+                }),
             )
             .await;
     }
@@ -338,7 +339,10 @@ impl CodexMessageProcessor {
         };
 
         self.outgoing
-            .send_response(request_id, PluginReadResponse { plugin })
+            .send_response(
+                request_id,
+                ClientResponsePayload::PluginRead(PluginReadResponse { plugin }),
+            )
             .await;
     }
 
@@ -487,10 +491,10 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_response(
                         request_id,
-                        PluginInstallResponse {
+                        ClientResponsePayload::PluginInstall(PluginInstallResponse {
                             auth_policy: result.auth_policy.into(),
                             apps_needing_auth,
-                        },
+                        }),
                     )
                     .await;
             }
@@ -553,7 +557,10 @@ impl CodexMessageProcessor {
             Ok(()) => {
                 self.clear_plugin_related_caches();
                 self.outgoing
-                    .send_response(request_id, PluginUninstallResponse {})
+                    .send_response(
+                        request_id,
+                        ClientResponsePayload::PluginUninstall(PluginUninstallResponse {}),
+                    )
                     .await;
             }
             Err(err) => {
