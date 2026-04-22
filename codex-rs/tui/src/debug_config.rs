@@ -144,6 +144,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if requirements_toml.guardian_policy_config.is_some() {
+        requirement_lines.push(requirement_line(
+            "guardian_policy_config",
+            "configured".to_string(),
+            requirements.guardian_policy_config_source.as_ref(),
+        ));
+    }
+
     if let Some(feature_requirements) = requirements.feature_requirements.as_ref() {
         let value = join_or_empty(
             feature_requirements
@@ -633,6 +641,7 @@ mod tests {
                     file: requirements_file.clone(),
                 },
             )),
+            guardian_policy_config_source: Some(RequirementSource::CloudRequirements),
             ..ConfigRequirements::default()
         };
 
@@ -642,7 +651,7 @@ mod tests {
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            guardian_policy_config: None,
+            guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -696,6 +705,9 @@ mod tests {
             rendered.contains(
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
+        );
+        assert!(
+            rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
         );
         assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
