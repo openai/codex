@@ -2980,6 +2980,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional full permissions profile for this command.\n\nDefaults to the user's configured permissions when omitted. Cannot be combined with `sandboxPolicy`."
+        },
         "processId": {
           "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
@@ -2996,7 +3007,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`."
         },
         "size": {
           "anyOf": [
@@ -11944,6 +11955,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for the forked thread. Cannot be combined with `sandbox`."
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -13341,6 +13363,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for the resumed thread. Cannot be combined with `sandbox`."
+        },
         "personality": {
           "anyOf": [
             {
@@ -13646,6 +13679,17 @@
             "string",
             "null"
           ]
+        },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
         },
         "personality": {
           "anyOf": [
@@ -14451,6 +14495,17 @@
         },
         "outputSchema": {
           "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+        },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
         },
         "personality": {
           "anyOf": [
