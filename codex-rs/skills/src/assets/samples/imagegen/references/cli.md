@@ -1,6 +1,6 @@
 # CLI reference (`scripts/image_gen.py`)
 
-This file is for the fallback CLI mode only. Read it when the user explicitly asks to use `scripts/image_gen.py` / CLI / API / model controls, or when the user explicitly asks for transparent output that requires the `gpt-image-1.5` fallback path.
+This file is for the fallback CLI mode only. Read it when the user explicitly asks to use `scripts/image_gen.py` / CLI / API / model controls, or after the user explicitly confirms that a transparent-output request should use the `gpt-image-1.5` true-transparency fallback path.
 
 `generate-batch` is a CLI subcommand in this fallback path. It is not a top-level mode of the skill.
 The word `batch` in a user request is not CLI opt-in by itself.
@@ -59,12 +59,13 @@ python "$IMAGE_GEN" edit \
 - Use the bundled CLI directly (`python "$IMAGE_GEN" ...`) after activating the correct environment.
 - Do **not** create one-off runners (for example `gen_images.py`) unless the user explicitly asks for a custom wrapper.
 - **Never modify** `scripts/image_gen.py`. If something is missing, ask the user before doing anything else.
+- Do not silently downgrade from CLI `gpt-image-2` or built-in `image_gen` to CLI `gpt-image-1.5`; ask first unless the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback.
 
 ## Defaults
 - Model: `gpt-image-2`
 - Supported model family for this CLI: GPT Image models (`gpt-image-*`)
 - Size: `auto`
-- Quality: `auto`
+- Quality: `medium`
 - Output format: `png`
 - Default one-off output path: `output/imagegen/output.png`
 - Background: unspecified unless `--background` is set
@@ -74,11 +75,11 @@ python "$IMAGE_GEN" edit \
 `gpt-image-2` is the default model for new CLI fallback work.
 
 - Use `--quality low` for fast drafts, thumbnails, and quick iterations.
-- Use `--quality auto`, `--quality medium`, or `--quality high` for final assets, dense text, diagrams, identity-sensitive edits, and high-resolution outputs.
+- Use `--quality medium`, `--quality high`, or `--quality auto` for final assets, dense text, diagrams, identity-sensitive edits, and high-resolution outputs.
 - Square images are typically fastest. Use `--size 1024x1024` for quick square drafts.
-- If the user asks for 4K-style output, use `--size 3824x2160` for landscape or `--size 2160x3824` for portrait.
+- If the user asks for 4K-style output, use `--size 3840x2160` for landscape or `--size 2160x3840` for portrait.
 - Do not pass `--input-fidelity` with `gpt-image-2`; this model always uses high fidelity for image inputs.
-- Do not use `--background transparent` with `gpt-image-2`; use `gpt-image-1.5` for transparent output.
+- Do not use `--background transparent` with `gpt-image-2`; the default transparent-image workflow uses built-in `image_gen` on a flat chroma-key background plus local removal. Use `gpt-image-1.5` only after the user explicitly confirms the true-transparent CLI fallback, unless they already requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback.
 
 Popular `gpt-image-2` sizes:
 - `1024x1024`
@@ -86,15 +87,16 @@ Popular `gpt-image-2` sizes:
 - `1024x1536`
 - `2048x2048`
 - `2048x1152`
-- `3824x2160`
-- `2160x3824`
+- `3840x2160`
+- `2160x3840`
 - `auto`
 
 `gpt-image-2` size constraints:
-- max edge `< 3840px`
+- max edge `<= 3840px`
 - both edges multiples of `16px`
 - long edge to short edge ratio `<= 3:1`
 - total pixels between `655,360` and `8,294,400`
+- outputs above `2560x1440` total pixels are experimental
 
 Fast draft:
 
@@ -116,17 +118,19 @@ python "$IMAGE_GEN" generate \
   --out output/imagegen/mug-hero.png
 ```
 
-Near-4K landscape:
+4K landscape:
 
 ```bash
 python "$IMAGE_GEN" generate \
   --prompt "A detailed architectural visualization at golden hour" \
-  --size 3824x2160 \
+  --size 3840x2160 \
   --quality high \
-  --out output/imagegen/architecture-near-4k.png
+  --out output/imagegen/architecture-4k.png
 ```
 
-Transparent background request:
+True transparent fallback request:
+
+Ask for confirmation before using this command unless the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback.
 
 ```bash
 python "$IMAGE_GEN" generate \
@@ -137,7 +141,7 @@ python "$IMAGE_GEN" generate \
   --out output/imagegen/product-cutout.png
 ```
 
-When using this path, explain briefly that transparent backgrounds are not supported in `gpt-image-2`, the latest model, so `gpt-image-1.5` is required.
+When using this path, explain briefly that built-in `image_gen` plus chroma-key removal is the default transparent-image path, but this request needs true model-native transparency. `gpt-image-2` does not support `background=transparent`, so `gpt-image-1.5` is required for this confirmed fallback.
 
 ## Quality, input fidelity, and masks (CLI fallback only)
 These are explicit CLI controls. They are not built-in `image_gen` tool arguments.
@@ -161,6 +165,10 @@ python "$IMAGE_GEN" edit \
 Mask notes:
 - For multi-image edits, pass repeated `--image` flags. Their order is meaningful, so describe each image by index and role in the prompt.
 - The CLI accepts a single `--mask`.
+- Image and mask must be the same size and format and each under 50MB.
+- Masks must include an alpha channel.
+- If multiple input images are provided, the mask applies to the first image.
+- Masking is prompt-guided; do not promise exact pixel-perfect mask boundaries.
 - Use a PNG mask when possible; the script treats mask handling as best-effort and does not perform full preflight validation beyond file checks/warnings.
 - In the edit prompt, repeat invariants (`change only the background; keep the subject unchanged`) to reduce drift.
 
@@ -223,7 +231,7 @@ Notes:
 
 ## CLI notes
 - Supported sizes depend on the model. `gpt-image-2` supports flexible constrained sizes; older GPT Image models support `1024x1024`, `1536x1024`, `1024x1536`, or `auto`.
-- Transparent backgrounds require `output_format` to be `png` or `webp` and are not supported by `gpt-image-2`.
+- True transparent CLI outputs require `output_format` to be `png` or `webp` and are not supported by `gpt-image-2`.
 - `--prompt-file`, `--output-compression`, `--moderation`, `--max-attempts`, `--fail-fast`, `--force`, and `--no-augment` are supported.
 - This CLI is intended for GPT Image models. Do not assume older non-GPT image-model behavior applies here.
 
@@ -231,3 +239,4 @@ Notes:
 - API parameter quick reference for fallback CLI mode: `references/image-api.md`
 - Prompt examples shared across both top-level modes: `references/sample-prompts.md`
 - Network/sandbox notes for fallback CLI mode: `references/codex-network.md`
+- Built-in-first transparent image workflow: `SKILL.md` and `scripts/remove_chroma_key.py`

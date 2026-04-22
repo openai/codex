@@ -2,7 +2,7 @@
 
 These prompt recipes are shared across both top-level modes of the skill:
 - built-in `image_gen` tool (default)
-- `scripts/image_gen.py` CLI fallback for explicit CLI/API/model requests or explicit transparent-output requests
+- `scripts/image_gen.py` CLI fallback for explicit CLI/API/model requests or user-confirmed true-transparent-output fallback requests
 
 Use these as starting points. They are intentionally complete prompt recipes, not the default amount of augmentation to add to every user request.
 
@@ -13,13 +13,13 @@ When adapting a user's prompt:
 
 The labeled lines are prompt scaffolding, not a closed schema. `Asset type` and `Input images` are prompt-only scaffolding; the CLI does not expose them as dedicated flags.
 
-Execution details such as explicit CLI flags, `quality`, `input_fidelity`, masks, output formats, and local output paths depend on mode. Use the built-in tool by default; only apply CLI-specific controls when the user explicitly opts into fallback mode or explicitly asks for transparent output.
+Execution details such as explicit CLI flags, `quality`, `input_fidelity`, masks, output formats, and local output paths depend on mode. Use the built-in tool by default, including simple transparent-image requests. For transparent images, prompt for a flat chroma-key background and remove it locally with `python scripts/remove_chroma_key.py`; only apply CLI-specific controls when the user explicitly opts into fallback mode or explicitly confirms that the transparent request should use true CLI transparency.
 
 CLI model notes:
 - `gpt-image-2` is the fallback CLI default for new workflows.
 - `gpt-image-2` supports `quality` values `low`, `medium`, `high`, and `auto`.
-- For 4K-style `gpt-image-2` output, use `3824x2160` or `2160x3824` instead of `3840x2160`.
-- If transparent output is explicitly required, use `gpt-image-1.5` and explain that transparent backgrounds are not supported in `gpt-image-2`, the latest model.
+- For 4K-style `gpt-image-2` output, use `3840x2160` or `2160x3840`.
+- If transparent output needs true CLI fallback, ask before using `gpt-image-1.5` unless the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback. Explain that built-in chroma-key removal is the default path, but `gpt-image-2` does not support `background=transparent`.
 - Do not set `input_fidelity` with `gpt-image-2`; image inputs already use high fidelity.
 
 For prompting principles (structure, specificity, invariants, iteration), see `references/prompting.md`.
@@ -391,10 +391,11 @@ Constraints: preserve subject identity, geometry, camera angle, and composition;
 Use case: background-extraction
 Input images: Image 1: product photo
 Primary request: isolate the product on a clean transparent background
-Constraints: crisp silhouette; no halos or fringing; preserve label text exactly; no restyling
+Scene/backdrop: perfectly flat solid #00ff00 chroma-key background for local background removal
+Constraints: background must be one uniform color with no shadows, gradients, texture, reflections, floor plane, or lighting variation; crisp silhouette; generous padding; no halos or fringing; preserve label text exactly; no restyling; do not use #00ff00 anywhere in the subject
 ```
 
-CLI note: if transparent output is explicitly required, use `gpt-image-1.5` because `gpt-image-2` does not currently support transparent backgrounds.
+Post-process note: after built-in generation, run `python scripts/remove_chroma_key.py --input <source> --out <final.png> --auto-key border --soft-matte --transparent-threshold 12 --opaque-threshold 220 --despill`. Ask before using CLI `gpt-image-1.5 --background transparent --output-format png` for true/native transparency, failed chroma-key validation, or complex subjects such as hair, fur, glass, smoke, liquids, translucent materials, reflections, or soft shadows, unless the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback.
 
 ### style-transfer
 ```

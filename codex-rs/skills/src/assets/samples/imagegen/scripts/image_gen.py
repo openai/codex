@@ -24,7 +24,7 @@ from io import BytesIO
 
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "auto"
-DEFAULT_QUALITY = "auto"
+DEFAULT_QUALITY = "medium"
 DEFAULT_OUTPUT_FORMAT = "png"
 DEFAULT_CONCURRENCY = 5
 DEFAULT_DOWNSCALE_SUFFIX = "-web"
@@ -39,10 +39,8 @@ ALLOWED_INPUT_FIDELITIES = {"low", "high", None}
 GPT_IMAGE_2_MODEL = "gpt-image-2"
 GPT_IMAGE_2_MIN_PIXELS = 655_360
 GPT_IMAGE_2_MAX_PIXELS = 8_294_400
-GPT_IMAGE_2_MAX_EDGE_EXCLUSIVE = 3840
+GPT_IMAGE_2_MAX_EDGE = 3840
 GPT_IMAGE_2_MAX_RATIO = 3.0
-GPT_IMAGE_2_NEAR_4K_LANDSCAPE = "3824x2160"
-GPT_IMAGE_2_NEAR_4K_PORTRAIT = "2160x3824"
 
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_JOBS = 500
@@ -133,14 +131,8 @@ def _validate_gpt_image_2_size(size: str) -> None:
     min_edge = min(width, height)
     total_pixels = width * height
 
-    if max_edge >= GPT_IMAGE_2_MAX_EDGE_EXCLUSIVE:
-        hint = GPT_IMAGE_2_NEAR_4K_LANDSCAPE
-        if height > width:
-            hint = GPT_IMAGE_2_NEAR_4K_PORTRAIT
-        _die(
-            "gpt-image-2 size maximum edge length must be less than 3840px. "
-            f"For 4K-style output, use {hint} instead of {size}."
-        )
+    if max_edge > GPT_IMAGE_2_MAX_EDGE:
+        _die("gpt-image-2 size maximum edge length must be less than or equal to 3840px.")
     if width % 16 != 0 or height % 16 != 0:
         _die("gpt-image-2 size width and height must be multiples of 16px.")
     if max_edge / min_edge > GPT_IMAGE_2_MAX_RATIO:
