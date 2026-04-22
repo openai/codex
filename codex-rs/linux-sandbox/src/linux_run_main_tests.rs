@@ -48,6 +48,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            ..Default::default()
         },
     )
     .args;
@@ -90,6 +91,7 @@ fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            ..Default::default()
         },
     )
     .args;
@@ -157,6 +159,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::Isolated,
+            ..Default::default()
         },
     )
     .args;
@@ -174,6 +177,7 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::ProxyOnly,
+            ..Default::default()
         },
     )
     .args;

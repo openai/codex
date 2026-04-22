@@ -15,6 +15,7 @@
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -22,15 +23,16 @@ use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
-use crate::legacy_core::plugins::PluginCapabilitySummary;
-use crate::legacy_core::skills::model::SkillMetadata;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use bottom_pane_view::ViewCompletion;
+use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -47,6 +49,7 @@ mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
+mod status_surface_preview;
 mod title_setup;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
@@ -81,16 +84,20 @@ mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
-mod prompt_args;
+mod memories_settings_view;
+pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
-mod slash_commands;
+pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
+pub(crate) use list_selection_view::SelectionRowDisplay;
+pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
+pub(crate) use memories_settings_view::MemoriesSettingsView;
 mod feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_classification;
@@ -101,19 +108,24 @@ pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
-pub(crate) use status_line_setup::StatusLinePreviewData;
 pub(crate) use status_line_setup::StatusLineSetupView;
+pub(crate) use status_surface_preview::StatusSurfacePreviewData;
+pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
+#[cfg(test)]
+pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
+mod selection_tabs;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use selection_tabs::SelectionTab;
 
 /// How long the "press again to quit" hint stays visible.
 ///
@@ -146,6 +158,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::QueuedInputAction;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -339,6 +352,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_side_conversation_active(&mut self, active: bool) {
+        self.composer.set_side_conversation_active(active);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
+        self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
@@ -377,6 +400,35 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    fn pop_active_view_with_completion(&mut self, completion: Option<ViewCompletion>) {
+        if self.view_stack.pop().is_some() {
+            match completion {
+                Some(ViewCompletion::Accepted) => {
+                    while self
+                        .view_stack
+                        .last()
+                        .is_some_and(|view| view.dismiss_after_child_accept())
+                    {
+                        self.view_stack.pop();
+                    }
+                }
+                Some(ViewCompletion::Cancelled) => {
+                    if let Some(view) = self.view_stack.last_mut() {
+                        view.clear_dismiss_after_child_accept();
+                    }
+                }
+                None => {}
+            }
+            self.on_view_stack_depth_decreased();
+        }
+    }
+
+    fn on_view_stack_depth_decreased(&mut self) {
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+    }
+
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
@@ -388,7 +440,7 @@ impl BottomPane {
             // We need three pieces of information after routing the key:
             // whether Esc completed the view, whether the view finished for any
             // reason, and whether a paste-burst timer should be scheduled.
-            let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
+            let (ctrl_c_completed, view_complete, completion, view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
                 let view = &mut self.view_stack[last_index];
                 let prefer_esc =
@@ -398,24 +450,27 @@ impl BottomPane {
                     && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                     && view.is_complete();
                 if ctrl_c_completed {
-                    (true, true, false)
+                    (true, true, view.completion(), false)
                 } else {
                     view.handle_key_event(key_event);
-                    (false, view.is_complete(), view.is_in_paste_burst())
+                    (
+                        false,
+                        view.is_complete(),
+                        view.completion(),
+                        view.is_in_paste_burst(),
+                    )
                 }
             };
 
             if ctrl_c_completed {
-                self.view_stack.pop();
-                self.on_active_view_complete();
+                self.pop_active_view_with_completion(completion);
                 if let Some(next_view) = self.view_stack.last()
                     && next_view.is_in_paste_burst()
                 {
                     self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
             } else if view_complete {
-                self.view_stack.clear();
-                self.on_active_view_complete();
+                self.pop_active_view_with_completion(completion);
             } else if view_in_paste_burst {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
@@ -467,10 +522,11 @@ impl BottomPane {
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
+            let view_complete = view.is_complete();
+            let completion = view.completion();
             if matches!(event, CancellationEvent::Handled) {
-                if view.is_complete() {
-                    self.view_stack.pop();
-                    self.on_active_view_complete();
+                if view_complete {
+                    self.pop_active_view_with_completion(completion);
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
                 self.request_redraw();
@@ -491,17 +547,14 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if !self.view_stack.is_empty() {
-            let (needs_redraw, view_complete) = {
-                let last_index = self.view_stack.len() - 1;
-                let view = &mut self.view_stack[last_index];
-                (view.handle_paste(pasted), view.is_complete())
-            };
+        if let Some(view) = self.view_stack.last_mut() {
+            let needs_redraw = view.handle_paste(pasted);
+            let view_complete = view.is_complete();
             if view_complete {
                 self.view_stack.clear();
                 self.on_active_view_complete();
             }
-            if needs_redraw {
+            if needs_redraw || view_complete {
                 self.request_redraw();
             }
         } else {
@@ -818,6 +871,13 @@ impl BottomPane {
             .and_then(|view| view.selected_index())
     }
 
+    pub(crate) fn active_tab_id_for_active_view(&self, view_id: &'static str) -> Option<&str> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.active_tab_id())
+    }
+
     /// Update the pending-input preview shown above the composer.
     pub(crate) fn set_pending_input_preview(
         &mut self,
@@ -1030,6 +1090,37 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    pub(crate) fn dismiss_app_server_request(
+        &mut self,
+        request: &ResolvedAppServerRequest,
+    ) -> bool {
+        if self.view_stack.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut completed_indices = Vec::new();
+        for index in (0..self.view_stack.len()).rev() {
+            let view = &mut self.view_stack[index];
+            if !view.dismiss_app_server_request(request) {
+                continue;
+            }
+            changed = true;
+            if view.is_complete() {
+                completed_indices.push(index);
+            }
+        }
+        if !changed {
+            return false;
+        }
+        for index in completed_indices {
+            self.view_stack.remove(index);
+        }
+        self.on_view_stack_depth_decreased();
+        self.request_redraw();
+        true
+    }
+
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
@@ -1197,6 +1288,12 @@ impl BottomPane {
             self.request_redraw();
         }
     }
+
+    pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
+        if self.composer.set_side_conversation_context_label(label) {
+            self.request_redraw();
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1239,18 +1336,23 @@ impl Renderable for BottomPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::app_server_requests::ResolvedAppServerRequest;
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
-    use std::path::PathBuf;
     use std::rc::Rc;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1272,6 +1374,19 @@ mod tests {
         snapshot_buffer(&buf)
     }
 
+    fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
+        BottomPane::new(BottomPaneParams {
+            app_event_tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        })
+    }
+
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             thread_id: codex_protocol::ThreadId::new(),
@@ -1285,6 +1400,73 @@ mod tests {
             ],
             network_approval_context: None,
             additional_permissions: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct DismissibleView {
+        id: Option<&'static str>,
+        dismiss_exec_id: Option<&'static str>,
+        complete: bool,
+    }
+
+    impl Renderable for DismissibleView {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+    }
+
+    impl BottomPaneView for DismissibleView {
+        fn is_complete(&self) -> bool {
+            self.complete
+        }
+
+        fn view_id(&self) -> Option<&'static str> {
+            self.id
+        }
+
+        fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+            let ResolvedAppServerRequest::ExecApproval { id } = request else {
+                return false;
+            };
+            if self.dismiss_exec_id != Some(id.as_str()) {
+                return false;
+            }
+
+            self.complete = true;
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct CompletingView {
+        id: Option<&'static str>,
+        complete: bool,
+    }
+
+    impl Renderable for CompletingView {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+    }
+
+    impl BottomPaneView for CompletingView {
+        fn handle_key_event(&mut self, key_event: KeyEvent) {
+            if key_event.code == KeyCode::Enter {
+                self.complete = true;
+            }
+        }
+
+        fn is_complete(&self) -> bool {
+            self.complete
+        }
+
+        fn view_id(&self) -> Option<&'static str> {
+            self.id
         }
     }
 
@@ -1367,6 +1549,89 @@ mod tests {
         assert!(
             !r0.contains("Working"),
             "overlay should not render above modal"
+        );
+    }
+
+    #[test]
+    fn dismiss_app_server_request_removes_matching_buried_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("buried"),
+            dismiss_exec_id: Some("request-1"),
+            complete: false,
+        }));
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("top"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+
+        assert!(
+            pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "request-1".to_string(),
+            })
+        );
+        assert_eq!(pane.view_stack.len(), 1);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("top")
+        );
+    }
+
+    #[test]
+    fn dismiss_app_server_request_returns_false_when_no_view_matches() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("first"),
+            dismiss_exec_id: Some("other-request"),
+            complete: false,
+        }));
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("second"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+
+        assert!(
+            !pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "request-1".to_string(),
+            })
+        );
+        assert_eq!(pane.view_stack.len(), 2);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn completing_top_view_preserves_underlying_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("underlying"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+        pane.push_view(Box::new(CompletingView {
+            id: Some("top"),
+            complete: false,
+        }));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(pane.view_stack.len(), 1);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("underlying")
         );
     }
 
@@ -1719,7 +1984,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
-                path_to_skills_md: PathBuf::from("test-skill"),
+                path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
                 scope: SkillScope::User,
             }]),
         });

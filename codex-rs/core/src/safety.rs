@@ -11,6 +11,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 const PATCH_REJECTED_OUTSIDE_PROJECT_REASON: &str =
     "writing outside of the project; rejected by user approval settings";
@@ -34,7 +35,7 @@ pub fn assess_patch_safety(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> SafetyCheck {
     if action.is_empty() {
@@ -119,7 +120,7 @@ fn patch_rejection_reason(sandbox_policy: &SandboxPolicy) -> &'static str {
 fn is_write_patch_constrained_to_writable_paths(
     action: &ApplyPatchAction,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
 ) -> bool {
     // Normalize a path by removing `.` and resolving `..` without touching the
     // filesystem (works even if the file does not exist).

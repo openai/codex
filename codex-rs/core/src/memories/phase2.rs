@@ -1,8 +1,9 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
-use crate::codex::Session;
-use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
+use crate::memories::extensions::PendingExtensionResourceRemoval;
+use crate::memories::extensions::find_old_extension_resources;
+use crate::memories::extensions::remove_extension_resources;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -10,9 +11,13 @@ use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
+use crate::session::emit_subagent_session_started;
+use crate::session::session::Session;
 use codex_config::Constrained;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -21,7 +26,6 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
 use codex_state::StateRuntime;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,7 +117,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
         return;
     }
-    if raw_memories.is_empty() {
+    let pending_extension_resource_removals = find_old_extension_resources(&root).await;
+    let removed_extension_resources = pending_extension_resource_removals
+        .iter()
+        .map(|resource| resource.removed.clone())
+        .collect::<Vec<_>>();
+    if raw_memories.is_empty() && pending_extension_resource_removals.is_empty() {
         // We check only after sync of the file system.
         job::succeed(
             session,
@@ -128,11 +137,10 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config, &selection);
+    let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
-    let thread_id = match session
-        .services
-        .agent_control
+    let agent_control = session.services.agent_control.detached_registry();
+    let thread_id = match agent_control
         .spawn_agent(agent_config, prompt.into(), Some(source))
         .await
     {
@@ -171,7 +179,9 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         claim,
         new_watermark,
         raw_memories.clone(),
+        pending_extension_resource_removals,
         thread_id,
+        agent_control,
         phase_two_e2e_timer,
     );
 
@@ -269,15 +279,15 @@ mod job {
         completion_watermark: i64,
         selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
-    ) {
+    ) -> bool {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
             /*inc*/ 1,
             &[("status", reason)],
         );
-        let _ = db
-            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
-            .await;
+        db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
+            .await
+            .unwrap_or(false)
     }
 }
 
@@ -288,18 +298,11 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        match AbsolutePathBuf::from_absolute_path(root) {
-            Ok(root) => agent_config.cwd = root,
-            Err(err) => {
-                warn!(
-                    "memory phase-2 consolidation could not set cwd from codex_home {}: {err}",
-                    agent_config.codex_home.display()
-                );
-                return None;
-            }
-        }
+        agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
+        agent_config.memories.use_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
@@ -308,27 +311,30 @@ mod agent {
         let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
-        let mut writable_roots = Vec::new();
-        match AbsolutePathBuf::from_absolute_path(agent_config.codex_home.clone()) {
-            Ok(codex_home) => writable_roots.push(codex_home),
-            Err(err) => warn!(
-                "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
-                agent_config.codex_home.display()
-            ),
-        }
-        // The consolidation agent only needs local codex_home write access and no network.
+        let writable_roots = vec![root];
+        // The consolidation agent only needs local memory-root write access and no network.
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,
             read_only_access: Default::default(),
             network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         };
+        let consolidation_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &consolidation_sandbox_policy,
+                agent_config.cwd.as_path(),
+            );
+        let consolidation_network_sandbox_policy =
+            NetworkSandboxPolicy::from(&consolidation_sandbox_policy);
         agent_config
             .permissions
             .sandbox_policy
             .set(consolidation_sandbox_policy)
             .ok()?;
+        agent_config.permissions.file_system_sandbox_policy =
+            consolidation_file_system_sandbox_policy;
+        agent_config.permissions.network_sandbox_policy = consolidation_network_sandbox_policy;
 
         agent_config.model = Some(
             config
@@ -345,9 +351,10 @@ mod agent {
     pub(super) fn get_prompt(
         config: Arc<Config>,
         selection: &codex_state::Phase2InputSelection,
+        removed_extension_resources: &[crate::memories::extensions::RemovedExtensionResource],
     ) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root, selection);
+        let prompt = build_consolidation_prompt(&root, selection, removed_extension_resources);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],
@@ -355,12 +362,15 @@ mod agent {
     }
 
     /// Handle the agent while it is running.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn handle(
         session: &Arc<Session>,
         claim: Claim,
         new_watermark: i64,
         selected_outputs: Vec<codex_state::Stage1Output>,
+        pending_extension_resource_removals: Vec<PendingExtensionResourceRemoval>,
         thread_id: ThreadId,
+        agent_control: crate::agent::AgentControl,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
         let Some(db) = session.services.state_db.clone() else {
@@ -370,7 +380,6 @@ mod agent {
 
         tokio::spawn(async move {
             let _phase_two_e2e_timer = phase_two_e2e_timer;
-            let agent_control = session.services.agent_control.clone();
 
             // TODO(jif) we might have a very small race here.
             let rx = match agent_control.subscribe_status(thread_id).await {
@@ -396,7 +405,7 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                job::succeed(
+                if job::succeed(
                     &session,
                     &db,
                     &claim,
@@ -404,7 +413,10 @@ mod agent {
                     &selected_outputs,
                     "succeeded",
                 )
-                .await;
+                .await
+                {
+                    remove_extension_resources(&pending_extension_resource_removals).await;
+                }
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }

@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
@@ -22,11 +23,12 @@ use crate::schema::PostToolUseToolInput;
 pub struct PostToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
     pub tool_name: String,
+    pub matcher_aliases: Vec<String>,
     pub tool_use_id: String,
     pub command: String,
     pub tool_response: Value,
@@ -53,10 +55,11 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &PostToolUseRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PostToolUse,
-        Some(&request.tool_name),
+        &matcher_inputs,
     )
     .into_iter()
     .map(|handler| {
@@ -70,10 +73,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: PostToolUseRequest,
 ) -> PostToolUseOutcome {
-    let matched = dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    let matched = dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PostToolUse,
-        Some(&request.tool_name),
+        &matcher_inputs,
     );
     if matched.is_empty() {
         return PostToolUseOutcome {
@@ -85,21 +89,7 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&PostToolUseCommandInput {
-        session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "PostToolUse".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
-        tool_input: PostToolUseToolInput {
-            command: request.command.clone(),
-        },
-        tool_response: request.tool_response.clone(),
-        tool_use_id: request.tool_use_id.clone(),
-    }) {
+    let input_json = match command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
@@ -150,6 +140,29 @@ pub(crate) async fn run(
         additional_contexts,
         feedback_message,
     }
+}
+
+/// Serializes command stdin for a selected `PostToolUse` hook.
+///
+/// Handler selection may include internal matcher aliases, but hook stdin keeps
+/// the canonical `tool_name` for logs and for consumers that pair pre/post
+/// events across processes.
+fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&PostToolUseCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "PostToolUse".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        tool_name: request.tool_name.clone(),
+        tool_input: PostToolUseToolInput {
+            command: request.command.clone(),
+        },
+        tool_response: request.tool_response.clone(),
+        tool_use_id: request.tool_use_id.clone(),
+    })
 }
 
 fn parse_completed(
@@ -302,22 +315,35 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostTo
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     use super::PostToolUseHandlerData;
+    use super::command_input_json;
     use super::parse_completed;
     use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
     use crate::events::common;
+
+    #[test]
+    fn command_input_uses_request_tool_name() {
+        let mut request = request_for_tool_use("call-apply-patch");
+        request.tool_name = "apply_patch".to_string();
+
+        let input_json = command_input_json(&request).expect("serialize command input");
+        let input: serde_json::Value =
+            serde_json::from_str(&input_json).expect("parse command input");
+
+        assert_eq!(input["tool_name"], "apply_patch");
+    }
 
     #[test]
     fn block_decision_stops_normal_processing() {
@@ -482,7 +508,13 @@ mod tests {
         let runs = preview(&[handler()], &request);
 
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].id, "post-tool-use:0:/tmp/hooks.json:tool-call-456");
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "post-tool-use:0:{}:tool-call-456",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
 
         let parsed = parse_completed(
             &handler(),
@@ -517,7 +549,8 @@ mod tests {
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
         }
     }
@@ -538,11 +571,12 @@ mod tests {
         super::PostToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
             tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
             tool_use_id: tool_use_id.to_string(),
             command: "echo hello".to_string(),
             tool_response: json!({"ok": true}),

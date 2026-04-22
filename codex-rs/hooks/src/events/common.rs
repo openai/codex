@@ -100,9 +100,10 @@ pub(crate) fn matcher_pattern_for_event(
     matcher: Option<&str>,
 ) -> Option<&str> {
     match event_name {
-        HookEventName::PreToolUse | HookEventName::PostToolUse | HookEventName::SessionStart => {
-            matcher
-        }
+        HookEventName::PreToolUse
+        | HookEventName::PermissionRequest
+        | HookEventName::PostToolUse
+        | HookEventName::SessionStart => matcher,
         HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
@@ -126,6 +127,17 @@ pub(crate) fn matches_matcher(matcher: Option<&str>, input: Option<&str>) -> boo
             })
             .unwrap_or(false),
     }
+}
+
+pub(crate) fn matcher_inputs<'a>(
+    tool_name: &'a str,
+    matcher_aliases: &'a [String],
+) -> Vec<&'a str> {
+    // Keep the canonical name first so matcher previews and execution preserve
+    // the same primary identity that hook stdin will serialize.
+    std::iter::once(tool_name)
+        .chain(matcher_aliases.iter().map(String::as_str))
+        .collect()
 }
 
 fn is_match_all_matcher(matcher: &str) -> bool {

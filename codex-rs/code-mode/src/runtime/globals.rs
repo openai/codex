@@ -53,10 +53,10 @@ fn build_tools_object<'s>(
         .map(|state| state.enabled_tools.clone())
         .unwrap_or_default();
 
-    for tool in enabled_tools {
+    for (tool_index, tool) in enabled_tools.iter().enumerate() {
         let name = v8::String::new(scope, &tool.global_name)
             .ok_or_else(|| "failed to allocate tool name".to_string())?;
-        let function = tool_function(scope, &tool.tool_name)?;
+        let function = tool_function(scope, tool_index)?;
         tools.set(scope, name.into(), function.into());
     }
     Ok(tools)
@@ -116,9 +116,9 @@ where
 
 fn tool_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    tool_name: &str,
+    tool_index: usize,
 ) -> Result<v8::Local<'s, v8::Function>, String> {
-    let data = v8::String::new(scope, tool_name)
+    let data = v8::String::new(scope, &tool_index.to_string())
         .ok_or_else(|| "failed to allocate tool callback data".to_string())?;
     let template = v8::FunctionTemplate::builder(tool_callback)
         .data(data.into())

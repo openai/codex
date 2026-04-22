@@ -70,6 +70,7 @@ fn remote_model_with_visibility(
             "supports_parallel_tool_calls": false,
             "supports_image_detail_original": false,
             "context_window": 272_000,
+            "max_context_window": 272_000,
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
@@ -93,6 +94,7 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -705,6 +707,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
     ));
     let provider = provider_for(server.uri());
     let manager = ModelsManager::with_provider_for_tests(

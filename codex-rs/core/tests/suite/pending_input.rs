@@ -85,7 +85,7 @@ fn response_completed_chunks(response_id: &str) -> Vec<StreamingSseChunk> {
 
 async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
     test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .build_with_streaming_server(server)
         .await
         .unwrap_or_else(|err| panic!("build streaming Codex test session: {err}"))
@@ -95,6 +95,7 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
 async fn submit_user_input(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
@@ -109,6 +110,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
 async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
@@ -157,6 +159,14 @@ async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
         })
         .await
         .unwrap_or_else(|err| panic!("submit queue-only agent mail: {err}"));
+    codex
+        .submit(Op::ListMcpTools)
+        .await
+        .unwrap_or_else(|err| panic!("submit list-mcp-tools barrier: {err}"));
+    wait_for_event(codex, |event| {
+        matches!(event, EventMsg::McpListToolsResponse(_))
+    })
+    .await;
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
@@ -256,7 +266,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let codex = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .build_with_streaming_server(&server)
         .await
         .unwrap()
@@ -264,6 +274,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
@@ -281,6 +292,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "second prompt".into(),
                 text_elements: Vec::new(),
@@ -522,7 +534,7 @@ async fn steered_user_input_waits_for_model_continuation_after_mid_turn_compact(
     .await;
 
     let codex = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;
@@ -609,7 +621,7 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
             .await;
 
     let codex = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;
@@ -716,7 +728,7 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
     .await;
 
     let test = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;

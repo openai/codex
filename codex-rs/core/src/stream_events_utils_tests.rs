@@ -2,13 +2,19 @@ use super::completed_item_defers_mailbox_delivery_to_next_turn;
 use super::handle_non_tool_response_item;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
+use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 
 fn assistant_output_text(text: &str) -> ResponseItem {
@@ -25,6 +31,84 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
         end_turn: Some(true),
         phase,
     }
+}
+
+#[test]
+fn external_context_pollution_items_include_web_search_and_tool_search() {
+    let polluting_items = [
+        ResponseItem::WebSearchCall {
+            id: None,
+            status: Some("completed".to_string()),
+            action: None,
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "calendar"}),
+        },
+        ResponseItem::ToolSearchOutput {
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: Vec::new(),
+        },
+    ];
+
+    assert!(
+        polluting_items
+            .iter()
+            .all(response_item_may_include_external_context)
+    );
+}
+
+#[test]
+fn external_context_pollution_items_exclude_local_tool_calls() {
+    let non_polluting_items = [
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["cat".to_string(), "README.md".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "custom-1".to_string(),
+            name: "apply_patch".to_string(),
+            input: "*** Begin Patch\n*** End Patch\n".to_string(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "custom-1".to_string(),
+            name: Some("apply_patch".to_string()),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        assistant_output_text("plain assistant text"),
+    ];
+
+    assert!(
+        !non_polluting_items
+            .iter()
+            .any(response_item_may_include_external_context)
+    );
 }
 
 #[tokio::test]
@@ -128,12 +212,12 @@ fn completed_item_defers_mailbox_delivery_for_image_generation_calls() {
 #[tokio::test]
 async fn save_image_generation_result_saves_base64_to_png_in_codex_home() {
     let codex_home = tempfile::tempdir().expect("create codex home");
-    let expected_path =
-        image_generation_artifact_path(codex_home.path(), "session-1", "ig_save_base64");
+    let codex_home = codex_home.path().abs();
+    let expected_path = image_generation_artifact_path(&codex_home, "session-1", "ig_save_base64");
     let _ = std::fs::remove_file(&expected_path);
 
     let saved_path =
-        save_image_generation_result(codex_home.path(), "session-1", "ig_save_base64", "Zm9v")
+        save_image_generation_result(&codex_home, "session-1", "ig_save_base64", "Zm9v")
             .await
             .expect("image should be saved");
 
@@ -146,8 +230,9 @@ async fn save_image_generation_result_saves_base64_to_png_in_codex_home() {
 async fn save_image_generation_result_rejects_data_url_payload() {
     let result = "data:image/jpeg;base64,Zm9v";
     let codex_home = tempfile::tempdir().expect("create codex home");
+    let codex_home = codex_home.path().abs();
 
-    let err = save_image_generation_result(codex_home.path(), "session-1", "ig_456", result)
+    let err = save_image_generation_result(&codex_home, "session-1", "ig_456", result)
         .await
         .expect_err("data url payload should error");
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
@@ -156,8 +241,8 @@ async fn save_image_generation_result_rejects_data_url_payload() {
 #[tokio::test]
 async fn save_image_generation_result_overwrites_existing_file() {
     let codex_home = tempfile::tempdir().expect("create codex home");
-    let existing_path =
-        image_generation_artifact_path(codex_home.path(), "session-1", "ig_overwrite");
+    let codex_home = codex_home.path().abs();
+    let existing_path = image_generation_artifact_path(&codex_home, "session-1", "ig_overwrite");
     std::fs::create_dir_all(
         existing_path
             .parent()
@@ -166,10 +251,9 @@ async fn save_image_generation_result_overwrites_existing_file() {
     .expect("create image output dir");
     std::fs::write(&existing_path, b"existing").expect("seed existing image");
 
-    let saved_path =
-        save_image_generation_result(codex_home.path(), "session-1", "ig_overwrite", "Zm9v")
-            .await
-            .expect("image should be saved");
+    let saved_path = save_image_generation_result(&codex_home, "session-1", "ig_overwrite", "Zm9v")
+        .await
+        .expect("image should be saved");
 
     assert_eq!(saved_path, existing_path);
     assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
@@ -179,13 +263,13 @@ async fn save_image_generation_result_overwrites_existing_file() {
 #[tokio::test]
 async fn save_image_generation_result_sanitizes_call_id_for_codex_home_output_path() {
     let codex_home = tempfile::tempdir().expect("create codex home");
-    let expected_path = image_generation_artifact_path(codex_home.path(), "session-1", "../ig/..");
+    let codex_home = codex_home.path().abs();
+    let expected_path = image_generation_artifact_path(&codex_home, "session-1", "../ig/..");
     let _ = std::fs::remove_file(&expected_path);
 
-    let saved_path =
-        save_image_generation_result(codex_home.path(), "session-1", "../ig/..", "Zm9v")
-            .await
-            .expect("image should be saved");
+    let saved_path = save_image_generation_result(&codex_home, "session-1", "../ig/..", "Zm9v")
+        .await
+        .expect("image should be saved");
 
     assert_eq!(saved_path, expected_path);
     assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
@@ -195,7 +279,8 @@ async fn save_image_generation_result_sanitizes_call_id_for_codex_home_output_pa
 #[tokio::test]
 async fn save_image_generation_result_rejects_non_standard_base64() {
     let codex_home = tempfile::tempdir().expect("create codex home");
-    let err = save_image_generation_result(codex_home.path(), "session-1", "ig_urlsafe", "_-8")
+    let codex_home = codex_home.path().abs();
+    let err = save_image_generation_result(&codex_home, "session-1", "ig_urlsafe", "_-8")
         .await
         .expect_err("non-standard base64 should error");
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
@@ -204,8 +289,9 @@ async fn save_image_generation_result_rejects_non_standard_base64() {
 #[tokio::test]
 async fn save_image_generation_result_rejects_non_base64_data_urls() {
     let codex_home = tempfile::tempdir().expect("create codex home");
+    let codex_home = codex_home.path().abs();
     let err = save_image_generation_result(
-        codex_home.path(),
+        &codex_home,
         "session-1",
         "ig_svg",
         "data:image/svg+xml,<svg/>",

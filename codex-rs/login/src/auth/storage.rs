@@ -23,6 +23,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_secrets::LocalSecretsBackend;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
@@ -42,6 +43,20 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh: Option<DateTime<Utc>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_identity: Option<AgentIdentityAuthRecord>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AgentIdentityAuthRecord {
+    pub agent_runtime_id: String,
+    pub agent_private_key: String,
+    pub account_id: String,
+    pub chatgpt_user_id: String,
+    pub email: String,
+    pub plan_type: AccountPlanType,
+    pub chatgpt_account_is_fedramp: bool,
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {

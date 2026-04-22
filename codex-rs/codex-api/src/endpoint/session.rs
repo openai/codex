@@ -1,5 +1,4 @@
-use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
+use crate::auth::SharedAuthProvider;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
@@ -9,21 +8,22 @@ use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
+use codex_client::TransportError;
 use http::HeaderMap;
 use http::Method;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
-pub(crate) struct EndpointSession<T: HttpTransport, A: AuthProvider> {
+pub(crate) struct EndpointSession<T: HttpTransport> {
     transport: T,
     provider: Provider,
-    auth: A,
+    auth: SharedAuthProvider,
     request_telemetry: Option<Arc<dyn RequestTelemetry>>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
-    pub(crate) fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> EndpointSession<T> {
+    pub(crate) fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             transport,
             provider,
@@ -56,7 +56,7 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         if let Some(body) = body {
             req.body = Some(RequestBody::Json(body.clone()));
         }
-        add_auth_headers(&self.auth, req)
+        req
     }
 
     pub(crate) async fn execute(
@@ -97,7 +97,14 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
             self.provider.retry.to_policy(),
             self.request_telemetry.clone(),
             make_request,
-            |req| self.transport.execute(req),
+            |req| {
+                let auth = self.auth.clone();
+                let transport = &self.transport;
+                async move {
+                    let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
+                    transport.execute(req).await
+                }
+            },
         )
         .await?;
 
@@ -131,7 +138,14 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
             self.provider.retry.to_policy(),
             self.request_telemetry.clone(),
             make_request,
-            |req| self.transport.stream(req),
+            |req| {
+                let auth = self.auth.clone();
+                let transport = &self.transport;
+                async move {
+                    let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
+                    transport.stream(req).await
+                }
+            },
         )
         .await?;
 

@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::legacy_core::config::set_project_trust_level;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -27,6 +26,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
+    pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
     pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -51,12 +51,34 @@ impl WidgetRef for &TrustDirectoryWidget {
         ]));
         column.push("");
 
+        if self.cwd != self.trust_target {
+            #[allow(clippy::disallowed_methods)]
+            let git_root_warning = Paragraph::new(format!(
+                "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root: {}",
+                self.trust_target.display()
+            ))
+            .yellow();
+            column.push(
+                git_root_warning
+                    .wrap(Wrap { trim: true })
+                    .inset(Insets::tlbr(
+                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+                    )),
+            );
+            column.push("");
+        }
+
         column.push(
             Paragraph::new(
-                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
+                "Do you trust the contents of this directory? Working with untrusted \
+                 contents comes with higher risk of prompt injection. Trusting the \
+                 directory allows project-local config, hooks, and exec policies to load."
+                    .to_string(),
             )
-                .wrap(Wrap { trim: true })
-                .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
+            .wrap(Wrap { trim: true })
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push("");
 
@@ -142,8 +164,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target =
-            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        let target = self.trust_target.clone();
         if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
@@ -182,6 +203,7 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("."),
+            trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -207,6 +229,7 @@ mod tests {
         let widget = TrustDirectoryWidget {
             codex_home: codex_home.path().to_path_buf(),
             cwd: PathBuf::from("/workspace/project"),
+            trust_target: PathBuf::from("/workspace/project"),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,

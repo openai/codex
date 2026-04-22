@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::io;
@@ -25,6 +28,7 @@ pub struct CopyOptions {
 pub struct FileMetadata {
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -39,31 +43,65 @@ pub struct ReadDirectoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
-    pub sandbox_policy: SandboxPolicy,
+    pub permissions: PermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<AbsolutePathBuf>,
     pub windows_sandbox_level: WindowsSandboxLevel,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
     #[serde(default)]
     pub use_legacy_landlock: bool,
-    pub additional_permissions: Option<PermissionProfile>,
 }
 
 impl FileSystemSandboxContext {
     pub fn new(sandbox_policy: SandboxPolicy) -> Self {
+        if let Ok(cwd) = AbsolutePathBuf::current_dir() {
+            Self::from_legacy_sandbox_policy(sandbox_policy, cwd)
+        } else {
+            let permissions = PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::from(&sandbox_policy),
+                NetworkSandboxPolicy::from(&sandbox_policy),
+            );
+            Self::from_permission_profile(permissions)
+        }
+    }
+
+    pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
+        let permissions = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path()),
+            NetworkSandboxPolicy::from(&sandbox_policy),
+        );
+        Self::from_permission_profile_with_cwd(permissions, cwd)
+    }
+
+    pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
+        Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
+    }
+
+    pub fn from_permission_profile_with_cwd(
+        permissions: PermissionProfile,
+        cwd: AbsolutePathBuf,
+    ) -> Self {
+        Self::from_permissions_and_cwd(permissions, Some(cwd))
+    }
+
+    fn from_permissions_and_cwd(
+        permissions: PermissionProfile,
+        cwd: Option<AbsolutePathBuf>,
+    ) -> Self {
         Self {
-            sandbox_policy,
+            permissions,
+            cwd,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
             use_legacy_landlock: false,
-            additional_permissions: None,
         }
     }
 
     pub fn should_run_in_sandbox(&self) -> bool {
-        matches!(
-            self.sandbox_policy,
-            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-        )
+        let file_system_policy = self.permissions.file_system_sandbox_policy();
+        matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
+            && !file_system_policy.has_full_disk_write_access()
     }
 }
 

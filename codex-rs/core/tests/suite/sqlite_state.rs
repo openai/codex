@@ -83,7 +83,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let metadata = metadata.expect("thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert!(
         rollout_path.exists(),
         "rollout should be materialized after first user message"
@@ -103,6 +103,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let dynamic_tools = vec![
         DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "geo_lookup".to_string(),
             description: "lookup a city".to_string(),
             input_schema: json!({
@@ -113,6 +114,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             defer_loading: true,
         },
         DynamicToolSpec {
+            namespace: None,
             name: "weather_lookup".to_string(),
             description: "lookup weather".to_string(),
             input_schema: json!({
@@ -208,7 +210,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let metadata = metadata.expect("backfilled thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.first_user_message.is_some());
 
@@ -297,7 +299,7 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
@@ -325,12 +327,17 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     let server = start_mock_server().await;
     let call_id = "call-123";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
     mount_sse_once(
         &server,
         responses::sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                "{\"message\":\"ping\"}",
+            ),
             ev_completed("resp-1"),
         ]),
     )
@@ -350,7 +357,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
@@ -366,11 +373,14 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -389,6 +399,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),

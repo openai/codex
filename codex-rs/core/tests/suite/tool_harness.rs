@@ -51,7 +51,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("gpt-5");
+    let mut builder = test_codex().with_model("test-local-shell-json");
     let TestCodex {
         codex,
         cwd,
@@ -78,6 +78,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
                 text_elements: Vec::new(),
@@ -149,6 +150,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
@@ -230,6 +232,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
                 text_elements: Vec::new(),
@@ -326,6 +329,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),
@@ -430,6 +434,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
                 text_elements: Vec::new(),

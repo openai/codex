@@ -1,16 +1,26 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::Constrained;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -22,10 +32,14 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use serial_test::serial;
+use tempfile::TempDir;
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -42,6 +56,118 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn ev_namespaced_function_call(
+    call_id: &str,
+    namespace: &str,
+    name: &str,
+    arguments: &str,
+) -> Value {
+    json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "call_id": call_id,
+            "namespace": namespace,
+            "name": name,
+            "arguments": arguments,
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("unified exec should enable for test");
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("js repl should enable for test");
+        config.include_apply_patch_tool = true;
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_environments("which tools are available?", Some(vec![]))
+        .await?;
+
+    let tools = tool_names(&response_mock.single_request().body_json());
+    assert!(
+        tools.contains(&"update_plan".to_string()),
+        "non-environment tool should remain available; got {tools:?}"
+    );
+    for environment_tool in [
+        "exec_command",
+        "write_stdin",
+        "js_repl",
+        "js_repl_reset",
+        "apply_patch",
+        "view_image",
+    ] {
+        assert!(
+            !tools.contains(&environment_tool.to_string()),
+            "{environment_tool} should be omitted for explicit empty turn environments; got {tools:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("unified exec should enable for test");
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_environments(
+        "which tools are available?",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: "local".to_string(),
+            cwd: test.config.cwd.clone(),
+        }]),
+    )
+    .await?;
+
+    let tools = tool_names(&response_mock.single_request().body_json());
+    assert!(
+        tools.contains(&"exec_command".to_string()),
+        "environment tool should remain available with selected local environment; got {tools:?}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -92,11 +218,154 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(mcp_test_value)]
+async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let historical_call_id = "historical-mcp-call";
+    let retry_call_id = "retry-mcp-call";
+    let server_name = "rmcp";
+    let unavailable_tool_namespace = "mcp__rmcp__";
+    let unavailable_tool_name = "echo";
+    let unavailable_tool_display_name = "mcp__rmcp__echo";
+    let server = start_mock_server().await;
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    let codex_home = Arc::new(TempDir::new()?);
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_home(Arc::clone(&codex_home))
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("unavailable dummy tools should be enabled for this test");
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::new()),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    experimental_environment: None,
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
+
+    let first_turn_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_namespaced_function_call(
+                    historical_call_id,
+                    unavailable_tool_namespace,
+                    unavailable_tool_name,
+                    r#"{"message":"ping"}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "rmcp echo tool completed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.submit_turn("call the rmcp echo tool").await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    assert_eq!(first_turn_mock.requests().len(), 2);
+    drop(test);
+
+    let retry_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_namespaced_function_call(
+                    retry_call_id,
+                    unavailable_tool_namespace,
+                    unavailable_tool_name,
+                    r#"{"message":"ping again"}"#,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnavailableDummyTools)
+            .expect("unavailable dummy tools should be enabled for this test");
+    });
+    let test = resume_builder
+        .resume(&server, codex_home, rollout_path)
+        .await?;
+
+    test.submit_turn("retry the rmcp echo tool").await?;
+
+    let requests = retry_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first_request_tools = tool_names(&requests[0].body_json());
+    assert!(
+        first_request_tools
+            .iter()
+            .any(|name| name == unavailable_tool_display_name),
+        "historical unavailable MCP call should add a placeholder tool; got {first_request_tools:?}"
+    );
+    let output_text = requests[1]
+        .function_call_output_text(retry_call_id)
+        .context("placeholder tool output present")?;
+    assert!(output_text.contains("not currently available"));
+    assert!(
+        !output_text.contains("unsupported call"),
+        "placeholder handler should answer instead of falling back to unsupported call: {output_text}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5");
+    let mut builder = test_codex().with_model("test-shell-json");
     let test = builder.build(&server).await?;
 
     let command = ["/bin/echo", "shell ok"];
@@ -193,7 +462,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1-codex");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let fixture = builder.build(&server).await?;
 
     let call_id = "sandbox-denied-shell";
@@ -211,7 +480,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     ];
     let args = json!({
         "command": command,
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
 
     let responses = vec![
@@ -276,6 +545,109 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     assert_ne!(
         exit_code, 0,
         "sandbox denial should surface a non-zero exit code"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let read_only_policy_for_config = read_only_policy.clone();
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.permissions.sandbox_policy = Constrained::allow_any(read_only_policy_for_config);
+            let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
+            file_system_sandbox_policy
+                .entries
+                .push(FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
+                    },
+                    access: FileSystemAccessMode::None,
+                });
+            config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        });
+    let fixture = builder.build(&server).await?;
+
+    let fixture_dir = fixture.workspace_path("glob-deny-read");
+    fs::create_dir_all(&fixture_dir).context("create glob deny-read fixture directory")?;
+    let denied_path = fixture_dir.join("secret.env");
+    let allowed_path = fixture_dir.join("notes.txt");
+    let secret = "shell glob deny-read secret";
+    let allowed = "shell glob deny-read allowed";
+    fs::write(&denied_path, format!("{secret}\n")).context("write denied fixture")?;
+    fs::write(&allowed_path, format!("{allowed}\n")).context("write allowed fixture")?;
+
+    let call_id = "shell-glob-deny-read";
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "status=0; cat \"$1\" || status=$?; cat \"$2\"; exit \"$status\"".to_string(),
+        "sh".to_string(),
+        denied_path.to_string_lossy().into_owned(),
+        allowed_path.to_string_lossy().into_owned(),
+    ];
+    let args = json!({
+        "command": command,
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    fixture
+        .submit_turn_with_policy("read the fixture files", read_only_policy)
+        .await?;
+
+    let output_text = mock
+        .function_call_output_text(call_id)
+        .context("shell output present")?;
+    let exit_code_line = output_text
+        .lines()
+        .next()
+        .context("exit code line present")?;
+    let exit_code = exit_code_line
+        .strip_prefix("Exit code: ")
+        .context("exit code prefix present")?
+        .trim()
+        .parse::<i32>()
+        .context("exit code is integer")?;
+
+    assert_ne!(
+        exit_code, 0,
+        "glob deny-read should surface a non-zero exit code"
+    );
+    assert!(
+        output_text.contains(allowed),
+        "expected allowed file contents in shell output: {output_text}"
+    );
+    assert!(
+        !output_text.contains(secret),
+        "denied file contents leaked into shell output: {output_text}"
+    );
+    let output_lower = output_text.to_lowercase();
+    let has_denial = output_lower.contains("permission denied")
+        || output_lower.contains("operation not permitted")
+        || output_lower.contains("read-only file system");
+    assert!(
+        has_denial,
+        "expected sandbox denial details in shell output: {output_text}"
     );
 
     Ok(())
@@ -349,7 +721,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5");
+    let mut builder = test_codex().with_model("test-shell-json");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-timeout";
@@ -420,7 +792,7 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
         config
             .permissions
             .sandbox_policy

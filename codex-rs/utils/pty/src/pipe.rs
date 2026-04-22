@@ -162,12 +162,11 @@ async fn spawn_process_with_stdin_mode(
     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
-        let writer = Arc::new(tokio::sync::Mutex::new(stdin));
         tokio::spawn(async move {
+            let mut writer = stdin;
             while let Some(bytes) = writer_rx.recv().await {
-                let mut guard = writer.lock().await;
-                let _ = guard.write_all(&bytes).await;
-                let _ = guard.flush().await;
+                let _ = writer.write_all(&bytes).await;
+                let _ = writer.flush().await;
             }
         })
     } else {
@@ -235,6 +234,7 @@ async fn spawn_process_with_stdin_mode(
         exit_status,
         exit_code,
         /*pty_handles*/ None,
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

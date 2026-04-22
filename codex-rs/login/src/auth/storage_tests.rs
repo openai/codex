@@ -9,6 +9,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use codex_keyring_store::tests::MockKeyringStore;
+use codex_protocol::account::PlanType as AccountPlanType;
 use keyring::Error as KeyringError;
 
 #[tokio::test]
@@ -20,6 +21,7 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
         openai_api_key: Some("test-key".to_string()),
         tokens: None,
         last_refresh: Some(Utc::now()),
+        agent_identity: None,
     };
 
     storage
@@ -40,6 +42,7 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
         openai_api_key: Some("test-key".to_string()),
         tokens: None,
         last_refresh: Some(Utc::now()),
+        agent_identity: None,
     };
 
     let file = get_auth_file(codex_home.path());
@@ -54,6 +57,33 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(AuthMode::AgentIdentity),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: Some(AgentIdentityAuthRecord {
+            agent_runtime_id: "agent-runtime-id".to_string(),
+            agent_private_key: "private-key".to_string(),
+            account_id: "account-id".to_string(),
+            chatgpt_user_id: "user-id".to_string(),
+            email: "user@example.com".to_string(),
+            plan_type: AccountPlanType::Pro,
+            chatgpt_account_is_fedramp: false,
+        }),
+    };
+
+    storage.save(&auth_dot_json)?;
+
+    let loaded = storage.load()?;
+    assert_eq!(Some(auth_dot_json), loaded);
+    Ok(())
+}
+
 #[test]
 fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let dir = tempdir()?;
@@ -62,6 +92,7 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
     storage.save(&auth_dot_json)?;
@@ -85,6 +116,7 @@ fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> 
         openai_api_key: Some("sk-ephemeral".to_string()),
         tokens: None,
         last_refresh: Some(Utc::now()),
+        agent_identity: None,
     };
 
     storage.save(&auth_dot_json)?;
@@ -207,6 +239,7 @@ fn auth_with_prefix(prefix: &str) -> AuthDotJson {
             account_id: Some(format!("{prefix}-account-id")),
         }),
         last_refresh: None,
+        agent_identity: None,
     }
 }
 
@@ -223,6 +256,7 @@ fn keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Result<()> {
         openai_api_key: Some("sk-test".to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     seed_keyring_with_auth(&mock_keyring, codex_home.path(), &expected)?;
 
@@ -261,6 +295,7 @@ fn keyring_auth_storage_save_persists_and_removes_fallback_file() -> anyhow::Res
             account_id: Some("account".to_string()),
         }),
         last_refresh: Some(Utc::now()),
+        agent_identity: None,
     };
 
     storage.save(&auth)?;

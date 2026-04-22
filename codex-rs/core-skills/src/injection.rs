@@ -1,28 +1,36 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::sync::Arc;
 
+use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::build_skill_name_counts;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
-use codex_instructions::SkillInstructions;
+use codex_exec_server::LOCAL_FS;
 use codex_otel::SessionTelemetry;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
-use tokio::fs;
 
 #[derive(Debug, Default)]
 pub struct SkillInjections {
-    pub items: Vec<ResponseItem>,
+    pub items: Vec<SkillInjection>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillInjection {
+    pub name: String,
+    pub path: String,
+    pub contents: String,
 }
 
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
+    loaded_skills: Option<&SkillLoadOutcome>,
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -38,20 +46,26 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        let fs = loaded_skills
+            .and_then(|outcome| outcome.file_system_for_skill(skill))
+            .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
+        match fs
+            .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
+            .await
+        {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
                     skill_name: skill.name.clone(),
                     skill_scope: skill.scope,
-                    skill_path: skill.path_to_skills_md.clone(),
+                    skill_path: skill.path_to_skills_md.to_path_buf(),
                     invocation_type: InvocationType::Explicit,
                 });
-                result.items.push(ResponseItem::from(SkillInstructions {
+                result.items.push(SkillInjection {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
                     contents,
-                }));
+                });
             }
             Err(err) => {
                 emit_skill_injected_metric(otel, skill, "error");
@@ -100,7 +114,7 @@ fn emit_skill_injected_metric(
 pub fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<PathBuf>,
+    disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
     let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
@@ -113,20 +127,24 @@ pub fn collect_explicit_skill_mentions(
     };
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
-    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+    let mut seen_paths: HashSet<AbsolutePathBuf> = HashSet::new();
     let mut blocked_plain_names: HashSet<String> = HashSet::new();
 
     for input in inputs {
         if let UserInput::Skill { name, path } = input {
             blocked_plain_names.insert(name.clone());
-            if selection_context.disabled_paths.contains(path) || seen_paths.contains(path) {
+            let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
+                continue;
+            };
+
+            if selection_context.disabled_paths.contains(&path) || seen_paths.contains(&path) {
                 continue;
             }
 
             if let Some(skill) = selection_context
                 .skills
                 .iter()
-                .find(|skill| skill.path_to_skills_md.as_path() == path.as_path())
+                .find(|skill| skill.path_to_skills_md == path)
             {
                 seen_paths.insert(skill.path_to_skills_md.clone());
                 seen_names.insert(skill.name.clone());
@@ -154,7 +172,7 @@ pub fn collect_explicit_skill_mentions(
 
 struct SkillSelectionContext<'a> {
     skills: &'a [SkillMetadata],
-    disabled_paths: &'a HashSet<PathBuf>,
+    disabled_paths: &'a HashSet<AbsolutePathBuf>,
     skill_name_counts: &'a HashMap<String, usize>,
     connector_slug_counts: &'a HashMap<String, usize>,
 }
@@ -305,7 +323,7 @@ fn select_skills_from_mentions(
     blocked_plain_names: &HashSet<String>,
     mentions: &ToolMentions<'_>,
     seen_names: &mut HashSet<String>,
-    seen_paths: &mut HashSet<PathBuf>,
+    seen_paths: &mut HashSet<AbsolutePathBuf>,
     selected: &mut Vec<SkillMetadata>,
 ) {
     if mentions.is_empty() {

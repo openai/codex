@@ -128,6 +128,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                     chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
                     chatgpt_user_id: Some("user-12345".to_string()),
                     chatgpt_account_id: None,
+                    chatgpt_account_is_fedramp: false,
                     raw_jwt: fake_jwt,
                 },
                 access_token: "test-access-token".to_string(),
@@ -135,6 +136,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                 account_id: None,
             }),
             last_refresh: Some(last_refresh),
+            agent_identity: None,
         },
         auth_dot_json
     );
@@ -172,6 +174,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -188,6 +191,7 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
         dir.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
     );
     let managed = UnauthorizedRecovery {
         manager: Arc::clone(&manager),

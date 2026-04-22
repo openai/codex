@@ -20,7 +20,6 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use std::io;
@@ -31,15 +30,11 @@ pub(crate) struct FsApi {
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
-impl Default for FsApi {
-    fn default() -> Self {
-        Self {
-            file_system: Environment::default().get_filesystem(),
-        }
-    }
-}
-
 impl FsApi {
+    pub(crate) fn new(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self { file_system }
+    }
+
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
@@ -99,6 +94,7 @@ impl FsApi {
         Ok(FsGetMetadataResponse {
             is_directory: metadata.is_directory,
             is_file: metadata.is_file,
+            is_symlink: metadata.is_symlink,
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
         })

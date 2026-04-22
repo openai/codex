@@ -48,9 +48,8 @@ pub enum ClientEvent {
         message: JSONRPCMessage,
     },
     /// Backend-generated acknowledgement for all server envelopes addressed to
-    /// `client_id` whose envelope `seq_id` is less than or equal to this ack's
-    /// `seq_id`. This cursor is client-scoped, not stream-scoped, so receivers
-    /// must not use `stream_id` to partition acks.
+    /// `client_id` and `stream_id` whose envelope `seq_id` is less than or equal
+    /// to this ack's `seq_id`. This cursor is stream-scoped.
     Ack,
     Ping,
     ClientClosed,
@@ -65,7 +64,7 @@ pub(crate) struct ClientEnvelope {
     pub(crate) client_id: ClientId,
     #[serde(rename = "stream_id", skip_serializing_if = "Option::is_none")]
     pub(crate) stream_id: Option<StreamId>,
-    /// For `Ack`, this is the backend-generated per-client cursor over
+    /// For `Ack`, this is the backend-generated per-stream cursor over
     /// `ServerEnvelope.seq_id`.
     #[serde(rename = "seq_id", skip_serializing_if = "Option::is_none")]
     pub(crate) seq_id: Option<u64>,
@@ -106,7 +105,7 @@ pub(crate) struct ServerEnvelope {
     pub(crate) seq_id: u64,
 }
 
-fn is_allowed_chatgpt_host(host: &Option<Host<&str>>) -> bool {
+fn is_allowed_remote_control_chatgpt_host(host: &Option<Host<&str>>) -> bool {
     let Some(Host::Domain(host)) = *host else {
         return false;
     };
@@ -157,7 +156,7 @@ pub(super) fn normalize_remote_control_url(
         .map_err(map_url_parse_error)?;
     let host = enroll_url.host();
     match enroll_url.scheme() {
-        "https" if is_localhost(&host) || is_allowed_chatgpt_host(&host) => {
+        "https" if is_localhost(&host) || is_allowed_remote_control_chatgpt_host(&host) => {
             websocket_url.set_scheme("wss").map_err(map_scheme_error)?;
         }
         "http" if is_localhost(&host) => {
@@ -233,6 +232,7 @@ mod tests {
             "http://chatgpt.com/backend-api",
             "http://example.com/backend-api",
             "https://example.com/backend-api",
+            "https://chat.openai.com/backend-api",
             "https://chatgpt.com.evil.com/backend-api",
             "https://evilchatgpt.com/backend-api",
             "https://foo.localhost/backend-api",

@@ -14,7 +14,6 @@ use codex_core::file_watcher::FileWatcherSubscriber;
 use codex_core::file_watcher::Receiver;
 use codex_core::file_watcher::WatchPath;
 use codex_core::file_watcher::WatchRegistration;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -128,7 +127,7 @@ impl FsWatchManager {
         };
         let outgoing = self.outgoing.clone();
         let (subscriber, rx) = self.file_watcher.add_subscriber();
-        let watch_root = params.path.to_path_buf().clone();
+        let watch_root = params.path.clone();
         let registration = subscriber.register_paths(vec![WatchPath {
             path: params.path.to_path_buf(),
             recursive: false,
@@ -166,7 +165,7 @@ impl FsWatchManager {
                 let mut changed_paths = event
                     .paths
                     .into_iter()
-                    .map(|path| AbsolutePathBuf::resolve_path_against_base(&path, &watch_root))
+                    .map(|path| watch_root.join(path))
                     .collect::<Vec<_>>();
                 changed_paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
                 if !changed_paths.is_empty() {

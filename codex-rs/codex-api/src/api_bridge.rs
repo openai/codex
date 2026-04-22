@@ -1,4 +1,3 @@
-use crate::AuthProvider as ApiAuthProvider;
 use crate::TransportError;
 use crate::error::ApiError;
 use crate::rate_limits::parse_promo_message;
@@ -172,39 +171,4 @@ struct UsageErrorBody {
     error_type: Option<String>,
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
-}
-
-#[derive(Clone, Default)]
-pub struct CoreAuthProvider {
-    pub token: Option<String>,
-    pub account_id: Option<String>,
-}
-
-impl CoreAuthProvider {
-    pub fn auth_header_attached(&self) -> bool {
-        self.token
-            .as_ref()
-            .is_some_and(|token| http::HeaderValue::from_str(&format!("Bearer {token}")).is_ok())
-    }
-
-    pub fn auth_header_name(&self) -> Option<&'static str> {
-        self.auth_header_attached().then_some("authorization")
-    }
-
-    pub fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
-        Self {
-            token: token.map(str::to_string),
-            account_id: account_id.map(str::to_string),
-        }
-    }
-}
-
-impl ApiAuthProvider for CoreAuthProvider {
-    fn bearer_token(&self) -> Option<String> {
-        self.token.clone()
-    }
-
-    fn account_id(&self) -> Option<String> {
-        self.account_id.clone()
-    }
 }

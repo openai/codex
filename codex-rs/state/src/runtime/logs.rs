@@ -464,10 +464,15 @@ fn format_feedback_log_line(
 }
 
 fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
-    if let Some(level_upper) = query.level_upper.as_ref() {
-        builder
-            .push(" AND UPPER(level) = ")
-            .push_bind(level_upper.as_str());
+    if !query.levels_upper.is_empty() {
+        builder.push(" AND UPPER(level) IN (");
+        {
+            let mut separated = builder.separated(", ");
+            for level_upper in &query.levels_upper {
+                separated.push_bind(level_upper.as_str());
+            }
+        }
+        builder.push(")");
     }
     if let Some(from_ts) = query.from_ts {
         builder.push(" AND ts >= ").push_bind(from_ts);
@@ -729,6 +734,7 @@ mod tests {
         .await
         .expect("insert legacy log row");
         pool.close().await;
+        drop(pool);
 
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -846,6 +852,91 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message.as_deref(), Some("foo=2 alphabet"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_logs_filters_level_set_without_rewriting_stored_level() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "TRACE".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("trace-row".to_string()),
+                    feedback_log_body: Some("trace-row".to_string()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("info-row".to_string()),
+                    feedback_log_body: Some("info-row".to_string()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "warn".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("warn-row".to_string()),
+                    feedback_log_body: Some("warn-row".to_string()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 4,
+                    ts_nanos: 0,
+                    level: "ERROR".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("error-row".to_string()),
+                    feedback_log_body: Some("error-row".to_string()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(4),
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                levels_upper: vec!["WARN".to_string(), "ERROR".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query matching logs");
+        let actual = rows
+            .iter()
+            .map(|row| (row.level.as_str(), row.message.as_deref()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![("warn", Some("warn-row")), ("ERROR", Some("error-row"))]
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

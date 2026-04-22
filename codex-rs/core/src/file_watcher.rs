@@ -51,8 +51,48 @@ struct WatchState {
 }
 
 struct SubscriberState {
-    watched_paths: HashMap<WatchPath, usize>,
+    watched_paths: HashMap<SubscriberWatchKey, SubscriberWatchState>,
     tx: WatchSender,
+}
+
+/// Immutable per-subscriber watch identity.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SubscriberWatchKey {
+    /// Original path requested by the subscriber. Notifications are reported
+    /// in this namespace so clients do not see canonicalization artifacts.
+    requested: WatchPath,
+    /// Canonical equivalent of `requested` used to match backend events.
+    /// Some backends report canonical paths such as `/private/var/...` even
+    /// when the watch was registered through `/var/...`.
+    matched: WatchPath,
+}
+
+/// Mutable per-subscriber watch state.
+struct SubscriberWatchState {
+    /// Existing path passed to the OS watcher and used for ref-counting. This
+    /// is usually `requested`, but missing targets use an existing ancestor.
+    actual: WatchPath,
+    count: usize,
+    /// Whether the requested path existed the last time an ancestor event was
+    /// handled. This preserves delete notifications for fallback watches.
+    last_exists: bool,
+    /// Whether this watch started from a missing path. Such watches normalize
+    /// ancestor create/delete events back to `requested`.
+    fallback: bool,
+}
+
+/// Registration-time watch data before it is merged into subscriber state.
+///
+/// The key is stable for unregistering while `actual` may later move closer
+/// to the requested path as missing path components are created.
+#[derive(Clone)]
+struct SubscriberWatchRegistration {
+    /// Immutable subscriber-visible identity for this registration.
+    key: SubscriberWatchKey,
+    /// Existing path initially passed to the OS watcher.
+    actual: WatchPath,
+    /// Whether registration started from a missing path fallback.
+    fallback: bool,
 }
 
 /// Receives coalesced change notifications for a single subscriber.
@@ -223,13 +263,27 @@ impl FileWatcherSubscriber {
     /// Registers the provided paths for this subscriber and returns an RAII
     /// guard that unregisters them on drop.
     pub fn register_paths(&self, watched_paths: Vec<WatchPath>) -> WatchRegistration {
-        let watched_paths = dedupe_watched_paths(watched_paths);
+        let watched_paths = dedupe_watched_paths(watched_paths)
+            .into_iter()
+            .map(|requested| {
+                let (actual, matched, fallback) = actual_watch_path(&requested);
+                let key = SubscriberWatchKey { requested, matched };
+                SubscriberWatchRegistration {
+                    key,
+                    actual,
+                    fallback,
+                }
+            })
+            .collect::<Vec<_>>();
         self.file_watcher.register_paths(self.id, &watched_paths);
 
         WatchRegistration {
             file_watcher: Arc::downgrade(&self.file_watcher),
             subscriber_id: self.id,
-            watched_paths,
+            watched_paths: watched_paths
+                .iter()
+                .map(|watch| watch.key.clone())
+                .collect(),
         }
     }
 
@@ -249,7 +303,17 @@ impl Drop for FileWatcherSubscriber {
 pub struct WatchRegistration {
     file_watcher: std::sync::Weak<FileWatcher>,
     subscriber_id: SubscriberId,
-    watched_paths: Vec<WatchPath>,
+    watched_paths: Vec<SubscriberWatchKey>,
+}
+
+impl Default for WatchRegistration {
+    fn default() -> Self {
+        Self {
+            file_watcher: std::sync::Weak::new(),
+            subscriber_id: 0,
+            watched_paths: Vec::new(),
+        }
+    }
 }
 
 impl Drop for WatchRegistration {
@@ -262,7 +326,7 @@ impl Drop for WatchRegistration {
 
 /// Multi-subscriber file watcher built on top of `notify`.
 pub struct FileWatcher {
-    inner: Option<Mutex<FileWatcherInner>>,
+    inner: Option<Arc<Mutex<FileWatcherInner>>>,
     state: Arc<RwLock<WatchState>>,
 }
 
@@ -281,7 +345,7 @@ impl FileWatcher {
         };
         let state = Arc::new(RwLock::new(WatchState::default()));
         let file_watcher = Self {
-            inner: Some(Mutex::new(inner)),
+            inner: Some(Arc::new(Mutex::new(inner))),
             state,
         };
         file_watcher.spawn_event_loop(raw_rx);
@@ -322,97 +386,88 @@ impl FileWatcher {
         (subscriber, rx)
     }
 
-    fn register_paths(&self, subscriber_id: SubscriberId, watched_paths: &[WatchPath]) {
+    fn register_paths(
+        &self,
+        subscriber_id: SubscriberId,
+        watched_paths: &[SubscriberWatchRegistration],
+    ) {
         let mut state = self
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
 
-        for watched_path in watched_paths {
-            {
+        for registration in watched_paths {
+            let actual = {
                 let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
                     return;
                 };
-                *subscriber
-                    .watched_paths
-                    .entry(watched_path.clone())
-                    .or_default() += 1;
-            }
+                match subscriber.watched_paths.entry(registration.key.clone()) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().count += 1;
+                        entry.get().actual.clone()
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(SubscriberWatchState {
+                            actual: registration.actual.clone(),
+                            count: 1,
+                            last_exists: registration.key.matched.path.exists(),
+                            fallback: registration.fallback,
+                        });
+                        registration.actual.clone()
+                    }
+                }
+            };
 
             let counts = state
                 .path_ref_counts
-                .entry(watched_path.path.clone())
+                .entry(actual.path.clone())
                 .or_default();
             let previous_mode = counts.effective_mode();
-            counts.increment(watched_path.recursive, /*amount*/ 1);
+            counts.increment(actual.recursive, /*amount*/ 1);
             let next_mode = counts.effective_mode();
             if previous_mode != next_mode {
-                self.reconfigure_watch(&watched_path.path, next_mode, &mut inner_guard);
+                self.reconfigure_watch(&actual.path, next_mode, &mut inner_guard);
             }
         }
     }
 
-    // Bridge `notify`'s callback-based events into the Tokio runtime and
-    // notify the matching subscribers.
-    fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
-        if let Ok(handle) = Handle::try_current() {
-            let state = Arc::clone(&self.state);
-            handle.spawn(async move {
-                loop {
-                    match raw_rx.recv().await {
-                        Some(Ok(event)) => {
-                            if !is_mutating_event(&event) {
-                                continue;
-                            }
-                            if event.paths.is_empty() {
-                                continue;
-                            }
-                            Self::notify_subscribers(&state, &event.paths).await;
-                        }
-                        Some(Err(err)) => {
-                            warn!("file watcher error: {err}");
-                        }
-                        None => break,
-                    }
-                }
-            });
-        } else {
-            warn!("file watcher loop skipped: no Tokio runtime available");
-        }
-    }
-
-    fn unregister_paths(&self, subscriber_id: SubscriberId, watched_paths: &[WatchPath]) {
+    fn unregister_paths(&self, subscriber_id: SubscriberId, watched_paths: &[SubscriberWatchKey]) {
         let mut state = self
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
 
-        for watched_path in watched_paths {
-            {
+        for subscriber_watch in watched_paths {
+            let actual = {
                 let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
                     return;
                 };
-                let Some(subscriber_count) = subscriber.watched_paths.get_mut(watched_path) else {
+                let Some(subscriber_watch_state) =
+                    subscriber.watched_paths.get_mut(subscriber_watch)
+                else {
                     continue;
                 };
-                *subscriber_count = subscriber_count.saturating_sub(1);
-                if *subscriber_count == 0 {
-                    subscriber.watched_paths.remove(watched_path);
+                let actual = subscriber_watch_state.actual.clone();
+                subscriber_watch_state.count = subscriber_watch_state.count.saturating_sub(1);
+                if subscriber_watch_state.count == 0 {
+                    subscriber.watched_paths.remove(subscriber_watch);
                 }
-            }
-            let Some(counts) = state.path_ref_counts.get_mut(&watched_path.path) else {
+                actual
+            };
+
+            let Some(counts) = state.path_ref_counts.get_mut(&actual.path) else {
                 continue;
             };
             let previous_mode = counts.effective_mode();
-            counts.decrement(watched_path.recursive, /*amount*/ 1);
+            counts.decrement(actual.recursive, /*amount*/ 1);
             let next_mode = counts.effective_mode();
             if counts.is_empty() {
-                state.path_ref_counts.remove(&watched_path.path);
+                state.path_ref_counts.remove(&actual.path);
             }
             if previous_mode != next_mode {
-                self.reconfigure_watch(&watched_path.path, next_mode, &mut inner_guard);
+                self.reconfigure_watch(&actual.path, next_mode, &mut inner_guard);
             }
         }
     }
@@ -427,18 +482,30 @@ impl FileWatcher {
         };
 
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
-        for (watched_path, count) in subscriber.watched_paths {
-            let Some(path_counts) = state.path_ref_counts.get_mut(&watched_path.path) else {
+        for (_subscriber_watch, subscriber_watch_state) in subscriber.watched_paths {
+            let Some(path_counts) = state
+                .path_ref_counts
+                .get_mut(&subscriber_watch_state.actual.path)
+            else {
                 continue;
             };
             let previous_mode = path_counts.effective_mode();
-            path_counts.decrement(watched_path.recursive, count);
+            path_counts.decrement(
+                subscriber_watch_state.actual.recursive,
+                subscriber_watch_state.count,
+            );
             let next_mode = path_counts.effective_mode();
             if path_counts.is_empty() {
-                state.path_ref_counts.remove(&watched_path.path);
+                state
+                    .path_ref_counts
+                    .remove(&subscriber_watch_state.actual.path);
             }
             if previous_mode != next_mode {
-                self.reconfigure_watch(&watched_path.path, next_mode, &mut inner_guard);
+                self.reconfigure_watch(
+                    &subscriber_watch_state.actual.path,
+                    next_mode,
+                    &mut inner_guard,
+                );
             }
         }
     }
@@ -449,7 +516,16 @@ impl FileWatcher {
         next_mode: Option<RecursiveMode>,
         inner_guard: &mut Option<std::sync::MutexGuard<'a, FileWatcherInner>>,
     ) {
-        let Some(inner) = &self.inner else {
+        Self::reconfigure_watch_inner(self.inner.as_ref(), path, next_mode, inner_guard);
+    }
+
+    fn reconfigure_watch_inner<'a>(
+        inner: Option<&'a Arc<Mutex<FileWatcherInner>>>,
+        path: &Path,
+        next_mode: Option<RecursiveMode>,
+        inner_guard: &mut Option<std::sync::MutexGuard<'a, FileWatcherInner>>,
+    ) {
+        let Some(inner) = inner else {
             return;
         };
         if inner_guard.is_none() {
@@ -488,27 +564,124 @@ impl FileWatcher {
         guard.watched_paths.insert(path.to_path_buf(), next_mode);
     }
 
-    async fn notify_subscribers(state: &RwLock<WatchState>, event_paths: &[PathBuf]) {
+    fn apply_actual_watch_move<'a>(
+        path_ref_counts: &mut HashMap<PathBuf, PathWatchCounts>,
+        old_actual: WatchPath,
+        new_actual: WatchPath,
+        count: usize,
+        inner: Option<&'a Arc<Mutex<FileWatcherInner>>>,
+        inner_guard: &mut Option<std::sync::MutexGuard<'a, FileWatcherInner>>,
+    ) {
+        if old_actual == new_actual {
+            return;
+        }
+
+        if let Some(counts) = path_ref_counts.get_mut(&old_actual.path) {
+            let previous_mode = counts.effective_mode();
+            counts.decrement(old_actual.recursive, count);
+            let next_mode = counts.effective_mode();
+            if counts.is_empty() {
+                path_ref_counts.remove(&old_actual.path);
+            }
+            if previous_mode != next_mode {
+                Self::reconfigure_watch_inner(inner, &old_actual.path, next_mode, inner_guard);
+            }
+        }
+
+        let counts = path_ref_counts.entry(new_actual.path.clone()).or_default();
+        let previous_mode = counts.effective_mode();
+        counts.increment(new_actual.recursive, count);
+        let next_mode = counts.effective_mode();
+        if previous_mode != next_mode {
+            Self::reconfigure_watch_inner(inner, &new_actual.path, next_mode, inner_guard);
+        }
+    }
+
+    // Bridge `notify`'s callback-based events into the Tokio runtime and
+    // notify the matching subscribers.
+    fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
+        if let Ok(handle) = Handle::try_current() {
+            let state = Arc::clone(&self.state);
+            let inner = self.inner.as_ref().map(Arc::downgrade);
+            handle.spawn(async move {
+                loop {
+                    match raw_rx.recv().await {
+                        Some(Ok(event)) => {
+                            if !is_mutating_event(&event) {
+                                continue;
+                            }
+                            if event.paths.is_empty() {
+                                continue;
+                            }
+                            let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
+                            Self::notify_subscribers(&state, inner.as_ref(), &event.paths).await;
+                        }
+                        Some(Err(err)) => {
+                            warn!("file watcher error: {err}");
+                        }
+                        None => break,
+                    }
+                }
+            });
+        } else {
+            warn!("file watcher loop skipped: no Tokio runtime available");
+        }
+    }
+
+    async fn notify_subscribers(
+        state: &RwLock<WatchState>,
+        inner: Option<&Arc<Mutex<FileWatcherInner>>>,
+        event_paths: &[PathBuf],
+    ) {
         let subscribers_to_notify: Vec<(WatchSender, Vec<PathBuf>)> = {
-            let state = state
-                .read()
+            let mut state = state
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state
-                .subscribers
-                .values()
-                .filter_map(|subscriber| {
-                    let changed_paths: Vec<PathBuf> = event_paths
-                        .iter()
-                        .filter(|event_path| {
-                            subscriber.watched_paths.keys().any(|watched_path| {
-                                watch_path_matches_event(watched_path, event_path)
-                            })
-                        })
-                        .cloned()
-                        .collect();
-                    (!changed_paths.is_empty()).then_some((subscriber.tx.clone(), changed_paths))
-                })
-                .collect()
+            let mut actual_watch_moves = Vec::new();
+            let mut subscribers_to_notify = Vec::new();
+
+            for subscriber in state.subscribers.values_mut() {
+                let mut changed_paths = Vec::new();
+                for event_path in event_paths {
+                    for (subscriber_watch, subscriber_watch_state) in &mut subscriber.watched_paths
+                    {
+                        if let Some(path) = changed_path_for_event(
+                            subscriber_watch,
+                            subscriber_watch_state,
+                            event_path,
+                        ) {
+                            changed_paths.push(path);
+                        }
+
+                        let (new_actual, _new_matched, fallback) =
+                            actual_watch_path(&subscriber_watch.requested);
+                        subscriber_watch_state.fallback |= fallback;
+                        if subscriber_watch_state.actual != new_actual {
+                            let old_actual = subscriber_watch_state.actual.clone();
+                            let count = subscriber_watch_state.count;
+                            subscriber_watch_state.actual = new_actual.clone();
+                            actual_watch_moves.push((old_actual, new_actual, count));
+                        }
+                    }
+                }
+                if !changed_paths.is_empty() {
+                    subscribers_to_notify.push((subscriber.tx.clone(), changed_paths));
+                }
+            }
+
+            let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
+            for (old_actual, new_actual, count) in actual_watch_moves {
+                Self::apply_actual_watch_move(
+                    &mut state.path_ref_counts,
+                    old_actual,
+                    new_actual,
+                    count,
+                    inner,
+                    &mut inner_guard,
+                );
+            }
+
+            subscribers_to_notify
         };
 
         for (subscriber, changed_paths) in subscribers_to_notify {
@@ -518,7 +691,7 @@ impl FileWatcher {
 
     #[cfg(test)]
     pub(crate) async fn send_paths_for_test(&self, paths: Vec<PathBuf>) {
-        Self::notify_subscribers(&self.state, &paths).await;
+        Self::notify_subscribers(&self.state, self.inner.as_ref(), &paths).await;
     }
 
     #[cfg(test)]
@@ -560,17 +733,122 @@ fn dedupe_watched_paths(mut watched_paths: Vec<WatchPath>) -> Vec<WatchPath> {
     watched_paths
 }
 
-fn watch_path_matches_event(watched_path: &WatchPath, event_path: &Path) -> bool {
-    if event_path == watched_path.path {
-        return true;
+/// Returns the actual OS watch path and canonical match path for a request.
+///
+/// Missing targets are watched non-recursively through the nearest existing
+/// directory ancestor. As path components appear, the actual watch is moved
+/// closer to the requested path so broad recursive ancestor watches are never
+/// needed.
+fn actual_watch_path(requested: &WatchPath) -> (WatchPath, WatchPath, bool) {
+    if requested.path.exists() {
+        let matched_path = requested
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| requested.path.clone());
+        let actual = requested.clone();
+        let matched = WatchPath {
+            path: matched_path,
+            recursive: requested.recursive,
+        };
+        return (actual, matched, false);
     }
-    if watched_path.path.starts_with(event_path) {
-        return true;
+
+    let requested_parent = requested.path.parent();
+    let mut ancestor = requested_parent;
+    while let Some(path) = ancestor {
+        if path.is_dir() {
+            let actual_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let matched_path = requested
+                .path
+                .strip_prefix(path)
+                .map(|suffix| actual_path.join(suffix))
+                .unwrap_or_else(|_| requested.path.clone());
+            let actual = WatchPath {
+                path: path.to_path_buf(),
+                recursive: false,
+            };
+            let matched = WatchPath {
+                path: matched_path,
+                recursive: requested.recursive,
+            };
+            return (actual, matched, true);
+        }
+        ancestor = path.parent();
     }
-    if !event_path.starts_with(&watched_path.path) {
-        return false;
+
+    (requested.clone(), requested.clone(), false)
+}
+
+/// Converts one raw backend event path into the subscriber-visible path.
+///
+/// Matching first uses the canonical path namespace reported by many OS
+/// backends, then falls back to the originally requested namespace for
+/// synthetic tests and backends that preserve the input spelling.
+fn changed_path_for_event(
+    subscriber_watch: &SubscriberWatchKey,
+    subscriber_watch_state: &mut SubscriberWatchState,
+    event_path: &Path,
+) -> Option<PathBuf> {
+    if let Some(path) = changed_path_for_matched_path(
+        subscriber_watch,
+        subscriber_watch_state,
+        &subscriber_watch.matched,
+        event_path,
+    ) {
+        return Some(path);
     }
-    watched_path.recursive || event_path.parent() == Some(watched_path.path.as_path())
+    if subscriber_watch.matched.path == subscriber_watch.requested.path {
+        return None;
+    }
+    changed_path_for_matched_path(
+        subscriber_watch,
+        subscriber_watch_state,
+        &subscriber_watch.requested,
+        event_path,
+    )
+}
+
+/// Applies the watch matching rules in one path namespace and maps any emitted
+/// path back into the subscriber's requested namespace.
+fn changed_path_for_matched_path(
+    subscriber_watch: &SubscriberWatchKey,
+    subscriber_watch_state: &mut SubscriberWatchState,
+    matched: &WatchPath,
+    event_path: &Path,
+) -> Option<PathBuf> {
+    let requested = &subscriber_watch.requested;
+    if event_path == matched.path {
+        subscriber_watch_state.last_exists = matched.path.exists();
+        return Some(requested.path.clone());
+    }
+    if matched.path.starts_with(event_path) {
+        let now_exists = matched.path.exists();
+        if subscriber_watch_state.fallback {
+            let should_notify = now_exists || subscriber_watch_state.last_exists;
+            subscriber_watch_state.last_exists = now_exists;
+            return should_notify.then(|| requested.path.clone());
+        }
+        if subscriber_watch_state.actual.path != matched.path {
+            let should_notify = now_exists || subscriber_watch_state.last_exists;
+            subscriber_watch_state.last_exists = now_exists;
+            return should_notify.then(|| requested.path.clone());
+        }
+        subscriber_watch_state.last_exists = now_exists;
+        return Some(event_path.to_path_buf());
+    }
+    if !event_path.starts_with(&matched.path) {
+        return None;
+    }
+    if !(matched.recursive || event_path.parent() == Some(matched.path.as_path())) {
+        return None;
+    }
+    subscriber_watch_state.last_exists = matched.path.exists();
+    Some(
+        event_path
+            .strip_prefix(&matched.path)
+            .map(|suffix| requested.path.join(suffix))
+            .unwrap_or_else(|_| event_path.to_path_buf()),
+    )
 }
 
 #[cfg(test)]

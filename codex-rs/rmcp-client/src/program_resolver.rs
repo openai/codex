@@ -70,7 +70,7 @@ mod tests {
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.program_name);
+        let mut cmd = Command::new(&env.executable_path);
         cmd.envs(&env.mcp_env);
 
         let output = cmd.output().await;
@@ -138,6 +138,8 @@ mod tests {
         // Held to prevent the temporary directory from being deleted.
         _temp_dir: TempDir,
         program_name: String,
+        #[cfg(unix)]
+        executable_path: std::path::PathBuf,
         mcp_env: HashMap<OsString, OsString>,
     }
 
@@ -157,9 +159,11 @@ mod tests {
             #[cfg(windows)]
             extra_env.insert(OsString::from("PATHEXT"), Self::ensure_cmd_extension());
 
-            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[]);
+            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[])?;
 
             Ok(Self {
+                #[cfg(unix)]
+                executable_path: Self::executable_path(dir_path),
                 _temp_dir: temp_dir,
                 program_name: Self::TEST_PROGRAM.to_string(),
                 mcp_env,
@@ -182,6 +186,11 @@ mod tests {
             }
 
             Ok(())
+        }
+
+        #[cfg(unix)]
+        fn executable_path(dir: &Path) -> std::path::PathBuf {
+            dir.join(Self::TEST_PROGRAM)
         }
 
         #[cfg(unix)]

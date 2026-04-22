@@ -19,8 +19,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
@@ -33,6 +31,8 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewData;
+use crate::bottom_pane::status_surface_preview::StatusSurfacePreviewItem;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the status line.
@@ -49,6 +49,7 @@ use crate::render::renderable::Renderable;
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
+    #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
     /// Model name with reasoning level suffix.
@@ -58,10 +59,19 @@ pub(crate) enum StatusLineItem {
     CurrentDir,
 
     /// Project root directory (if detected).
+    #[strum(
+        to_string = "project-name",
+        serialize = "project",
+        serialize = "project-root"
+    )]
     ProjectRoot,
 
     /// Current git branch name (if in a repository).
     GitBranch,
+
+    /// Compact runtime run-state text.
+    #[strum(to_string = "run-state", serialize = "status")]
+    Status,
 
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -101,6 +111,9 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title (if set by user).
     ThreadTitle,
+
+    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
 }
 
 impl StatusLineItem {
@@ -110,8 +123,9 @@ impl StatusLineItem {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
+            StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -135,39 +149,34 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
-            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
-        }
-    }
-}
-
-/// Runtime values used to preview the current status-line selection.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct StatusLinePreviewData {
-    values: BTreeMap<StatusLineItem, String>,
-}
-
-impl StatusLinePreviewData {
-    pub(crate) fn from_iter<I>(values: I) -> Self
-    where
-        I: IntoIterator<Item = (StatusLineItem, String)>,
-    {
-        Self {
-            values: values.into_iter().collect(),
+            StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
+            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            }
         }
     }
 
-    fn line_for_items(&self, items: &[MultiSelectItem]) -> Option<Line<'static>> {
-        let preview = items
-            .iter()
-            .filter(|item| item.enabled)
-            .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
-            .filter_map(|item| self.values.get(&item).cloned())
-            .collect::<Vec<_>>()
-            .join(" · ");
-        if preview.is_empty() {
-            None
-        } else {
-            Some(Line::from(preview))
+    pub(crate) fn preview_item(self) -> StatusSurfacePreviewItem {
+        match self {
+            StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
+            StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
+            StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
+            StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
+            StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::Status => StatusSurfacePreviewItem::Status,
+            StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
+            StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
+            StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
+            StatusLineItem::WeeklyLimit => StatusSurfacePreviewItem::WeeklyLimit,
+            StatusLineItem::CodexVersion => StatusSurfacePreviewItem::CodexVersion,
+            StatusLineItem::ContextWindowSize => StatusSurfacePreviewItem::ContextWindowSize,
+            StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
+            StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
+            StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
+            StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
+            StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
+            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
     }
 }
@@ -197,7 +206,7 @@ impl StatusLineSetupView {
     /// enabled. Remaining items are appended and marked as disabled.
     pub(crate) fn new(
         status_line_items: Option<&[String]>,
-        preview_data: StatusLinePreviewData,
+        preview_data: StatusSurfacePreviewData,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut used_ids = HashSet::new();
@@ -236,7 +245,15 @@ impl StatusLineSetupView {
             ])
             .items(items)
             .enable_ordering()
-            .on_preview(move |items| preview_data.line_for_items(items))
+            .on_preview(move |items| {
+                preview_data.line_for_items(
+                    items
+                        .iter()
+                        .filter(|item| item.enabled)
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                        .map(StatusLineItem::preview_item),
+                )
+            })
             .on_confirm(|ids, app_event| {
                 let items = ids
                     .iter()
@@ -296,6 +313,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::text::Line;
     use tokio::sync::mpsc::unbounded_channel;
 
     use crate::app_event::AppEvent;
@@ -314,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn context_remaining_is_separate_selectable_id() {
+    fn context_remaining_is_selectable_id() {
         assert_eq!(
             "context-remaining".parse::<StatusLineItem>(),
             Ok(StatusLineItem::ContextRemaining)
@@ -324,14 +342,74 @@ mod tests {
             "context-remaining"
         );
     }
+    #[test]
+    fn project_name_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ProjectRoot.to_string(), "project-name");
+        assert_eq!(
+            "project-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project-root".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+    }
+
+    #[test]
+    fn model_is_canonical_and_accepts_model_name_legacy_id() {
+        assert_eq!(StatusLineItem::ModelName.to_string(), "model");
+        assert_eq!(
+            "model".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+        assert_eq!(
+            "model-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+    }
+
+    #[test]
+    fn run_state_is_canonical_and_accepts_status_legacy_id() {
+        assert_eq!(StatusLineItem::Status.to_string(), "run-state");
+        assert_eq!(
+            "run-state".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+        assert_eq!(
+            "status".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Status)
+        );
+    }
+
+    #[test]
+    fn parse_status_line_items_accepts_title_only_variants() {
+        let items = ["run-state", "task-progress"]
+            .into_iter()
+            .map(str::parse::<StatusLineItem>)
+            .collect::<Result<Vec<_>, _>>();
+        assert_eq!(
+            items,
+            Ok(vec![StatusLineItem::Status, StatusLineItem::TaskProgress,])
+        );
+    }
 
     #[test]
     fn preview_uses_runtime_values() {
-        let preview_data = StatusLinePreviewData::from_iter([
-            (StatusLineItem::ModelName, "gpt-5".to_string()),
-            (StatusLineItem::CurrentDir, "/repo".to_string()),
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::CurrentDir.preview_item(),
+                "/repo".to_string(),
+            ),
         ]);
-        let items = vec![
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
@@ -347,16 +425,23 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(&items),
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
             Some(Line::from("gpt-5 · /repo"))
         );
     }
 
     #[test]
-    fn preview_omits_items_without_runtime_values() {
-        let preview_data =
-            StatusLinePreviewData::from_iter([(StatusLineItem::ModelName, "gpt-5".to_string())]);
-        let items = vec![
+    fn preview_uses_placeholders_when_runtime_values_are_missing() {
+        let preview_data = StatusSurfacePreviewData::from_iter([(
+            StatusSurfacePreviewItem::Model,
+            "gpt-5".to_string(),
+        )]);
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
@@ -372,18 +457,29 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(&items),
-            Some(Line::from("gpt-5"))
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
+            Some(Line::from("gpt-5 · feat/awesome-feature"))
         );
     }
 
     #[test]
     fn preview_includes_thread_title() {
-        let preview_data = StatusLinePreviewData::from_iter([
-            (StatusLineItem::ModelName, "gpt-5".to_string()),
-            (StatusLineItem::ThreadTitle, "Roadmap cleanup".to_string()),
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::ThreadTitle.preview_item(),
+                "Roadmap cleanup".to_string(),
+            ),
         ]);
-        let items = vec![
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
@@ -399,7 +495,12 @@ mod tests {
         ];
 
         assert_eq!(
-            preview_data.line_for_items(&items),
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
             Some(Line::from("gpt-5 · Roadmap cleanup"))
         );
     }
@@ -413,14 +514,23 @@ mod tests {
                 StatusLineItem::CurrentDir.to_string(),
                 StatusLineItem::GitBranch.to_string(),
             ]),
-            StatusLinePreviewData::from_iter([
-                (StatusLineItem::ModelName, "gpt-5-codex".to_string()),
-                (StatusLineItem::CurrentDir, "~/codex-rs".to_string()),
+            StatusSurfacePreviewData::from_iter([
                 (
-                    StatusLineItem::GitBranch,
+                    StatusLineItem::ModelName.preview_item(),
+                    "gpt-5-codex".to_string(),
+                ),
+                (
+                    StatusLineItem::CurrentDir.preview_item(),
+                    "~/codex-rs".to_string(),
+                ),
+                (
+                    StatusLineItem::GitBranch.preview_item(),
                     "jif/statusline-preview".to_string(),
                 ),
-                (StatusLineItem::WeeklyLimit, "weekly 82%".to_string()),
+                (
+                    StatusLineItem::WeeklyLimit.preview_item(),
+                    "weekly 82%".to_string(),
+                ),
             ]),
             AppEventSender::new(tx_raw),
         );

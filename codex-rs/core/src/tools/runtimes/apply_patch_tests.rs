@@ -1,10 +1,18 @@
 use super::*;
+use crate::tools::sandboxing::SandboxAttempt;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-#[cfg(not(target_os = "windows"))]
-use std::path::PathBuf;
 
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
@@ -36,7 +44,7 @@ fn guardian_review_request_includes_patch_context() {
         .join("guardian-apply-patch-test.txt")
         .abs();
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.to_path_buf();
+    let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         action,
@@ -53,7 +61,6 @@ fn guardian_review_request_includes_patch_context() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
-        timeout_ms: None,
     };
 
     let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
@@ -69,70 +76,136 @@ fn guardian_review_request_includes_patch_context() {
     );
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
-fn build_sandbox_command_prefers_configured_codex_self_exe_for_apply_patch() {
+fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
+    let runtime = ApplyPatchRuntime::new();
     let path = std::env::temp_dir()
-        .join("apply-patch-current-exe-test.txt")
+        .join("apply-patch-permission-request-payload.txt")
         .abs();
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let request = ApplyPatchRequest {
+    let expected_patch = action.patch.clone();
+    let req = ApplyPatchRequest {
         action,
-        file_paths: vec![path.clone()],
-        changes: HashMap::from([(
-            path.to_path_buf(),
-            FileChange::Add {
-                content: "hello".to_string(),
-            },
-        )]),
+        file_paths: vec![path],
+        changes: HashMap::new(),
         exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
             reason: None,
             proposed_execpolicy_amendment: None,
         },
         additional_permissions: None,
         permissions_preapproved: false,
-        timeout_ms: None,
     };
-    let codex_self_exe = PathBuf::from("/tmp/codex");
 
-    let command = ApplyPatchRuntime::build_sandbox_command(&request, Some(&codex_self_exe))
-        .expect("build sandbox command");
+    let payload = runtime
+        .permission_request_payload(&req)
+        .expect("permission request payload");
 
-    assert_eq!(command.program, codex_self_exe.into_os_string());
+    assert_eq!(payload.tool_name.name(), "apply_patch");
+    assert_eq!(
+        payload.tool_name.matcher_aliases(),
+        &["Write".to_string(), "Edit".to_string()]
+    );
+    assert_eq!(payload.command, expected_patch);
+    assert_eq!(payload.description, None);
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
-fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
+fn file_system_sandbox_context_uses_active_attempt() {
     let path = std::env::temp_dir()
-        .join("apply-patch-current-exe-test.txt")
+        .join("apply-patch-runtime-attempt.txt")
         .abs();
-    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let request = ApplyPatchRequest {
-        action,
+    let additional_permissions = PermissionProfile {
+        network: None,
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(Vec::new()),
+        )),
+    };
+    let req = ApplyPatchRequest {
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
-        changes: HashMap::from([(
-            path.to_path_buf(),
-            FileChange::Add {
-                content: "hello".to_string(),
-            },
-        )]),
-        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
-            reason: None,
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: Some(additional_permissions.clone()),
+        permissions_preapproved: false,
+    };
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::MacosSeatbelt,
+        policy: &sandbox_policy,
+        file_system_policy: &file_system_policy,
+        network_policy: NetworkSandboxPolicy::Restricted,
+        enforce_managed_network: false,
+        manager: &manager,
+        sandbox_cwd: &path,
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: true,
+        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+        windows_sandbox_private_desktop: true,
+    };
+
+    let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
+        .expect("sandbox context");
+
+    let base_permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let Some(expected_permissions) =
+        merge_permission_profiles(Some(&base_permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    assert_eq!(sandbox.permissions, expected_permissions);
+    assert_eq!(sandbox.cwd, Some(path.clone()));
+    assert_eq!(
+        sandbox.windows_sandbox_level,
+        WindowsSandboxLevel::RestrictedToken
+    );
+    assert_eq!(sandbox.windows_sandbox_private_desktop, true);
+    assert_eq!(sandbox.use_legacy_landlock, true);
+}
+
+#[test]
+fn no_sandbox_attempt_has_no_file_system_context() {
+    let path = std::env::temp_dir()
+        .join("apply-patch-runtime-none.txt")
+        .abs();
+    let req = ApplyPatchRequest {
+        action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
+        file_paths: vec![path.clone()],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
             proposed_execpolicy_amendment: None,
         },
         additional_permissions: None,
         permissions_preapproved: false,
-        timeout_ms: None,
+    };
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let manager = SandboxManager::new();
+    let attempt = SandboxAttempt {
+        sandbox: SandboxType::None,
+        policy: &sandbox_policy,
+        file_system_policy: &file_system_policy,
+        network_policy: NetworkSandboxPolicy::Enabled,
+        enforce_managed_network: false,
+        manager: &manager,
+        sandbox_cwd: &path,
+        codex_linux_sandbox_exe: None,
+        use_legacy_landlock: false,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
     };
 
-    let command = ApplyPatchRuntime::build_sandbox_command(&request, /*codex_self_exe*/ None)
-        .expect("build sandbox command");
-
     assert_eq!(
-        command.program,
-        std::env::current_exe()
-            .expect("current exe")
-            .into_os_string()
+        ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt),
+        None
     );
 }

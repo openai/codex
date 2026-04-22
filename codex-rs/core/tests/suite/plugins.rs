@@ -118,7 +118,7 @@ async fn build_analytics_plugin_test_codex(
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5")
+        .with_model("gpt-5.2")
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
         });
@@ -168,22 +168,6 @@ fn tool_names(body: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn tool_description(body: &serde_json::Value, tool_name: &str) -> Option<String> {
-    body.get("tools")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
-                    tool.get("description")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-        })
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capability_sections_render_in_developer_message_in_order() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -208,6 +192,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -284,6 +269,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
@@ -319,20 +305,27 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
-    let echo_description = tool_description(&request_body, "mcp__sample__echo")
+    let echo_tool = request
+        .tool_by_name("mcp__sample__", "echo")
+        .expect("plugin MCP tool should be present");
+    let echo_description = echo_tool
+        .get("description")
+        .and_then(serde_json::Value::as_str)
         .expect("plugin MCP tool description should be present");
     assert!(
         echo_description.contains("This tool is part of plugin `sample`."),
         "expected plugin MCP provenance in tool description: {echo_description:?}"
     );
-    let calendar_description = tool_description(
-        &request_body,
-        "mcp__codex_apps__google_calendar_create_event",
-    )
-    .expect("plugin app tool description should be present");
+    let calendar_tool = request
+        .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+        .expect("plugin app tool should be present");
+    let calendar_description = calendar_tool
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .expect("plugin app tool description should be present");
     assert!(
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
@@ -357,6 +350,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![codex_protocol::user_input::UserInput::Mention {
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
@@ -405,7 +399,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         event["event_params"]["product_client_id"],
         serde_json::json!(codex_login::default_client::originator().value)
     );
-    assert_eq!(event["event_params"]["model_slug"], "gpt-5");
+    assert_eq!(event["event_params"]["model_slug"], "gpt-5.2");
     assert!(event["event_params"]["thread_id"].as_str().is_some());
     assert!(event["event_params"]["turn_id"].as_str().is_some());
 

@@ -51,8 +51,9 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
+    let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
+        writable_roots: vec![extra_root],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
@@ -328,7 +329,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Guardian Approvals") {
+    if popup.contains("Auto-review") {
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -399,8 +400,8 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Guardian Approvals"),
-        "expected Guardian Approvals to stay hidden until the experimental feature is enabled: {popup}"
+        !popup.contains("Auto-review"),
+        "expected Auto-review to stay hidden until the experimental feature is enabled: {popup}"
     );
 }
 
@@ -431,8 +432,8 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Guardian Approvals"),
-        "expected Guardian Approvals to stay hidden when the experimental feature is disabled: {popup}"
+        !popup.contains("Auto-review"),
+        "expected Auto-review to stay hidden when the experimental feature is disabled: {popup}"
     );
 }
 
@@ -462,7 +463,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-            cwd: test_project_path(),
+            cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -476,8 +477,8 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
-        "expected Guardian Approvals to be current after SessionConfigured sync: {popup}"
+        popup.contains("Auto-review (current)"),
+        "expected Auto-review to be current after SessionConfigured sync: {popup}"
     );
 }
 
@@ -496,7 +497,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
-    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
+    let extra_root = test_path_buf("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),
@@ -516,7 +517,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
-            cwd: test_project_path(),
+            cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -530,8 +531,8 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
-        "expected Guardian Approvals to be current even with custom workspace-write details: {popup}"
+        popup.contains("Auto-review (current)"),
+        "expected Auto-review to be current even with custom workspace-write details: {popup}"
     );
 }
 
@@ -566,7 +567,7 @@ async fn permissions_selection_can_disable_guardian_approvals() {
             event,
             AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
         )),
-        "expected selecting Default from Guardian Approvals to switch back to manual approval review: {events:?}"
+        "expected selecting Default from Auto-review to switch back to manual approval review: {events:?}"
     );
     assert!(
         !events
@@ -612,8 +613,8 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     assert!(
         popup
             .lines()
-            .any(|line| line.contains("Guardian Approvals") && line.contains('›')),
-        "expected one Down from Default to select Guardian Approvals: {popup}"
+            .any(|line| line.contains("Auto-review") && line.contains('›')),
+        "expected one Down from Default to select Auto-review: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -631,6 +632,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

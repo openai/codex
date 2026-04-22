@@ -26,6 +26,7 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -50,6 +51,8 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -152,6 +155,7 @@ fn exec_server_params_for_request(
         env_policy,
         env,
         tty,
+        pipe_stdin: false,
         arg0: request.arg0.clone(),
     }
 }
@@ -256,7 +260,7 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            cwd.to_path_buf(),
+            cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -322,7 +326,7 @@ impl UnifiedExecProcessManager {
                     Arc::clone(&context.turn),
                     context.call_id.clone(),
                     request.command.clone(),
-                    cwd.to_path_buf(),
+                    cwd.clone(),
                     Some(request.process_id.to_string()),
                     Arc::clone(&transcript),
                     message.clone(),
@@ -365,7 +369,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd.to_path_buf(),
+                cwd.clone(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -639,7 +643,7 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
-            cwd.to_path_buf(),
+            cwd,
             process_id,
             transcript,
             started_at,
@@ -655,6 +659,60 @@ impl UnifiedExecProcessManager {
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
+
+        #[cfg(target_os = "windows")]
+        if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+            let policy_json = serde_json::to_string(&request.sandbox_policy).map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "failed to serialize Windows sandbox policy: {err}"
+                ))
+            })?;
+            let codex_home = crate::config::find_codex_home().map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "windows sandbox: failed to resolve codex_home: {err}"
+                ))
+            })?;
+            let spawned = match request.windows_sandbox_level {
+                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
+                        policy_json.as_str(),
+                        request.windows_sandbox_policy_cwd.as_path(),
+                        codex_home.as_ref(),
+                        request.command.clone(),
+                        request.cwd.as_path(),
+                        request.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        request.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
+                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
+                        policy_json.as_str(),
+                        request.windows_sandbox_policy_cwd.as_path(),
+                        codex_home.as_ref(),
+                        request.command.clone(),
+                        request.cwd.as_path(),
+                        request.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        request.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+            };
+            spawn_lifecycle.after_spawn();
+            return UnifiedExecProcess::from_spawned(
+                spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
+                request.sandbox,
+                spawn_lifecycle,
+            )
+            .await;
+        }
         if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
@@ -747,6 +805,7 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
+            hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
             env,
@@ -777,7 +836,19 @@ impl UnifiedExecProcessManager {
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
+            .map_err(|err| match err {
+                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+                    let output = *output;
+                    let message = if output.aggregated_output.text.is_empty() {
+                        let exit_code = output.exit_code;
+                        format!("Process exited with code {exit_code}")
+                    } else {
+                        output.aggregated_output.text.clone()
+                    };
+                    UnifiedExecError::sandbox_denied(message, output)
+                }
+                other => UnifiedExecError::create_process(format!("{other:?}")),
+            })
     }
 
     pub(super) async fn collect_output_until_deadline(
