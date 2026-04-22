@@ -66,6 +66,7 @@ pub async fn load_auth_manager() -> Option<AuthManager> {
         config.codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
+        Some(config.chatgpt_base_url),
     ))
 }
 

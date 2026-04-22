@@ -917,12 +917,12 @@ pub(crate) fn status_account_display_from_auth_mode(
 ) -> Option<StatusAccountDisplay> {
     match auth_mode {
         Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
-        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens) => {
-            Some(StatusAccountDisplay::ChatGpt {
-                email: None,
-                plan: plan_type.map(plan_type_display_name),
-            })
-        }
+        Some(AuthMode::Chatgpt)
+        | Some(AuthMode::ChatgptAuthTokens)
+        | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {
+            email: None,
+            plan: plan_type.map(plan_type_display_name),
+        }),
         None => None,
     }
 }
@@ -1504,6 +1504,13 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
+            permission_profile: Some(
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+                    &test_path_buf("/tmp/project"),
+                )
+                .into(),
+            ),
             reasoning_effort: None,
         };
 

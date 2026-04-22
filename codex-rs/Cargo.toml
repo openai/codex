@@ -2,6 +2,7 @@
 members = [
     "aws-auth",
     "analytics",
+    "agent-identity",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -112,6 +113,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
+codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-aws-auth = { path = "aws-auth" }
@@ -235,6 +237,7 @@ clap_complete = "4"
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
+crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.28.1"
 csv = "1.3.1"
 ctor = "0.6.3"
@@ -245,6 +248,7 @@ dirs = "6"
 dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.9"

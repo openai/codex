@@ -78,6 +78,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -214,6 +215,17 @@ pub struct Permissions {
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
     /// Whether the final Windows sandboxed child should run on a private desktop.
     pub windows_sandbox_private_desktop: bool,
+}
+
+impl Permissions {
+    /// Effective runtime permissions after config requirements and runtime
+    /// readable-root additions have been applied.
+    pub fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -633,6 +645,10 @@ impl AuthManagerConfig for Config {
 
     fn forced_chatgpt_workspace_id(&self) -> Option<String> {
         self.forced_chatgpt_workspace_id.clone()
+    }
+
+    fn chatgpt_base_url(&self) -> String {
+        self.chatgpt_base_url.clone()
     }
 }
 
@@ -1565,6 +1581,7 @@ impl Config {
             enforce_residency,
             network: network_requirements,
             filesystem: filesystem_requirements,
+            guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))

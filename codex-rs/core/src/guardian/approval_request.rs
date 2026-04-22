@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use codex_analytics::GuardianReviewedAction;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -183,30 +184,47 @@ fn guardian_command_source_tool_name(source: GuardianCommandSource) -> &'static 
     }
 }
 
-fn truncate_guardian_action_value(value: Value) -> Value {
+fn truncate_guardian_action_value(value: Value) -> (Value, bool) {
     match value {
-        Value::String(text) => Value::String(guardian_truncate_text(
-            &text,
-            GUARDIAN_MAX_ACTION_STRING_TOKENS,
-        )),
-        Value::Array(values) => Value::Array(
-            values
+        Value::String(text) => {
+            let (text, truncated) =
+                guardian_truncate_text(&text, GUARDIAN_MAX_ACTION_STRING_TOKENS);
+            (Value::String(text), truncated)
+        }
+        Value::Array(values) => {
+            let mut truncated = false;
+            let values = values
                 .into_iter()
-                .map(truncate_guardian_action_value)
-                .collect::<Vec<_>>(),
-        ),
+                .map(|value| {
+                    let (value, value_truncated) = truncate_guardian_action_value(value);
+                    truncated |= value_truncated;
+                    value
+                })
+                .collect::<Vec<_>>();
+            (Value::Array(values), truncated)
+        }
         Value::Object(values) => {
             let mut entries = values.into_iter().collect::<Vec<_>>();
             entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, truncate_guardian_action_value(value)))
-                    .collect(),
-            )
+            let mut truncated = false;
+            let values = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    let (value, value_truncated) = truncate_guardian_action_value(value);
+                    truncated |= value_truncated;
+                    (key, value)
+                })
+                .collect();
+            (Value::Object(values), truncated)
         }
-        other => other,
+        other => (other, false),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormattedGuardianAction {
+    pub(crate) text: String,
+    pub(crate) truncated: bool,
 }
 
 pub(crate) fn guardian_approval_request_to_json(
@@ -390,6 +408,66 @@ pub(crate) fn guardian_assessment_action(
     }
 }
 
+pub(crate) fn guardian_reviewed_action(
+    request: &GuardianApprovalRequest,
+) -> GuardianReviewedAction {
+    match request {
+        GuardianApprovalRequest::Shell {
+            sandbox_permissions,
+            additional_permissions,
+            ..
+        } => GuardianReviewedAction::Shell {
+            sandbox_permissions: *sandbox_permissions,
+            additional_permissions: additional_permissions.clone(),
+        },
+        GuardianApprovalRequest::ExecCommand {
+            sandbox_permissions,
+            additional_permissions,
+            tty,
+            ..
+        } => GuardianReviewedAction::UnifiedExec {
+            sandbox_permissions: *sandbox_permissions,
+            additional_permissions: additional_permissions.clone(),
+            tty: *tty,
+        },
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve {
+            source,
+            program,
+            additional_permissions,
+            ..
+        } => GuardianReviewedAction::Execve {
+            source: *source,
+            program: program.clone(),
+            additional_permissions: additional_permissions.clone(),
+        },
+        GuardianApprovalRequest::ApplyPatch { .. } => GuardianReviewedAction::ApplyPatch {},
+        GuardianApprovalRequest::NetworkAccess { protocol, port, .. } => {
+            GuardianReviewedAction::NetworkAccess {
+                protocol: *protocol,
+                port: *port,
+            }
+        }
+        GuardianApprovalRequest::McpToolCall {
+            server,
+            tool_name,
+            connector_id,
+            connector_name,
+            tool_title,
+            ..
+        } => GuardianReviewedAction::McpToolCall {
+            server: server.clone(),
+            tool_name: tool_name.clone(),
+            connector_id: connector_id.clone(),
+            connector_name: connector_name.clone(),
+            tool_title: tool_title.clone(),
+        },
+        GuardianApprovalRequest::RequestPermissions { .. } => {
+            GuardianReviewedAction::RequestPermissions {}
+        }
+    }
+}
+
 pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest) -> Option<&str> {
     match request {
         GuardianApprovalRequest::Shell { id, .. }
@@ -421,8 +499,11 @@ pub(crate) fn guardian_request_turn_id<'a>(
 
 pub(crate) fn format_guardian_action_pretty(
     action: &GuardianApprovalRequest,
-) -> serde_json::Result<String> {
-    let mut value = guardian_approval_request_to_json(action)?;
-    value = truncate_guardian_action_value(value);
-    serde_json::to_string_pretty(&value)
+) -> serde_json::Result<FormattedGuardianAction> {
+    let value = guardian_approval_request_to_json(action)?;
+    let (value, truncated) = truncate_guardian_action_value(value);
+    Ok(FormattedGuardianAction {
+        text: serde_json::to_string_pretty(&value)?,
+        truncated,
+    })
 }

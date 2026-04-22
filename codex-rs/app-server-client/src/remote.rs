@@ -586,14 +586,9 @@ impl RemoteAppServerClient {
             .send(RemoteClientCommand::Shutdown { response_tx })
             .await
             .is_ok()
-            && let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
+            && let Ok(Ok(close_result)) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
         {
-            command_result.map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "remote app-server shutdown channel is closed",
-                )
-            })??;
+            close_result?;
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {
@@ -834,4 +829,28 @@ async fn write_jsonrpc_message(
                 "failed to write websocket message to `{websocket_url}`: {err}"
             ))
         })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_tolerates_worker_exit_after_command_is_queued() {
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let worker_handle = tokio::spawn(async move {
+            let _ = command_rx.recv().await;
+        });
+        let client = RemoteAppServerClient {
+            command_tx,
+            event_rx,
+            pending_events: VecDeque::new(),
+            worker_handle,
+        };
+
+        client
+            .shutdown()
+            .await
+            .expect("shutdown should complete when worker exits first");
+    }
 }
