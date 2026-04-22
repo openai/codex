@@ -57,18 +57,6 @@ pub struct FileSystemSandboxContext {
 }
 
 impl FileSystemSandboxContext {
-    pub fn new(sandbox_policy: SandboxPolicy) -> Self {
-        if let Ok(cwd) = AbsolutePathBuf::current_dir() {
-            Self::from_legacy_sandbox_policy(sandbox_policy, cwd)
-        } else {
-            let permissions = PermissionProfile::from_runtime_permissions(
-                &FileSystemSandboxPolicy::from(&sandbox_policy),
-                NetworkSandboxPolicy::from(&sandbox_policy),
-            );
-            Self::from_permission_profile(permissions)
-        }
-    }
-
     pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
         let permissions = PermissionProfile::from_runtime_permissions(
             &FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path()),

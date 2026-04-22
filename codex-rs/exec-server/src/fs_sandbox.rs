@@ -526,7 +526,10 @@ mod tests {
         let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         let file_system_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
-        let sandbox_context = crate::FileSystemSandboxContext::new(sandbox_policy.clone());
+        let sandbox_context = crate::FileSystemSandboxContext::from_legacy_sandbox_policy(
+            sandbox_policy.clone(),
+            cwd.clone(),
+        );
 
         let request = runner
             .sandbox_exec_request(
