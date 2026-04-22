@@ -293,7 +293,7 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// Guardian-specific policy config override from requirements.toml or config.toml.
     /// This is inserted into the fixed guardian prompt template under the
     /// `# Policy Configuration` section rather than replacing the whole
     /// guardian developer prompt.
@@ -2022,7 +2022,14 @@ impl Config {
             .or(cfg.include_environment_context)
             .unwrap_or(true);
         let guardian_policy_config =
-            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml());
+            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
+                .or_else(|| {
+                    cfg.auto_review
+                        .as_ref()
+                        .and_then(|auto_review| normalize_guardian_policy_config(
+                            auto_review.policy.as_deref(),
+                        ))
+                });
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
@@ -2486,13 +2493,14 @@ pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayer
 fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
-    requirements_toml
-        .guardian_policy_config
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
+    normalize_guardian_policy_config(requirements_toml.guardian_policy_config.as_deref())
+}
+
+fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {

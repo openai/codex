@@ -292,6 +292,15 @@
         }
       ]
     },
+    "AutoReviewToml": {
+      "properties": {
+        "policy": {
+          "description": "Additional policy instructions inserted into the guardian prompt.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2252,6 +2261,15 @@
       ],
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
+    },
+    "auto_review": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AutoReviewToml"
+        }
+      ],
+      "default": null,
+      "description": "Optional policy instructions for the guardian auto-reviewer."
     },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
