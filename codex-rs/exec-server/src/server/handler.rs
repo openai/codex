@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -49,7 +48,6 @@ use crate::server::session_registry::SessionRegistry;
 #[derive(Default)]
 struct HttpBodyStreamRegistry {
     reserved_ids: HashMap<String, Option<JoinHandle<()>>>,
-    pending: VecDeque<PendingHttpBodyStream>,
 }
 
 pub(crate) struct ExecServerHandler {
@@ -87,7 +85,6 @@ impl ExecServerHandler {
                 .drain()
                 .filter_map(|(_, task)| task)
                 .collect::<Vec<_>>();
-            http_body_streams.pending.clear();
             tasks
         };
         for task in tasks {
@@ -181,7 +178,7 @@ impl ExecServerHandler {
     pub(crate) async fn http_request(
         &self,
         params: HttpRequestParams,
-    ) -> Result<HttpRequestResponse, JSONRPCErrorError> {
+    ) -> Result<(HttpRequestResponse, Option<PendingHttpBodyStream>), JSONRPCErrorError> {
         self.require_initialized_for("http")?;
         let request_id = if params.stream_response {
             Some(params.request_id.clone().ok_or_else(|| {
@@ -194,13 +191,7 @@ impl ExecServerHandler {
             self.reserve_http_body_stream(request_id).await?;
         }
         match run_http_request(params).await {
-            Ok((response, pending_stream)) => {
-                if let Some(pending_stream) = pending_stream {
-                    let mut http_body_streams = self.http_body_streams.lock().await;
-                    http_body_streams.pending.push_back(pending_stream);
-                }
-                Ok(response)
-            }
+            Ok((response, pending_stream)) => Ok((response, pending_stream)),
             Err(error) => {
                 if let Some(request_id) = request_id.as_deref() {
                     self.release_http_body_stream(request_id).await;
@@ -210,26 +201,23 @@ impl ExecServerHandler {
         }
     }
 
-    pub(crate) async fn start_pending_http_body_streams(self: &Arc<Self>) {
-        let pending_streams = {
-            let mut http_body_streams = self.http_body_streams.lock().await;
-            http_body_streams.pending.drain(..).collect::<Vec<_>>()
-        };
-        for pending_stream in pending_streams {
-            let request_id = pending_stream.request_id.clone();
-            let finished_request_id = request_id.clone();
-            let handler = Arc::clone(self);
-            let notifications = self.notifications.clone();
-            let task = tokio::spawn(async move {
-                stream_http_body(pending_stream, notifications).await;
-                handler.release_http_body_stream(&finished_request_id).await;
-            });
-            let mut http_body_streams = self.http_body_streams.lock().await;
-            if let Some(entry) = http_body_streams.reserved_ids.get_mut(&request_id) {
-                *entry = Some(task);
-            } else {
-                task.abort();
-            }
+    pub(crate) async fn start_http_body_stream(
+        self: &Arc<Self>,
+        pending_stream: PendingHttpBodyStream,
+    ) {
+        let request_id = pending_stream.request_id.clone();
+        let finished_request_id = request_id.clone();
+        let handler = Arc::clone(self);
+        let notifications = self.notifications.clone();
+        let task = tokio::spawn(async move {
+            stream_http_body(pending_stream, notifications).await;
+            handler.release_http_body_stream(&finished_request_id).await;
+        });
+        let mut http_body_streams = self.http_body_streams.lock().await;
+        if let Some(entry) = http_body_streams.reserved_ids.get_mut(&request_id) {
+            *entry = Some(task);
+        } else {
+            task.abort();
         }
     }
 
@@ -342,7 +330,7 @@ impl ExecServerHandler {
         Ok(())
     }
 
-    async fn release_http_body_stream(&self, request_id: &str) {
+    pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
         let mut http_body_streams = self.http_body_streams.lock().await;
         http_body_streams.reserved_ids.remove(request_id);
     }

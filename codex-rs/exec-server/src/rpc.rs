@@ -394,7 +394,7 @@ pub(crate) fn internal_error(message: String) -> JSONRPCErrorError {
     }
 }
 
-fn decode_request_params<P>(params: Option<Value>) -> Result<P, JSONRPCErrorError>
+pub(crate) fn decode_request_params<P>(params: Option<Value>) -> Result<P, JSONRPCErrorError>
 where
     P: DeserializeOwned,
 {
