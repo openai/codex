@@ -22,6 +22,23 @@ use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
+async fn invocation_for_payload(
+    tool_name: &str,
+    call_id: &str,
+    payload: ToolPayload,
+) -> ToolInvocation {
+    let (session, turn) = make_session_and_context().await;
+    ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: call_id.to_string(),
+        tool_name: codex_tools::ToolName::plain(tool_name),
+        payload,
+    }
+}
+
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello"}"#;
@@ -262,8 +279,9 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         original_token_count: None,
         hook_command: Some("echo three".to_string()),
     };
+    let invocation = invocation_for_payload("exec_command", "call-43", payload).await;
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_use_id: "call-43".to_string(),
@@ -273,8 +291,8 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
     );
 }
 
-#[test]
-fn exec_command_post_tool_use_payload_uses_output_for_interactive_completion() {
+#[tokio::test]
+async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completion() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": true }).to_string(),
     };
@@ -289,9 +307,10 @@ fn exec_command_post_tool_use_payload_uses_output_for_interactive_completion() {
         original_token_count: None,
         hook_command: Some("echo three".to_string()),
     };
+    let invocation = invocation_for_payload("exec_command", "call-44", payload).await;
 
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_use_id: "call-44".to_string(),
@@ -317,14 +336,15 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         original_token_count: None,
         hook_command: Some("echo three".to_string()),
     };
+    let invocation = invocation_for_payload("exec_command", "call-45", payload).await;
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         None
     );
 }
 
-#[test]
-fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_completion() {
+#[tokio::test]
+async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_completion() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({
             "session_id": 45,
@@ -343,9 +363,10 @@ fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_c
         original_token_count: None,
         hook_command: Some("sleep 1; echo finished".to_string()),
     };
+    let invocation = invocation_for_payload("write_stdin", "write-stdin-call", payload).await;
 
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("write-stdin-call", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_use_id: "exec-call-45".to_string(),
@@ -355,8 +376,8 @@ fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_command_on_c
     );
 }
 
-#[test]
-fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate() {
+#[tokio::test]
+async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "session_id": 45, "chars": "" }).to_string(),
     };
@@ -382,10 +403,12 @@ fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separate() 
         original_token_count: None,
         hook_command: Some("sleep 1; echo beta".to_string()),
     };
+    let invocation_b = invocation_for_payload("write_stdin", "write-call-b", payload.clone()).await;
+    let invocation_a = invocation_for_payload("write_stdin", "write-call-a", payload).await;
 
     let payloads = [
-        UnifiedExecHandler.post_tool_use_payload("write-call-b", &payload, &output_b),
-        UnifiedExecHandler.post_tool_use_payload("write-call-a", &payload, &output_a),
+        UnifiedExecHandler.post_tool_use_payload(&invocation_b, &output_b),
+        UnifiedExecHandler.post_tool_use_payload(&invocation_a, &output_a),
     ];
 
     assert_eq!(

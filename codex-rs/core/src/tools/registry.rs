@@ -70,8 +70,7 @@ pub trait ToolHandler: Send + Sync {
 
     fn post_tool_use_payload(
         &self,
-        _call_id: &str,
-        _payload: &ToolPayload,
+        _invocation: &ToolInvocation,
         _result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         None
@@ -198,9 +197,9 @@ where
         Box::pin(async move {
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
-            let output = self.handle(invocation).await?;
+            let output = self.handle(invocation.clone()).await?;
             let post_tool_use_payload =
-                ToolHandler::post_tool_use_payload(self, &call_id, &payload, &output);
+                ToolHandler::post_tool_use_payload(self, &invocation, &output);
             Ok(AnyToolResult {
                 call_id,
                 payload,
