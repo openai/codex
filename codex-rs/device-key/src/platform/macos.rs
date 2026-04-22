@@ -55,12 +55,13 @@ unsafe extern "C" {
     static kSecUseAuthenticationContext: CFStringRef;
 }
 
-#[link(name = "LocalAuthentication", kind = "framework")]
-unsafe extern "C" {}
+unsafe extern "C" {
+    fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
 
 #[link(name = "objc")]
 unsafe extern "C" {
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn objc_getClass(name: *const c_char) -> ObjcId;
     fn sel_registerName(name: *const c_char) -> ObjcSel;
 }
@@ -68,6 +69,8 @@ unsafe extern "C" {
 type ObjcId = *mut c_void;
 type ObjcSel = *mut c_void;
 
+const LOCAL_AUTHENTICATION_FRAMEWORK_PATH: &[u8] =
+    b"/System/Library/Frameworks/LocalAuthentication.framework/LocalAuthentication\0";
 const LA_CONTEXT_CLASS: &[u8] = b"LAContext\0";
 const OBJC_MSG_SEND_SYMBOL: &[u8] = b"objc_msgSend\0";
 const OBJC_ALLOC_SELECTOR: &[u8] = b"alloc\0";
@@ -76,6 +79,8 @@ const OBJC_RELEASE_SELECTOR: &[u8] = b"release\0";
 const SET_TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SELECTOR: &[u8] =
     b"setTouchIDAuthenticationAllowableReuseDuration:\0";
 const TOUCH_ID_AUTHENTICATION_REUSE_DURATION_SECONDS: c_double = 300.0;
+const RTLD_LAZY: i32 = 0x1;
+const RTLD_LOCAL: i32 = 0x4;
 
 #[derive(Debug)]
 pub(crate) struct MacOsDeviceKeyProvider;
@@ -156,6 +161,7 @@ unsafe impl Send for LocalAuthenticationContext {}
 
 impl LocalAuthenticationContext {
     fn new() -> Result<Self, DeviceKeyError> {
+        load_local_authentication_framework()?;
         let class = unsafe { objc_getClass(LA_CONTEXT_CLASS.as_ptr().cast::<c_char>()) };
         if class.is_null() {
             return Err(DeviceKeyError::Platform(
@@ -223,6 +229,24 @@ fn reusable_authentication_context()
 
 fn sel(name: &'static [u8]) -> ObjcSel {
     unsafe { sel_registerName(name.as_ptr().cast::<c_char>()) }
+}
+
+fn load_local_authentication_framework() -> Result<(), DeviceKeyError> {
+    let handle = unsafe {
+        dlopen(
+            LOCAL_AUTHENTICATION_FRAMEWORK_PATH
+                .as_ptr()
+                .cast::<c_char>(),
+            RTLD_LAZY | RTLD_LOCAL,
+        )
+    };
+    if handle.is_null() {
+        Err(DeviceKeyError::Platform(
+            "failed to load LocalAuthentication.framework".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 unsafe fn objc_msg_send_id(receiver: ObjcId, selector: ObjcSel) -> Result<ObjcId, DeviceKeyError> {
