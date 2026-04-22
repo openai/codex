@@ -48,6 +48,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
+use crate::tasks::TurnTaskInput;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -137,11 +138,15 @@ use tracing::warn;
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
+    input: TurnTaskInput,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() && !sess.has_pending_input().await {
+    let TurnTaskInput {
+        user_input: input,
+        prefetched_tool_results,
+    } = input;
+    if input.is_empty() && prefetched_tool_results.is_empty() && !sess.has_pending_input().await {
         return None;
     }
 
@@ -300,11 +305,13 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return None;
     }
+    let prefetched_tool_result_items = prefetched_tool_results
+        .into_iter()
+        .map(ResponseItem::from)
+        .collect::<Vec<_>>();
     let additional_contexts = if input.is_empty() {
         Vec::new()
     } else {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        let response_item: ResponseItem = initial_input_for_turn.clone().into();
         let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
@@ -320,10 +327,18 @@ pub(crate) async fn run_turn(
             .await;
             return None;
         }
-        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-            .await;
         user_prompt_submit_outcome.additional_contexts
     };
+    if !prefetched_tool_result_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &prefetched_tool_result_items)
+            .await;
+    }
+    if !input.is_empty() {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.into();
+        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+    }
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);

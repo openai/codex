@@ -49,6 +49,7 @@ use crate::rollout::recorder::RolloutRecorder;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TurnTaskInput;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
@@ -3790,6 +3791,7 @@ fn op_kind_distinguishes_turn_ops() {
         Op::UserInputWithTurnContext {
             environments: None,
             items: vec![],
+            prefetched_tool_results: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             cwd: None,
@@ -3992,7 +3994,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
-            _input: Vec<UserInput>,
+            _input: TurnTaskInput,
             _cancellation_token: CancellationToken,
         ) -> Option<String> {
             let mut trace = self
@@ -5608,7 +5610,7 @@ impl SessionTask for NeverEndingTask {
         self: Arc<Self>,
         _session: Arc<SessionTaskContext>,
         _ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         if self.listen_to_cancellation_token {
@@ -5637,7 +5639,7 @@ impl SessionTask for GuardianDeniedApprovalTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();

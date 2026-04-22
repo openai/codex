@@ -61,6 +61,21 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TurnTaskInput {
+    pub(crate) user_input: Vec<UserInput>,
+    pub(crate) prefetched_tool_results: Vec<ResponseInputItem>,
+}
+
+impl From<Vec<UserInput>> for TurnTaskInput {
+    fn from(user_input: Vec<UserInput>) -> Self {
+        Self {
+            user_input,
+            prefetched_tool_results: Vec::new(),
+        }
+    }
+}
+
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
@@ -161,7 +176,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Option<String>> + Send;
 
@@ -190,7 +205,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>>;
 
@@ -217,7 +232,7 @@ where
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>> {
         Box::pin(SessionTask::run(
@@ -242,9 +257,10 @@ impl Session {
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: impl Into<TurnTaskInput>,
         task: T,
     ) {
+        let input = input.into();
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
         self.start_task(turn_context, input, task).await;
@@ -253,7 +269,7 @@ impl Session {
     async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: TurnTaskInput,
         task: T,
     ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
@@ -398,7 +414,7 @@ impl Session {
         let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        self.start_task(turn_context, TurnTaskInput::default(), RegularTask::new())
             .await;
     }
 

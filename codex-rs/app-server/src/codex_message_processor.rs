@@ -309,6 +309,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -6108,6 +6109,101 @@ impl CodexMessageProcessor {
         Ok(())
     }
 
+    fn invalid_prefetched_tool_results_error(message: String) -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        }
+    }
+
+    fn parse_prefetched_tool_results(
+        values: Option<Vec<serde_json::Value>>,
+    ) -> Result<Vec<ResponseInputItem>, JSONRPCErrorError> {
+        let Some(values) = values else {
+            return Ok(Vec::new());
+        };
+
+        let mut parsed = Vec::with_capacity(values.len());
+        let mut calls = HashMap::<String, usize>::new();
+        let mut outputs = HashMap::<String, usize>::new();
+
+        for (index, value) in values.into_iter().enumerate() {
+            let item = serde_json::from_value::<ResponseItem>(value).map_err(|err| {
+                Self::invalid_prefetched_tool_results_error(format!(
+                    "prefetchedToolResults[{index}] is not a valid response item: {err}"
+                ))
+            })?;
+
+            match item {
+                ResponseItem::FunctionCall {
+                    name,
+                    namespace,
+                    arguments,
+                    call_id,
+                    ..
+                } => {
+                    if call_id.is_empty() {
+                        return Err(Self::invalid_prefetched_tool_results_error(format!(
+                            "prefetchedToolResults[{index}] function_call call_id must not be empty"
+                        )));
+                    }
+                    if calls.insert(call_id.clone(), index).is_some() {
+                        return Err(Self::invalid_prefetched_tool_results_error(format!(
+                            "prefetchedToolResults contains duplicate function_call call_id `{call_id}`"
+                        )));
+                    }
+                    parsed.push(ResponseInputItem::FunctionCall {
+                        name,
+                        namespace,
+                        arguments,
+                        call_id,
+                    });
+                }
+                ResponseItem::FunctionCallOutput { call_id, output } => {
+                    if call_id.is_empty() {
+                        return Err(Self::invalid_prefetched_tool_results_error(format!(
+                            "prefetchedToolResults[{index}] function_call_output call_id must not be empty"
+                        )));
+                    }
+                    if outputs.insert(call_id.clone(), index).is_some() {
+                        return Err(Self::invalid_prefetched_tool_results_error(format!(
+                            "prefetchedToolResults contains duplicate function_call_output call_id `{call_id}`"
+                        )));
+                    }
+                    parsed.push(ResponseInputItem::FunctionCallOutput { call_id, output });
+                }
+                _ => {
+                    return Err(Self::invalid_prefetched_tool_results_error(format!(
+                        "prefetchedToolResults[{index}] must be a function_call or function_call_output response item"
+                    )));
+                }
+            }
+        }
+
+        for (call_id, output_index) in &outputs {
+            let Some(call_index) = calls.get(call_id) else {
+                return Err(Self::invalid_prefetched_tool_results_error(format!(
+                    "prefetchedToolResults contains function_call_output for missing call_id `{call_id}`"
+                )));
+            };
+            if output_index < call_index {
+                return Err(Self::invalid_prefetched_tool_results_error(format!(
+                    "prefetchedToolResults function_call_output for call_id `{call_id}` must appear after its function_call"
+                )));
+            }
+        }
+        for call_id in calls.keys() {
+            if !outputs.contains_key(call_id) {
+                return Err(Self::invalid_prefetched_tool_results_error(format!(
+                    "prefetchedToolResults contains function_call without function_call_output for call_id `{call_id}`"
+                )));
+            }
+        }
+
+        Ok(parsed)
+    }
+
     async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
@@ -6783,6 +6879,29 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         }
+        let prefetched_tool_results =
+            match Self::parse_prefetched_tool_results(params.prefetched_tool_results) {
+                Ok(items) => items,
+                Err(error) => {
+                    self.track_error_response(&request_id, &error, /*error_type*/ None);
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+        if params.input.is_empty() && prefetched_tool_results.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "input or prefetchedToolResults must not be empty".to_string(),
+                data: None,
+            };
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
+            );
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -6894,6 +7013,7 @@ impl CodexMessageProcessor {
         let turn_op = if has_any_overrides {
             Op::UserInputWithTurnContext {
                 items: mapped_items,
+                prefetched_tool_results,
                 environments,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
@@ -6910,9 +7030,17 @@ impl CodexMessageProcessor {
                 collaboration_mode,
                 personality,
             }
-        } else {
+        } else if prefetched_tool_results.is_empty() {
             Op::UserInput {
                 items: mapped_items,
+                environments,
+                final_output_json_schema: params.output_schema,
+                responsesapi_client_metadata: params.responsesapi_client_metadata,
+            }
+        } else {
+            Op::UserInputWithPrefetchedToolResults {
+                items: mapped_items,
+                prefetched_tool_results,
                 environments,
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
@@ -7055,6 +7183,20 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         }
+        if params.input.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "input must not be empty".to_string(),
+                data: None,
+            };
+            self.track_error_response(
+                &request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
+            );
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -7062,10 +7204,11 @@ impl CodexMessageProcessor {
             .map(V2UserInput::into_core)
             .collect();
 
+        let expected_turn_id = params.expected_turn_id;
         match thread
             .steer_input(
                 mapped_items,
-                Some(&params.expected_turn_id),
+                Some(&expected_turn_id),
                 params.responsesapi_client_metadata,
             )
             .await

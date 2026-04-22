@@ -4810,6 +4810,11 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// EXPERIMENTAL - Raw Responses API `function_call` and matching
+    /// `function_call_output` items to place before the user input for this turn.
+    #[experimental("turn/start.prefetchedToolResults")]
+    #[ts(optional = nullable)]
+    pub prefetched_tool_results: Option<Vec<JsonValue>>,
     /// Optional turn-scoped environment selections.
     #[experimental("turn/start.environments")]
     #[ts(optional = nullable)]
@@ -10018,6 +10023,7 @@ mod tests {
             thread_id: "thread_123".to_string(),
             input: vec![],
             responsesapi_client_metadata: None,
+            prefetched_tool_results: None,
             environments: None,
             cwd: None,
             approval_policy: None,

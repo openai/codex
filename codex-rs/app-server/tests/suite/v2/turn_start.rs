@@ -255,6 +255,161 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_prefetched_tool_results_precede_user_input() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Use the cached result".to_string(),
+                text_elements: Vec::new(),
+            }],
+            prefetched_tool_results: Some(vec![
+                json!({
+                    "type": "function_call",
+                    "name": "lookup",
+                    "arguments": "{\"query\":\"cached\"}",
+                    "call_id": "prefetch-call-1"
+                }),
+                json!({
+                    "type": "function_call_output",
+                    "call_id": "prefetch-call-1",
+                    "output": "cached result"
+                }),
+            ]),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let payload = response_mock.single_request().body_json();
+    let input = payload["input"].as_array().expect("model input array");
+    let function_call_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call")
+                && item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("prefetch-call-1")
+        })
+        .expect("prefetched function_call in model input");
+    let output_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("prefetch-call-1")
+        })
+        .expect("prefetched function_call_output in model input");
+    let user_index = input
+        .iter()
+        .position(|item| {
+            item.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|content| {
+                        content.iter().any(|part| {
+                            part.get("type").and_then(serde_json::Value::as_str)
+                                == Some("input_text")
+                                && part.get("text").and_then(serde_json::Value::as_str)
+                                    == Some("Use the cached result")
+                        })
+                    })
+        })
+        .expect("user input in model input");
+
+    assert_eq!(
+        input[function_call_index]["arguments"],
+        "{\"query\":\"cached\"}"
+    );
+    assert!(function_call_index < output_index);
+    assert!(output_index < user_index);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_unpaired_prefetched_tool_results() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: "thread-does-not-matter".to_string(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            prefetched_tool_results: Some(vec![json!({
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": "{}",
+                "call_id": "missing-output"
+            })]),
+            ..Default::default()
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert!(
+        error
+            .error
+            .message
+            .contains("prefetchedToolResults contains function_call without function_call_output")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
@@ -1824,6 +1979,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             responsesapi_client_metadata: None,
+            prefetched_tool_results: None,
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,
@@ -1866,6 +2022,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             responsesapi_client_metadata: None,
+            prefetched_tool_results: None,
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             approvals_reviewer: None,

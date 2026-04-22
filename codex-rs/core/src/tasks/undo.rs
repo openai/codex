@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::TurnTaskInput;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -10,7 +11,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
-use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -37,7 +37,7 @@ impl SessionTask for UndoTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         session

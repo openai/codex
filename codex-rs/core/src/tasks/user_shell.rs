@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
-use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -32,6 +31,7 @@ use codex_shell_command::parse_command::parse_command;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TurnTaskInput;
 use crate::session::session::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -74,7 +74,7 @@ impl SessionTask for UserShellCommandTask {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         turn_context: Arc<TurnContext>,
-        _input: Vec<UserInput>,
+        _input: TurnTaskInput,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         execute_user_shell_command(
