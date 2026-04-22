@@ -175,6 +175,9 @@ use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
+use super::mentions_v2::MentionV2Popup;
+use super::mentions_v2::MentionV2SearchModeSettings;
+use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
@@ -373,6 +376,8 @@ pub(crate) struct ChatComposer {
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
+    mentions_v2_enabled: bool,
+    mentions_v2_search_mode_settings: MentionV2SearchModeSettings,
     fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
@@ -417,6 +422,7 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+    MentionV2(MentionV2Popup),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,6 +524,8 @@ impl ChatComposer {
             collaboration_mode_indicator: None,
             connectors_enabled: false,
             plugins_command_enabled: false,
+            mentions_v2_enabled: false,
+            mentions_v2_search_mode_settings: MentionV2SearchModeSettings::default(),
             fast_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
@@ -562,6 +570,11 @@ impl ChatComposer {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.plugins_command_enabled = enabled;
+    }
+
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.mentions_v2_enabled = enabled;
+        self.sync_popups();
     }
 
     /// Toggle composer-side image paste handling.
@@ -661,6 +674,9 @@ impl ChatComposer {
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::Skill(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
+            ActivePopup::MentionV2(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::None => Constraint::Max(footer_total_height),
@@ -1345,7 +1361,11 @@ impl ChatComposer {
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
-        let current_opt = Self::current_at_token(&self.textarea);
+        let current_opt = if self.mentions_v2_enabled {
+            self.current_mentions_v2_token()
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let Some(current_token) = current_opt else {
             return;
         };
@@ -1354,8 +1374,14 @@ impl ChatComposer {
             return;
         }
 
-        if let ActivePopup::File(popup) = &mut self.active_popup {
-            popup.set_matches(&query, matches);
+        match &mut self.active_popup {
+            ActivePopup::File(popup) => {
+                popup.set_matches(&query, matches);
+            }
+            ActivePopup::MentionV2(popup) => {
+                popup.set_file_matches(&query, matches);
+            }
+            _ => {}
         }
     }
 
@@ -1429,6 +1455,7 @@ impl ChatComposer {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
+            ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         // Update (or hide/show) popup after processing the key.
@@ -1868,6 +1895,112 @@ impl ChatComposer {
         result
     }
 
+    fn handle_key_event_with_mentions_v2_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::MentionV2(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        let mut selected: Option<MentionV2Selection> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.previous_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                popup.next_search_mode();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                popup.remember_search_mode(&mut self.mentions_v2_search_mode_settings);
+                popup.sync_search_mode_settings(self.mentions_v2_search_mode_settings);
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = self.current_mentions_v2_token() {
+                    self.dismissed_mention_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                selected = popup.selected();
+                close_popup = true;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some(selected) = selected {
+                match selected {
+                    MentionV2Selection::File(path) => {
+                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                    }
+                    MentionV2Selection::Tool { insert_text, path } => {
+                        self.insert_selected_mention(&insert_text, path.as_deref());
+                    }
+                }
+            }
+            self.active_popup = ActivePopup::None;
+        }
+
+        result
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png")
@@ -1875,6 +2008,45 @@ impl ChatComposer {
             || lower.ends_with(".jpeg")
             || lower.ends_with(".gif")
             || lower.ends_with(".webp")
+    }
+
+    fn insert_selected_file_path(&mut self, selected_path: &str) {
+        if Self::is_image_path(selected_path) {
+            let path_buf = PathBuf::from(selected_path);
+            match image::image_dimensions(&path_buf) {
+                Ok((width, height)) => {
+                    tracing::debug!("selected image dimensions={}x{}", width, height);
+                    let cursor_offset = self.textarea.cursor();
+                    let text = self.textarea.text();
+                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                    let before_cursor = &text[..safe_cursor];
+                    let after_cursor = &text[safe_cursor..];
+
+                    let start_idx = before_cursor
+                        .char_indices()
+                        .rfind(|(_, c)| c.is_whitespace())
+                        .map(|(idx, c)| idx + c.len_utf8())
+                        .unwrap_or(0);
+                    let end_rel_idx = after_cursor
+                        .char_indices()
+                        .find(|(_, c)| c.is_whitespace())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(after_cursor.len());
+                    let end_idx = safe_cursor + end_rel_idx;
+
+                    self.textarea.replace_range(start_idx..end_idx, "");
+                    self.textarea.set_cursor(start_idx);
+                    self.attach_image(path_buf);
+                    self.textarea.insert_str(" ");
+                }
+                Err(err) => {
+                    tracing::trace!("image dimensions lookup failed: {err}");
+                    self.insert_selected_path(selected_path);
+                }
+            }
+        } else {
+            self.insert_selected_path(selected_path);
+        }
     }
 
     fn trim_text_elements(
@@ -2132,8 +2304,20 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
+    fn current_mentions_v2_token(&self) -> Option<String> {
+        if !self.mentions_v2_enabled {
+            return None;
+        }
+        Self::current_prefixed_token(&self.textarea, '@', /*allow_empty*/ true).or_else(|| {
+            Self::current_prefixed_token(&self.textarea, '$', /*allow_empty*/ true)
+        })
+    }
+
     fn current_mention_token(&self) -> Option<String> {
         if !self.mentions_enabled() {
+            return None;
+        }
+        if self.mentions_v2_enabled {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', /*allow_empty*/ true)
@@ -3259,7 +3443,12 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let file_token = Self::current_at_token(&self.textarea);
+        let mentions_v2_token = self.current_mentions_v2_token();
+        let file_token = if self.mentions_v2_enabled {
+            None
+        } else {
+            Self::current_at_token(&self.textarea)
+        };
         let browsing_history = self
             .history
             .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
@@ -3279,6 +3468,7 @@ impl ChatComposer {
         let allow_command_popup = self.slash_commands_enabled()
             && !self.is_bash_mode
             && file_token.is_none()
+            && mentions_v2_token.is_none()
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
@@ -3290,6 +3480,11 @@ impl ChatComposer {
             }
             self.dismissed_file_popup_token = None;
             self.dismissed_mention_popup_token = None;
+            return;
+        }
+
+        if let Some(token) = mentions_v2_token {
+            self.sync_mentions_v2_popup(token);
             return;
         }
 
@@ -3317,7 +3512,7 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_)
+            ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::MentionV2(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -3561,6 +3756,46 @@ impl ChatComposer {
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn sync_mentions_v2_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        } else {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+            self.current_file_query = Some(query.clone());
+        }
+
+        let candidates = super::mentions_v2::build_search_catalog(
+            self.skills.as_deref(),
+            self.plugins.as_deref(),
+            self.connectors_enabled,
+            self.connectors_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.connectors.as_slice()),
+        );
+
+        match &mut self.active_popup {
+            ActivePopup::MentionV2(popup) => {
+                popup.set_query(&query);
+                popup.set_candidates(candidates);
+            }
+            _ => {
+                let mut popup =
+                    MentionV2Popup::new(candidates, self.mentions_v2_search_mode_settings);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::MentionV2(popup);
+            }
+        }
+
+        self.dismissed_mention_popup_token = None;
     }
 
     fn mention_items(&self) -> Vec<MentionItem> {
@@ -3861,6 +4096,7 @@ impl Renderable for ChatComposer {
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
+                ActivePopup::MentionV2(c) => c.calculate_required_height(width),
             }
     }
 
@@ -3881,6 +4117,9 @@ impl ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::Skill(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::MentionV2(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
