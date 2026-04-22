@@ -2,6 +2,8 @@ use anyhow::Result;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_features::Feature;
+use codex_git_utils::diff_since_latest_init;
+use codex_git_utils::reset_git_repository;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -29,6 +31,7 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
+    let memory_root = home.path().join("memories");
 
     let now = Utc::now();
     let _thread_a = seed_stage1_output(
@@ -41,35 +44,19 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
     )
     .await?;
 
-    let first_phase2 = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-phase2-1"),
-            ev_assistant_message("msg-phase2-1", "phase2 complete"),
-            ev_completed("resp-phase2-1"),
-        ]),
+    let rollout_summaries_root = memory_root.join("rollout_summaries");
+    tokio::fs::create_dir_all(&rollout_summaries_root).await?;
+    tokio::fs::write(
+        memory_root.join("raw_memories.md"),
+        "# Raw Memories\n\nraw memory A\n",
     )
-    .await;
-
-    let first = build_test_codex(&server, home.clone()).await?;
-    let first_request = wait_for_single_request(&first_phase2).await;
-    let first_prompt = phase2_prompt_text(&first_request);
-    assert!(
-        first_prompt.contains("phase2_workspace_diff.md"),
-        "expected workspace diff file in first prompt: {first_prompt}"
-    );
-
-    let memory_root = home.path().join("memories");
-    wait_for_phase2_success(&memory_root).await?;
-    let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
-    assert!(raw_memories.contains("raw memory A"));
-    assert!(!raw_memories.contains("raw memory B"));
-    let rollout_summaries = read_rollout_summary_bodies(&memory_root).await?;
-    assert_eq!(rollout_summaries.len(), 1);
-    assert!(rollout_summaries[0].contains("rollout summary A"));
-    assert!(rollout_summaries[0].contains("git_branch: branch-rollout-a"));
-
-    shutdown_test_codex(&first).await?;
+    .await?;
+    tokio::fs::write(
+        rollout_summaries_root.join("rollout-a.md"),
+        "git_branch: branch-rollout-a\n\nrollout summary A\n",
+    )
+    .await?;
+    reset_git_repository(&memory_root).await?;
 
     let _thread_b = seed_stage1_output(
         db.as_ref(),
@@ -81,25 +68,25 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
     )
     .await?;
 
-    let second_phase2 = mount_sse_once(
+    let phase2 = mount_sse_once(
         &server,
         sse(vec![
-            ev_response_created("resp-phase2-2"),
-            ev_assistant_message("msg-phase2-2", "phase2 complete"),
-            ev_completed("resp-phase2-2"),
+            ev_response_created("resp-phase2"),
+            ev_assistant_message("msg-phase2", "phase2 complete"),
+            ev_completed("resp-phase2"),
         ]),
     )
     .await;
 
-    let second = build_test_codex(&server, home.clone()).await?;
-    let second_request = wait_for_single_request(&second_phase2).await;
-    let second_prompt = phase2_prompt_text(&second_request);
+    let codex = build_test_codex(&server, home.clone()).await?;
+    let request = wait_for_single_request(&phase2).await;
+    let prompt = phase2_prompt_text(&request);
     assert!(
-        second_prompt.contains("phase2_workspace_diff.md"),
-        "expected workspace diff file in second prompt: {second_prompt}"
+        prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file in prompt: {prompt}"
     );
 
-    wait_for_phase2_success(&memory_root).await?;
+    wait_for_phase2_workspace_reset(&memory_root).await?;
     let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
     assert!(raw_memories.contains("raw memory B"));
     assert!(!raw_memories.contains("raw memory A"));
@@ -121,7 +108,7 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<(
             .all(|summary| !summary.contains("rollout summary A"))
     );
 
-    shutdown_test_codex(&second).await?;
+    shutdown_test_codex(&codex).await?;
     Ok(())
 }
 
@@ -180,7 +167,7 @@ async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> 
         "expected workspace diff file in prompt: {prompt}"
     );
 
-    wait_for_phase2_success(&home.path().join("memories")).await?;
+    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
     wait_for_file_removed(&old_file).await?;
     assert!(
         !tokio::fs::try_exists(&old_file).await?,
@@ -239,7 +226,7 @@ async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_i
         "expected workspace diff file in prompt: {prompt}"
     );
     wait_for_file_removed(&old_file).await?;
-    wait_for_phase2_success(&home.path().join("memories")).await?;
+    wait_for_phase2_workspace_reset(&home.path().join("memories")).await?;
 
     shutdown_test_codex(&codex).await?;
     Ok(())
@@ -345,8 +332,21 @@ fn phase2_prompt_text(request: &ResponsesRequest) -> String {
         .expect("phase2 prompt text")
 }
 
-async fn wait_for_phase2_success(memory_root: &Path) -> Result<()> {
-    wait_for_file_removed(&memory_root.join("phase2_workspace_diff.md")).await
+async fn wait_for_phase2_workspace_reset(memory_root: &Path) -> Result<()> {
+    wait_for_file_removed(&memory_root.join("phase2_workspace_diff.md")).await?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(diff) = diff_since_latest_init(memory_root).await
+            && !diff.has_changes()
+        {
+            return Ok(());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for clean memory workspace baseline"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn seed_stage1_output_for_existing_thread(
