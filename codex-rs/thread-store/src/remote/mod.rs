@@ -20,30 +20,83 @@ use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use proto::thread_store_client::ThreadStoreClient;
+use tonic::codegen::InterceptedService;
+use tonic::metadata::BinaryMetadataValue;
+use tonic::service::Interceptor;
+use tonic::transport::Channel;
+use tonic::transport::Endpoint;
 
 #[path = "proto/codex.thread_store.v1.rs"]
 mod proto;
+
+/// Metadata key used to forward the app-server's opaque identity key to remote contracts.
+pub const IDENTITY_KEY_HEADER: &str = "x-codex-app-server-identity-key-bin";
+
+#[derive(Clone, Debug)]
+struct IdentityKeyInterceptor {
+    identity_key: Option<Vec<u8>>,
+}
+
+impl Interceptor for IdentityKeyInterceptor {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Some(identity_key) = &self.identity_key {
+            request.metadata_mut().insert_bin(
+                IDENTITY_KEY_HEADER,
+                BinaryMetadataValue::from_bytes(identity_key),
+            );
+        }
+        Ok(request)
+    }
+}
+
+type RemoteThreadStoreClient =
+    ThreadStoreClient<InterceptedService<Channel, IdentityKeyInterceptor>>;
 
 /// gRPC-backed [`ThreadStore`] implementation for deployments whose durable thread data lives
 /// outside the app-server process.
 #[derive(Clone, Debug)]
 pub struct RemoteThreadStore {
     endpoint: String,
+    identity_key: Option<Vec<u8>>,
 }
 
 impl RemoteThreadStore {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
+            identity_key: None,
         }
     }
 
-    async fn client(&self) -> ThreadStoreResult<ThreadStoreClient<tonic::transport::Channel>> {
-        ThreadStoreClient::connect(self.endpoint.clone())
+    pub fn new_with_identity_key(
+        endpoint: impl Into<String>,
+        identity_key: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            identity_key,
+        }
+    }
+
+    async fn client(&self) -> ThreadStoreResult<RemoteThreadStoreClient> {
+        let channel = Endpoint::new(self.endpoint.clone())
+            .map_err(|err| ThreadStoreError::InvalidRequest {
+                message: format!("invalid remote thread store endpoint: {err}"),
+            })?
+            .connect()
             .await
             .map_err(|err| ThreadStoreError::Internal {
                 message: format!("failed to connect to remote thread store: {err}"),
-            })
+            })?;
+        Ok(ThreadStoreClient::with_interceptor(
+            channel,
+            IdentityKeyInterceptor {
+                identity_key: self.identity_key.clone(),
+            },
+        ))
     }
 }
 

@@ -1,12 +1,14 @@
 use clap::Parser;
 use codex_app_server::AppServerTransport;
 use codex_app_server::AppServerWebsocketAuthArgs;
-use codex_app_server::run_main_with_transport;
+use codex_app_server::IdentityKey;
+use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary
@@ -36,6 +38,10 @@ struct AppServerArgs {
 
     #[command(flatten)]
     auth: AppServerWebsocketAuthArgs,
+
+    /// Opaque identity key forwarded to remote contract implementations.
+    #[arg(long = "identity-key", value_name = "KEY")]
+    identity_key: Option<OsString>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -51,8 +57,9 @@ fn main() -> anyhow::Result<()> {
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
+        let identity_key = args.identity_key.map(IdentityKey::from_os_string);
 
-        run_main_with_transport(
+        run_main_with_transport_options(
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
@@ -60,6 +67,7 @@ fn main() -> anyhow::Result<()> {
             transport,
             session_source,
             auth,
+            identity_key,
         )
         .await?;
         Ok(())

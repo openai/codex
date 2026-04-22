@@ -12,6 +12,7 @@ use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
@@ -93,6 +94,43 @@ pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdentityKey {
+    bytes: Vec<u8>,
+}
+
+impl IdentityKey {
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            bytes: bytes.into(),
+        }
+    }
+
+    pub fn from_os_string(value: OsString) -> Self {
+        Self::from_bytes(os_string_to_bytes(value))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+#[cfg(unix)]
+fn os_string_to_bytes(value: OsString) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    value.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn os_string_to_bytes(value: OsString) -> Vec<u8> {
+    value.to_string_lossy().into_owned().into_bytes()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LogFormat {
@@ -360,6 +398,29 @@ pub async fn run_main_with_transport(
     transport: AppServerTransport,
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
+) -> IoResult<()> {
+    run_main_with_transport_options(
+        arg0_paths,
+        cli_config_overrides,
+        loader_overrides,
+        default_analytics_enabled,
+        transport,
+        session_source,
+        auth,
+        None,
+    )
+    .await
+}
+
+pub async fn run_main_with_transport_options(
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+    session_source: SessionSource,
+    auth: AppServerWebsocketAuthSettings,
+    identity_key: Option<IdentityKey>,
 ) -> IoResult<()> {
     let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
         ExecServerRuntimePaths::from_optional_paths(
@@ -669,6 +730,7 @@ pub async fn run_main_with_transport(
             auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
             remote_control_handle: Some(remote_control_handle),
+            identity_key,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -908,8 +970,26 @@ fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTranspo
 
 #[cfg(test)]
 mod tests {
+    use super::IdentityKey;
     use super::LogFormat;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn identity_key_preserves_opaque_bytes() {
+        let key = IdentityKey::from_bytes(b"tenant-key-\x00\xff".to_vec());
+        assert_eq!(key.as_bytes(), &b"tenant-key-\x00\xff"[..]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_key_preserves_unix_argv_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let key = IdentityKey::from_os_string(OsString::from_vec(b"tenant-key-\xff".to_vec()));
+
+        assert_eq!(key.as_bytes(), &b"tenant-key-\xff"[..]);
+    }
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {

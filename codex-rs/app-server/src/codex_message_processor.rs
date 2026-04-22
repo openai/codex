@@ -365,6 +365,7 @@ mod plugin_app_helpers;
 mod plugin_mcp_oauth;
 mod token_usage_replay;
 
+use crate::IdentityKey;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
@@ -618,6 +619,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) identity_key: Option<IdentityKey>,
 }
 
 impl CodexMessageProcessor {
@@ -696,6 +698,7 @@ impl CodexMessageProcessor {
             cloud_requirements,
             feedback,
             log_db,
+            identity_key: _identity_key,
         } = args;
         Self {
             auth_manager,

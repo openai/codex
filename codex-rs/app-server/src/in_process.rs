@@ -404,6 +404,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
+                identity_key: None,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::default());
