@@ -67,12 +67,13 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
 
 #[test]
 fn exec_server_params_use_env_policy_overlay_contract() {
+    let cwd: codex_utils_absolute_path::AbsolutePathBuf = std::env::current_dir()
+        .expect("current dir")
+        .try_into()
+        .expect("absolute path");
     let request = ExecRequest {
         command: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-        cwd: std::env::current_dir()
-            .expect("current dir")
-            .try_into()
-            .expect("absolute path"),
+        cwd: cwd.clone(),
         env: HashMap::from([
             ("HOME".to_string(), "/client-home".to_string()),
             ("PATH".to_string(), "/sandbox-path".to_string()),
@@ -95,6 +96,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
+        windows_sandbox_policy_cwd: cwd,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,

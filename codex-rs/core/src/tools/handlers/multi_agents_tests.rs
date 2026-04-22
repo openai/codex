@@ -431,7 +431,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         )
     );
 }
@@ -465,7 +465,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         )
     );
 }
@@ -509,13 +509,13 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         )
     );
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_fork_turns_rejects_child_model_overrides() {
+async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_overrides() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -540,17 +540,16 @@ async fn multi_agent_v2_spawn_fork_turns_rejects_child_model_overrides() {
                 "message": "inspect this repo",
                 "task_name": "fork_context_v2",
                 "model": "gpt-5-child-override",
-                "reasoning_effort": "low",
-                "fork_turns": "all"
+                "reasoning_effort": "low"
             })),
         ))
         .await
-        .expect_err("forked spawn should reject child model overrides");
+        .expect_err("default full fork should reject child model overrides");
 
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without a full-history fork.".to_string(),
         )
     );
 }
@@ -2240,6 +2239,7 @@ async fn send_input_accepts_structured_items() {
         .expect("send_input should succeed");
 
     let expected = Op::UserInput {
+        environments: None,
         items: vec![
             UserInput::Mention {
                 name: "drive".to_string(),

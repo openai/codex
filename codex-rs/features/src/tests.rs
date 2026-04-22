@@ -226,12 +226,6 @@ fn remote_control_is_under_development() {
 }
 
 #[test]
-fn use_agent_identity_is_under_development() {
-    assert_eq!(Feature::UseAgentIdentity.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::UseAgentIdentity.default_enabled(), false);
-}
-
-#[test]
 fn workspace_dependencies_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::WorkspaceDependencies.stage(), Stage::Stable);
     assert_eq!(Feature::WorkspaceDependencies.default_enabled(), true);

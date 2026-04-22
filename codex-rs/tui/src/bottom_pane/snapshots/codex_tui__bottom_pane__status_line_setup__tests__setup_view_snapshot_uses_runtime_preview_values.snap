@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/status_line_setup.rs
+expression: "render_lines(&view, 72)"
+---
+                                                                        
+  Configure Status Line                                                 
+  Select which items to display in the status line.                     
+                                                                        
+  Type to search                                                        
+  >                                                                     
+› [x] model                 Current model name                          
+  [x] current-dir           Current working directory                   
+  [x] git-branch            Current Git branch (omitted when unavaila…  
+  [ ] model-with-reasoning  Current model name with reasoning level     
+  [ ] project-name          Project name (omitted when unavailable)     
+  [ ] run-state             Compact session run-state text (Ready, Wo…  
+  [ ] context-remaining     Percentage of context window remaining (o…  
+  [ ] context-used          Percentage of context window used (omitte…  
+                                                                        
+  gpt-5-codex · ~/codex-rs · jif/statusline-preview                     
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc

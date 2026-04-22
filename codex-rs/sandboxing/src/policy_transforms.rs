@@ -6,7 +6,9 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
@@ -14,6 +16,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveSandboxPermissions {
@@ -146,21 +150,48 @@ pub fn merge_permission_profiles(
 pub fn intersect_permission_profiles(
     requested: PermissionProfile,
     granted: PermissionProfile,
+    cwd: &Path,
 ) -> PermissionProfile {
     let file_system = requested
         .file_system
         .map(|requested_file_system| {
             let granted_file_system = granted.file_system.unwrap_or_default();
-            let entries: Vec<_> = requested_file_system
-                .entries
-                .into_iter()
-                .filter(|entry| granted_file_system.entries.contains(entry))
-                .collect();
+            let requested_policy =
+                FileSystemSandboxPolicy::restricted(requested_file_system.entries.clone());
+            let requested_read_deny_matcher = ReadDenyMatcher::new(&requested_policy, cwd);
+            let mut accepted_entries = Vec::new();
+            for entry in granted_file_system.entries.iter().filter(|entry| {
+                granted_file_system_entry_within_request(
+                    &requested_file_system,
+                    &requested_policy,
+                    requested_read_deny_matcher.as_ref(),
+                    entry,
+                    cwd,
+                )
+            }) {
+                let entry = materialize_cwd_dependent_entry(entry, cwd);
+                if !accepted_entries.contains(&entry) {
+                    accepted_entries.push(entry);
+                }
+            }
+            let mut entries = accepted_entries.clone();
+            let requested_retained_deny_entries = retain_constraining_deny_entries(
+                &requested_file_system.entries,
+                &accepted_entries,
+                cwd,
+                &mut entries,
+            );
+            let granted_retained_deny_entries = retain_constraining_deny_entries(
+                &granted_file_system.entries,
+                &accepted_entries,
+                cwd,
+                &mut entries,
+            );
             FileSystemPermissions {
                 glob_scan_max_depth: merge_glob_scan_max_depth(
-                    &entries,
+                    &requested_retained_deny_entries,
                     requested_file_system.glob_scan_max_depth.map(usize::from),
-                    &entries,
+                    &granted_retained_deny_entries,
                     granted_file_system.glob_scan_max_depth.map(usize::from),
                 )
                 .and_then(NonZeroUsize::new),
@@ -228,6 +259,178 @@ fn effective_glob_scan_depth(
 enum GlobScanDepth {
     Bounded(usize),
     Unbounded,
+}
+
+fn granted_file_system_entry_within_request(
+    requested: &FileSystemPermissions,
+    requested_policy: &FileSystemSandboxPolicy,
+    requested_read_deny_matcher: Option<&ReadDenyMatcher>,
+    granted_entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+) -> bool {
+    if !granted_entry.access.can_read() {
+        return false;
+    }
+
+    if let Some(path) = resolve_permission_path(&granted_entry.path, cwd) {
+        if requested_read_deny_matcher.is_some_and(|matcher| matcher.is_read_denied(path.as_path()))
+        {
+            return false;
+        }
+        return access_covers(
+            requested_policy.resolve_access_with_cwd(path.as_path(), cwd),
+            granted_entry.access,
+        );
+    }
+
+    requested.entries.iter().any(|requested_entry| {
+        access_covers(requested_entry.access, granted_entry.access)
+            && requested_entry.path == granted_entry.path
+    })
+}
+
+fn retain_constraining_deny_entries(
+    source_entries: &[FileSystemSandboxEntry],
+    accepted_entries: &[FileSystemSandboxEntry],
+    cwd: &Path,
+    output_entries: &mut Vec<FileSystemSandboxEntry>,
+) -> Vec<FileSystemSandboxEntry> {
+    let mut retained_entries = Vec::new();
+    for entry in source_entries
+        .iter()
+        .filter(|entry| entry.access == FileSystemAccessMode::None)
+    {
+        if !deny_entry_constrains_accepted_grant(entry, accepted_entries, cwd) {
+            continue;
+        }
+        let entry = materialize_cwd_dependent_entry(entry, cwd);
+        if !output_entries.contains(&entry) {
+            output_entries.push(entry.clone());
+        }
+        retained_entries.push(entry);
+    }
+    retained_entries
+}
+
+fn deny_entry_constrains_accepted_grant(
+    deny_entry: &FileSystemSandboxEntry,
+    accepted_entries: &[FileSystemSandboxEntry],
+    cwd: &Path,
+) -> bool {
+    accepted_entries
+        .iter()
+        .filter(|entry| entry.access.can_read())
+        .any(|entry| {
+            let Some(grant_path) = resolve_permission_path(&entry.path, cwd) else {
+                return false;
+            };
+            match &deny_entry.path {
+                FileSystemPath::GlobPattern { pattern } => glob_static_prefix_path(pattern, cwd)
+                    .is_some_and(|prefix| paths_overlap(prefix.as_path(), grant_path.as_path())),
+                FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => {
+                    resolve_permission_path(&deny_entry.path, cwd).is_some_and(|deny_path| {
+                        paths_overlap(deny_path.as_path(), grant_path.as_path())
+                    })
+                }
+            }
+        })
+}
+
+fn glob_static_prefix_path(pattern: &str, cwd: &Path) -> Option<AbsolutePathBuf> {
+    let resolved_pattern = AbsolutePathBuf::resolve_path_against_base(pattern, cwd);
+    let resolved_pattern = resolved_pattern.as_path().to_string_lossy();
+    let prefix = match resolved_pattern.find(['*', '?', '[', ']']) {
+        Some(0) => return None,
+        Some(index) => {
+            let prefix = &resolved_pattern[..index];
+            if prefix.ends_with(std::path::MAIN_SEPARATOR)
+                || prefix.ends_with('/')
+                || prefix.ends_with('\\')
+            {
+                Path::new(prefix)
+            } else {
+                Path::new(prefix).parent()?
+            }
+        }
+        None => Path::new(resolved_pattern.as_ref()),
+    };
+    AbsolutePathBuf::from_absolute_path(prefix).ok()
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
+}
+
+fn access_covers(requested: FileSystemAccessMode, granted: FileSystemAccessMode) -> bool {
+    match granted {
+        FileSystemAccessMode::Read => requested.can_read(),
+        FileSystemAccessMode::Write => requested.can_write(),
+        FileSystemAccessMode::None => false,
+    }
+}
+
+fn materialize_cwd_dependent_entry(
+    entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+) -> FileSystemSandboxEntry {
+    match &entry.path {
+        FileSystemPath::Special {
+            value:
+                FileSystemSpecialPath::CurrentWorkingDirectory
+                | FileSystemSpecialPath::ProjectRoots { .. },
+        } => resolve_permission_path(&entry.path, cwd)
+            .map(|path| FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: entry.access,
+            })
+            .unwrap_or_else(|| entry.clone()),
+        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            access: entry.access,
+        },
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
+    }
+}
+
+fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::GlobPattern { .. } => None,
+        FileSystemPath::Special { value } => match value {
+            FileSystemSpecialPath::Root => {
+                let root = cwd.ancestors().last()?;
+                AbsolutePathBuf::from_absolute_path(root).ok()
+            }
+            FileSystemSpecialPath::CurrentWorkingDirectory => {
+                AbsolutePathBuf::from_absolute_path(cwd).ok()
+            }
+            FileSystemSpecialPath::ProjectRoots { subpath } => {
+                let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;
+                Some(match subpath {
+                    Some(subpath) => {
+                        AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
+                    }
+                    None => cwd,
+                })
+            }
+            FileSystemSpecialPath::Tmpdir => {
+                let tmpdir = std::env::var_os("TMPDIR")?;
+                if tmpdir.is_empty() {
+                    None
+                } else {
+                    AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
+                }
+            }
+            FileSystemSpecialPath::SlashTmp => AbsolutePathBuf::from_absolute_path("/tmp")
+                .ok()
+                .filter(|path| path.as_path().is_dir()),
+            FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => None,
+        },
+    }
 }
 
 fn merge_permission_entries(

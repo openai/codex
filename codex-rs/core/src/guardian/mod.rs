@@ -49,7 +49,7 @@ const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 const TRUNCATION_TAG: &str = "truncated";
 
 /// Structured output contract that the guardian reviewer must satisfy.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct GuardianAssessment {
     pub(crate) risk_level: codex_protocol::protocol::GuardianRiskLevel,
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
