@@ -311,6 +311,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
+        params: v2::ThreadApproveGuardianDeniedActionParams,
+        response: v2::ThreadApproveGuardianDeniedActionResponse,
+    },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
         params: v2::ThreadBackgroundTerminalsCleanParams,

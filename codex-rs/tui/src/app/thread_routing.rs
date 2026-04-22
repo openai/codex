@@ -672,6 +672,12 @@ impl App {
                 Ok(true)
             }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
+            AppCommandView::Other(Op::ApproveGuardianDeniedAction { event }) => {
+                app_server
+                    .thread_approve_guardian_denied_action(thread_id, event)
+                    .await?;
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }
