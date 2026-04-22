@@ -88,9 +88,10 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
     let handler = ApplyPatchHandler;
 
     assert_eq!(
-        handler.post_tool_use_payload(&invocation, &output),
+        handler.post_tool_use_payload(&invocation.call_id, &invocation.payload, &output),
         Some(PostToolUsePayload {
             tool_name: HookToolName::apply_patch(),
+            tool_use_id: "call-apply-patch".to_string(),
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })

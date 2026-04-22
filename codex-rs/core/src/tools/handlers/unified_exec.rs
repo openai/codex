@@ -145,23 +145,25 @@ impl ToolHandler for UnifiedExecHandler {
 
     fn post_tool_use_payload(
         &self,
-        invocation: &ToolInvocation,
+        call_id: &str,
+        payload: &ToolPayload,
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = &invocation.payload else {
+        let ToolPayload::Function { .. } = payload else {
             return None;
         };
 
-        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
-        if args.tty {
-            return None;
-        }
-
-        let tool_response =
-            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let command = result.hook_command.clone()?;
+        let tool_use_id = if result.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            result.event_call_id.clone()
+        };
+        let tool_response = result.post_tool_use_response(&tool_use_id, payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::bash(),
-            tool_input: serde_json::json!({ "command": args.cmd }),
+            tool_use_id,
+            tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
     }
@@ -200,11 +202,12 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+                let hook_command = args.cmd.clone();
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
-                    &args.cmd,
+                    &hook_command,
                     &workdir,
                 )
                 .await;
@@ -313,17 +316,16 @@ impl ToolHandler for UnifiedExecHandler {
                         process_id: None,
                         exit_code: None,
                         original_token_count: None,
-                        session_command: None,
+                        hook_command: None,
                     });
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                let session_command = command.clone();
                 match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
-                            hook_command: args.cmd,
+                            hook_command: hook_command.clone(),
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -357,7 +359,7 @@ impl ToolHandler for UnifiedExecHandler {
                             process_id: None,
                             exit_code: Some(output.exit_code),
                             original_token_count: Some(original_token_count),
-                            session_command: Some(session_command),
+                            hook_command: Some(hook_command),
                         }
                     }
                     Err(err) => {

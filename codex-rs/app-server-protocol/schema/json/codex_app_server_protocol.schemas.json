@@ -455,6 +455,30 @@
             },
             "method": {
               "enum": [
+                "thread/approveGuardianDeniedAction"
+              ],
+              "title": "Thread/approveGuardianDeniedActionRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadApproveGuardianDeniedActionParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/approveGuardianDeniedActionRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -4411,6 +4435,26 @@
             "params"
           ],
           "title": "WarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "guardianWarning"
+              ],
+              "title": "GuardianWarningNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/GuardianWarningNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "GuardianWarningNotification",
           "type": "object"
         },
         {
@@ -9264,6 +9308,25 @@
         ],
         "type": "string"
       },
+      "GuardianWarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "message": {
+            "description": "Concise guardian warning message for the user.",
+            "type": "string"
+          },
+          "threadId": {
+            "description": "Thread target for the guardian warning.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "threadId"
+        ],
+        "title": "GuardianWarningNotification",
+        "type": "object"
+      },
       "HookCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13929,6 +13992,28 @@
         ],
         "type": "string"
       },
+      "ThreadApproveGuardianDeniedActionParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "description": "Serialized `codex_protocol::protocol::GuardianAssessmentEvent`."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "ThreadApproveGuardianDeniedActionParams",
+        "type": "object"
+      },
+      "ThreadApproveGuardianDeniedActionResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadApproveGuardianDeniedActionResponse",
+        "type": "object"
+      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14056,6 +14141,17 @@
               "string",
               "null"
             ]
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the forked thread. Cannot be combined with `sandbox`."
           },
           "sandbox": {
             "anyOf": [
@@ -15475,6 +15571,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the resumed thread. Cannot be combined with `sandbox`."
+          },
           "personality": {
             "anyOf": [
               {
@@ -15780,6 +15887,17 @@
               "string",
               "null"
             ]
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
           },
           "personality": {
             "anyOf": [
@@ -16585,6 +16703,17 @@
           },
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
           },
           "personality": {
             "anyOf": [

@@ -2589,6 +2589,7 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",
@@ -2597,6 +2598,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

@@ -36,17 +36,18 @@ impl ToolHandler for McpHandler {
 
     fn post_tool_use_payload(
         &self,
-        invocation: &ToolInvocation,
+        call_id: &str,
+        payload: &ToolPayload,
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Mcp { .. } = &invocation.payload else {
+        let ToolPayload::Mcp { server, tool, .. } = payload else {
             return None;
         };
 
-        let tool_response =
-            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
-            tool_name: HookToolName::new(invocation.tool_name.display()),
+            tool_name: HookToolName::new(format!("mcp__{server}__{tool}")),
+            tool_use_id: call_id.to_string(),
             tool_input: result.tool_input.clone(),
             tool_response,
         })
@@ -177,23 +178,11 @@ mod tests {
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
         };
-        let (session, turn) = make_session_and_context().await;
-
         assert_eq!(
-            McpHandler.post_tool_use_payload(
-                &ToolInvocation {
-                    session: session.into(),
-                    turn: turn.into(),
-                    cancellation_token: tokio_util::sync::CancellationToken::new(),
-                    tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                    call_id: "call-mcp-post".to_string(),
-                    tool_name: codex_tools::ToolName::namespaced("mcp__filesystem__", "read_file"),
-                    payload,
-                },
-                &output,
-            ),
+            McpHandler.post_tool_use_payload("call-mcp-post", &payload, &output),
             Some(PostToolUsePayload {
                 tool_name: HookToolName::new("mcp__filesystem__read_file"),
+                tool_use_id: "call-mcp-post".to_string(),
                 tool_input: json!({
                     "path": {
                         "file_id": "file_123"

@@ -119,7 +119,9 @@ pub(crate) fn matches_matcher(matcher: Option<&str>, input: Option<&str>) -> boo
     match matcher {
         None => true,
         Some(matcher) if is_match_all_matcher(matcher) => true,
-        Some(matcher) if is_exact_matcher(matcher) => input == Some(matcher),
+        Some(matcher) if is_exact_matcher(matcher) => input
+            .map(|input| matcher.split('|').any(|candidate| candidate == input))
+            .unwrap_or(false),
         Some(matcher) => input
             .and_then(|input| {
                 regex::Regex::new(matcher)
@@ -146,12 +148,9 @@ fn is_match_all_matcher(matcher: &str) -> bool {
 }
 
 fn is_exact_matcher(matcher: &str) -> bool {
-    !matcher.chars().any(|ch| {
-        matches!(
-            ch,
-            '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
-        )
-    })
+    matcher
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '|')
 }
 
 #[cfg(test)]
@@ -184,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn matcher_uses_regex_matching() {
+    fn exact_matcher_supports_pipe_alternatives() {
         assert!(matches_matcher(Some("Edit|Write"), Some("Edit")));
         assert!(matches_matcher(Some("Edit|Write"), Some("Write")));
         assert!(!matches_matcher(Some("Edit|Write"), Some("Bash")));
@@ -207,6 +206,12 @@ mod tests {
     }
 
     #[test]
+    fn matcher_uses_regex_when_it_contains_regex_characters() {
+        assert!(matches_matcher(Some("^Bash"), Some("BashOutput")));
+        assert_eq!(validate_matcher_pattern("^Bash"), Ok(()));
+    }
+
+    #[test]
     fn mcp_matchers_support_regex_wildcards() {
         assert!(matches_matcher(
             Some("mcp__memory__.*"),
@@ -220,6 +225,7 @@ mod tests {
             Some("mcp__.*__write.*"),
             Some("mcp__filesystem__read_file")
         ));
+        assert_eq!(validate_matcher_pattern("mcp__memory__.*"), Ok(()));
     }
 
     #[test]

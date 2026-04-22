@@ -10,6 +10,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
+use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -53,6 +54,9 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -61,6 +65,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -797,6 +802,115 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         config.permissions.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_populates_runtime_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::DangerFullAccess
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_preserves_configured_network_proxy() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+            glob_scan_max_depth: None,
+        }),
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                            enable_socks5: Some(false),
+                            allow_upstream_proxy: Some(false),
+                            domains: Some(NetworkDomainPermissionsToml {
+                                entries: BTreeMap::from([(
+                                    "openai.com".to_string(),
+                                    NetworkDomainPermissionToml::Allow,
+                                )]),
+                            }),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    let network = config
+        .permissions
+        .network
+        .as_ref()
+        .expect("network-enabled override should preserve configured proxy");
+
+    assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+    assert!(!network.socks_enabled());
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
     Ok(())
 }
 
@@ -3702,6 +3816,116 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
         config.guardian_policy_config.as_deref(),
         Some("Use the workspace-managed guardian policy.")
     );
+
+    Ok(())
+}
+
+#[test]
+fn config_toml_deserializes_auto_review_policy() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[auto_review]
+policy = "Use the user-configured guardian policy."
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.auto_review
+            .as_ref()
+            .and_then(|auto_review| auto_review.policy.as_deref()),
+        Some("Use the user-configured guardian policy.")
+    );
+}
+
+#[tokio::test]
+async fn load_config_uses_auto_review_guardian_policy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("  Use the user-configured guardian policy.  ".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian_policy_config.as_deref(),
+        Some("Use the user-configured guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("Use the user-configured guardian policy.".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        config_layer_stack,
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian_policy_config.as_deref(),
+        Some("Use the managed guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("   ".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.guardian_policy_config, None);
 
     Ok(())
 }

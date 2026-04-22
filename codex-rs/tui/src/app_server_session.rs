@@ -35,6 +35,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -94,6 +96,7 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
@@ -537,6 +540,7 @@ impl AppServerSession {
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy: Some(sandbox_policy.into()),
+                    permission_profile: None,
                     model: Some(model),
                     service_tier,
                     effort,
@@ -707,6 +711,27 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_approve_guardian_denied_action(
+        &mut self,
+        thread_id: ThreadId,
+        event: &GuardianAssessmentEvent,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadApproveGuardianDeniedActionResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadApproveGuardianDeniedAction {
+                request_id,
+                params: ThreadApproveGuardianDeniedActionParams {
+                    thread_id: thread_id.to_string(),
+                    event: serde_json::to_value(event)
+                        .wrap_err("failed to serialize Guardian denial event")?,
+                },
+            })
+            .await
+            .wrap_err("thread/approveGuardianDeniedAction failed in TUI")?;
         Ok(())
     }
 

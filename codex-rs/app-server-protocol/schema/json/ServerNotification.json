@@ -1704,6 +1704,23 @@
       ],
       "type": "string"
     },
+    "GuardianWarningNotification": {
+      "properties": {
+        "message": {
+          "description": "Concise guardian warning message for the user.",
+          "type": "string"
+        },
+        "threadId": {
+          "description": "Thread target for the guardian warning.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "HookCompletedNotification": {
       "properties": {
         "run": {
@@ -5340,6 +5357,26 @@
         "params"
       ],
       "title": "WarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "guardianWarning"
+          ],
+          "title": "GuardianWarningNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/GuardianWarningNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "GuardianWarningNotification",
       "type": "object"
     },
     {

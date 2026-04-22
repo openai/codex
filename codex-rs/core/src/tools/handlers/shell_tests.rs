@@ -279,23 +279,11 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let handler = ShellCommandHandler {
         backend: super::ShellCommandBackend::Classic,
     };
-    let (session, turn) = make_session_and_context().await;
-
     assert_eq!(
-        handler.post_tool_use_payload(
-            &ToolInvocation {
-                session: session.into(),
-                turn: turn.into(),
-                cancellation_token: tokio_util::sync::CancellationToken::new(),
-                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-                call_id: "call-42".to_string(),
-                tool_name: codex_tools::ToolName::plain("shell_command"),
-                payload,
-            },
-            &output,
-        ),
+        handler.post_tool_use_payload("call-42", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
+            tool_use_id: "call-42".to_string(),
             tool_input: json!({ "command": "printf shell command" }),
             tool_response: json!("shell output"),
         })

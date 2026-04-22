@@ -322,15 +322,16 @@ impl ToolHandler for ApplyPatchHandler {
 
     fn post_tool_use_payload(
         &self,
-        invocation: &ToolInvocation,
+        call_id: &str,
+        payload: &ToolPayload,
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let tool_response =
-            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::apply_patch(),
+            tool_use_id: call_id.to_string(),
             tool_input: serde_json::json!({
-                "command": apply_patch_payload_command(&invocation.payload)?,
+                "command": apply_patch_payload_command(payload)?,
             }),
             tool_response,
         })

@@ -147,6 +147,7 @@ export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatu
 export type { GuardianCommandSource } from "./GuardianCommandSource";
 export type { GuardianRiskLevel } from "./GuardianRiskLevel";
 export type { GuardianUserAuthorization } from "./GuardianUserAuthorization";
+export type { GuardianWarningNotification } from "./GuardianWarningNotification";
 export type { HookCompletedNotification } from "./HookCompletedNotification";
 export type { HookEventName } from "./HookEventName";
 export type { HookExecutionMode } from "./HookExecutionMode";
@@ -308,6 +309,8 @@ export type { TextPosition } from "./TextPosition";
 export type { TextRange } from "./TextRange";
 export type { Thread } from "./Thread";
 export type { ThreadActiveFlag } from "./ThreadActiveFlag";
+export type { ThreadApproveGuardianDeniedActionParams } from "./ThreadApproveGuardianDeniedActionParams";
+export type { ThreadApproveGuardianDeniedActionResponse } from "./ThreadApproveGuardianDeniedActionResponse";
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";

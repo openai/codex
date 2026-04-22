@@ -3147,6 +3147,10 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for this thread. Cannot be combined with
+    /// `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -3280,6 +3284,10 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the resumed thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3368,6 +3376,10 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the forked thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3638,6 +3650,20 @@ pub struct ThreadShellCommandParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadShellCommandResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadApproveGuardianDeniedActionParams {
+    pub thread_id: String,
+    /// Serialized `codex_protocol::protocol::GuardianAssessmentEvent`.
+    pub event: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadApproveGuardianDeniedActionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4802,6 +4828,10 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the full permissions profile for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -7233,6 +7263,16 @@ pub struct WarningNotification {
     /// Optional thread target when the warning applies to a specific thread.
     pub thread_id: Option<String>,
     /// Concise warning message for the user.
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianWarningNotification {
+    /// Thread target for the guardian warning.
+    pub thread_id: String,
+    /// Concise guardian warning message for the user.
     pub message: String,
 }
 
@@ -9983,6 +10023,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             model: None,
             service_tier: None,
             effort: None,
