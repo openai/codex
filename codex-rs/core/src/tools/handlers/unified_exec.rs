@@ -146,7 +146,7 @@ impl ToolHandler for UnifiedExecHandler {
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;

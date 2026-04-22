@@ -132,6 +132,7 @@ impl ToolOutput for CallToolResult {
 #[derive(Clone, Debug)]
 pub struct McpToolOutput {
     pub result: CallToolResult,
+    pub tool_input: JsonValue,
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
 }
