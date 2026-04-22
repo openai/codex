@@ -167,13 +167,6 @@ pub(crate) async fn handle_mcp_tool_call(
     let connector_name = metadata
         .as_ref()
         .and_then(|metadata| metadata.connector_name.clone());
-    let server_origin = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .server_origin(&server)
-        .map(str::to_string);
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
@@ -197,82 +190,16 @@ pub(crate) async fn handle_mcp_tool_call(
             McpToolApprovalDecision::Accept
             | McpToolApprovalDecision::AcceptForSession
             | McpToolApprovalDecision::AcceptAndRemember => {
-                maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
-
-                let start = Instant::now();
-                // Capture the rewritten arguments here so PostToolUse hooks see
-                // the same input that is sent to the MCP server.
-                let rewrite = rewrite_mcp_tool_input(
+                return handle_approved_mcp_tool_call(
                     sess.as_ref(),
                     turn_context.as_ref(),
-                    arguments_value.clone(),
-                    metadata.as_ref(),
-                )
-                .await;
-                let tool_input = tool_input_for_rewrite(&rewrite, arguments_value.clone());
-                let result = async {
-                    let rewritten_arguments = rewrite?;
-                    execute_mcp_tool_call(
-                        sess.as_ref(),
-                        turn_context.as_ref(),
-                        &server,
-                        &tool_name,
-                        rewritten_arguments,
-                        request_meta.clone(),
-                    )
-                    .await
-                }
-                .instrument(mcp_tool_call_span(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    McpToolCallSpanFields {
-                        server_name: &server,
-                        tool_name: &tool_name,
-                        call_id: &call_id,
-                        server_origin: server_origin.as_deref(),
-                        connector_id: connector_id.as_deref(),
-                        connector_name: connector_name.as_deref(),
-                    },
-                ))
-                .await;
-                if let Err(error) = &result {
-                    tracing::warn!("MCP tool call error: {error:?}");
-                }
-                let duration = start.elapsed();
-                let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                    call_id: call_id.clone(),
+                    &call_id,
                     invocation,
-                    mcp_app_resource_uri: mcp_app_resource_uri.clone(),
-                    duration,
-                    result: result.clone(),
-                });
-                notify_mcp_tool_call_event(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    tool_call_end_event.clone(),
+                    metadata.as_ref(),
+                    request_meta,
+                    mcp_app_resource_uri,
                 )
                 .await;
-                maybe_track_codex_app_used(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    &server,
-                    &tool_name,
-                )
-                .await;
-                let status = if result.is_ok() { "ok" } else { "error" };
-                emit_mcp_call_metrics(
-                    turn_context.as_ref(),
-                    status,
-                    &tool_name,
-                    connector_id.as_deref(),
-                    connector_name.as_deref(),
-                    Some(duration),
-                );
-
-                return HandledMcpToolCall {
-                    result: CallToolResult::from_result(result),
-                    tool_input,
-                };
             }
             McpToolApprovalDecision::Decline { message } => {
                 let message = message.unwrap_or_else(|| "user rejected MCP tool call".to_string());
@@ -331,24 +258,66 @@ pub(crate) async fn handle_mcp_tool_call(
         };
     }
 
-    maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
-
-    let start = Instant::now();
-    // Capture the rewritten arguments here so PostToolUse hooks see the same
-    // input that is sent to the MCP server.
-    let rewrite = rewrite_mcp_tool_input(
+    handle_approved_mcp_tool_call(
         sess.as_ref(),
         turn_context.as_ref(),
-        arguments_value.clone(),
+        &call_id,
+        invocation,
         metadata.as_ref(),
+        request_meta,
+        mcp_app_resource_uri,
+    )
+    .await
+}
+
+pub(crate) struct HandledMcpToolCall {
+    pub(crate) result: CallToolResult,
+    pub(crate) tool_input: JsonValue,
+}
+
+async fn handle_approved_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    invocation: McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+    request_meta: Option<JsonValue>,
+    mcp_app_resource_uri: Option<String>,
+) -> HandledMcpToolCall {
+    maybe_mark_thread_memory_mode_polluted(sess, turn_context).await;
+
+    let server = invocation.server.clone();
+    let tool_name = invocation.tool.clone();
+    let arguments_value = invocation.arguments.clone();
+    let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
+    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
+    let server_origin = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_origin(&server)
+        .map(str::to_string);
+
+    let start = Instant::now();
+    let rewrite = rewrite_mcp_tool_arguments_for_openai_files(
+        sess,
+        turn_context,
+        arguments_value.clone(),
+        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
     .await;
-    let tool_input = tool_input_for_rewrite(&rewrite, arguments_value.clone());
+    let tool_input = match &rewrite {
+        Ok(Some(rewritten_arguments)) => rewritten_arguments.clone(),
+        Ok(None) | Err(_) => arguments_value
+            .clone()
+            .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
+    };
     let result = async {
         let rewritten_arguments = rewrite?;
         execute_mcp_tool_call(
-            sess.as_ref(),
-            turn_context.as_ref(),
+            sess,
+            turn_context,
             &server,
             &tool_name,
             rewritten_arguments,
@@ -357,15 +326,15 @@ pub(crate) async fn handle_mcp_tool_call(
         .await
     }
     .instrument(mcp_tool_call_span(
-        sess.as_ref(),
-        turn_context.as_ref(),
+        sess,
+        turn_context,
         McpToolCallSpanFields {
             server_name: &server,
             tool_name: &tool_name,
-            call_id: &call_id,
+            call_id,
             server_origin: server_origin.as_deref(),
-            connector_id: connector_id.as_deref(),
-            connector_name: connector_name.as_deref(),
+            connector_id,
+            connector_name,
         },
     ))
     .await;
@@ -374,28 +343,22 @@ pub(crate) async fn handle_mcp_tool_call(
     }
     let duration = start.elapsed();
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-        call_id: call_id.clone(),
+        call_id: call_id.to_string(),
         invocation,
         mcp_app_resource_uri,
         duration,
         result: result.clone(),
     });
-
-    notify_mcp_tool_call_event(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        tool_call_end_event.clone(),
-    )
-    .await;
-    maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    notify_mcp_tool_call_event(sess, turn_context, tool_call_end_event.clone()).await;
+    maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
     emit_mcp_call_metrics(
-        turn_context.as_ref(),
+        turn_context,
         status,
         &tool_name,
-        connector_id.as_deref(),
-        connector_name.as_deref(),
+        connector_id,
+        connector_name,
         Some(duration),
     );
 
@@ -403,39 +366,6 @@ pub(crate) async fn handle_mcp_tool_call(
         result: CallToolResult::from_result(result),
         tool_input,
     }
-}
-
-pub(crate) struct HandledMcpToolCall {
-    pub(crate) result: CallToolResult,
-    pub(crate) tool_input: JsonValue,
-}
-
-async fn rewrite_mcp_tool_input(
-    sess: &Session,
-    turn_context: &TurnContext,
-    arguments_value: Option<JsonValue>,
-    metadata: Option<&McpToolApprovalMetadata>,
-) -> Result<Option<JsonValue>, String> {
-    rewrite_mcp_tool_arguments_for_openai_files(
-        sess,
-        turn_context,
-        arguments_value,
-        metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
-    )
-    .await
-}
-
-fn tool_input_for_rewrite(
-    rewrite: &Result<Option<JsonValue>, String>,
-    fallback_arguments: Option<JsonValue>,
-) -> JsonValue {
-    rewrite
-        .as_ref()
-        .ok()
-        .cloned()
-        .flatten()
-        .or(fallback_arguments)
-        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()))
 }
 
 fn emit_mcp_call_metrics(
