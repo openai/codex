@@ -38,6 +38,10 @@ pub(crate) struct ExecutorPendingHttpBodyStream {
     response: reqwest::Response,
 }
 
+struct ExecutorHttpRequestRunner {
+    client: reqwest::Client,
+}
+
 /// Request-scoped stream of body chunks for an executor HTTP response.
 ///
 /// The initial `http/request` call returns status and headers. This stream then
@@ -349,152 +353,16 @@ fn spawn_remove_http_body_stream(inner: Arc<Inner>, request_id: String) {
 pub(crate) async fn run_executor_http_request(
     params: HttpRequestParams,
 ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError> {
-    let method = Method::from_bytes(params.method.as_bytes())
-        .map_err(|err| invalid_params(format!("http/request method is invalid: {err}")))?;
-    let url = Url::parse(&params.url)
-        .map_err(|err| invalid_params(format!("http/request url is invalid: {err}")))?;
-    match url.scheme() {
-        "http" | "https" => {}
-        scheme => {
-            return Err(invalid_params(format!(
-                "http/request only supports http and https URLs, got {scheme}"
-            )));
-        }
-    }
-
-    let headers = build_executor_http_headers(params.headers)?;
-    let client = match params.timeout_ms {
-        None => reqwest::Client::builder(),
-        Some(timeout_ms) => reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms)),
-    }
-    .build()
-    .map_err(|err| internal_error(format!("failed to build http/request client: {err}")))?;
-
-    let mut request = client.request(method, url).headers(headers);
-    if let Some(body) = params.body {
-        request = request.body(body.into_inner());
-    }
-
-    let response = request
-        .send()
+    ExecutorHttpRequestRunner::new(params.timeout_ms)?
+        .run(params)
         .await
-        .map_err(|err| internal_error(format!("http/request failed: {err}")))?;
-    let status = response.status().as_u16();
-    let headers = executor_response_headers(response.headers());
-
-    if params.stream_response {
-        return Ok((
-            HttpRequestResponse {
-                status,
-                headers,
-                body: Vec::new().into(),
-            },
-            Some(ExecutorPendingHttpBodyStream {
-                request_id: params.request_id,
-                response,
-            }),
-        ));
-    }
-
-    let body = response.bytes().await.map_err(|err| {
-        internal_error(format!("failed to read http/request response body: {err}"))
-    })?;
-
-    Ok((
-        HttpRequestResponse {
-            status,
-            headers,
-            body: body.to_vec().into(),
-        },
-        None,
-    ))
-}
-
-fn build_executor_http_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
-    let mut header_map = HeaderMap::new();
-    for header in headers {
-        let name = HeaderName::from_bytes(header.name.as_bytes())
-            .map_err(|err| invalid_params(format!("http/request header name is invalid: {err}")))?;
-        let value = HeaderValue::from_str(&header.value).map_err(|err| {
-            invalid_params(format!(
-                "http/request header value is invalid for {}: {err}",
-                header.name
-            ))
-        })?;
-        header_map.append(name, value);
-    }
-    Ok(header_map)
-}
-
-fn executor_response_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            Some(HttpHeader {
-                name: name.as_str().to_string(),
-                value: value.to_str().ok()?.to_string(),
-            })
-        })
-        .collect()
 }
 
 pub(crate) async fn stream_executor_http_body(
     pending_stream: ExecutorPendingHttpBodyStream,
     notifications: RpcNotificationSender,
 ) {
-    let ExecutorPendingHttpBodyStream {
-        request_id,
-        response,
-    } = pending_stream;
-    let mut seq = 1;
-    let mut body = response.bytes_stream();
-    while let Some(chunk) = body.next().await {
-        match chunk {
-            Ok(bytes) => {
-                if !send_executor_body_delta(
-                    &notifications,
-                    HttpRequestBodyDeltaNotification {
-                        request_id: request_id.clone(),
-                        seq,
-                        delta: bytes.to_vec().into(),
-                        done: false,
-                        error: None,
-                    },
-                )
-                .await
-                {
-                    return;
-                }
-                seq += 1;
-            }
-            Err(err) => {
-                let _ = send_executor_body_delta(
-                    &notifications,
-                    HttpRequestBodyDeltaNotification {
-                        request_id,
-                        seq,
-                        delta: Vec::new().into(),
-                        done: true,
-                        error: Some(err.to_string()),
-                    },
-                )
-                .await;
-                return;
-            }
-        }
-    }
-
-    let _ = send_executor_body_delta(
-        &notifications,
-        HttpRequestBodyDeltaNotification {
-            request_id,
-            seq,
-            delta: Vec::new().into(),
-            done: true,
-            error: None,
-        },
-    )
-    .await;
+    ExecutorHttpRequestRunner::stream_body(pending_stream, notifications).await;
 }
 
 async fn send_executor_body_delta(
@@ -505,4 +373,165 @@ async fn send_executor_body_delta(
         .notify(HTTP_REQUEST_BODY_DELTA_METHOD, &delta)
         .await
         .is_ok()
+}
+
+impl ExecutorHttpRequestRunner {
+    fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
+        let client = match timeout_ms {
+            None => reqwest::Client::builder(),
+            Some(timeout_ms) => {
+                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
+            }
+        }
+        .build()
+        .map_err(|err| internal_error(format!("failed to build http/request client: {err}")))?;
+        Ok(Self { client })
+    }
+
+    async fn run(
+        &self,
+        params: HttpRequestParams,
+    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
+    {
+        let method = Method::from_bytes(params.method.as_bytes())
+            .map_err(|err| invalid_params(format!("http/request method is invalid: {err}")))?;
+        let url = Url::parse(&params.url)
+            .map_err(|err| invalid_params(format!("http/request url is invalid: {err}")))?;
+        match url.scheme() {
+            "http" | "https" => {}
+            scheme => {
+                return Err(invalid_params(format!(
+                    "http/request only supports http and https URLs, got {scheme}"
+                )));
+            }
+        }
+
+        let headers = Self::build_headers(params.headers)?;
+        let mut request = self.client.request(method, url).headers(headers);
+        if let Some(body) = params.body {
+            request = request.body(body.into_inner());
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|err| internal_error(format!("http/request failed: {err}")))?;
+        let status = response.status().as_u16();
+        let headers = Self::response_headers(response.headers());
+
+        if params.stream_response {
+            return Ok((
+                HttpRequestResponse {
+                    status,
+                    headers,
+                    body: Vec::new().into(),
+                },
+                Some(ExecutorPendingHttpBodyStream {
+                    request_id: params.request_id,
+                    response,
+                }),
+            ));
+        }
+
+        let body = response.bytes().await.map_err(|err| {
+            internal_error(format!("failed to read http/request response body: {err}"))
+        })?;
+
+        Ok((
+            HttpRequestResponse {
+                status,
+                headers,
+                body: body.to_vec().into(),
+            },
+            None,
+        ))
+    }
+
+    fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
+        let mut header_map = HeaderMap::new();
+        for header in headers {
+            let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|err| {
+                invalid_params(format!("http/request header name is invalid: {err}"))
+            })?;
+            let value = HeaderValue::from_str(&header.value).map_err(|err| {
+                invalid_params(format!(
+                    "http/request header value is invalid for {}: {err}",
+                    header.name
+                ))
+            })?;
+            header_map.append(name, value);
+        }
+        Ok(header_map)
+    }
+
+    fn response_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+        headers
+            .iter()
+            .filter_map(|(name, value)| {
+                Some(HttpHeader {
+                    name: name.as_str().to_string(),
+                    value: value.to_str().ok()?.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    async fn stream_body(
+        pending_stream: ExecutorPendingHttpBodyStream,
+        notifications: RpcNotificationSender,
+    ) {
+        let ExecutorPendingHttpBodyStream {
+            request_id,
+            response,
+        } = pending_stream;
+        let mut seq = 1;
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    if !send_executor_body_delta(
+                        &notifications,
+                        HttpRequestBodyDeltaNotification {
+                            request_id: request_id.clone(),
+                            seq,
+                            delta: bytes.to_vec().into(),
+                            done: false,
+                            error: None,
+                        },
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                    seq += 1;
+                }
+                Err(err) => {
+                    let _ = send_executor_body_delta(
+                        &notifications,
+                        HttpRequestBodyDeltaNotification {
+                            request_id,
+                            seq,
+                            delta: Vec::new().into(),
+                            done: true,
+                            error: Some(err.to_string()),
+                        },
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+
+        let _ = send_executor_body_delta(
+            &notifications,
+            HttpRequestBodyDeltaNotification {
+                request_id,
+                seq,
+                delta: Vec::new().into(),
+                done: true,
+                error: None,
+            },
+        )
+        .await;
+    }
 }
