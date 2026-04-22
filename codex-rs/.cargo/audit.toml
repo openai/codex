@@ -4,7 +4,6 @@ ignore = [
     "RUSTSEC-2024-0388", # derivative 2.2.0 via starlark; upstream crate is unmaintained
     "RUSTSEC-2025-0057", # fxhash 0.2.1 via starlark_map; upstream crate is unmaintained
     "RUSTSEC-2024-0436", # paste 1.0.15 via starlark/ratatui; upstream crate is unmaintained
-    "RUSTSEC-2026-0097", # rand 0.8.5 via age/codex-secrets, oauth2/rmcp, and codex-windows-sandbox; remove when these paths move to rand >=0.8.6
     "RUSTSEC-2026-0002", # lru 0.12.5 via pinned nornagon/ratatui v0.29.0; remove when ratatui moves to lru >=0.16.3
     "RUSTSEC-2024-0320", # yaml-rust via syntect; remove when syntect drops or updates it
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
