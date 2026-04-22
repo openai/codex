@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use serde_json::Value;
+use serde_json::to_value;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -8,10 +10,13 @@ use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
-use crate::rpc::RequestRouteOutcome;
+use crate::protocol::HTTP_REQUEST_METHOD;
+use crate::protocol::HttpRequestParams;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
+use crate::rpc::internal_error;
+use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
@@ -50,9 +55,9 @@ async fn run_connection(
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, mut disconnected_rx, connection_tasks) =
         connection.into_parts();
-    let (server_outbound_tx, mut server_outbound_rx) =
+    let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
-    let notifications = RpcNotificationSender::new(server_outbound_tx.clone());
+    let notifications = RpcNotificationSender::new(outgoing_tx.clone());
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
         notifications,
@@ -60,7 +65,7 @@ async fn run_connection(
     ));
 
     let outbound_task = tokio::spawn(async move {
-        while let Some(message) = server_outbound_rx.recv().await {
+        while let Some(message) = outgoing_rx.recv().await {
             let json_message = match encode_server_message(message) {
                 Ok(json_message) => json_message,
                 Err(err) => {
@@ -83,7 +88,7 @@ async fn run_connection(
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
                 warn!("ignoring malformed exec-server message: {reason}");
-                if server_outbound_tx
+                if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
                         request_id: codex_app_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
@@ -96,20 +101,73 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some(route) = router.request_route(request.method.as_str()) {
-                        let outcome = tokio::select! {
-                            outcome = route(Arc::clone(&handler), request) => outcome,
+                    if request.method == HTTP_REQUEST_METHOD {
+                        let request_id = request.id;
+                        let params = match decode_http_request_params(request.params) {
+                            Ok(params) => params,
+                            Err(error) => {
+                                if outgoing_tx
+                                    .send(RpcServerOutboundMessage::Error { request_id, error })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        let response = tokio::select! {
+                            response = handler.http_request(params) => response,
                             _ = disconnected_rx.changed() => {
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
                         };
-                        if let RequestRouteOutcome::Message(message) = outcome
-                            && server_outbound_tx.send(message).await.is_err()
-                        {
+                        let (response, mut pending_stream) = match response {
+                            Ok(response) => response,
+                            Err(error) => {
+                                if outgoing_tx
+                                    .send(RpcServerOutboundMessage::Error { request_id, error })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        let message = match to_value(response) {
+                            Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
+                            Err(err) => {
+                                if let Some(pending_stream) = pending_stream.take() {
+                                    handler
+                                        .release_http_body_stream(&pending_stream.request_id)
+                                        .await;
+                                }
+                                RpcServerOutboundMessage::Error {
+                                    request_id,
+                                    error: internal_error(err.to_string()),
+                                }
+                            }
+                        };
+                        if outgoing_tx.send(message).await.is_err() {
                             break;
                         }
-                    } else if server_outbound_tx
+                        if let Some(pending_stream) = pending_stream {
+                            handler.start_http_body_stream(pending_stream).await;
+                        }
+                    } else if let Some(route) = router.request_route(request.method.as_str()) {
+                        let message = tokio::select! {
+                            message = route(Arc::clone(&handler), request) => message,
+                            _ = disconnected_rx.changed() => {
+                                debug!("exec-server transport disconnected while handling request");
+                                break;
+                            }
+                        };
+                        if outgoing_tx.send(message).await.is_err() {
+                            break;
+                        }
+                    } else if outgoing_tx
                         .send(RpcServerOutboundMessage::Error {
                             request_id: request.id,
                             error: method_not_found(format!(
@@ -172,12 +230,28 @@ async fn run_connection(
 
     handler.shutdown().await;
     drop(handler);
-    drop(server_outbound_tx);
+    drop(outgoing_tx);
     for task in connection_tasks {
         task.abort();
         let _ = task.await;
     }
     let _ = outbound_task.await;
+}
+
+fn decode_http_request_params(
+    params: Option<Value>,
+) -> Result<HttpRequestParams, codex_app_server_protocol::JSONRPCErrorError> {
+    let params = params.unwrap_or(Value::Null);
+    match serde_json::from_value(params.clone()) {
+        Ok(params) => Ok(params),
+        Err(err) => {
+            if matches!(params, Value::Object(ref map) if map.is_empty()) {
+                serde_json::from_value(Value::Null).map_err(|_| invalid_params(err.to_string()))
+            } else {
+                Err(invalid_params(err.to_string()))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

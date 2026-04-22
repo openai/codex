@@ -4,15 +4,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequestId;
-use serde_json::to_value;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::ExecutorPendingHttpBodyStream;
+use crate::client::http_client::HttpRequestResponse;
 use crate::client::http_client::run_executor_http_request;
 use crate::client::http_client::stream_executor_http_body;
 use crate::protocol::ExecParams;
@@ -41,8 +39,6 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
-use crate::rpc::RpcServerOutboundMessage;
-use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
@@ -109,7 +105,7 @@ impl ExecServerHandler {
 
         let session = match self
             .session_registry
-            .attach(params.resume_session_id.clone(), self.notification_sender())
+            .attach(params.resume_session_id.clone(), self.notifications.clone())
             .await
         {
             Ok(session) => session,
@@ -173,10 +169,10 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn http_request(
-        self: &Arc<Self>,
-        request_id: RequestId,
+        &self,
         params: HttpRequestParams,
-    ) -> Result<(), JSONRPCErrorError> {
+    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
+    {
         self.require_initialized_for("http")?;
         let stream_response = params.stream_response;
         let http_request_id = params.request_id.clone();
@@ -187,30 +183,7 @@ impl ExecServerHandler {
         if response.is_err() && stream_response {
             self.release_http_body_stream(&http_request_id).await;
         }
-        let (response, mut pending_stream) = response?;
-        let message = match to_value(response) {
-            Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
-            Err(err) => {
-                if let Some(pending_stream) = pending_stream.take() {
-                    self.release_http_body_stream(&pending_stream.request_id)
-                        .await;
-                }
-                RpcServerOutboundMessage::Error {
-                    request_id,
-                    error: internal_error(err.to_string()),
-                }
-            }
-        };
-        self.notifications
-            .send(
-                message,
-                "RPC connection closed while sending http/request response",
-            )
-            .await?;
-        if let Some(pending_stream) = pending_stream {
-            self.start_http_body_stream(pending_stream).await;
-        }
-        Ok(())
+        response
     }
 
     pub(crate) async fn fs_read_file(
@@ -309,14 +282,14 @@ impl ExecServerHandler {
             .clone()
     }
 
-    async fn start_http_body_stream(
+    pub(crate) async fn start_http_body_stream(
         self: &Arc<Self>,
         pending_stream: ExecutorPendingHttpBodyStream,
     ) {
         let request_id = pending_stream.request_id.clone();
         let finished_request_id = request_id.clone();
         let handler = Arc::clone(self);
-        let notifications = self.notification_sender();
+        let notifications = self.notifications.clone();
         let task = tokio::spawn(async move {
             stream_executor_http_body(pending_stream, notifications).await;
             handler.release_http_body_stream(&finished_request_id).await;
@@ -329,7 +302,7 @@ impl ExecServerHandler {
         }
     }
 
-    async fn release_http_body_stream(&self, request_id: &str) {
+    pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
         let mut body_streams = self.body_streams.lock().await;
         body_streams.remove(request_id);
     }
@@ -343,10 +316,6 @@ impl ExecServerHandler {
         }
         body_streams.insert(request_id.to_string(), None);
         Ok(())
-    }
-
-    fn notification_sender(&self) -> RpcNotificationSender {
-        self.notifications.clone()
     }
 }
 
