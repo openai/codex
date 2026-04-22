@@ -371,8 +371,6 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
-pub(crate) const THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE: &str = "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.";
-
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
 /// the unique session id.
 pub struct CodexSpawnOk {
@@ -2493,13 +2491,13 @@ impl Session {
                 },
             );
             if let Some(available_skills) = available_skills {
-                let emit_warning = available_skills.emit_warning;
+                let warning_message = available_skills.warning_message.clone();
                 let skills_instructions = AvailableSkillsInstructions::from(available_skills);
-                if emit_warning {
+                if let Some(warning_message) = warning_message {
                     self.send_event_raw(Event {
                         id: String::new(),
                         msg: EventMsg::Warning(WarningEvent {
-                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                            message: warning_message,
                         }),
                     })
                     .await;
