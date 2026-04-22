@@ -88,7 +88,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        let mut headers = self.request_headers();
+        let mut headers = self.default_headers.clone();
         insert_static_header(
             &mut headers,
             ACCEPT,
@@ -119,7 +119,8 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 stream_response: true,
             })
             .await
-            .map_err(Self::error)?;
+            .map_err(RemoteStreamableHttpClientError::from)
+            .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
@@ -171,7 +172,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         session: Arc<str>,
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
-        let mut headers = self.request_headers();
+        let mut headers = self.default_headers.clone();
         insert_auth_header(&mut headers, auth_token)?;
         insert_static_header(
             &mut headers,
@@ -191,7 +192,8 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 stream_response: false,
             })
             .await
-            .map_err(Self::error)?;
+            .map_err(RemoteStreamableHttpClientError::from)
+            .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Ok(());
@@ -215,7 +217,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
-        let mut headers = self.request_headers();
+        let mut headers = self.default_headers.clone();
         insert_static_header(
             &mut headers,
             ACCEPT,
@@ -249,7 +251,8 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
                 stream_response: true,
             })
             .await
-            .map_err(Self::error)?;
+            .map_err(RemoteStreamableHttpClientError::from)
+            .map_err(StreamableHttpError::Client)?;
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
@@ -283,30 +286,15 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
     }
 }
 
-impl RemoteStreamableHttpClient {
-    /// Returns the configured default headers for one outgoing HTTP operation.
-    fn request_headers(&self) -> HeaderMap {
-        self.default_headers.clone()
-    }
-
-    /// Wraps executor transport errors in the RMCP Streamable HTTP error type.
-    fn error(error: ExecServerError) -> StreamableHttpError<RemoteStreamableHttpClientError> {
-        StreamableHttpError::Client(RemoteStreamableHttpClientError::from(error))
-    }
-
-    /// Wraps invalid header construction in the RMCP Streamable HTTP error type.
-    fn header_error(error: impl ToString) -> StreamableHttpError<RemoteStreamableHttpClientError> {
-        StreamableHttpError::Client(RemoteStreamableHttpClientError::Header(error.to_string()))
-    }
-}
-
 /// Inserts a statically named header after validating its value.
 fn insert_static_header(
     headers: &mut HeaderMap,
     name: HeaderName,
     value: String,
 ) -> std::result::Result<(), StreamableHttpError<RemoteStreamableHttpClientError>> {
-    let value = HeaderValue::from_str(&value).map_err(RemoteStreamableHttpClient::header_error)?;
+    let value = HeaderValue::from_str(&value).map_err(|error| {
+        StreamableHttpError::Client(RemoteStreamableHttpClientError::Header(error.to_string()))
+    })?;
     headers.insert(name, value);
     Ok(())
 }
@@ -357,7 +345,8 @@ async fn collect_body(
     while let Some(chunk) = body_stream
         .recv()
         .await
-        .map_err(RemoteStreamableHttpClient::error)?
+        .map_err(RemoteStreamableHttpClientError::from)
+        .map_err(StreamableHttpError::Client)?
     {
         body.extend_from_slice(&chunk);
     }
