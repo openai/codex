@@ -39,6 +39,7 @@ pub(crate) struct TurnEnvironment {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
+    pub(crate) trace_context: Option<W3cTraceContext>,
     pub(crate) realtime_active: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
@@ -173,6 +174,7 @@ impl TurnContext {
         Self {
             sub_id: self.sub_id.clone(),
             trace_id: self.trace_id.clone(),
+            trace_context: self.trace_context.clone(),
             realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
@@ -428,6 +430,7 @@ impl Session {
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
+            trace_context: current_span_w3c_trace_context(),
             realtime_active: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,

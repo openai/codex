@@ -1,6 +1,8 @@
 use std::time::Instant;
 
 use crate::facts::AppInvocation;
+use crate::facts::AppListEvent;
+use crate::facts::AppListResult;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
@@ -58,6 +60,7 @@ pub(crate) enum TrackEventRequest {
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     HookRun(CodexHookRunEventRequest),
+    AppList(Box<CodexAppListEventRequest>),
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
@@ -424,6 +427,31 @@ pub(crate) struct CodexHookRunEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexAppListEventParams {
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) force_refetch: bool,
+    pub(crate) cursor_present: bool,
+    pub(crate) limit: Option<u32>,
+    pub(crate) result: AppListResult,
+    pub(crate) cached_accessible_count: Option<usize>,
+    pub(crate) cached_directory_count: Option<usize>,
+    pub(crate) accessible_count: Option<usize>,
+    pub(crate) directory_count: Option<usize>,
+    pub(crate) merged_count: Option<usize>,
+    pub(crate) returned_count: Option<usize>,
+    pub(crate) next_cursor_present: Option<bool>,
+    pub(crate) duration_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexAppListEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexAppListEventParams,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
@@ -583,6 +611,30 @@ pub(crate) fn codex_app_metadata(
         product_client_id: Some(originator().value),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+pub(crate) fn codex_app_list_event_params(
+    input: AppListEvent,
+    app_server_client: CodexAppServerClientMetadata,
+    runtime: CodexRuntimeMetadata,
+) -> CodexAppListEventParams {
+    CodexAppListEventParams {
+        app_server_client,
+        runtime,
+        thread_id: input.thread_id,
+        force_refetch: input.force_refetch,
+        cursor_present: input.cursor_present,
+        limit: input.limit,
+        result: input.result,
+        cached_accessible_count: input.cached_accessible_count,
+        cached_directory_count: input.cached_directory_count,
+        accessible_count: input.accessible_count,
+        directory_count: input.directory_count,
+        merged_count: input.merged_count,
+        returned_count: input.returned_count,
+        next_cursor_present: input.next_cursor_present,
+        duration_ms: input.duration_ms,
     }
 }
 

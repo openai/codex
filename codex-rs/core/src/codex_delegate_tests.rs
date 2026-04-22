@@ -6,6 +6,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -25,12 +27,23 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
+use core_test_support::tracing::install_test_tracing;
+use opentelemetry::trace::TraceContextExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::timeout;
+use tracing::Instrument;
+
+fn test_trace_context(trace_id: &str, span_id: &str) -> W3cTraceContext {
+    W3cTraceContext {
+        traceparent: Some(format!("00-{trace_id}-{span_id}-01")),
+        tracestate: Some("vendor=value".to_string()),
+    }
+}
 
 #[tokio::test]
 async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
@@ -250,6 +263,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let parent_trace = test_trace_context("00000000000000000000000000000011", "0000000000000022");
     let mut config = (*parent_ctx.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     parent_ctx.config = Arc::new(config);
@@ -257,6 +271,8 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set on-request policy");
+    parent_ctx.trace_id = Some("00000000000000000000000000000011".to_string());
+    parent_ctx.trace_context = Some(parent_trace.clone());
     let parent_ctx = Arc::new(parent_ctx);
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -355,6 +371,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             decision: ReviewDecision::Abort,
         }
     );
+    assert_eq!(submission.trace, Some(parent_trace));
 }
 
 #[tokio::test]
@@ -412,5 +429,224 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 },
             )]),
         })
+    );
+}
+
+#[tokio::test]
+async fn handle_request_user_input_guardian_submission_uses_parent_trace() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let parent_trace = test_trace_context("00000000000000000000000000000033", "0000000000000044");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    parent_ctx.config = Arc::new(config);
+    parent_ctx
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    parent_ctx.trace_id = Some("00000000000000000000000000000033".to_string());
+    parent_ctx.trace_context = Some(parent_trace.clone());
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+        "call-1".to_string(),
+        McpInvocation {
+            server: "custom_server".to_string(),
+            tool: "dangerous_tool".to_string(),
+            arguments: None,
+        },
+    )])));
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    handle_request_user_input(
+        codex.as_ref(),
+        "user-input-1".to_string(),
+        &parent_session,
+        &parent_ctx,
+        &pending_mcp_invocations,
+        RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "child-turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+                header: "Approve app tool call?".to_string(),
+                question: "Allow this app tool?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: None,
+            }],
+        },
+        &cancel_token,
+    )
+    .await;
+
+    let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        .await
+        .expect("user input response timed out")
+        .expect("user input response missing");
+    assert_eq!(
+        submission.op,
+        Op::UserInputAnswer {
+            id: "user-input-1".to_string(),
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+                    RequestUserInputAnswer {
+                        answers: vec![MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()],
+                    },
+                )]),
+            },
+        }
+    );
+    assert_eq!(submission.trace, Some(parent_trace));
+}
+
+#[tokio::test]
+async fn handle_patch_approval_guardian_submission_uses_parent_trace() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let parent_trace = test_trace_context("00000000000000000000000000000077", "0000000000000088");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    parent_ctx.config = Arc::new(config);
+    parent_ctx
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    parent_ctx.trace_id = Some("00000000000000000000000000000077".to_string());
+    parent_ctx.trace_context = Some(parent_trace.clone());
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    handle_patch_approval(
+        codex.as_ref(),
+        "patch-approval-event".to_string(),
+        &parent_session,
+        &parent_ctx,
+        ApplyPatchApprovalRequestEvent {
+            call_id: "patch-call-1".to_string(),
+            turn_id: "child-turn-1".to_string(),
+            changes: HashMap::from([(
+                PathBuf::from("src/main.rs"),
+                codex_protocol::protocol::FileChange::Update {
+                    unified_diff: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+                    move_path: None,
+                },
+            )]),
+            reason: Some("dangerous patch".to_string()),
+            grant_root: None,
+        },
+        &cancel_token,
+    )
+    .await;
+
+    let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        .await
+        .expect("patch approval response timed out")
+        .expect("patch approval response missing");
+    assert_eq!(
+        submission.op,
+        Op::PatchApproval {
+            id: "patch-call-1".to_string(),
+            decision: ReviewDecision::Abort,
+        }
+    );
+    assert_eq!(submission.trace, Some(parent_trace));
+}
+
+#[tokio::test]
+async fn guardian_review_span_uses_parent_turn_trace_context() {
+    let _trace_test_context = install_test_tracing("codex-core-tests");
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let parent_trace = test_trace_context("00000000000000000000000000000011", "0000000000000022");
+    turn.trace_id = Some("00000000000000000000000000000011".to_string());
+    turn.trace_context = Some(parent_trace.clone());
+    let trace =
+        crate::guardian::guardian_review_trace_for_test(Arc::new(turn), /*parent_trace*/ None)
+            .await
+            .expect("guardian review trace");
+    let actual =
+        codex_otel::context_from_w3c_trace_context(&trace).expect("actual guardian review trace");
+    let expected =
+        codex_otel::context_from_w3c_trace_context(&parent_trace).expect("expected parent trace");
+    assert_eq!(
+        actual.span().span_context().trace_id(),
+        expected.span().span_context().trace_id()
+    );
+    assert_ne!(
+        actual.span().span_context().span_id(),
+        expected.span().span_context().span_id()
+    );
+}
+
+#[tokio::test]
+async fn guardian_review_submit_trace_prefers_current_review_span_and_falls_back_to_turn_trace() {
+    let _trace_test_context = install_test_tracing("codex-core-tests");
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let fallback_trace = test_trace_context("00000000000000000000000000000033", "0000000000000044");
+    let current_review_trace =
+        test_trace_context("00000000000000000000000000000055", "0000000000000066");
+    turn.trace_id = Some("00000000000000000000000000000033".to_string());
+    turn.trace_context = Some(fallback_trace.clone());
+    let turn = Arc::new(turn);
+
+    let current_span_trace = async {
+        crate::guardian::guardian_review_submit_trace_for_test(turn.as_ref())
+            .expect("current review trace")
+    }
+    .instrument({
+        let span = tracing::info_span!("guardian_review_submit");
+        assert!(codex_otel::set_parent_from_w3c_trace_context(
+            &span,
+            &current_review_trace
+        ));
+        span
+    })
+    .await;
+    let current_actual = codex_otel::context_from_w3c_trace_context(&current_span_trace)
+        .expect("current span trace context");
+    let current_expected = codex_otel::context_from_w3c_trace_context(&current_review_trace)
+        .expect("expected current review trace");
+    assert_eq!(
+        current_actual.span().span_context().trace_id(),
+        current_expected.span().span_context().trace_id()
+    );
+
+    let fallback_actual = crate::guardian::guardian_review_submit_trace_for_test(turn.as_ref())
+        .expect("fallback turn trace");
+    let fallback_actual = codex_otel::context_from_w3c_trace_context(&fallback_actual)
+        .expect("fallback trace context");
+    let fallback_expected = codex_otel::context_from_w3c_trace_context(&fallback_trace)
+        .expect("expected fallback trace");
+    assert_eq!(
+        fallback_actual.span().span_context().trace_id(),
+        fallback_expected.span().span_context().trace_id()
     );
 }

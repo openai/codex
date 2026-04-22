@@ -186,6 +186,39 @@ pub struct AppInvocation {
     pub invocation_type: Option<InvocationType>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppListResult {
+    Success,
+    Disabled,
+    ConfigError,
+    ThreadLoadError,
+    InvalidCursor,
+    LoadChannelClosed,
+    Timeout,
+    AccessibleError,
+    DirectoryError,
+    PaginationError,
+}
+
+#[derive(Clone)]
+pub struct AppListEvent {
+    pub connection_id: u64,
+    pub thread_id: Option<String>,
+    pub force_refetch: bool,
+    pub cursor_present: bool,
+    pub limit: Option<u32>,
+    pub result: AppListResult,
+    pub cached_accessible_count: Option<usize>,
+    pub cached_directory_count: Option<usize>,
+    pub accessible_count: Option<usize>,
+    pub directory_count: Option<usize>,
+    pub merged_count: Option<usize>,
+    pub returned_count: Option<usize>,
+    pub next_cursor_present: Option<bool>,
+    pub duration_ms: Option<u64>,
+}
+
 #[derive(Clone)]
 pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
@@ -302,6 +335,7 @@ pub(crate) enum CustomAnalyticsFact {
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
     HookRun(HookRunInput),
+    AppList(Box<AppListEvent>),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
 }

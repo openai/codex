@@ -28,6 +28,8 @@ pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
 pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::guardian_rejection_message;
+#[cfg(test)]
+pub(crate) use review::guardian_review_trace_for_test;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
@@ -39,6 +41,8 @@ pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
+#[cfg(test)]
+pub(crate) use review_session::guardian_review_submit_trace_for_test;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "codex-auto-review";
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
@@ -126,6 +130,8 @@ use approval_request::guardian_assessment_action;
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
 use prompt::GuardianPromptMode;
+#[cfg(test)]
+use prompt::GuardianPromptModeKind;
 #[cfg(test)]
 use prompt::GuardianTranscriptCursor;
 #[cfg(test)]

@@ -87,6 +87,10 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::Span;
+use tracing::field;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::warn;
 use url::Url;
@@ -691,6 +695,14 @@ impl McpRuntimeEnvironment {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct McpStartupTraceMetadata {
+    pub thread_id: Option<String>,
+    pub session_source: Option<String>,
+    pub is_subagent: bool,
+    pub is_guardian_reviewer: bool,
+}
+
 impl McpConnectionManager {
     pub fn configured_servers(&self, config: &McpConfig) -> HashMap<String, McpServerConfig> {
         configured_mcp_servers(config)
@@ -755,6 +767,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
+        trace_metadata: McpStartupTraceMetadata,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
@@ -765,10 +778,28 @@ impl McpConnectionManager {
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();
+        let enabled_server_count = mcp_servers.values().filter(|cfg| cfg.enabled).count();
+        let startup_span = info_span!(
+            "mcp_servers_startup",
+            otel.name = "mcp_servers_startup",
+            thread.id = trace_metadata.thread_id.as_deref().unwrap_or(""),
+            codex.thread_id = trace_metadata.thread_id.as_deref().unwrap_or(""),
+            session.source = trace_metadata.session_source.as_deref().unwrap_or(""),
+            codex.session_source = trace_metadata.session_source.as_deref().unwrap_or(""),
+            session.is_subagent = trace_metadata.is_subagent,
+            session.is_guardian_reviewer = trace_metadata.is_guardian_reviewer,
+            mcp.enabled_server_count = enabled_server_count,
+            mcp.ready_server_count = field::Empty,
+            mcp.failed_server_count = field::Empty,
+            mcp.cancelled_server_count = field::Empty,
+            mcp.startup.status = field::Empty,
+        );
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
-            if let Some(origin) = transport_origin(&cfg.transport) {
-                server_origins.insert(server_name.clone(), origin);
+            let server_origin = transport_origin(&cfg.transport);
+            if let Some(origin) = server_origin.as_ref() {
+                server_origins.insert(server_name.clone(), origin.clone());
             }
+            let server_required = cfg.required;
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 startup_submit_id.as_str(),
@@ -787,6 +818,21 @@ impl McpConnectionManager {
             } else {
                 None
             };
+            let server_startup_span = info_span!(
+                parent: &startup_span,
+                "mcp_server_startup",
+                otel.name = "mcp_server_startup",
+                thread.id = trace_metadata.thread_id.as_deref().unwrap_or(""),
+                codex.thread_id = trace_metadata.thread_id.as_deref().unwrap_or(""),
+                session.source = trace_metadata.session_source.as_deref().unwrap_or(""),
+                codex.session_source = trace_metadata.session_source.as_deref().unwrap_or(""),
+                session.is_subagent = trace_metadata.is_subagent,
+                session.is_guardian_reviewer = trace_metadata.is_guardian_reviewer,
+                mcp.server = %server_name,
+                mcp.server.required = server_required,
+                mcp.server.origin = server_origin.as_deref().unwrap_or("unknown"),
+                mcp.startup.status = field::Empty,
+            );
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 cfg,
@@ -802,64 +848,91 @@ impl McpConnectionManager {
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            join_set.spawn(async move {
-                let mut outcome = async_managed_client.client().await;
-                if cancel_token.is_cancelled() {
-                    outcome = Err(StartupOutcomeError::Cancelled);
-                }
-                let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed { error: error_str }
+            join_set.spawn(
+                async move {
+                    let mut outcome = async_managed_client.client().await;
+                    if cancel_token.is_cancelled() {
+                        Span::current().record("mcp.startup.status", "cancelled");
+                        outcome = Err(StartupOutcomeError::Cancelled);
                     }
-                };
+                    let status = match &outcome {
+                        Ok(_) => {
+                            Span::current().record("mcp.startup.status", "ready");
+                            McpStartupStatus::Ready
+                        }
+                        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                        Err(error) => {
+                            let status = match error {
+                                StartupOutcomeError::Cancelled => "cancelled",
+                                StartupOutcomeError::Failed { .. } => "failed",
+                            };
+                            Span::current().record("mcp.startup.status", status);
+                            let error_str = mcp_init_error_display(
+                                server_name.as_str(),
+                                auth_entry.as_ref(),
+                                error,
+                            );
+                            McpStartupStatus::Failed { error: error_str }
+                        }
+                    };
 
-                let _ = emit_update(
-                    submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status,
-                    },
-                )
-                .await;
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status,
+                        },
+                    )
+                    .await;
 
-                (server_name, outcome)
-            });
+                    (server_name, outcome)
+                }
+                .instrument(server_startup_span),
+            );
         }
         let manager = Self {
             clients,
             server_origins,
             elicitation_requests: elicitation_requests.clone(),
         };
-        tokio::spawn(async move {
-            let outcomes = join_set.join_all().await;
-            let mut summary = McpStartupCompleteEvent::default();
-            for (server_name, outcome) in outcomes {
-                match outcome {
-                    Ok(_) => summary.ready.push(server_name),
-                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error }) => {
-                        summary.failed.push(McpStartupFailure {
-                            server: server_name,
-                            error,
-                        })
+        tokio::spawn(
+            async move {
+                let outcomes = join_set.join_all().await;
+                let mut summary = McpStartupCompleteEvent::default();
+                for (server_name, outcome) in outcomes {
+                    match outcome {
+                        Ok(_) => summary.ready.push(server_name),
+                        Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                        Err(StartupOutcomeError::Failed { error }) => {
+                            summary.failed.push(McpStartupFailure {
+                                server: server_name,
+                                error,
+                            })
+                        }
                     }
                 }
+                let span = Span::current();
+                span.record("mcp.ready_server_count", summary.ready.len());
+                span.record("mcp.failed_server_count", summary.failed.len());
+                span.record("mcp.cancelled_server_count", summary.cancelled.len());
+                let startup_status = if !summary.failed.is_empty() {
+                    "failed"
+                } else if !summary.cancelled.is_empty() {
+                    "cancelled"
+                } else {
+                    "ready"
+                };
+                span.record("mcp.startup.status", startup_status);
+                let _ = tx_event
+                    .send(Event {
+                        id: startup_submit_id,
+                        msg: EventMsg::McpStartupComplete(summary),
+                    })
+                    .await;
             }
-            let _ = tx_event
-                .send(Event {
-                    id: startup_submit_id,
-                    msg: EventMsg::McpStartupComplete(summary),
-                })
-                .await;
-        });
+            .instrument(startup_span),
+        );
         (manager, cancel_token)
     }
 

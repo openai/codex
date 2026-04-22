@@ -1,4 +1,5 @@
 use crate::events::AppServerRpcTransport;
+use crate::events::CodexAppListEventRequest;
 use crate::events::CodexAppMentionedEventRequest;
 use crate::events::CodexAppServerClientMetadata;
 use crate::events::CodexAppUsedEventRequest;
@@ -19,6 +20,7 @@ use crate::events::SkillInvocationEventRequest;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
+use crate::events::codex_app_list_event_params;
 use crate::events::codex_app_metadata;
 use crate::events::codex_compaction_event_params;
 use crate::events::codex_hook_run_metadata;
@@ -30,6 +32,7 @@ use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
+use crate::facts::AppListEvent;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
@@ -222,6 +225,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::HookRun(input) => {
                     self.ingest_hook_run(input, out);
+                }
+                CustomAnalyticsFact::AppList(input) => {
+                    self.ingest_app_list(*input, out);
                 }
                 CustomAnalyticsFact::PluginUsed(input) => {
                     self.ingest_plugin_used(input, out);
@@ -454,6 +460,27 @@ impl AnalyticsReducer {
             event_type: "codex_hook_run",
             event_params: codex_hook_run_metadata(&tracking, hook),
         }));
+    }
+
+    fn ingest_app_list(&mut self, input: AppListEvent, out: &mut Vec<TrackEventRequest>) {
+        let Some(connection_state) = self.connections.get(&input.connection_id) else {
+            tracing::warn!(
+                connection_id = input.connection_id,
+                thread_id = input.thread_id.as_deref().unwrap_or("<none>"),
+                "dropping app list analytics event: missing connection metadata"
+            );
+            return;
+        };
+        out.push(TrackEventRequest::AppList(Box::new(
+            CodexAppListEventRequest {
+                event_type: "codex_app_list",
+                event_params: codex_app_list_event_params(
+                    input,
+                    connection_state.app_server_client.clone(),
+                    connection_state.runtime.clone(),
+                ),
+            },
+        )));
     }
 
     fn ingest_plugin_used(&mut self, input: PluginUsedInput, out: &mut Vec<TrackEventRequest>) {

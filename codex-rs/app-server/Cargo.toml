@@ -69,6 +69,7 @@ futures = { workspace = true }
 gethostname = { workspace = true }
 hmac = { workspace = true }
 jsonwebtoken = { workspace = true }
+libc = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

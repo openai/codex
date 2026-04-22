@@ -78,6 +78,11 @@ const V2_STEERING_ACKNOWLEDGEMENT: &str =
 const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 
+fn normalized_json_string(json: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(json)?;
+    Ok(serde_json::to_string(&value)?)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
     Generated,
@@ -114,11 +119,6 @@ impl Match for RealtimeCallRequestCapture {
             .push(request.clone());
         true
     }
-}
-
-fn normalized_json_string(raw: &str) -> Result<String> {
-    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
-    serde_json::to_string(&value).context("expected JSON fixture to serialize")
 }
 
 struct GatedSseResponse {
@@ -2283,23 +2283,27 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = normalized_json_string(session)?;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             {offer_sdp}\r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
+    let prefix = format!(
+        "--codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"sdp\"\r\n\
+         Content-Type: application/sdp\r\n\
+         \r\n\
+         {offer_sdp}\r\n\
+         --codex-realtime-call-boundary\r\n\
+         Content-Disposition: form-data; name=\"session\"\r\n\
+         Content-Type: application/json\r\n\
+         \r\n"
     );
+    let suffix = "\r\n--codex-realtime-call-boundary--\r\n";
+    let actual_session = body
+        .strip_prefix(&prefix)
+        .and_then(|body| body.strip_suffix(suffix))
+        .context("multipart body should contain sdp and session parts")?;
+    let actual_session: Value =
+        serde_json::from_str(actual_session).context("session part should be json")?;
+    let expected_session: Value =
+        serde_json::from_str(session).context("expected session should be json")?;
+    assert_eq!(actual_session, expected_session);
     Ok(())
 }
 

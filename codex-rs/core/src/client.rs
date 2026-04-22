@@ -826,6 +826,7 @@ impl ModelClientSession {
             .set_connection_reused(/*connection_reused*/ false);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_responses_request(
         &self,
         provider: &codex_api::Provider,
@@ -834,6 +835,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
+        request_trace: Option<&W3cTraceContext>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -894,10 +896,13 @@ impl ModelClientSession {
             },
             prompt_cache_key,
             text,
-            client_metadata: Some(HashMap::from([(
-                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-                self.client.state.installation_id.clone(),
-            )])),
+            client_metadata: response_create_client_metadata(
+                Some(HashMap::from([(
+                    X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+                    self.client.state.installation_id.clone(),
+                )])),
+                request_trace,
+            ),
         };
         Ok(request)
     }
@@ -1164,6 +1169,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
         inference_trace: &InferenceTraceContext,
+        request_trace: Option<&W3cTraceContext>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
@@ -1209,6 +1215,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
+                request_trace,
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.record_started(&request);
@@ -1303,6 +1310,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
+                request_trace.as_ref(),
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
@@ -1494,10 +1502,10 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
+        let request_trace = current_span_w3c_trace_context();
         match wire_api {
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
-                    let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
                             prompt,
@@ -1508,7 +1516,7 @@ impl ModelClientSession {
                             service_tier,
                             turn_metadata_header,
                             /*warmup*/ false,
-                            request_trace,
+                            request_trace.clone(),
                             inference_trace,
                         )
                         .await?
@@ -1529,6 +1537,7 @@ impl ModelClientSession {
                     service_tier,
                     turn_metadata_header,
                     inference_trace,
+                    request_trace.as_ref(),
                 )
                 .await
             }

@@ -858,6 +858,14 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
+            McpStartupTraceMetadata {
+                thread_id: Some(conversation_id.to_string()),
+                session_source: Some(session_configuration.session_source.to_string()),
+                is_subagent,
+                is_guardian_reviewer: crate::guardian::is_guardian_reviewer_source(
+                    &session_configuration.session_source,
+                ),
+            },
         )
         .instrument(info_span!(
             "session_init.mcp_manager_init",

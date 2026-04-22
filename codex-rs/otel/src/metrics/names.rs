@@ -27,6 +27,13 @@ pub const TURN_NETWORK_PROXY_METRIC: &str = "codex.turn.network_proxy";
 pub const TURN_MEMORY_METRIC: &str = "codex.turn.memory";
 pub const TURN_TOOL_CALL_METRIC: &str = "codex.turn.tool.call";
 pub const TURN_TOKEN_USAGE_METRIC: &str = "codex.turn.token_usage";
+pub const GUARDIAN_REVIEW_COUNT_METRIC: &str = "codex.guardian.review";
+pub const GUARDIAN_REVIEW_E2E_DURATION_METRIC: &str = "codex.guardian.review.e2e_duration_ms";
+pub const GUARDIAN_REVIEW_PHASE_DURATION_METRIC: &str = "codex.guardian.review.phase.duration_ms";
+pub const GUARDIAN_REVIEW_PROMPT_APPROX_TOKENS_METRIC: &str =
+    "codex.guardian.review.prompt.approx_tokens";
+pub const GUARDIAN_REVIEW_PROMPT_TRANSCRIPT_ENTRIES_METRIC: &str =
+    "codex.guardian.review.prompt.transcript_entries";
 pub const PROFILE_USAGE_METRIC: &str = "codex.profile.usage";
 pub const CURATED_PLUGINS_STARTUP_SYNC_METRIC: &str = "codex.plugins.startup_sync";
 pub const CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC: &str = "codex.plugins.startup_sync.final";

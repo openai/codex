@@ -138,6 +138,8 @@ pub async fn load_config_layers_state(
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    let system_config_path = overrides.system_config_path.clone();
+    let system_requirements_path = overrides.system_requirements_path.clone();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
         merge_requirements_with_remote_sandbox_config(
@@ -159,7 +161,10 @@ pub async fn load_config_layers_state(
     .await?;
 
     // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file()?;
+    let requirements_toml_file = match system_requirements_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => system_requirements_toml_file()?,
+    };
     load_requirements_toml(
         fs,
         &mut config_requirements_toml,
@@ -206,7 +211,10 @@ pub async fn load_config_layers_state(
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
-    let system_config_toml_file = system_config_toml_file()?;
+    let system_config_toml_file = match system_config_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => system_config_toml_file()?,
+    };
     let system_layer =
         load_config_toml_for_required_layer(fs, &system_config_toml_file, |config_toml| {
             ConfigLayerEntry::new(

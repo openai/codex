@@ -17,6 +17,8 @@ use toml::Value as TomlValue;
 /// LoaderOverrides overrides managed configuration inputs (primarily for tests).
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
+    pub system_config_path: Option<PathBuf>,
+    pub system_requirements_path: Option<PathBuf>,
     pub managed_config_path: Option<PathBuf>,
     pub ignore_user_config: bool,
     pub ignore_user_and_project_exec_policy_rules: bool,
@@ -31,11 +33,7 @@ impl LoaderOverrides {
     ///
     /// This is intended for tests that should load only repo-controlled config fixtures.
     pub fn without_managed_config_for_tests() -> Self {
-        Self::with_managed_config_path_for_tests(
-            std::env::temp_dir()
-                .join("codex-config-tests")
-                .join("managed_config.toml"),
-        )
+        Self::with_managed_config_path_for_tests(test_config_path("managed_config.toml"))
     }
 
     /// Returns overrides with host MDM disabled and managed config loaded from `managed_config_path`.
@@ -43,6 +41,8 @@ impl LoaderOverrides {
     /// This is intended for tests that supply an explicit managed config fixture.
     pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
         Self {
+            system_config_path: Some(test_config_path("config.toml")),
+            system_requirements_path: Some(test_config_path("requirements.toml")),
             managed_config_path: Some(managed_config_path),
             ignore_user_config: false,
             ignore_user_and_project_exec_policy_rules: false,
@@ -51,6 +51,12 @@ impl LoaderOverrides {
             macos_managed_config_requirements_base64: Some(String::new()),
         }
     }
+}
+
+fn test_config_path(file_name: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("codex-config-tests")
+        .join(file_name)
 }
 
 #[derive(Debug, Clone, PartialEq)]
