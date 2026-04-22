@@ -2689,6 +2689,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         timezone: None,
         approval_policy: primary_session.approval_policy,
         sandbox_policy: primary_session.sandbox_policy.clone(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: "gpt-agent".to_string(),
