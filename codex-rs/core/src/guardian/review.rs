@@ -205,7 +205,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
     session
         .send_event(
             turn.as_ref(),
-            EventMsg::Warning(WarningEvent {
+            EventMsg::GuardianWarning(WarningEvent {
                 message: format!(
                     "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {total_denials} total); interrupting the turn."
                 ),
@@ -368,7 +368,7 @@ async fn run_guardian_review(
                 session
                     .send_event(
                         turn.as_ref(),
-                        EventMsg::Warning(WarningEvent {
+                        EventMsg::GuardianWarning(WarningEvent {
                             message: rationale.clone(),
                         }),
                     )
@@ -478,7 +478,7 @@ async fn run_guardian_review(
     session
         .send_event(
             turn.as_ref(),
-            EventMsg::Warning(WarningEvent { message: warning }),
+            EventMsg::GuardianWarning(WarningEvent { message: warning }),
         )
         .await;
     let status = if approved {

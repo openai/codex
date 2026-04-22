@@ -807,7 +807,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     while let Ok(event) = rx.try_recv() {
         match event.msg {
             EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             _ => {}
         }
     }
@@ -1559,7 +1559,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let mut denial_rationales = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event.msg {
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             EventMsg::GuardianAssessment(event)
                 if event.status == GuardianAssessmentStatus::Denied =>
             {

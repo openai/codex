@@ -213,6 +213,27 @@ async fn live_app_server_warning_notification_renders_message() {
 }
 
 #[tokio::test]
+async fn live_app_server_guardian_warning_notification_renders_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::GuardianWarning(GuardianWarningNotification {
+            thread_id: "thread-1".to_string(),
+            message: "Automatic approval review denied the requested action.".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Automatic approval review denied the requested action."),
+        "expected guardian warning notification message, got {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_config_warning_prefixes_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
