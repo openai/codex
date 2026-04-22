@@ -809,6 +809,24 @@ fn mcp_tool_approval_prompt_options(
     }
 }
 
+/// Determines whether an MCP tool call requires user approval and, if so,
+/// obtains a decision via the appropriate channel (interactive prompt, guardian,
+/// or ARC safety monitor).
+///
+/// Returns `None` when the call may proceed without any approval gate, or
+/// `Some(decision)` when an approval path was triggered. The caller must
+/// inspect the decision variant to decide whether to execute or skip the tool.
+///
+/// The function's early-exit order matters:
+/// 1. Full-access mode → skip everything.
+/// 2. Custom MCP in `Auto` mode without annotations (or with empty annotations
+///    where every hint is `None`) → skip (user opted in by configuring the
+///    server; see `should_skip_default_custom_mcp_approval`).
+/// 3. Annotation-based check → skip if annotations say the tool is safe and
+///    the mode is not `Prompt`.
+/// 4. ARC safety monitor (for `Approve` mode) → may block or escalate.
+/// 5. Non-interactive guard → `Decline` rather than hang.
+/// 6. Guardian / interactive prompt → obtain a user or guardian decision.
 async fn maybe_request_mcp_tool_approval(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -825,6 +843,9 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
+    if should_skip_default_custom_mcp_approval(invocation, approval_mode, annotations) {
+        return None;
+    }
     let approval_required = requires_mcp_tool_approval(annotations);
     if !approval_required && approval_mode != AppToolApproval::Prompt {
         return None;
@@ -855,6 +876,14 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
+    // In runs with `--ask-for-approval never` (for example `codex exec`), no
+    // user is available to answer the approval prompt. Decline rather than
+    // hanging forever. This check is intentionally placed *after* the ARC
+    // safety-monitor block so that `Approve`-mode tools are still
+    // safety-checked even when running non-interactively.
+    if matches!(turn_context.approval_policy.value(), AskForApproval::Never) {
+        return Some(McpToolApprovalDecision::Decline);
+    }
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
     let persistent_approval_key =
         persistent_mcp_tool_approval_key(invocation, metadata, approval_mode);
@@ -979,6 +1008,42 @@ async fn maybe_request_mcp_tool_approval(
     )
     .await;
     Some(decision)
+}
+
+/// Returns `true` when a custom (non-Codex-Apps) MCP tool call should bypass the
+/// default annotation-driven approval path entirely.
+///
+/// Codex Apps tools always carry `ToolAnnotations`, so the annotation-based logic in
+/// `requires_mcp_tool_approval` is authoritative for them. Custom MCP servers, however,
+/// may omit annotations entirely **or** supply a `ToolAnnotations` struct with every
+/// hint field set to `None` (the "empty annotations" case — common for stdio-based
+/// servers that echo the struct without populating it). Both cases signal the same
+/// thing: the server has no opinion on the tool's risk profile.
+///
+/// When a custom tool is in the default `Auto` approval mode and annotations are absent
+/// or empty, the user has already opted in by configuring the server — prompting them
+/// again would be a regression from the expected behavior (see #15824).
+///
+/// This gate intentionally does **not** fire for `Prompt` or `Approve` modes: those
+/// represent an explicit per-tool override that should always take effect regardless
+/// of annotation presence.
+///
+/// Callers that set any concrete hint value (e.g. `destructive_hint: Some(true)`)
+/// will fall through to the normal `requires_mcp_tool_approval` path, ensuring
+/// annotation-based approval is still enforced whenever the server actually provides
+/// risk information.
+fn should_skip_default_custom_mcp_approval(
+    invocation: &McpInvocation,
+    approval_mode: AppToolApproval,
+    annotations: Option<&ToolAnnotations>,
+) -> bool {
+    invocation.server != CODEX_APPS_MCP_SERVER_NAME
+        && approval_mode == AppToolApproval::Auto
+        && annotations.is_none_or(|annotations| {
+            annotations.destructive_hint.is_none()
+                && annotations.read_only_hint.is_none()
+                && annotations.open_world_hint.is_none()
+        })
 }
 
 async fn maybe_monitor_auto_approved_mcp_tool_call(
