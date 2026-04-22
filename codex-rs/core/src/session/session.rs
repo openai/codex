@@ -227,7 +227,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
-        environment: Option<Arc<Environment>>,
+        environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -676,7 +676,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: environment.clone(),
+            environment_manager,
         };
         services
             .model_client
@@ -770,9 +770,10 @@ impl Session {
             tx_event.clone(),
             session_configuration.sandbox_policy.get().clone(),
             McpRuntimeEnvironment::new(
-                environment
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                sess.services
+                    .environment_manager
+                    .default_environment()
+                    .unwrap_or_else(|| sess.services.environment_manager.local_environment()),
                 session_configuration.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),

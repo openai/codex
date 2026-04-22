@@ -4078,7 +4078,7 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginDetail {
     pub marketplace_name: String,
-    pub marketplace_path: AbsolutePathBuf,
+    pub marketplace_path: Option<AbsolutePathBuf>,
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
@@ -4094,7 +4094,7 @@ pub struct SkillSummary {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
-    pub path: AbsolutePathBuf,
+    pub path: Option<AbsolutePathBuf>,
     pub enabled: bool,
 }
 
@@ -4701,6 +4701,14 @@ pub enum TurnStatus {
 }
 
 // Turn APIs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnvironmentParams {
+    pub environment_id: String,
+    pub cwd: AbsolutePathBuf,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]
@@ -4713,6 +4721,10 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Optional turn-scoped environment selections.
+    #[experimental("turn/start.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -9820,6 +9832,7 @@ mod tests {
             thread_id: "thread_123".to_string(),
             input: vec![],
             responsesapi_client_metadata: None,
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -9835,5 +9848,110 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_start_params_round_trip_environments() {
+        let cwd = test_absolute_path();
+        let params: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": cwd
+                }
+            ],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(
+            params.environments,
+            Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: cwd.clone(),
+            }])
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+            Some("turn/start.environments")
+        );
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("environments"),
+            Some(&json!([
+                {
+                    "environmentId": "local",
+                    "cwd": cwd
+                }
+            ]))
+        );
+    }
+
+    #[test]
+    fn turn_start_params_preserve_empty_environments() {
+        let params: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(params.environments, Some(Vec::new()));
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+            Some("turn/start.environments")
+        );
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(serialized.get("environments"), Some(&json!([])));
+    }
+
+    #[test]
+    fn turn_start_params_treat_null_or_omitted_environments_as_default() {
+        let null_environments: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": null,
+        }))
+        .expect("params should deserialize");
+        let omitted_environments: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(null_environments.environments, None);
+        assert_eq!(omitted_environments.environments, None);
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&null_environments),
+            None
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&omitted_environments),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_start_params_reject_relative_environment_cwd() {
+        let err = serde_json::from_value::<TurnStartParams>(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": "relative"
+                }
+            ],
+        }))
+        .expect_err("relative environment cwd should fail");
+
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without a base path"),
+            "unexpected error: {err}"
+        );
     }
 }

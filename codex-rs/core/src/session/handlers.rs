@@ -125,7 +125,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata) = match op {
+    let (items, updates, responsesapi_client_metadata, environments) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -139,6 +139,7 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             collaboration_mode,
             personality,
+            environments,
         } => {
             let collaboration_mode = collaboration_mode.or_else(|| {
                 Some(CollaborationMode {
@@ -167,10 +168,12 @@ pub(super) async fn user_input_or_turn_inner(
                     app_server_client_version: None,
                 },
                 None,
+                environments,
             )
         }
         Op::UserInput {
             items,
+            environments,
             final_output_json_schema,
             responsesapi_client_metadata,
         } => (
@@ -180,11 +183,15 @@ pub(super) async fn user_input_or_turn_inner(
                 ..Default::default()
             },
             responsesapi_client_metadata,
+            environments,
         ),
         _ => unreachable!(),
     };
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
+    let Ok(current_context) = sess
+        .new_turn_with_sub_id(sub_id.clone(), updates, environments)
+        .await
+    else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
@@ -507,8 +514,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     let plugins_manager = &sess.services.plugins_manager;
     let fs = sess
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem());
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;

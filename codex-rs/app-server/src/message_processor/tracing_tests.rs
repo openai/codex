@@ -280,7 +280,7 @@ fn build_test_processor(
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         config_manager,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),
@@ -743,6 +743,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
             ClientRequest::TurnStart {
                 request_id: RequestId::Integer(3),
                 params: TurnStartParams {
+                    environments: None,
                     thread_id,
                     input: vec![UserInput::Text {
                         text: "hello".to_string(),

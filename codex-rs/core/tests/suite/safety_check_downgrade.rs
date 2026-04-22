@@ -38,6 +38,7 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger safety check".to_string(),
                 text_elements: Vec::new(),
@@ -137,6 +138,7 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger response model check".to_string(),
                 text_elements: Vec::new(),
@@ -223,6 +225,7 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger follow-up turn".to_string(),
                 text_elements: Vec::new(),
@@ -273,6 +276,7 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger casing check".to_string(),
                 text_elements: Vec::new(),

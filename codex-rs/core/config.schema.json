@@ -452,6 +452,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "remote_plugin": {
+              "type": "boolean"
+            },
             "request_permissions": {
               "type": "boolean"
             },
@@ -1157,6 +1160,10 @@
       "properties": {
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
+          "type": "string"
+        },
+        "region": {
+          "description": "AWS region to use for provider-specific endpoints.",
           "type": "string"
         }
       },
@@ -2573,6 +2580,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "remote_plugin": {
           "type": "boolean"
         },
         "request_permissions": {

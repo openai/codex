@@ -9,6 +9,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -133,7 +134,7 @@ pub(crate) struct ApprovalCtx<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionRequestPayload {
-    pub tool_name: String,
+    pub tool_name: HookToolName,
     pub command: String,
     pub description: Option<String>,
 }

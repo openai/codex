@@ -395,9 +395,10 @@ fn accepts_amazon_bedrock_aws_profile_override() {
         r#"
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
-    .expect("Amazon Bedrock AWS profile override should deserialize");
+    .expect("Amazon Bedrock AWS overrides should deserialize");
 
     assert_eq!(
         cfg.model_providers
@@ -405,6 +406,13 @@ profile = "codex-bedrock"
             .and_then(|provider| provider.aws.as_ref())
             .and_then(|aws| aws.profile.as_deref()),
         Some("codex-bedrock")
+    );
+    assert_eq!(
+        cfg.model_providers
+            .get("amazon-bedrock")
+            .and_then(|provider| provider.aws.as_ref())
+            .and_then(|aws| aws.region.as_deref()),
+        Some("us-west-2")
     );
 }
 
@@ -416,9 +424,10 @@ model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
-    .expect("Amazon Bedrock AWS profile override should deserialize");
+    .expect("Amazon Bedrock AWS overrides should deserialize");
 
     let config = Config::load_from_base_config_with_overrides(
         cfg,
@@ -437,6 +446,14 @@ profile = "codex-bedrock"
             .and_then(|aws| aws.profile.as_deref()),
         Some("codex-bedrock")
     );
+    assert_eq!(
+        config
+            .model_provider
+            .aws
+            .as_ref()
+            .and_then(|aws| aws.region.as_deref()),
+        Some("us-west-2")
+    );
 }
 
 #[tokio::test]
@@ -453,6 +470,7 @@ supports_websockets = true
 
 [model_providers.amazon-bedrock.aws]
 profile = "codex-bedrock"
+region = "us-west-2"
 "#,
     )
     .expect("Amazon Bedrock unsupported overrides should deserialize");
@@ -467,7 +485,7 @@ profile = "codex-bedrock"
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
     ));
 }
 
