@@ -1,3 +1,9 @@
+//! Small helpers shared by the Streamable HTTP transport adapter.
+//!
+//! Keep only genuinely transport-agnostic pieces here: constants, header
+//! helpers, and small formatting utilities used by the orchestrator-side RMCP
+//! adapter.
+
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;

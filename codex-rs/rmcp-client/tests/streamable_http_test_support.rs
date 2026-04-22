@@ -1,3 +1,9 @@
+//! Shared helpers for Streamable HTTP RMCP integration tests.
+//!
+//! This support module starts the test HTTP server, launches a real
+//! `exec-server` when remote coverage is needed, and provides small helpers for
+//! creating RMCP clients and asserting round-trip behavior.
+
 // This support module is included by multiple integration-test crates. Each
 // crate uses a different subset of the helpers, so dead-code warnings would
 // otherwise depend on which test file compiled the module.

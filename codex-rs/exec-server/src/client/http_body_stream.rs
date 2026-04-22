@@ -1,3 +1,9 @@
+//! Shared HTTP response-body stream plumbing for local and remote execution.
+//!
+//! This module owns the byte-stream type exposed by the `HttpClient`
+//! capability plus the remote-side routing table used to turn
+//! `http/request/bodyDelta` notifications back into per-request streams.
+
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;

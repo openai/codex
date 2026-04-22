@@ -1,3 +1,9 @@
+//! Integration coverage for the remote Streamable HTTP RMCP path.
+//!
+//! These tests exercise the orchestrator-side RMCP adapter against a real
+//! `exec-server` process so HTTP requests go through the remote runtime path
+//! instead of direct local `reqwest` calls.
+
 mod streamable_http_test_support;
 
 use pretty_assertions::assert_eq;

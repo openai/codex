@@ -1,3 +1,9 @@
+//! Shared response/body helpers for the orchestrator-side Streamable HTTP adapter.
+//!
+//! This keeps response-header inspection, body collection, and SSE conversion
+//! out of the main transport client implementation so the high-level RMCP flow
+//! stays readable.
+
 use std::io;
 
 use bytes::Bytes;
