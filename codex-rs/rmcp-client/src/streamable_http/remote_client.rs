@@ -1,9 +1,10 @@
-//! Streamable HTTP transport that performs network requests through exec-server.
+//! Streamable HTTP transport that performs network requests through the remote
+//! runtime HTTP API.
 //!
 //! RMCP still owns the MCP protocol state machine, session recovery, and OAuth
 //! decisions. This adapter only translates RMCP's HTTP operations into the
-//! executor HTTP request protocol so remote executors resolve network
-//! addresses, headers, and streaming bodies from the executor side.
+//! remote runtime HTTP request protocol so the remote runtime resolves network
+//! addresses, headers, and streaming bodies on the remote side.
 
 use std::io;
 use std::sync::Arc;
@@ -39,32 +40,34 @@ use crate::streamable_http::common::insert_header;
 use crate::streamable_http::common::is_streamable_http_content_type;
 use crate::streamable_http::remote_client::RemoteStreamableHttpClientError::Header;
 
-/// RMCP Streamable HTTP client that sends HTTP requests through exec-server.
+/// RMCP Streamable HTTP client that sends HTTP requests through the remote
+/// runtime HTTP API.
 ///
 /// The client is deliberately small: it translates HTTP operations to
-/// executor protocol calls and lets RMCP own MCP session and recovery behavior.
+/// remote HTTP protocol calls and lets RMCP own MCP session and recovery
+/// behavior.
 #[derive(Clone)]
 pub(crate) struct RemoteStreamableHttpClient {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
 }
 
-/// Errors introduced by executor-backed Streamable HTTP transport.
+/// Errors introduced by remote Streamable HTTP transport.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RemoteStreamableHttpClientError {
     /// Existing MCP session id was rejected with 404.
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
-    /// The executor HTTP request failed before producing an RMCP response.
+    /// The remote HTTP request failed before producing an RMCP response.
     #[error(transparent)]
-    ExecServer(#[from] ExecServerError),
-    /// Header value construction failed before sending the executor request.
+    HttpRequest(#[from] ExecServerError),
+    /// Header value construction failed before sending the remote request.
     #[error("invalid HTTP header: {0}")]
     Header(String),
 }
 
 impl RemoteStreamableHttpClient {
-    /// Creates an adapter with shared executor client and static default headers.
+    /// Creates an adapter with a shared HTTP client and static default headers.
     pub(crate) fn new(http_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
         Self {
             http_client,
@@ -76,7 +79,7 @@ impl RemoteStreamableHttpClient {
 impl StreamableHttpClient for RemoteStreamableHttpClient {
     type Error = RemoteStreamableHttpClientError;
 
-    /// Sends a JSON-RPC message to the MCP server over executor HTTP.
+    /// Sends a JSON-RPC message to the MCP server over remote HTTP.
     async fn post_message(
         &self,
         uri: Arc<str>,
@@ -176,7 +179,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         }
     }
 
-    /// Deletes an MCP Streamable HTTP session through executor HTTP.
+    /// Deletes an MCP Streamable HTTP session through remote HTTP.
     async fn delete_session(
         &self,
         uri: Arc<str>,
@@ -225,7 +228,7 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         Ok(())
     }
 
-    /// Opens a server stream through executor HTTP and exposes it as SSE bytes.
+    /// Opens a server stream through remote HTTP and exposes it as SSE bytes.
     async fn get_stream(
         &self,
         uri: Arc<str>,
