@@ -3,6 +3,7 @@
 mod model_catalog;
 
 use super::*;
+use crate::app::test_support::app_enabled_in_effective_config;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
@@ -3517,6 +3518,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -4078,6 +4080,167 @@ fn active_turn_steer_race_extracts_actual_turn_id_from_mismatch() {
 }
 
 #[tokio::test]
+async fn update_reasoning_effort_updates_collaboration_mode() {
+    let mut app = make_test_app().await;
+    app.chat_widget
+        .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+    app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    assert_eq!(
+        app.chat_widget.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        app.config.model_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+}
+
+#[tokio::test]
+async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
+    let mut app = make_test_app().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
+
+    assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+    ConfigEditsBuilder::new(&app.config.codex_home)
+        .with_edits([
+            ConfigEdit::SetPath {
+                segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
+                value: false.into(),
+            },
+            ConfigEdit::SetPath {
+                segments: vec![
+                    "apps".to_string(),
+                    app_id.clone(),
+                    "disabled_reason".to_string(),
+                ],
+                value: "user".into(),
+            },
+        ])
+        .apply()
+        .await
+        .expect("persist app toggle");
+
+    assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+    app.refresh_in_memory_config_from_disk().await?;
+
+    assert_eq!(
+        app_enabled_in_effective_config(&app.config, &app_id),
+        Some(false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_in_memory_config_from_disk_best_effort_keeps_current_config_on_error() -> Result<()>
+{
+    let mut app = make_test_app().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+    let original_config = app.config.clone();
+
+    app.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
+        .await;
+
+    assert_eq!(app.config, original_config);
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_in_memory_config_from_disk_uses_active_chat_widget_cwd() -> Result<()> {
+    let mut app = make_test_app().await;
+    let original_cwd = app.config.cwd.clone();
+    let next_cwd_tmp = tempdir()?;
+    let next_cwd = next_cwd_tmp.path().to_path_buf();
+
+    app.chat_widget.handle_codex_event(Event {
+        id: String::new(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
+            cwd: next_cwd.clone().abs(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }),
+    });
+
+    assert_eq!(app.chat_widget.config_ref().cwd.to_path_buf(), next_cwd);
+    assert_eq!(app.config.cwd, original_cwd);
+
+    app.refresh_in_memory_config_from_disk().await?;
+
+    assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rebuild_config_for_resume_or_fallback_uses_current_config_on_same_cwd_error() -> Result<()>
+{
+    let mut app = make_test_app().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+    let current_config = app.config.clone();
+    let current_cwd = current_config.cwd.clone();
+
+    let resume_config = app
+        .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.to_path_buf())
+        .await?;
+
+    assert_eq!(resume_config, current_config);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rebuild_config_for_resume_or_fallback_errors_when_cwd_changes() -> Result<()> {
+    let mut app = make_test_app().await;
+    let codex_home = tempdir()?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+    let current_cwd = app.config.cwd.clone();
+    let next_cwd_tmp = tempdir()?;
+    let next_cwd = next_cwd_tmp.path().to_path_buf();
+
+    let result = app
+        .rebuild_config_for_resume_or_fallback(&current_cwd, next_cwd)
+        .await;
+
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sync_tui_theme_selection_updates_chat_widget_config_copy() {
+    let mut app = make_test_app().await;
+
+    app.sync_tui_theme_selection("dracula".to_string());
+
+    assert_eq!(app.config.tui_theme.as_deref(), Some("dracula"));
+    assert_eq!(
+        app.chat_widget.config_ref().tui_theme.as_deref(),
+        Some("dracula")
+    );
+}
+
+#[tokio::test]
 async fn fresh_session_config_uses_current_service_tier() {
     let mut app = make_test_app().await;
     app.chat_widget
@@ -4125,6 +4288,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4188,6 +4352,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4281,6 +4446,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4664,6 +4830,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4776,6 +4943,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
