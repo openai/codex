@@ -126,9 +126,7 @@ use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
-use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::CreateThreadParams;
-use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadStore;
@@ -170,6 +168,8 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::live_thread::LiveThread;
+use crate::live_thread::LiveThreadInitGuard;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -1026,30 +1026,30 @@ impl Session {
         self.services.state_db.clone()
     }
 
-    pub(crate) async fn thread_persistence_enabled(&self) -> bool {
-        self.services.thread_persistence_enabled || self.current_rollout_path().await.is_some()
+    pub(crate) fn live_thread_for_persistence(
+        &self,
+        operation: &str,
+    ) -> anyhow::Result<&LiveThread> {
+        self.live_thread()
+            .ok_or_else(|| anyhow::anyhow!("Session persistence is disabled; cannot {operation}."))
+    }
+
+    pub(crate) fn live_thread(&self) -> Option<&LiveThread> {
+        self.services.live_thread.get()
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
     pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
-        if self.thread_persistence_enabled().await {
-            self.services
-                .thread_store
-                .flush_thread(self.conversation_id)
-                .await
-                .map_err(std::io::Error::other)
+        if let Some(live_thread) = self.live_thread() {
+            live_thread.flush().await.map_err(std::io::Error::other)
         } else {
             Ok(())
         }
     }
 
     pub(crate) async fn try_ensure_rollout_materialized(&self) -> std::io::Result<()> {
-        if self.thread_persistence_enabled().await {
-            self.services
-                .thread_store
-                .persist_thread(self.conversation_id)
-                .await
-                .map_err(std::io::Error::other)?;
+        if let Some(live_thread) = self.live_thread() {
+            live_thread.persist().await.map_err(std::io::Error::other)?;
         }
         Ok(())
     }
@@ -2673,15 +2673,8 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        if self.thread_persistence_enabled().await
-            && let Err(e) = self
-                .services
-                .thread_store
-                .append_items(AppendThreadItemsParams {
-                    thread_id: self.conversation_id,
-                    items: items.to_vec(),
-                })
-                .await
+        if let Some(live_thread) = self.live_thread()
+            && let Err(e) = live_thread.append_items(items).await
         {
             error!("failed to record rollout items: {e:#}");
         }
@@ -3211,22 +3204,10 @@ impl Session {
     }
 
     pub(crate) async fn try_current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
-        let Some(local_store) = self
-            .services
-            .thread_store
-            .as_any()
-            .downcast_ref::<LocalThreadStore>()
-        else {
-            anyhow::bail!(
-                "rollout path requested for thread {} but the configured thread store is not local; this legacy path is unsupported for remote thread storage",
-                self.conversation_id
-            );
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(None);
         };
-        local_store
-            .live_rollout_path(self.conversation_id)
-            .await
-            .map(Some)
-            .map_err(anyhow::Error::from)
+        live_thread.local_rollout_path().await
     }
 
     pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {

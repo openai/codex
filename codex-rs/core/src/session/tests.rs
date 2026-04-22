@@ -130,6 +130,7 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -2579,19 +2580,25 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
 }
 
 async fn attach_thread_persistence(session: &Session) -> PathBuf {
-    session
-        .services
-        .thread_store
-        .create_thread(CreateThreadParams {
+    let live_thread = LiveThread::create(
+        Arc::clone(&session.services.thread_store),
+        CreateThreadParams {
             thread_id: session.conversation_id,
             forked_from_id: None,
             source: SessionSource::Exec,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             event_persistence_mode: ThreadEventPersistenceMode::Limited,
-        })
-        .await
-        .expect("create thread persistence");
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session
+        .services
+        .live_thread
+        .set(live_thread)
+        .map_err(|_| ())
+        .expect("attach live thread persistence");
     session.ensure_rollout_materialized().await;
     session
         .flush_rollout()
@@ -3275,7 +3282,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_persistence_enabled: false,
+        live_thread: OnceCell::new(),
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),
@@ -4590,7 +4597,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_persistence_enabled: false,
+        live_thread: OnceCell::new(),
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),

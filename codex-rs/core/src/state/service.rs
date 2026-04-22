@@ -8,6 +8,7 @@ use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
+use crate::live_thread::LiveThread;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
@@ -28,6 +29,7 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -62,7 +64,7 @@ pub(crate) struct SessionServices {
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) thread_persistence_enabled: bool,
+    pub(crate) live_thread: OnceCell<LiveThread>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,

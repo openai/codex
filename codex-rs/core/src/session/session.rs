@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ConstraintError;
+use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -311,12 +312,13 @@ impl Session {
         // - load history metadata (skipped for subagents)
         let thread_persistence_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>(false)
+                Ok::<_, anyhow::Error>(None)
             } else {
-                match &initial_history {
+                let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                        thread_store
-                            .create_thread(CreateThreadParams {
+                        LiveThread::create(
+                            Arc::clone(&thread_store),
+                            CreateThreadParams {
                                 thread_id: conversation_id,
                                 forked_from_id,
                                 source: session_source,
@@ -325,22 +327,25 @@ impl Session {
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
                                 event_persistence_mode,
-                            })
-                            .await?;
+                            },
+                        )
+                        .await?
                     }
                     InitialHistory::Resumed(resumed_history) => {
-                        thread_store
-                            .resume_thread(ResumeThreadParams {
+                        LiveThread::resume(
+                            Arc::clone(&thread_store),
+                            ResumeThreadParams {
                                 thread_id: resumed_history.conversation_id,
                                 rollout_path: Some(resumed_history.rollout_path.clone()),
                                 history: Some(resumed_history.history.clone()),
                                 include_archived: true,
                                 event_persistence_mode,
-                            })
-                            .await?;
+                            },
+                        )
+                        .await?
                     }
                 };
-                Ok(true)
+                Ok(Some(live_thread))
             }
         }
         .instrument(info_span!(
@@ -410,18 +415,13 @@ impl Session {
             auth_and_mcp_fut
         );
 
-        let thread_persistence_enabled = thread_persistence_result.map_err(|e| {
-            error!("failed to initialize thread persistence: {e:#}");
-            e
-        })?;
-        let rollout_path = if thread_persistence_enabled {
-            discard_thread_after_failed_session_init_on_error(
-                thread_persistence_enabled,
-                conversation_id,
-                &thread_store,
-                local_live_rollout_path(&thread_store, conversation_id).await,
-            )
-            .await?
+        let mut live_thread_init =
+            LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
+                error!("failed to initialize thread persistence: {e:#}");
+                e
+            })?);
+        let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
+            live_thread.local_rollout_path().await?
         } else {
             None
         };
@@ -584,30 +584,18 @@ impl Session {
         {
             user_shell_override
         } else if use_zsh_fork_shell {
-            let zsh_path = discard_thread_after_failed_session_init_on_error(
-                thread_persistence_enabled,
-                conversation_id,
-                &thread_store,
-                config.zsh_path.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
-                    )
-                }),
-            )
-            .await?;
+            let zsh_path = config.zsh_path.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
+                )
+            })?;
             let zsh_path = zsh_path.to_path_buf();
-            discard_thread_after_failed_session_init_on_error(
-                thread_persistence_enabled,
-                conversation_id,
-                &thread_store,
-                shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
-                        zsh_path.display()
-                    )
-                }),
-            )
-            .await?
+            shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
+                    zsh_path.display()
+                )
+            })?
         } else {
             shell::default_user_shell()
         };
@@ -678,29 +666,22 @@ impl Session {
         let (network_proxy, session_network_proxy) =
             if let Some(spec) = config.permissions.network.as_ref() {
                 let current_exec_policy = exec_policy.current();
-                let (network_proxy, session_network_proxy) =
-                    discard_thread_after_failed_session_init_on_error(
-                        thread_persistence_enabled,
-                        conversation_id,
-                        &thread_store,
-                        Self::start_managed_network_proxy(
-                            spec,
-                            current_exec_policy.as_ref(),
-                            config.permissions.sandbox_policy.get(),
-                            network_policy_decider.as_ref().map(Arc::clone),
-                            blocked_request_observer.as_ref().map(Arc::clone),
-                            managed_network_requirements_configured,
-                            network_proxy_audit_metadata,
-                        )
-                        .instrument(info_span!(
-                            "session_init.network_proxy",
-                            otel.name = "session_init.network_proxy",
-                            session_init.managed_network_requirements_enabled =
-                                managed_network_requirements_enabled,
-                        ))
-                        .await,
-                    )
-                    .await?;
+                let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
+                    spec,
+                    current_exec_policy.as_ref(),
+                    config.permissions.sandbox_policy.get(),
+                    network_policy_decider.as_ref().map(Arc::clone),
+                    blocked_request_observer.as_ref().map(Arc::clone),
+                    managed_network_requirements_configured,
+                    network_proxy_audit_metadata,
+                )
+                .instrument(info_span!(
+                    "session_init.network_proxy",
+                    otel.name = "session_init.network_proxy",
+                    session_init.managed_network_requirements_enabled =
+                        managed_network_requirements_enabled,
+                ))
+                .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
                 (None, None)
@@ -726,13 +707,7 @@ impl Session {
             });
         }
 
-        let installation_id = discard_thread_after_failed_session_init_on_error(
-            thread_persistence_enabled,
-            conversation_id,
-            &thread_store,
-            resolve_installation_id(&config.codex_home).await,
-        )
-        .await?;
+        let installation_id = resolve_installation_id(&config.codex_home).await?;
         let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
             AnalyticsEventsClient::new(
                 Arc::clone(&auth_manager),
@@ -740,6 +715,10 @@ impl Session {
                 config.analytics_enabled,
             )
         });
+        let live_thread_cell = OnceCell::new();
+        if let Some(live_thread) = live_thread_init.as_ref() {
+            let _ = live_thread_cell.set(live_thread.clone());
+        }
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -780,7 +759,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            thread_persistence_enabled,
+            live_thread: live_thread_cell,
             thread_store: Arc::clone(&thread_store),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -946,12 +925,6 @@ impl Session {
                     .map(|failure| format!("{}: {}", failure.server, failure.error))
                     .collect::<Vec<_>>()
                     .join("; ");
-                discard_thread_after_failed_session_init(
-                    thread_persistence_enabled,
-                    conversation_id,
-                    &thread_store,
-                )
-                .await;
                 anyhow::bail!("required MCP servers failed to initialize: {details}");
             }
         }
@@ -978,53 +951,7 @@ impl Session {
             &session_configuration.session_source,
         );
 
+        live_thread_init.commit();
         Ok(sess)
     }
-}
-
-async fn discard_thread_after_failed_session_init(
-    thread_persistence_enabled: bool,
-    thread_id: ThreadId,
-    thread_store: &Arc<dyn ThreadStore>,
-) {
-    if thread_persistence_enabled && let Err(err) = thread_store.discard_thread(thread_id).await {
-        warn!("failed to discard thread persistence for failed session init: {err}");
-    }
-}
-
-async fn discard_thread_after_failed_session_init_on_error<T, E>(
-    thread_persistence_enabled: bool,
-    thread_id: ThreadId,
-    thread_store: &Arc<dyn ThreadStore>,
-    result: Result<T, E>,
-) -> anyhow::Result<T>
-where
-    E: Into<anyhow::Error>,
-{
-    match result {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            discard_thread_after_failed_session_init(
-                thread_persistence_enabled,
-                thread_id,
-                thread_store,
-            )
-            .await;
-            Err(err.into())
-        }
-    }
-}
-
-async fn local_live_rollout_path(
-    thread_store: &Arc<dyn ThreadStore>,
-    thread_id: ThreadId,
-) -> anyhow::Result<Option<PathBuf>> {
-    let Some(local_store) = thread_store.as_any().downcast_ref::<LocalThreadStore>() else {
-        anyhow::bail!("rollout path is only available for the local thread store");
-    };
-    local_store
-        .live_rollout_path(thread_id)
-        .await
-        .map(Some)
-        .map_err(anyhow::Error::from)
 }

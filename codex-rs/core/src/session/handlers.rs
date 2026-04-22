@@ -5,10 +5,6 @@ use crate::realtime_conversation::handle_text as handle_realtime_conversation_te
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::protocol::Submission;
-use codex_thread_store::AppendThreadItemsParams;
-use codex_thread_store::LoadThreadHistoryParams;
-use codex_thread_store::ThreadMetadataPatch;
-use codex_thread_store::UpdateThreadMetadataParams;
 use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
@@ -759,23 +755,21 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    if !sess.thread_persistence_enabled().await {
-        sess.send_event_raw(Event {
-            id: turn_context.sub_id.clone(),
-            msg: EventMsg::Error(ErrorEvent {
-                message: "thread rollback requires persisted thread history".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-            }),
-        })
-        .await;
-        return;
-    }
-    if let Err(err) = sess
-        .services
-        .thread_store
-        .flush_thread(sess.conversation_id)
-        .await
-    {
+    let live_thread = match sess.live_thread_for_persistence("rollback thread") {
+        Ok(live_thread) => live_thread,
+        Err(_) => {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "thread rollback requires persisted thread history".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
+    if let Err(err) = live_thread.flush().await {
         sess.send_event_raw(Event {
             id: turn_context.sub_id.clone(),
             msg: EventMsg::Error(ErrorEvent {
@@ -787,15 +781,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let stored_history = match sess
-        .services
-        .thread_store
-        .load_history(LoadThreadHistoryParams {
-            thread_id: sess.conversation_id,
-            include_archived: false,
-        })
-        .await
-    {
+    let stored_history = match live_thread.load_history(/*include_archived*/ false).await {
         Ok(history) => history,
         Err(err) => {
             sess.send_event_raw(Event {
@@ -848,61 +834,26 @@ async fn persist_thread_name_update(
 ) -> anyhow::Result<EventMsg> {
     let msg = EventMsg::ThreadNameUpdated(event);
     let item = RolloutItem::EventMsg(msg.clone());
-    ensure_thread_persistence_enabled(sess, "rename thread").await?;
-    sess.services
-        .thread_store
-        .persist_thread(sess.conversation_id)
+    let live_thread = sess.live_thread_for_persistence("rename thread")?;
+    live_thread.persist().await?;
+    live_thread
+        .append_items(std::slice::from_ref(&item))
         .await?;
-    sess.services
-        .thread_store
-        .append_items(AppendThreadItemsParams {
-            thread_id: sess.conversation_id,
-            items: vec![item],
-        })
-        .await?;
-    sess.services
-        .thread_store
-        .flush_thread(sess.conversation_id)
-        .await?;
+    live_thread.flush().await?;
     Ok(msg)
-}
-
-async fn ensure_thread_persistence_enabled(sess: &Session, operation: &str) -> anyhow::Result<()> {
-    if sess.thread_persistence_enabled().await {
-        Ok(())
-    } else {
-        anyhow::bail!("Session persistence is disabled; cannot {operation}.")
-    }
 }
 
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,
 ) -> anyhow::Result<()> {
-    ensure_thread_persistence_enabled(sess, "update thread memory mode").await?;
-    sess.services
-        .thread_store
-        .persist_thread(sess.conversation_id)
+    let live_thread = sess.live_thread_for_persistence("update thread memory mode")?;
+    live_thread.persist().await?;
+    live_thread.flush().await?;
+    live_thread
+        .update_memory_mode(mode, /*include_archived*/ false)
         .await?;
-    sess.services
-        .thread_store
-        .flush_thread(sess.conversation_id)
-        .await?;
-    sess.services
-        .thread_store
-        .update_thread_metadata(UpdateThreadMetadataParams {
-            thread_id: sess.conversation_id,
-            patch: ThreadMetadataPatch {
-                memory_mode: Some(mode),
-                ..Default::default()
-            },
-            include_archived: false,
-        })
-        .await?;
-    sess.services
-        .thread_store
-        .flush_thread(sess.conversation_id)
-        .await?;
+    live_thread.flush().await?;
     Ok(())
 }
 
@@ -1006,12 +957,8 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
-    if sess.thread_persistence_enabled().await
-        && let Err(e) = sess
-            .services
-            .thread_store
-            .shutdown_thread(sess.conversation_id)
-            .await
+    if let Some(live_thread) = sess.live_thread()
+        && let Err(e) = live_thread.shutdown().await
     {
         warn!("failed to shutdown thread persistence: {e}");
         let event = Event {
