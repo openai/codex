@@ -1,7 +1,13 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use std::num::NonZeroU64;
 use std::time::Duration;
 use strum_macros::Display;
@@ -69,20 +75,52 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
-#[derive(
-    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
 #[strum(serialize_all = "snake_case")]
+#[ts(type = r#""user" | "auto_review" | "guardian_subagent""#)]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[default]
+    #[serde(rename = "user")]
     User,
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    #[strum(serialize = "auto_review")]
     GuardianSubagent,
+}
+
+impl JsonSchema for ApprovalsReviewer {
+    fn schema_name() -> String {
+        "ApprovalsReviewer".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        string_enum_schema_with_description(
+            &["user", "auto_review", "guardian_subagent"],
+            "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+        )
+    }
+}
+
+fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
+    let mut schema = SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        metadata: Some(Box::new(Metadata {
+            description: Some(description.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| Value::String((*value).to_string()))
+            .collect(),
+    );
+    Schema::Object(schema)
 }
 
 #[derive(
@@ -559,6 +597,32 @@ mod tests {
             let json = format!("\"{alias}\"");
             let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
             assert_eq!(ModeKind::Default, mode);
+        }
+    }
+
+    #[test]
+    fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+        assert_eq!(ApprovalsReviewer::User.to_string(), "user");
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::GuardianSubagent)
+                .expect("serialize reviewer"),
+            "\"auto_review\""
+        );
+
+        for value in ["user", "auto_review", "guardian_subagent"] {
+            let json = format!("\"{value}\"");
+            let reviewer: ApprovalsReviewer =
+                serde_json::from_str(&json).expect("deserialize reviewer");
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::GuardianSubagent
+            };
+            assert_eq!(expected, reviewer);
         }
     }
 

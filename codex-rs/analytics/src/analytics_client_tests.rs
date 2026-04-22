@@ -1334,7 +1334,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
         },
     ));
 
-    let payload = serde_json::to_value(&event).expect("serialize guardian subagent event");
+    let payload = serde_json::to_value(&event).expect("serialize auto-review subagent event");
     assert_eq!(payload["event_params"]["subagent_source"], "guardian");
     assert_eq!(
         payload["event_params"]["parent_thread_id"],
@@ -1758,7 +1758,7 @@ fn turn_event_serializes_expected_shape() {
             reasoning_summary: Some("detailed".to_string()),
             service_tier: "flex".to_string(),
             approval_policy: "on-request".to_string(),
-            approvals_reviewer: "guardian_subagent".to_string(),
+            approvals_reviewer: "auto_review".to_string(),
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
             personality: Some("pragmatic".to_string()),
@@ -1819,7 +1819,7 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
                 "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
+                "approvals_reviewer": "auto_review",
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",

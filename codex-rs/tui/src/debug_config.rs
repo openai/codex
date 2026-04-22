@@ -690,7 +690,7 @@ mod tests {
             rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
         );
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(
             rendered.contains(
@@ -745,7 +745,7 @@ mod tests {
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(!rendered.contains("Requirements:\n  <none>"));
     }

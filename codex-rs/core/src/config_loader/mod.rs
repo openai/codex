@@ -1025,8 +1025,8 @@ async fn load_project_layers(
 ///
 /// If present, re-interpret `managed_config.toml` as a `requirements.toml`
 /// where each specified field is treated as a constraint. Most fields allow
-/// only the specified value. `approvals_reviewer = "guardian_subagent"` also
-/// allows `user` so people can opt out of the guardian reviewer.
+/// only the specified value. `approvals_reviewer = "auto_review"` also allows
+/// `user` so people can opt out of the auto-reviewer.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
@@ -1145,7 +1145,7 @@ foo = "xyzzy"
             requirements.allowed_approvals_reviewers,
             Some(vec![
                 ApprovalsReviewer::GuardianSubagent,
-                ApprovalsReviewer::User
+                ApprovalsReviewer::User,
             ])
         );
     }

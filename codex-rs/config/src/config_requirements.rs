@@ -1649,7 +1649,7 @@ allowed_approvals_reviewers = ["user"]
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
-                allowed_approvals_reviewers = ["guardian_subagent"]
+                allowed_approvals_reviewers = ["auto_review"]
                 allowed_sandbox_modes = ["read-only"]
             "#,
         )?;
@@ -1730,7 +1730,7 @@ allowed_approvals_reviewers = ["user"]
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
-                allowed_approvals_reviewers = ["guardian_subagent"]
+                allowed_approvals_reviewers = ["auto_review"]
                 allowed_sandbox_modes = ["read-only"]
                 allowed_web_search_modes = ["cached"]
                 enforce_residency = "us"
@@ -1830,7 +1830,7 @@ allowed_approvals_reviewers = ["user"]
     #[test]
     fn deserialize_allowed_approvals_reviewers() -> Result<()> {
         let toml_str = r#"
-            allowed_approvals_reviewers = ["guardian_subagent", "user"]
+            allowed_approvals_reviewers = ["auto_review", "user"]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
@@ -1851,6 +1851,22 @@ allowed_approvals_reviewers = ["user"]
                 .approvals_reviewer
                 .can_set(&ApprovalsReviewer::User)
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_legacy_allowed_approvals_reviewer() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = ["guardian_subagent", "user"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.approvals_reviewer.value(),
+            ApprovalsReviewer::GuardianSubagent
         );
 
         Ok(())
