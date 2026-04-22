@@ -323,8 +323,10 @@ impl LocalProcess {
                 )
             };
 
+            let has_new_lifecycle_event = response.next_seq > after_seq.saturating_add(1);
             if !response.chunks.is_empty()
-                || response.exited
+                || has_new_lifecycle_event
+                || response.closed
                 || tokio::time::Instant::now() >= deadline
             {
                 let _total_bytes: usize = response
@@ -625,16 +627,7 @@ async fn watch_exit(
             .await;
     }
 
-    maybe_emit_closed(process_id.clone(), Arc::clone(&inner)).await;
-
-    tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
-    let mut processes = inner.processes.lock().await;
-    if matches!(
-        processes.get(&process_id),
-        Some(ProcessEntry::Running(process)) if process.exit_code == Some(exit_code)
-    ) {
-        processes.remove(&process_id);
-    }
+    maybe_emit_closed(process_id, Arc::clone(&inner)).await;
 }
 
 async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
@@ -653,7 +646,7 @@ async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
 }
 
 async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
-    let notification = {
+    let closed = {
         let mut processes = inner.processes.lock().await;
         let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
             return;
@@ -668,15 +661,32 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         process.next_seq += 1;
         let _ = process.wake_tx.send(seq);
         process.events.publish(ExecProcessEvent::Closed { seq });
-        Some(ExecClosedNotification {
-            process_id: process_id.clone(),
-            seq,
-        })
+        Some((
+            ExecClosedNotification {
+                process_id: process_id.clone(),
+                seq,
+            },
+            Arc::clone(&process.output_notify),
+        ))
     };
 
-    let Some(notification) = notification else {
+    let Some((notification, output_notify)) = closed else {
         return;
     };
+
+    output_notify.notify_waiters();
+    let cleanup_process_id = process_id.clone();
+    let cleanup_inner = Arc::clone(&inner);
+    tokio::spawn(async move {
+        tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
+        let mut processes = cleanup_inner.processes.lock().await;
+        if matches!(
+            processes.get(&cleanup_process_id),
+            Some(ProcessEntry::Running(process)) if process.closed
+        ) {
+            processes.remove(&cleanup_process_id);
+        }
+    });
 
     if let Some(notifications) = notification_sender(&inner) {
         let _ = notifications
