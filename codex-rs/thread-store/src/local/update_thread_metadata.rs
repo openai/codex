@@ -5,7 +5,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
-use codex_rollout::StateDbHandle;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::find_archived_thread_path_by_id_str;
@@ -13,6 +12,7 @@ use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 
 use super::LocalThreadStore;
+use super::live_writer;
 use crate::ReadThreadParams;
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -53,7 +53,7 @@ pub(super) async fn update_thread_metadata(
             .await?;
     }
 
-    let state_db_ctx = open_state_db_for_direct_thread_lookup(store).await;
+    let state_db_ctx = store.state_db().await;
     codex_rollout::state_db::reconcile_rollout(
         state_db_ctx.as_deref(),
         resolved_rollout_path.path.as_path(),
@@ -65,7 +65,7 @@ pub(super) async fn update_thread_metadata(
     )
     .await;
 
-    read_thread::read_thread(
+    match read_thread::read_thread(
         store,
         ReadThreadParams {
             thread_id,
@@ -74,6 +74,18 @@ pub(super) async fn update_thread_metadata(
         },
     )
     .await
+    {
+        Ok(thread) => Ok(thread),
+        Err(_) => {
+            read_thread::read_thread_by_rollout_path(
+                store,
+                resolved_rollout_path.path,
+                params.include_archived,
+                /*include_history*/ false,
+            )
+            .await
+        }
+    }
 }
 
 async fn apply_thread_name(
@@ -127,15 +139,6 @@ async fn apply_thread_memory_mode(
         })
 }
 
-async fn open_state_db_for_direct_thread_lookup(store: &LocalThreadStore) -> Option<StateDbHandle> {
-    codex_state::StateRuntime::init(
-        store.config.sqlite_home.clone(),
-        store.config.model_provider_id.clone(),
-    )
-    .await
-    .ok()
-}
-
 fn memory_mode_as_str(mode: ThreadMemoryMode) -> &'static str {
     match mode {
         ThreadMemoryMode::Enabled => "enabled",
@@ -148,6 +151,13 @@ async fn resolve_rollout_path(
     thread_id: ThreadId,
     include_archived: bool,
 ) -> ThreadStoreResult<ResolvedRolloutPath> {
+    if let Ok(path) = live_writer::rollout_path(store, thread_id).await {
+        return Ok(ResolvedRolloutPath {
+            path,
+            archived: false,
+        });
+    }
+
     let active_path =
         find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
             .await
@@ -187,6 +197,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::ResumeThreadParams;
+    use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
     use crate::ThreadStore;
     use crate::local::LocalThreadStore;
@@ -266,6 +278,46 @@ mod tests {
             .await
             .expect("thread memory mode should be readable");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_uses_live_rollout_path_for_external_resume() {
+        let home = TempDir::new().expect("temp dir");
+        let external_home = TempDir::new().expect("external temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(307);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let path = write_session_file(external_home.path(), "2025-01-03T14-45-00", uuid)
+            .expect("external session file");
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(path.clone()),
+                history: None,
+                include_archived: true,
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume external live thread");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    memory_mode: Some(ThreadMemoryMode::Disabled),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set memory mode on external live thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert!(thread.rollout_path.is_some());
+        let appended = last_rollout_item(path.as_path());
+        assert_eq!(appended["type"], "session_meta");
+        assert_eq!(appended["payload"]["memory_mode"], "disabled");
     }
 
     #[tokio::test]

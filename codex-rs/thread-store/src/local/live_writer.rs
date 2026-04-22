@@ -4,7 +4,6 @@ use codex_protocol::ThreadId;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::builder_from_items;
-use codex_rollout::state_db;
 
 use super::LocalThreadStore;
 use super::create_thread;
@@ -20,15 +19,16 @@ pub(super) async fn create_thread(
     params: CreateThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    store.ensure_live_recorder_absent(thread_id).await?;
     let recorder = create_thread::create_thread(store, params).await?;
-    store.insert_live_recorder(thread_id, recorder).await;
-    Ok(())
+    store.insert_live_recorder(thread_id, recorder).await
 }
 
 pub(super) async fn resume_thread(
     store: &LocalThreadStore,
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
+    store.ensure_live_recorder_absent(params.thread_id).await?;
     let (rollout_path, history) = match (params.rollout_path, params.history) {
         (Some(rollout_path), history) => (rollout_path, history),
         (None, history) => {
@@ -55,7 +55,7 @@ pub(super) async fn resume_thread(
     let state_builder = history
         .as_deref()
         .and_then(|items| builder_from_items(items, rollout_path.as_path()));
-    let state_db_ctx = state_db::init(&store.config).await;
+    let state_db_ctx = store.state_db().await;
     let recorder = RolloutRecorder::new(
         &store.config,
         RolloutRecorderParams::resume(
@@ -69,8 +69,7 @@ pub(super) async fn resume_thread(
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to resume local thread recorder: {err}"),
     })?;
-    store.insert_live_recorder(params.thread_id, recorder).await;
-    Ok(())
+    store.insert_live_recorder(params.thread_id, recorder).await
 }
 
 pub(super) async fn append_items(

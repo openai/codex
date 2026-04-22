@@ -14,10 +14,13 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
+use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -39,6 +42,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: RolloutConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    state_db: Arc<OnceCell<Option<StateDbHandle>>>,
 }
 
 impl std::fmt::Debug for LocalThreadStore {
@@ -55,7 +59,16 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
+            state_db: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Return the state DB handle used by local rollout writers.
+    pub async fn state_db(&self) -> Option<StateDbHandle> {
+        self.state_db
+            .get_or_init(|| async { codex_rollout::state_db::init(&self.config).await })
+            .await
+            .clone()
     }
 
     /// Read a local rollout-backed thread by path.
@@ -91,12 +104,32 @@ impl LocalThreadStore {
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
     }
 
+    pub(super) async fn ensure_live_recorder_absent(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<()> {
+        if self.live_recorders.lock().await.contains_key(&thread_id) {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!("thread {thread_id} already has a live local writer"),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) async fn insert_live_recorder(
         &self,
         thread_id: ThreadId,
         recorder: RolloutRecorder,
-    ) {
-        self.live_recorders.lock().await.insert(thread_id, recorder);
+    ) -> ThreadStoreResult<()> {
+        match self.live_recorders.lock().await.entry(thread_id) {
+            Entry::Occupied(entry) => Err(ThreadStoreError::InvalidRequest {
+                message: format!("thread {} already has a live local writer", entry.key()),
+            }),
+            Entry::Vacant(entry) => {
+                entry.insert(recorder);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -339,6 +372,26 @@ mod tests {
 
         assert_rollout_contains_message(rollout_path.as_path(), "before resume").await;
         assert_rollout_contains_message(rollout_path.as_path(), "after resume").await;
+    }
+
+    #[tokio::test]
+    async fn create_thread_rejects_duplicate_live_writer() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let thread_id = ThreadId::default();
+
+        store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        let err = store
+            .create_thread(create_thread_params(thread_id))
+            .await
+            .expect_err("duplicate live writer should fail");
+
+        assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
+        assert!(err.to_string().contains("already has a live local writer"));
     }
 
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {

@@ -1,19 +1,17 @@
-use codex_rollout::EventPersistenceMode;
-use codex_rollout::RolloutRecorder;
-use codex_rollout::RolloutRecorderParams;
-use codex_rollout::state_db;
-
 use super::LocalThreadStore;
 use crate::CreateThreadParams;
 use crate::ThreadEventPersistenceMode;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+use codex_rollout::EventPersistenceMode;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::RolloutRecorderParams;
 
 pub(super) async fn create_thread(
     store: &LocalThreadStore,
     params: CreateThreadParams,
 ) -> ThreadStoreResult<RolloutRecorder> {
-    let state_db_ctx = state_db::init(&store.config).await;
+    let state_db_ctx = store.state_db().await;
     let recorder = RolloutRecorder::new(
         &store.config,
         RolloutRecorderParams::new(

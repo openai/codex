@@ -635,7 +635,7 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        self.state.remove_thread(thread_id).await
     }
 
     /// Tries to shut down all tracked threads concurrently within the provided timeout.
@@ -791,7 +791,14 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        let thread = self.threads.write().await.remove(thread_id);
+        if let Some(thread) = thread.as_ref()
+            && let Some(live_thread) = thread.codex.session.live_thread()
+            && let Err(err) = live_thread.shutdown().await
+        {
+            warn!("failed to shutdown persistence for removed thread {thread_id}: {err}");
+        }
+        thread
     }
 
     /// Spawn a new thread with no history using a provided config.

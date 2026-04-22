@@ -356,6 +356,10 @@ impl Session {
         let state_db_fut = async {
             if config.ephemeral {
                 None
+            } else if let Some(local_store) =
+                thread_store.as_any().downcast_ref::<LocalThreadStore>()
+            {
+                local_store.state_db().await
             } else {
                 state_db::init(&config).await
             }
