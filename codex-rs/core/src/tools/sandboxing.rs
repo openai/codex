@@ -287,6 +287,10 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
+    fn requires_strict_auto_review(&self, _req: &Req) -> bool {
+        false
+    }
+
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {

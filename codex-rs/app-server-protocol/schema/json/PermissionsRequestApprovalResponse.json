@@ -311,6 +311,10 @@
         }
       ],
       "default": "turn"
+    },
+    "strictAutoReview": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "required": [

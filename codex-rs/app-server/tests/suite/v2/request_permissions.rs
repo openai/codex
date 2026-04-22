@@ -99,6 +99,7 @@ async fn request_permissions_round_trip() -> Result<()> {
                 }),
             },
             scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
         })?,
     )
     .await?;

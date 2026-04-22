@@ -54,7 +54,6 @@ pub struct ShellRequest {
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
-    #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -206,6 +205,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
             command: req.hook_command.clone(),
             description: req.justification.clone(),
         })
+    }
+
+    fn requires_strict_auto_review(&self, req: &ShellRequest) -> bool {
+        req.additional_permissions_preapproved
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {

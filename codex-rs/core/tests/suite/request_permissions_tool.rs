@@ -262,6 +262,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             },
         })
         .await?;
@@ -381,6 +382,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             },
         })
         .await?;

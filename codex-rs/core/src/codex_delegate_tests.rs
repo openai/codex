@@ -179,6 +179,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
             ..RequestPermissionProfile::default()
         },
         scope: PermissionGrantScope::Turn,
+        strict_auto_review: false,
     };
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
     let cancel_token = CancellationToken::new();

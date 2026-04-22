@@ -58,6 +58,8 @@ pub struct RequestPermissionsResponse {
     pub permissions: RequestPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strict_auto_review: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

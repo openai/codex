@@ -116,7 +116,13 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let use_guardian = routes_approval_to_guardian(turn_ctx);
+        let strict_auto_review = tool.requires_strict_auto_review(req)
+            && tool_ctx
+                .session
+                .strict_auto_review_turn_permissions()
+                .await
+                .is_some();
+        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
 
         // 1) Approval
         let mut already_approved = false;
@@ -126,12 +132,37 @@ impl ToolOrchestrator {
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(
-                    otel_tn,
-                    otel_ci,
-                    &ReviewDecision::Approved,
-                    ToolDecisionSource::Config,
-                );
+                if strict_auto_review {
+                    let guardian_review_id = Some(new_guardian_review_id());
+                    let approval_ctx = ApprovalCtx {
+                        session: &tool_ctx.session,
+                        turn: &tool_ctx.turn,
+                        call_id: &tool_ctx.call_id,
+                        guardian_review_id: guardian_review_id.clone(),
+                        retry_reason: None,
+                        network_approval_context: None,
+                    };
+                    let decision = Self::request_approval(
+                        tool,
+                        req,
+                        tool_ctx.call_id.as_str(),
+                        approval_ctx,
+                        tool_ctx,
+                        /*evaluate_permission_request_hooks*/ false,
+                        &otel,
+                    )
+                    .await?;
+                    Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
+                        .await?;
+                    already_approved = true;
+                } else {
+                    otel.tool_decision(
+                        otel_tn,
+                        otel_ci,
+                        &ReviewDecision::Approved,
+                        ToolDecisionSource::Config,
+                    );
+                }
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -152,35 +183,13 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    use_guardian,
+                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
                     &otel,
                 )
                 .await?;
 
-                match decision {
-                    ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if let Some(review_id) = guardian_review_id.as_deref() {
-                            guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
-                        } else {
-                            "rejected by user".to_string()
-                        };
-                        return Err(ToolError::Rejected(reason));
-                    }
-                    ReviewDecision::TimedOut => {
-                        return Err(ToolError::Rejected(guardian_timeout_message()));
-                    }
-                    ReviewDecision::Approved
-                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                    | ReviewDecision::ApprovedForSession => {}
-                    ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment,
-                    } => match network_policy_amendment.action {
-                        NetworkPolicyRuleAction::Allow => {}
-                        NetworkPolicyRuleAction::Deny => {
-                            return Err(ToolError::Rejected("rejected by user".to_string()));
-                        }
-                    },
-                }
+                Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
+                    .await?;
                 already_approved = true;
             }
         }
@@ -309,36 +318,13 @@ impl ToolOrchestrator {
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        use_guardian,
+                        /*evaluate_permission_request_hooks*/ !strict_auto_review,
                         &otel,
                     )
                     .await?;
 
-                    match decision {
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if let Some(review_id) = guardian_review_id.as_deref() {
-                                guardian_rejection_message(tool_ctx.session.as_ref(), review_id)
-                                    .await
-                            } else {
-                                "rejected by user".to_string()
-                            };
-                            return Err(ToolError::Rejected(reason));
-                        }
-                        ReviewDecision::TimedOut => {
-                            return Err(ToolError::Rejected(guardian_timeout_message()));
-                        }
-                        ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {}
-                        ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment,
-                        } => match network_policy_amendment.action {
-                            NetworkPolicyRuleAction::Allow => {}
-                            NetworkPolicyRuleAction::Deny => {
-                                return Err(ToolError::Rejected("rejected by user".to_string()));
-                            }
-                        },
-                    }
+                    Self::reject_if_not_approved(tool_ctx, guardian_review_id.as_deref(), decision)
+                        .await?;
                 }
 
                 let escalated_attempt = SandboxAttempt {
@@ -385,13 +371,15 @@ impl ToolOrchestrator {
         permission_request_run_id: &str,
         approval_ctx: ApprovalCtx<'_>,
         tool_ctx: &ToolCtx,
-        use_guardian: bool,
+        evaluate_permission_request_hooks: bool,
         otel: &codex_otel::SessionTelemetry,
     ) -> Result<ReviewDecision, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
-        if let Some(permission_request) = tool.permission_request_payload(req) {
+        if evaluate_permission_request_hooks
+            && let Some(permission_request) = tool.permission_request_payload(req)
+        {
             match run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
@@ -424,12 +412,12 @@ impl ToolOrchestrator {
             }
         }
 
-        let decision = tool.start_approval_async(req, approval_ctx).await;
-        let otel_source = if use_guardian {
+        let otel_source = if approval_ctx.guardian_review_id.is_some() {
             ToolDecisionSource::AutomatedReviewer
         } else {
             ToolDecisionSource::User
         };
+        let decision = tool.start_approval_async(req, approval_ctx).await;
         otel.tool_decision(
             &tool_ctx.tool_name,
             &tool_ctx.call_id,
@@ -437,6 +425,35 @@ impl ToolOrchestrator {
             otel_source,
         );
         Ok(decision)
+    }
+
+    async fn reject_if_not_approved(
+        tool_ctx: &ToolCtx,
+        guardian_review_id: Option<&str>,
+        decision: ReviewDecision,
+    ) -> Result<(), ToolError> {
+        match decision {
+            ReviewDecision::Denied | ReviewDecision::Abort => {
+                let reason = if let Some(review_id) = guardian_review_id {
+                    guardian_rejection_message(tool_ctx.session.as_ref(), review_id).await
+                } else {
+                    "rejected by user".to_string()
+                };
+                Err(ToolError::Rejected(reason))
+            }
+            ReviewDecision::TimedOut => Err(ToolError::Rejected(guardian_timeout_message())),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+            | ReviewDecision::ApprovedForSession => Ok(()),
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => Ok(()),
+                NetworkPolicyRuleAction::Deny => {
+                    Err(ToolError::Rejected("rejected by user".to_string()))
+                }
+            },
+        }
     }
 }
 
