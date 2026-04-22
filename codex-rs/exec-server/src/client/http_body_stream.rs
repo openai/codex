@@ -285,7 +285,7 @@ impl Inner {
         format!("http-{id}")
     }
 
-    /// Registers a request id before issuing an executor streaming HTTP call.
+    /// Registers a request id before issuing a streaming HTTP call.
     pub(super) async fn insert_http_body_stream(
         &self,
         request_id: String,

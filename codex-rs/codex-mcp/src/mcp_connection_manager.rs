@@ -1591,7 +1591,7 @@ async fn make_rmcp_client(
         } => {
             if remote_environment && !runtime_environment.environment().is_remote() {
                 return Err(StartupOutcomeError::from(anyhow!(
-                    "remote MCP server `{server_name}` requires a remote executor environment"
+                    "remote MCP server `{server_name}` requires a remote environment"
                 )));
             }
             let resolved_bearer_token =
