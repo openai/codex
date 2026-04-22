@@ -25,6 +25,7 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 
+#[path = "http_body_stream.rs"]
 mod body_stream;
 
 use body_stream::HttpBodyStreamRegistration;

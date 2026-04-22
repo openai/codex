@@ -25,6 +25,7 @@ use crate::streamable_http::common::body_preview;
 use crate::streamable_http::common::insert_header;
 use crate::streamable_http::common::is_streamable_http_content_type;
 
+#[path = "transport_response.rs"]
 mod response;
 
 use response::collect_body;
