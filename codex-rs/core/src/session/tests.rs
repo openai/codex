@@ -3344,7 +3344,7 @@ async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
 }
 
 #[tokio::test]
-async fn record_strict_auto_review_permissions_for_turn_uses_originating_turn() {
+async fn enable_strict_auto_review_for_turn_uses_originating_turn() {
     let (session, _turn_context) = make_session_and_context().await;
     let originating_active_turn = ActiveTurn::default();
     let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
@@ -3367,12 +3367,11 @@ async fn record_strict_auto_review_permissions_for_turn_uses_originating_turn() 
         )
         .await;
 
-    assert_eq!(
+    assert!(
         originating_turn_state
             .lock()
             .await
-            .strict_auto_review_permissions(),
-        Some(requested_permissions.into())
+            .strict_auto_review_enabled()
     );
 }
 

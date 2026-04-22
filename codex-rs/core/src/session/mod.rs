@@ -2175,9 +2175,9 @@ impl Session {
                 if let Some(turn_state) = originating_turn_state {
                     let mut ts = turn_state.lock().await;
                     let permissions: PermissionProfile = response.permissions.clone().into();
-                    ts.record_granted_permissions(permissions.clone());
+                    ts.record_granted_permissions(permissions);
                     if response.strict_auto_review {
-                        ts.record_strict_auto_review_permissions(permissions);
+                        ts.enable_strict_auto_review();
                     }
                 }
             }
@@ -2203,11 +2203,13 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn reads must stay consistent with the matching turn state"
     )]
-    pub(crate) async fn strict_auto_review_turn_permissions(&self) -> Option<PermissionProfile> {
+    pub(crate) async fn strict_auto_review_enabled_for_turn(&self) -> bool {
         let active = self.active_turn.lock().await;
-        let active = active.as_ref()?;
+        let Some(active) = active.as_ref() else {
+            return false;
+        };
         let ts = active.turn_state.lock().await;
-        ts.strict_auto_review_permissions()
+        ts.strict_auto_review_enabled()
     }
 
     pub(crate) async fn granted_session_permissions(&self) -> Option<PermissionProfile> {

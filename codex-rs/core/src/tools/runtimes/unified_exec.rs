@@ -193,10 +193,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         })
     }
 
-    fn requires_strict_auto_review(&self, req: &UnifiedExecRequest) -> bool {
-        req.additional_permissions_preapproved
-    }
-
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
         sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
