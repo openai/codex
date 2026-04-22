@@ -68,7 +68,35 @@ async fn list_rollout_threads(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
-    let page = if params.archived {
+    let page = if params.use_state_db_only && params.archived {
+        RolloutRecorder::list_archived_threads_from_state_db(
+            config,
+            params.page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            params.allowed_sources.as_slice(),
+            params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
+            config.model_provider_id.as_str(),
+            params.search_term.as_deref(),
+        )
+        .await
+    } else if params.use_state_db_only {
+        RolloutRecorder::list_threads_from_state_db(
+            config,
+            params.page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            params.allowed_sources.as_slice(),
+            params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
+            config.model_provider_id.as_str(),
+            params.search_term.as_deref(),
+        )
+        .await
+    } else if params.archived {
         RolloutRecorder::list_archived_threads(
             config,
             params.page_size,
@@ -77,6 +105,7 @@ async fn list_rollout_threads(
             sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
             config.model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
@@ -90,6 +119,7 @@ async fn list_rollout_threads(
             sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
             config.model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
@@ -140,8 +170,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("thread listing");
@@ -196,8 +228,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: Some("needle".to_string()),
+                use_state_db_only: true,
             })
             .await
             .expect("thread listing");
@@ -233,8 +267,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("active listing");
@@ -246,8 +282,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: true,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("archived listing");
@@ -295,8 +333,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["test-provider".to_string()]),
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("thread listing");
@@ -329,8 +369,10 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect_err("invalid cursor should fail");

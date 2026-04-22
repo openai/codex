@@ -1011,6 +1011,7 @@ mod tests {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            agent_identity: None,
         }
     }
 
@@ -1090,6 +1091,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
@@ -1171,6 +1173,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;

@@ -1226,6 +1226,13 @@ pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileNetworkPermissions {
+    pub enabled: Option<bool>,
+}
+
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
     fn from(value: CoreNetworkPermissions) -> Self {
         Self {
@@ -1236,6 +1243,22 @@ impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
 
 impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     fn from(value: AdditionalNetworkPermissions) -> Self {
+        Self {
+            enabled: value.enabled,
+        }
+    }
+}
+
+impl From<CoreNetworkPermissions> for PermissionProfileNetworkPermissions {
+    fn from(value: CoreNetworkPermissions) -> Self {
+        Self {
+            enabled: value.enabled,
+        }
+    }
+}
+
+impl From<PermissionProfileNetworkPermissions> for CoreNetworkPermissions {
+    fn from(value: PermissionProfileNetworkPermissions) -> Self {
         Self {
             enabled: value.enabled,
         }
@@ -1380,6 +1403,70 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
         Self {
             path: value.path.into(),
             access: value.access.to_core(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<PermissionProfileNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(PermissionProfileNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
         }
     }
 }
@@ -3128,7 +3215,15 @@ pub struct ThreadStartResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
+    /// Legacy sandbox policy retained for compatibility. New clients should use
+    /// `permissionProfile` when present as the canonical active permissions
+    /// view.
     pub sandbox: SandboxPolicy,
+    /// Canonical active permissions view for this thread when representable.
+    /// This is `null` for external sandbox policies because external
+    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    #[serde(default)]
+    pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3217,7 +3312,15 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
+    /// Legacy sandbox policy retained for compatibility. New clients should use
+    /// `permissionProfile` when present as the canonical active permissions
+    /// view.
     pub sandbox: SandboxPolicy,
+    /// Canonical active permissions view for this thread when representable.
+    /// This is `null` for external sandbox policies because external
+    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    #[serde(default)]
+    pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3297,7 +3400,15 @@ pub struct ThreadForkResponse {
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
+    /// Legacy sandbox policy retained for compatibility. New clients should use
+    /// `permissionProfile` when present as the canonical active permissions
+    /// view.
     pub sandbox: SandboxPolicy,
+    /// Canonical active permissions view for this thread when representable.
+    /// This is `null` for external sandbox policies because external
+    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    #[serde(default)]
+    pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3629,6 +3740,20 @@ pub struct ThreadShellCommandResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadApproveGuardianDeniedActionParams {
+    pub thread_id: String,
+    /// Serialized `codex_protocol::protocol::GuardianAssessmentEvent`.
+    pub event: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadApproveGuardianDeniedActionResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanParams {
     pub thread_id: String,
 }
@@ -3690,13 +3815,25 @@ pub struct ThreadListParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
-    /// Optional cwd filter; when set, only threads whose session cwd exactly
-    /// matches this path are returned.
-    #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    /// Optional cwd filter or filters; when set, only threads whose session cwd
+    /// exactly matches one of these paths are returned.
+    #[ts(optional = nullable, type = "string | Array<string> | null")]
+    pub cwd: Option<ThreadListCwdFilter>,
+    /// If true, return from the state DB without scanning JSONL rollouts to
+    /// repair thread metadata. Omitted or false preserves scan-and-repair
+    /// behavior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_state_db_only: bool,
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum ThreadListCwdFilter {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -7298,6 +7435,46 @@ mod tests {
     }
 
     #[test]
+    fn thread_list_params_accepts_single_cwd() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "cwd": "/workspace",
+        }))
+        .expect("single cwd should deserialize");
+
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One("/workspace".to_string()))
+        );
+        assert!(!params.use_state_db_only);
+    }
+
+    #[test]
+    fn thread_list_params_accepts_multiple_cwds() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "cwd": ["/workspace", "/other-workspace"],
+        }))
+        .expect("cwd array should deserialize");
+
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::Many(vec![
+                "/workspace".to_string(),
+                "/other-workspace".to_string(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn thread_list_params_accepts_state_db_only_flag() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "useStateDbOnly": true,
+        }))
+        .expect("state db only flag should deserialize");
+
+        assert!(params.use_state_db_only);
+    }
+
+    #[test]
     fn collab_agent_state_maps_interrupted_status() {
         assert_eq!(
             CollabAgentState::from(CoreAgentStatus::Interrupted),
@@ -7529,6 +7706,47 @@ mod tests {
             "write": null,
             "globScanMaxDepth": 0,
             "entries": [],
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
+    fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: CoreFileSystemAccessMode::None,
+            }],
+            glob_scan_max_depth: NonZeroUsize::new(2),
+        };
+
+        let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            PermissionProfileFileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                }],
+                glob_scan_max_depth: NonZeroUsize::new(2),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
+            "entries": [],
+            "globScanMaxDepth": 0,
         }))
         .expect_err("zero glob scan depth should fail deserialization");
     }
@@ -9822,7 +10040,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_lifecycle_responses_default_missing_instruction_sources() {
+    fn thread_lifecycle_responses_default_missing_compat_fields() {
         let response = json!({
             "thread": {
                 "id": "thread-id",
@@ -9863,6 +10081,9 @@ mod tests {
         assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
         assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
         assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
+        assert_eq!(start.permission_profile, None);
+        assert_eq!(resume.permission_profile, None);
+        assert_eq!(fork.permission_profile, None);
     }
 
     #[test]
