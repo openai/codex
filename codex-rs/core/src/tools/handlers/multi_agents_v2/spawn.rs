@@ -244,14 +244,12 @@ impl SpawnAgentArgs {
             ));
         }
 
-        let Some(fork_turns) = self
+        let fork_turns = self
             .fork_turns
             .as_deref()
             .map(str::trim)
             .filter(|fork_turns| !fork_turns.is_empty())
-        else {
-            return Ok(None);
-        };
+            .unwrap_or("all");
 
         if fork_turns.eq_ignore_ascii_case("none") {
             return Ok(None);

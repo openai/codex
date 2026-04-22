@@ -128,10 +128,17 @@ pub(crate) async fn run_pending_session_start_hooks(
     .await
 }
 
+/// Runs matching `PreToolUse` hooks before a tool executes.
+///
+/// `tool_name` is the canonical name serialized to hook stdin. Matcher aliases
+/// are internal compatibility names used only for selecting configured hook
+/// handlers.
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
     command: String,
 ) -> Option<String> {
     let request = PreToolUseRequest {
@@ -141,7 +148,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
+        matcher_aliases,
         tool_use_id,
         command,
     };
@@ -174,7 +182,8 @@ pub(crate) async fn run_permission_request_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: payload.tool_name,
+        tool_name: payload.tool_name.name().to_string(),
+        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
         run_id_suffix: run_id_suffix.to_string(),
         command: payload.command,
         description: payload.description,
@@ -191,10 +200,18 @@ pub(crate) async fn run_permission_request_hooks(
     decision
 }
 
+/// Runs matching `PostToolUse` hooks after a tool has produced a successful output.
+///
+/// The `tool_name`, matcher aliases, `command`, and `tool_response` values are
+/// already adapted by the tool handler into the stable hook contract. Passing
+/// raw internal tool data here would leak implementation details into user hook
+/// matchers and hook logs.
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
     command: String,
     tool_response: Value,
 ) -> PostToolUseOutcome {
@@ -205,7 +222,8 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
+        matcher_aliases,
         tool_use_id,
         command,
         tool_response,

@@ -38,6 +38,7 @@ use tracing::warn;
 
 const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "apps",
+    "memories",
     "plugins",
     "tool_search",
     "tool_suggest",
@@ -432,7 +433,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::sync::RwLock;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
@@ -733,10 +733,9 @@ mod tests {
         let config_api = ConfigApi::new(
             ConfigManager::new(
                 codex_home.path().to_path_buf(),
-                Arc::new(RwLock::new(Vec::new())),
-                Arc::new(RwLock::new(BTreeMap::new())),
+                Vec::new(),
                 LoaderOverrides::default(),
-                Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+                CloudRequirementsLoader::default(),
                 Arg0DispatchPaths::default(),
                 Arc::new(codex_config::NoopThreadConfigLoader),
             ),

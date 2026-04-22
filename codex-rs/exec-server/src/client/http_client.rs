@@ -1,7 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
+use codex_app_server_protocol::JSONRPCErrorError;
+use futures::StreamExt;
+use reqwest::Method;
+use reqwest::Url;
+use reqwest::header::HeaderMap;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use serde_json::Value;
 use serde_json::from_value;
 use tokio::runtime::Handle;
@@ -12,13 +20,27 @@ use tracing::debug;
 use super::ExecServerClient;
 use super::ExecServerError;
 use super::Inner;
+use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
 use crate::protocol::HTTP_REQUEST_METHOD;
+use crate::protocol::HttpHeader;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::HttpRequestResponse;
+use crate::rpc::RpcNotificationSender;
+use crate::rpc::internal_error;
+use crate::rpc::invalid_params;
 
 /// Maximum queued body frames per streamed executor HTTP response.
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: usize = 256;
+
+pub(crate) struct ExecutorPendingHttpBodyStream {
+    pub(crate) request_id: String,
+    response: reqwest::Response,
+}
+
+pub(crate) struct ExecutorHttpRequestRunner {
+    client: reqwest::Client,
+}
 
 /// Request-scoped stream of body chunks for an executor HTTP response.
 ///
@@ -33,6 +55,60 @@ pub struct HttpResponseBodyStream {
     // Terminal frames can carry a final chunk; return that once, then EOF.
     pending_eof: bool,
     closed: bool,
+}
+
+impl ExecServerClient {
+    /// Performs an executor-side HTTP request and buffers the response body.
+    pub async fn http_request(
+        &self,
+        mut params: HttpRequestParams,
+    ) -> Result<HttpRequestResponse, ExecServerError> {
+        params.stream_response = false;
+        self.call(HTTP_REQUEST_METHOD, &params).await
+    }
+
+    /// Performs an executor-side HTTP request and returns a body stream.
+    ///
+    /// The method sets `stream_response` and replaces any caller-supplied
+    /// `request_id` with a connection-local id, so late deltas from abandoned
+    /// streams cannot be confused with later requests.
+    pub async fn http_request_stream(
+        &self,
+        mut params: HttpRequestParams,
+    ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
+        params.stream_response = true;
+        let request_id = self.inner.next_http_body_stream_request_id();
+        params.request_id = request_id.clone();
+        let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
+        self.inner
+            .insert_http_body_stream(request_id.clone(), tx)
+            .await?;
+        let mut registration = HttpBodyStreamRegistration {
+            inner: Arc::clone(&self.inner),
+            request_id: request_id.clone(),
+            active: true,
+        };
+        let response = match self.call(HTTP_REQUEST_METHOD, &params).await {
+            Ok(response) => response,
+            Err(error) => {
+                self.inner.remove_http_body_stream(&request_id).await;
+                registration.active = false;
+                return Err(error);
+            }
+        };
+        registration.active = false;
+        Ok((
+            response,
+            HttpResponseBodyStream {
+                inner: Arc::clone(&self.inner),
+                request_id,
+                next_seq: 1,
+                rx,
+                pending_eof: false,
+                closed: false,
+            },
+        ))
+    }
 }
 
 impl HttpResponseBodyStream {
@@ -109,74 +185,164 @@ impl Drop for HttpResponseBodyStream {
     }
 }
 
-/// Active route registration owned while `http_request_stream` awaits headers.
-struct HttpBodyStreamRegistration {
-    inner: Arc<Inner>,
-    request_id: String,
-    active: bool,
-}
-
-impl Drop for HttpBodyStreamRegistration {
-    /// Removes the route if the stream request future is cancelled before headers return.
-    fn drop(&mut self) {
-        if self.active {
-            spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
-        }
-    }
-}
-
-impl ExecServerClient {
-    /// Performs an executor-side HTTP request and buffers the response body.
-    pub async fn http_request(
-        &self,
-        mut params: HttpRequestParams,
-    ) -> Result<HttpRequestResponse, ExecServerError> {
-        params.stream_response = false;
-        params.request_id = None;
-        self.call(HTTP_REQUEST_METHOD, &params).await
-    }
-
-    /// Performs an executor-side HTTP request and returns a body stream.
-    ///
-    /// The method sets `stream_response` and replaces any caller-supplied
-    /// `request_id` with a connection-local id, so late deltas from abandoned
-    /// streams cannot be confused with later requests.
-    pub async fn http_request_stream(
-        &self,
-        mut params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
-        params.stream_response = true;
-        let request_id = self.inner.next_http_body_stream_request_id();
-        params.request_id = Some(request_id.clone());
-        let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
-        self.inner
-            .insert_http_body_stream(request_id.clone(), tx)
-            .await?;
-        let mut registration = HttpBodyStreamRegistration {
-            inner: Arc::clone(&self.inner),
-            request_id: request_id.clone(),
-            active: true,
-        };
-        let response = match self.call(HTTP_REQUEST_METHOD, &params).await {
-            Ok(response) => response,
-            Err(error) => {
-                self.inner.remove_http_body_stream(&request_id).await;
-                registration.active = false;
-                return Err(error);
+impl ExecutorHttpRequestRunner {
+    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
+        let client = match timeout_ms {
+            None => reqwest::Client::builder(),
+            Some(timeout_ms) => {
+                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
-        };
-        registration.active = false;
+        }
+        .build()
+        .map_err(|err| internal_error(format!("failed to build http/request client: {err}")))?;
+        Ok(Self { client })
+    }
+
+    pub(crate) async fn run(
+        &self,
+        params: HttpRequestParams,
+    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
+    {
+        let method = Method::from_bytes(params.method.as_bytes())
+            .map_err(|err| invalid_params(format!("http/request method is invalid: {err}")))?;
+        let url = Url::parse(&params.url)
+            .map_err(|err| invalid_params(format!("http/request url is invalid: {err}")))?;
+        match url.scheme() {
+            "http" | "https" => {}
+            scheme => {
+                return Err(invalid_params(format!(
+                    "http/request only supports http and https URLs, got {scheme}"
+                )));
+            }
+        }
+
+        let headers = Self::build_headers(params.headers)?;
+        let mut request = self.client.request(method, url).headers(headers);
+        if let Some(body) = params.body {
+            request = request.body(body.into_inner());
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|err| internal_error(format!("http/request failed: {err}")))?;
+        let status = response.status().as_u16();
+        let headers = Self::response_headers(response.headers());
+
+        if params.stream_response {
+            return Ok((
+                HttpRequestResponse {
+                    status,
+                    headers,
+                    body: Vec::new().into(),
+                },
+                Some(ExecutorPendingHttpBodyStream {
+                    request_id: params.request_id,
+                    response,
+                }),
+            ));
+        }
+
+        let body = response.bytes().await.map_err(|err| {
+            internal_error(format!("failed to read http/request response body: {err}"))
+        })?;
+
         Ok((
-            response,
-            HttpResponseBodyStream {
-                inner: Arc::clone(&self.inner),
-                request_id,
-                next_seq: 1,
-                rx,
-                pending_eof: false,
-                closed: false,
+            HttpRequestResponse {
+                status,
+                headers,
+                body: body.to_vec().into(),
             },
+            None,
         ))
+    }
+
+    fn build_headers(headers: Vec<HttpHeader>) -> Result<HeaderMap, JSONRPCErrorError> {
+        let mut header_map = HeaderMap::new();
+        for header in headers {
+            let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|err| {
+                invalid_params(format!("http/request header name is invalid: {err}"))
+            })?;
+            let value = HeaderValue::from_str(&header.value).map_err(|err| {
+                invalid_params(format!(
+                    "http/request header value is invalid for {}: {err}",
+                    header.name
+                ))
+            })?;
+            header_map.append(name, value);
+        }
+        Ok(header_map)
+    }
+
+    fn response_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
+        headers
+            .iter()
+            .filter_map(|(name, value)| {
+                Some(HttpHeader {
+                    name: name.as_str().to_string(),
+                    value: value.to_str().ok()?.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) async fn stream_body(
+        pending_stream: ExecutorPendingHttpBodyStream,
+        notifications: RpcNotificationSender,
+    ) {
+        let ExecutorPendingHttpBodyStream {
+            request_id,
+            response,
+        } = pending_stream;
+        let mut seq = 1;
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    if !send_executor_body_delta(
+                        &notifications,
+                        HttpRequestBodyDeltaNotification {
+                            request_id: request_id.clone(),
+                            seq,
+                            delta: bytes.to_vec().into(),
+                            done: false,
+                            error: None,
+                        },
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                    seq += 1;
+                }
+                Err(err) => {
+                    let _ = send_executor_body_delta(
+                        &notifications,
+                        HttpRequestBodyDeltaNotification {
+                            request_id,
+                            seq,
+                            delta: Vec::new().into(),
+                            done: true,
+                            error: Some(err.to_string()),
+                        },
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+
+        let _ = send_executor_body_delta(
+            &notifications,
+            HttpRequestBodyDeltaNotification {
+                request_id,
+                seq,
+                delta: Vec::new().into(),
+                done: true,
+                error: None,
+            },
+        )
+        .await;
     }
 }
 
@@ -231,13 +397,21 @@ impl Inner {
         let streams = streams.as_ref().clone();
         self.http_body_streams.store(Arc::new(HashMap::new()));
         for (request_id, tx) in streams {
-            let _ = tx.try_send(HttpRequestBodyDeltaNotification {
-                request_id,
-                seq: 1,
-                delta: Vec::new().into(),
-                done: true,
-                error: Some(message.clone()),
-            });
+            if tx
+                .try_send(HttpRequestBodyDeltaNotification {
+                    request_id: request_id.clone(),
+                    seq: 1,
+                    delta: Vec::new().into(),
+                    done: true,
+                    error: Some(message.clone()),
+                })
+                .is_err()
+            {
+                let mut next_failures = self.http_body_stream_failures.load().as_ref().clone();
+                next_failures.insert(request_id, message.clone());
+                self.http_body_stream_failures
+                    .store(Arc::new(next_failures));
+            }
         }
     }
 
@@ -312,6 +486,22 @@ impl Inner {
     }
 }
 
+/// Active route registration owned while `http_request_stream` awaits headers.
+struct HttpBodyStreamRegistration {
+    inner: Arc<Inner>,
+    request_id: String,
+    active: bool,
+}
+
+impl Drop for HttpBodyStreamRegistration {
+    /// Removes the route if the stream request future is cancelled before headers return.
+    fn drop(&mut self) {
+        if self.active {
+            spawn_remove_http_body_stream(Arc::clone(&self.inner), self.request_id.clone());
+        }
+    }
+}
+
 /// Schedules HTTP body route removal from synchronous drop paths.
 fn spawn_remove_http_body_stream(inner: Arc<Inner>, request_id: String) {
     if let Ok(handle) = Handle::try_current() {
@@ -319,4 +509,14 @@ fn spawn_remove_http_body_stream(inner: Arc<Inner>, request_id: String) {
             inner.remove_http_body_stream(&request_id).await;
         });
     }
+}
+
+async fn send_executor_body_delta(
+    notifications: &RpcNotificationSender,
+    delta: HttpRequestBodyDeltaNotification,
+) -> bool {
+    notifications
+        .notify(HTTP_REQUEST_BODY_DELTA_METHOD, &delta)
+        .await
+        .is_ok()
 }

@@ -51,7 +51,7 @@ use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
-pub use codex_features::Feature;
+use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
@@ -60,7 +60,6 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
-use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -79,6 +78,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -217,6 +217,17 @@ pub struct Permissions {
     pub windows_sandbox_private_desktop: bool,
 }
 
+impl Permissions {
+    /// Effective runtime permissions after config requirements and runtime
+    /// readable-root additions have been applied.
+    pub fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -282,7 +293,7 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// Guardian-specific policy config override from requirements.toml or config.toml.
     /// This is inserted into the fixed guardian prompt template under the
     /// `# Policy Configuration` section rather than replacing the whole
     /// guardian developer prompt.
@@ -636,14 +647,8 @@ impl AuthManagerConfig for Config {
         self.forced_chatgpt_workspace_id.clone()
     }
 
-    fn chatgpt_base_url(&self) -> Option<String> {
-        Some(self.chatgpt_base_url.clone())
-    }
-
-    fn background_agent_task_auth_mode(&self) -> BackgroundAgentTaskAuthMode {
-        BackgroundAgentTaskAuthMode::from_feature_enabled(
-            self.features.enabled(Feature::UseAgentIdentity),
-        )
+    fn chatgpt_base_url(&self) -> String {
+        self.chatgpt_base_url.clone()
     }
 }
 
@@ -1373,6 +1378,7 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
+    pub permission_profile: Option<PermissionProfile>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
@@ -1576,6 +1582,7 @@ impl Config {
             enforce_residency,
             network: network_requirements,
             filesystem: filesystem_requirements,
+            guardian_policy_config_source: _,
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
@@ -1590,6 +1597,7 @@ impl Config {
             approval_policy: approval_policy_override,
             approvals_reviewer: approvals_reviewer_override,
             sandbox_mode,
+            permission_profile,
             model_provider,
             service_tier: service_tier_override,
             config_profile: config_profile_key,
@@ -1609,6 +1617,13 @@ impl Config {
             ephemeral,
             additional_writable_roots,
         } = overrides;
+
+        if sandbox_mode.is_some() && permission_profile.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`sandbox_mode` and `permission_profile` overrides cannot both be set",
+            ));
+        }
 
         let active_profile_name = config_profile_key
             .as_ref()
@@ -1730,7 +1745,56 @@ impl Config {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-        ) = if profiles_are_active {
+        ) = if let Some(permission_profile) = permission_profile {
+            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
+            let configured_network_proxy_config =
+                if network_sandbox_policy.is_enabled() && profiles_are_active {
+                    let permissions = cfg.permissions.as_ref().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "default_permissions requires a `[permissions]` table",
+                        )
+                    })?;
+                    let default_permissions = cfg.default_permissions.as_deref().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "default_permissions requires a named permissions profile",
+                        )
+                    })?;
+                    let profile = resolve_permission_profile(permissions, default_permissions)?;
+
+                    // PermissionProfile only carries the network enabled bit today. Keep the
+                    // configured proxy/allowlist policy so active profiles can round-trip without
+                    // broadening network behavior.
+                    network_proxy_config_from_profile_network(profile.network.as_ref())
+                } else {
+                    NetworkProxyConfig::default()
+                };
+            let mut sandbox_policy = permission_profile
+                .to_legacy_sandbox_policy(resolved_cwd.as_path())
+                .map_err(|err| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("invalid permission_profile override: {err}"),
+                    )
+                })?;
+            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_writable_roots(
+                        resolved_cwd.as_path(),
+                        &additional_writable_roots,
+                    );
+                sandbox_policy = file_system_sandbox_policy
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+            }
+            (
+                configured_network_proxy_config,
+                sandbox_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+            )
+        } else if profiles_are_active {
             let permissions = cfg.permissions.as_ref().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -2020,7 +2084,14 @@ impl Config {
             .or(cfg.include_environment_context)
             .unwrap_or(true);
         let guardian_policy_config =
-            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml());
+            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
+                .or_else(|| {
+                    cfg.auto_review
+                        .as_ref()
+                        .and_then(|auto_review| normalize_guardian_policy_config(
+                            auto_review.policy.as_deref(),
+                        ))
+                });
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
@@ -2484,13 +2555,14 @@ pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayer
 fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
-    requirements_toml
-        .guardian_policy_config
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
+    normalize_guardian_policy_config(requirements_toml.guardian_policy_config.as_deref())
+}
+
+fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {

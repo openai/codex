@@ -231,7 +231,6 @@ pub(crate) struct PreToolUseCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "pre_tool_use_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PreToolUseToolInput,
     pub tool_use_id: String,
@@ -260,7 +259,6 @@ pub(crate) struct PermissionRequestCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
 }
@@ -286,7 +284,6 @@ pub(crate) struct PostToolUseCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
-    #[schemars(schema_with = "post_tool_use_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PostToolUseToolInput,
     pub tool_response: Value,
@@ -545,24 +542,12 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
 
-fn post_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
-}
-
 fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PreToolUse")
 }
 
 fn permission_request_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PermissionRequest")
-}
-
-fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
-}
-
-fn permission_request_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

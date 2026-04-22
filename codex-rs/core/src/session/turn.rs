@@ -345,24 +345,6 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    let agent_task = match sess.ensure_agent_task_registered().await {
-        Ok(agent_task) => agent_task,
-        Err(error) => {
-            warn!(error = %error, "agent task registration failed");
-            sess.send_event(
-                turn_context.as_ref(),
-                EventMsg::Error(ErrorEvent {
-                    message: format!(
-                        "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
-                    ),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            )
-            .await;
-            return None;
-        }
-    };
-
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;
@@ -386,21 +368,8 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut prewarmed_client_session = prewarmed_client_session;
-    if agent_task.is_some()
-        && let Some(prewarmed_client_session) = prewarmed_client_session.as_mut()
-    {
-        prewarmed_client_session.disable_cached_websocket_session_on_drop();
-    }
-    let mut client_session = if let Some(agent_task) = agent_task {
-        sess.services
-            .model_client
-            .new_session_with_agent_task(Some(agent_task))
-    } else if let Some(prewarmed_client_session) = prewarmed_client_session.take() {
-        prewarmed_client_session
-    } else {
-        sess.services.model_client.new_session()
-    };
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
@@ -1000,6 +969,9 @@ pub(crate) fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+        output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
+            &turn_context.session_source,
+        ),
     }
 }
 
@@ -1512,6 +1484,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         },
         EventMsg::Error(_)
         | EventMsg::Warning(_)
+        | EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)
         | EventMsg::RealtimeConversationRealtime(_)
@@ -1905,6 +1878,12 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let inference_trace = sess.services.rollout_trace.inference_trace_context(
+        sess.conversation_id,
+        turn_context.sub_id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let mut stream = client_session
         .stream(
             prompt,
@@ -1914,6 +1893,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

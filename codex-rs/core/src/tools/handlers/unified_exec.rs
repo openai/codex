@@ -14,6 +14,7 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
@@ -136,7 +137,10 @@ impl ToolHandler for UnifiedExecHandler {
 
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload { command: args.cmd })
+            .map(|args| PreToolUsePayload {
+                tool_name: HookToolName::bash(),
+                command: args.cmd,
+            })
     }
 
     fn post_tool_use_payload(
@@ -157,6 +161,7 @@ impl ToolHandler for UnifiedExecHandler {
         };
         let tool_response = result.post_tool_use_response(&tool_use_id, payload)?;
         Some(PostToolUsePayload {
+            tool_name: HookToolName::bash(),
             tool_use_id,
             command,
             tool_response,

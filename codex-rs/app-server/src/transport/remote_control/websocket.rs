@@ -49,7 +49,6 @@ use tracing::warn;
 
 pub(super) const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "2";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
-const REMOTE_CONTROL_FEDRAMP_HEADER: &str = "X-OpenAI-Fedramp";
 const REMOTE_CONTROL_SUBSCRIBE_CURSOR_HEADER: &str = "x-codex-subscribe-cursor";
 const REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(10);
@@ -129,16 +128,6 @@ pub(crate) struct RemoteControlWebsocket {
     enabled_rx: watch::Receiver<bool>,
 }
 
-pub(crate) struct RemoteControlWebsocketOptions {
-    pub(crate) remote_control_url: String,
-    pub(crate) remote_control_target: Option<RemoteControlTarget>,
-    pub(crate) state_db: Option<Arc<StateRuntime>>,
-    pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) transport_event_tx: mpsc::Sender<TransportEvent>,
-    pub(crate) shutdown_token: CancellationToken,
-    pub(crate) enabled_rx: watch::Receiver<bool>,
-}
-
 enum ConnectOutcome {
     Connected(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
     Disabled,
@@ -146,7 +135,6 @@ enum ConnectOutcome {
 }
 
 impl RemoteControlWebsocket {
-    #[cfg(test)]
     pub(crate) fn new(
         remote_control_url: String,
         remote_control_target: Option<RemoteControlTarget>,
@@ -156,27 +144,6 @@ impl RemoteControlWebsocket {
         shutdown_token: CancellationToken,
         enabled_rx: watch::Receiver<bool>,
     ) -> Self {
-        Self::from_options(RemoteControlWebsocketOptions {
-            remote_control_url,
-            remote_control_target,
-            state_db,
-            auth_manager,
-            transport_event_tx,
-            shutdown_token,
-            enabled_rx,
-        })
-    }
-
-    pub(crate) fn from_options(options: RemoteControlWebsocketOptions) -> Self {
-        let RemoteControlWebsocketOptions {
-            remote_control_url,
-            remote_control_target,
-            state_db,
-            auth_manager,
-            transport_event_tx,
-            shutdown_token,
-            enabled_rx,
-        } = options;
         let shutdown_token = shutdown_token.child_token();
         let (server_event_tx, server_event_rx) = mpsc::channel(super::CHANNEL_CAPACITY);
         let client_tracker =
@@ -308,16 +275,14 @@ impl RemoteControlWebsocket {
                     }
                     return ConnectOutcome::Disabled;
                 }
-                connect_result = connect_remote_control_websocket_with_options(
-                    ConnectRemoteControlWebsocketOptions {
-                        remote_control_target: &remote_control_target,
-                        state_db: self.state_db.as_deref(),
-                        auth_manager: &self.auth_manager,
-                        auth_recovery: &mut self.auth_recovery,
-                        enrollment: &mut self.enrollment,
-                        subscribe_cursor: subscribe_cursor.as_deref(),
-                        app_server_client_name,
-                    },
+                connect_result = connect_remote_control_websocket(
+                    &remote_control_target,
+                    self.state_db.as_deref(),
+                    &self.auth_manager,
+                    &mut self.auth_recovery,
+                    &mut self.enrollment,
+                    subscribe_cursor.as_deref(),
+                    app_server_client_name,
                 ) => connect_result,
             };
 
@@ -715,11 +680,12 @@ fn build_remote_control_websocket_request(
         "x-codex-protocol-version",
         REMOTE_CONTROL_PROTOCOL_VERSION,
     )?;
-    set_remote_control_header(headers, "authorization", &auth.authorization_header_value)?;
+    set_remote_control_header(
+        headers,
+        "authorization",
+        &format!("Bearer {}", auth.bearer_token),
+    )?;
     set_remote_control_header(headers, REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)?;
-    if auth.is_fedramp_account {
-        set_remote_control_header(headers, REMOTE_CONTROL_FEDRAMP_HEADER, "true")?;
-    }
     if let Some(subscribe_cursor) = subscribe_cursor {
         set_remote_control_header(
             headers,
@@ -764,19 +730,8 @@ pub(crate) async fn load_remote_control_auth(
         ));
     }
 
-    let authorization_header_value = auth_manager
-        .chatgpt_authorization_header_for_auth(&auth)
-        .await
-        .ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::PermissionDenied,
-                "remote control requires ChatGPT authentication",
-            )
-        })?;
-
     Ok(RemoteControlConnectionAuth {
-        authorization_header_value,
-        is_fedramp_account: auth.is_fedramp_account(),
+        bearer_token: auth.get_token().map_err(io::Error::other)?,
         account_id: auth.get_account_id().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::WouldBlock,
@@ -786,7 +741,6 @@ pub(crate) async fn load_remote_control_auth(
     })
 }
 
-#[cfg(test)]
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
@@ -799,44 +753,6 @@ pub(super) async fn connect_remote_control_websocket(
     WebSocketStream<MaybeTlsStream<TcpStream>>,
     tungstenite::http::Response<()>,
 )> {
-    connect_remote_control_websocket_with_options(ConnectRemoteControlWebsocketOptions {
-        remote_control_target,
-        state_db,
-        auth_manager,
-        auth_recovery,
-        enrollment,
-        subscribe_cursor,
-        app_server_client_name,
-    })
-    .await
-}
-
-struct ConnectRemoteControlWebsocketOptions<'a> {
-    remote_control_target: &'a RemoteControlTarget,
-    state_db: Option<&'a StateRuntime>,
-    auth_manager: &'a Arc<AuthManager>,
-    auth_recovery: &'a mut UnauthorizedRecovery,
-    enrollment: &'a mut Option<RemoteControlEnrollment>,
-    subscribe_cursor: Option<&'a str>,
-    app_server_client_name: Option<&'a str>,
-}
-
-async fn connect_remote_control_websocket_with_options(
-    options: ConnectRemoteControlWebsocketOptions<'_>,
-) -> io::Result<(
-    WebSocketStream<MaybeTlsStream<TcpStream>>,
-    tungstenite::http::Response<()>,
-)> {
-    let ConnectRemoteControlWebsocketOptions {
-        remote_control_target,
-        state_db,
-        auth_manager,
-        auth_recovery,
-        enrollment,
-        subscribe_cursor,
-        app_server_client_name,
-    } = options;
-
     ensure_rustls_crypto_provider();
 
     let auth = load_remote_control_auth(auth_manager).await?;
@@ -1099,34 +1015,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn build_remote_control_websocket_request_includes_fedramp_header() {
-        let request = build_remote_control_websocket_request(
-            "ws://127.0.0.1/backend-api/wham/remote/control/server",
-            &RemoteControlEnrollment {
-                account_id: "account_id".to_string(),
-                environment_id: "env_test".to_string(),
-                server_id: "srv_e_test".to_string(),
-                server_name: "test-server".to_string(),
-            },
-            &RemoteControlConnectionAuth {
-                authorization_header_value: "AgentAssertion assertion".to_string(),
-                account_id: "account_id".to_string(),
-                is_fedramp_account: true,
-            },
-            /*subscribe_cursor*/ None,
-        )
-        .expect("request should build");
-
-        assert_eq!(
-            request
-                .headers()
-                .get(REMOTE_CONTROL_FEDRAMP_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
-    }
-
     #[tokio::test]
     async fn connect_remote_control_websocket_includes_http_error_details() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1203,6 +1091,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
@@ -1284,6 +1173,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;
