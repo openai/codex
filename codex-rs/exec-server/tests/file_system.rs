@@ -80,30 +80,38 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
 }
 
 fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![absolute_path(readable_root)],
+    let readable_root = absolute_path(readable_root);
+    FileSystemSandboxContext::from_legacy_sandbox_policy(
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![readable_root.clone()],
+            },
+            network_access: false,
         },
-        network_access: false,
-    })
+        readable_root,
+    )
 }
 
 fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![absolute_path(writable_root)],
-        read_only_access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
+    let writable_root = absolute_path(writable_root);
+    FileSystemSandboxContext::from_legacy_sandbox_policy(
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![writable_root.clone()],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         },
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    })
+        writable_root,
+    )
 }
 
 #[test]
-fn sandbox_context_new_preserves_legacy_workspace_write_read_only_subpaths() -> Result<()> {
+fn sandbox_context_from_legacy_policy_preserves_workspace_write_read_only_subpaths() -> Result<()> {
     let tmp = TempDir::new()?;
     let writable_dir = tmp.path().join("writable");
     let git_dir = writable_dir.join(".git");
