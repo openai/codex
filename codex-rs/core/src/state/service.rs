@@ -4,7 +4,6 @@ use std::sync::Arc;
 use crate::RolloutRecorder;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
-use crate::agent_identity::AgentIdentityManager;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
@@ -17,7 +16,7 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_analytics::AnalyticsEventsClient;
-use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConnectionManager;
@@ -43,7 +42,6 @@ pub(crate) struct SessionServices {
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
-    pub(crate) agent_identity_manager: Arc<AgentIdentityManager>,
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
@@ -64,5 +62,7 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
-    pub(crate) environment: Option<Arc<Environment>>,
+    /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
+    /// the same manager through child-thread spawn paths without reconstructing it.
+    pub(crate) environment_manager: Arc<EnvironmentManager>,
 }

@@ -777,7 +777,7 @@ pub(super) async fn read_response_and_notification_for_method(
     Ok((response, notification))
 }
 
-async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
+pub(super) async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
     let target_id = RequestId::Integer(id);
     loop {
         let message = read_jsonrpc_message(stream).await?;

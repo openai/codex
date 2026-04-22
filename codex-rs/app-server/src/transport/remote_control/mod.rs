@@ -4,7 +4,6 @@ mod protocol;
 mod websocket;
 
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
-use crate::transport::remote_control::websocket::RemoteControlWebsocketOptions;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
@@ -45,17 +44,6 @@ impl RemoteControlHandle {
     }
 }
 
-pub(crate) struct RemoteControlStartOptions {
-    pub(crate) remote_control_url: String,
-    pub(crate) state_db: Option<Arc<StateRuntime>>,
-    pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) transport_event_tx: mpsc::Sender<TransportEvent>,
-    pub(crate) shutdown_token: CancellationToken,
-    pub(crate) app_server_client_name_rx: Option<oneshot::Receiver<String>>,
-    pub(crate) initial_enabled: bool,
-}
-
-#[cfg(test)]
 pub(crate) async fn start_remote_control(
     remote_control_url: String,
     state_db: Option<Arc<StateRuntime>>,
@@ -65,38 +53,15 @@ pub(crate) async fn start_remote_control(
     app_server_client_name_rx: Option<oneshot::Receiver<String>>,
     initial_enabled: bool,
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
-    start_remote_control_with_options(RemoteControlStartOptions {
-        remote_control_url,
-        state_db,
-        auth_manager,
-        transport_event_tx,
-        shutdown_token,
-        app_server_client_name_rx,
-        initial_enabled,
-    })
-    .await
-}
-
-pub(crate) async fn start_remote_control_with_options(
-    options: RemoteControlStartOptions,
-) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
-    let RemoteControlStartOptions {
-        remote_control_url,
-        state_db,
-        auth_manager,
-        transport_event_tx,
-        shutdown_token,
-        app_server_client_name_rx,
-        initial_enabled,
-    } = options;
     let remote_control_target = if initial_enabled {
         Some(normalize_remote_control_url(&remote_control_url)?)
     } else {
         None
     };
+
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let join_handle = tokio::spawn(async move {
-        RemoteControlWebsocket::from_options(RemoteControlWebsocketOptions {
+        RemoteControlWebsocket::new(
             remote_control_url,
             remote_control_target,
             state_db,
@@ -104,7 +69,7 @@ pub(crate) async fn start_remote_control_with_options(
             transport_event_tx,
             shutdown_token,
             enabled_rx,
-        })
+        )
         .run(app_server_client_name_rx)
         .await;
     });

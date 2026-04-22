@@ -40,6 +40,7 @@ pub struct PermissionRequestRequest {
     pub model: String,
     pub permission_mode: String,
     pub tool_name: String,
+    pub matcher_aliases: Vec<String>,
     pub run_id_suffix: String,
     pub command: String,
     pub description: Option<String>,
@@ -66,10 +67,11 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &PermissionRequestRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PermissionRequest,
-        Some(&request.tool_name),
+        &matcher_inputs,
     )
     .into_iter()
     .map(|handler| {
@@ -86,10 +88,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
-    let matched = dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    let matched = dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PermissionRequest,
-        Some(&request.tool_name),
+        &matcher_inputs,
     );
     if matched.is_empty() {
         return PermissionRequestOutcome {
