@@ -273,6 +273,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
             &ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-43".to_string(),
                 tool_name: codex_tools::ToolName::plain("exec_command"),
@@ -315,6 +316,7 @@ async fn exec_command_post_tool_use_payload_skips_interactive_exec() {
             &ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-44".to_string(),
                 tool_name: codex_tools::ToolName::plain("exec_command"),
@@ -353,6 +355,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
             &ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-45".to_string(),
                 tool_name: codex_tools::ToolName::plain("exec_command"),

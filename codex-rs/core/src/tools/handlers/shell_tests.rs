@@ -286,6 +286,7 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
             &ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-42".to_string(),
                 tool_name: codex_tools::ToolName::plain("shell_command"),

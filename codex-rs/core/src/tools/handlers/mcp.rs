@@ -134,6 +134,7 @@ mod tests {
             McpHandler.pre_tool_use_payload(&ToolInvocation {
                 session: session.into(),
                 turn: turn.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                 call_id: "call-mcp-pre".to_string(),
                 tool_name: codex_tools::ToolName::namespaced("mcp__memory__", "create_entities"),
@@ -183,6 +184,7 @@ mod tests {
                 &ToolInvocation {
                     session: session.into(),
                     turn: turn.into(),
+                    cancellation_token: tokio_util::sync::CancellationToken::new(),
                     tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
                     call_id: "call-mcp-post".to_string(),
                     tool_name: codex_tools::ToolName::namespaced("mcp__filesystem__", "read_file"),
