@@ -5675,8 +5675,8 @@ impl CodexMessageProcessor {
         let auth = auth_manager.auth().await;
         let runtime_environment = match self.thread_manager.environment_manager().current().await {
             Ok(Some(environment)) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
+                // Status listing has no turn cwd. This fallback is used by
+                // stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
             Ok(None) => McpRuntimeEnvironment::new(
