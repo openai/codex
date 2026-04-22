@@ -38,7 +38,7 @@ pub(crate) struct ExecutorPendingHttpBodyStream {
     response: reqwest::Response,
 }
 
-struct ExecutorHttpRequestRunner {
+pub(crate) struct ExecutorHttpRequestRunner {
     client: reqwest::Client,
 }
 
@@ -350,21 +350,6 @@ fn spawn_remove_http_body_stream(inner: Arc<Inner>, request_id: String) {
     }
 }
 
-pub(crate) async fn run_executor_http_request(
-    params: HttpRequestParams,
-) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError> {
-    ExecutorHttpRequestRunner::new(params.timeout_ms)?
-        .run(params)
-        .await
-}
-
-pub(crate) async fn stream_executor_http_body(
-    pending_stream: ExecutorPendingHttpBodyStream,
-    notifications: RpcNotificationSender,
-) {
-    ExecutorHttpRequestRunner::stream_body(pending_stream, notifications).await;
-}
-
 async fn send_executor_body_delta(
     notifications: &RpcNotificationSender,
     delta: HttpRequestBodyDeltaNotification,
@@ -376,7 +361,7 @@ async fn send_executor_body_delta(
 }
 
 impl ExecutorHttpRequestRunner {
-    fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
+    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
         let client = match timeout_ms {
             None => reqwest::Client::builder(),
             Some(timeout_ms) => {
@@ -388,7 +373,7 @@ impl ExecutorHttpRequestRunner {
         Ok(Self { client })
     }
 
-    async fn run(
+    pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
     ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
@@ -476,7 +461,7 @@ impl ExecutorHttpRequestRunner {
             .collect()
     }
 
-    async fn stream_body(
+    pub(crate) async fn stream_body(
         pending_stream: ExecutorPendingHttpBodyStream,
         notifications: RpcNotificationSender,
     ) {

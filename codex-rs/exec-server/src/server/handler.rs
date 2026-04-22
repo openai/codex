@@ -11,9 +11,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::ExecServerRuntimePaths;
+use crate::client::http_client::ExecutorHttpRequestRunner;
 use crate::client::http_client::ExecutorPendingHttpBodyStream;
-use crate::client::http_client::run_executor_http_request;
-use crate::client::http_client::stream_executor_http_body;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -181,7 +180,9 @@ impl ExecServerHandler {
         if stream_response {
             self.reserve_http_body_stream(&http_request_id).await?;
         }
-        let mut response = run_executor_http_request(params).await;
+        let mut response = ExecutorHttpRequestRunner::new(params.timeout_ms)?
+            .run(params)
+            .await;
         if response.is_err() && stream_response {
             self.release_http_body_stream(&http_request_id).await;
         }
@@ -314,7 +315,7 @@ impl ExecServerHandler {
         let handler = Arc::clone(self);
         let notifications = self.notifications.clone();
         let task = tokio::spawn(async move {
-            stream_executor_http_body(pending_stream, notifications).await;
+            ExecutorHttpRequestRunner::stream_body(pending_stream, notifications).await;
             handler.release_http_body_stream(&finished_request_id).await;
         });
         let mut body_streams = self.body_streams.lock().await;
