@@ -67,6 +67,74 @@ fn fixed_guardian_parent_session_id() -> ThreadId {
         .expect("fixed parent session id should be a valid UUID")
 }
 
+#[test]
+fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 3,
+            total_denials: 3,
+        }
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+}
+
+#[test]
+fn guardian_rejection_circuit_breaker_resets_consecutive_denials_on_non_denial() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    circuit_breaker.record_non_denial("turn-1");
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::Continue
+    );
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 3,
+            total_denials: 4,
+        }
+    );
+}
+
+#[test]
+fn guardian_rejection_circuit_breaker_interrupts_after_ten_total_denials() {
+    let mut circuit_breaker = GuardianRejectionCircuitBreaker::default();
+    for _ in 0..9 {
+        assert_eq!(
+            circuit_breaker.record_denial("turn-1"),
+            GuardianRejectionCircuitBreakerAction::Continue
+        );
+        circuit_breaker.record_non_denial("turn-1");
+    }
+    assert_eq!(
+        circuit_breaker.record_denial("turn-1"),
+        GuardianRejectionCircuitBreakerAction::InterruptTurn {
+            consecutive_denials: 1,
+            total_denials: 10,
+        }
+    );
+}
+
 async fn guardian_test_session_and_turn(
     server: &wiremock::MockServer,
 ) -> (Arc<Session>, Arc<TurnContext>) {
@@ -739,7 +807,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     while let Ok(event) = rx.try_recv() {
         match event.msg {
             EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             _ => {}
         }
     }
@@ -1491,7 +1559,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let mut denial_rationales = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event.msg {
-            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianWarning(event) => warnings.push(event.message),
             EventMsg::GuardianAssessment(event)
                 if event.status == GuardianAssessmentStatus::Denied =>
             {
