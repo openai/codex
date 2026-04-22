@@ -3201,15 +3201,32 @@ impl Session {
     }
 
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
-        let local_store = self
+        match self.try_current_rollout_path().await {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("{err}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn try_current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
+        let Some(local_store) = self
             .services
             .thread_store
             .as_any()
-            .downcast_ref::<LocalThreadStore>()?;
+            .downcast_ref::<LocalThreadStore>()
+        else {
+            anyhow::bail!(
+                "rollout path requested for thread {} but the configured thread store is not local; this legacy path is unsupported for remote thread storage",
+                self.conversation_id
+            );
+        };
         local_store
             .live_rollout_path(self.conversation_id)
             .await
-            .ok()
+            .map(Some)
+            .map_err(anyhow::Error::from)
     }
 
     pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {

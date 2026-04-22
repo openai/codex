@@ -751,7 +751,7 @@ async fn load_rollout_items_for_fork(
     session: &Session,
 ) -> anyhow::Result<Option<Vec<RolloutItem>>> {
     session.flush_rollout().await?;
-    let Some(rollout_path) = session.current_rollout_path().await else {
+    let Some(rollout_path) = session.try_current_rollout_path().await? else {
         return Ok(None);
     };
     let history = RolloutRecorder::get_rollout_history(rollout_path.as_path()).await?;
