@@ -6486,6 +6486,68 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            None,
+        )
+        .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ExternalSet {
+        status: codex_state::ThreadGoalStatus::Active,
+    })
+    .await?;
+
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 65,
+            cached_input_tokens: 10,
+            output_tokens: 40,
+            reasoning_output_tokens: 5,
+            total_tokens: 110,
+        },
+    )
+    .await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+        turn_context: tc.as_ref(),
+        tool_name: "shell",
+    })
+    .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(25, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(

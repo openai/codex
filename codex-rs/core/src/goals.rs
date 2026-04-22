@@ -471,21 +471,12 @@ impl Session {
                     .is_some_and(|status| status != codex_state::ThreadGoalStatus::Active));
         if newly_active_goal {
             let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-            {
-                let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-                let turn_accounting = turn_accounting
-                    .entry(turn_context.sub_id.clone())
-                    .or_insert_with(|| {
-                        GoalTurnAccountingSnapshot::new(current_token_usage.clone())
-                    });
-                turn_accounting.reset_baseline(current_token_usage);
-                turn_accounting.mark_active_goal(goal_id.clone());
-            }
-            self.goal_runtime
-                .wall_clock_accounting
-                .lock()
-                .await
-                .mark_active_goal(goal_id);
+            self.mark_active_goal_accounting_for_turns(
+                goal_id,
+                [turn_context.sub_id.clone()],
+                current_token_usage,
+            )
+            .await;
         } else if goal_status != codex_state::ThreadGoalStatus::Active {
             self.clear_active_goal_accounting(turn_context).await;
         }
@@ -584,6 +575,37 @@ impl Session {
         match status {
             codex_state::ThreadGoalStatus::Active => {
                 self.reset_thread_goal_continuation_suppression();
+                match self.state_db_for_thread_goals().await {
+                    Ok(Some(state_db)) => {
+                        match state_db.get_thread_goal(self.conversation_id).await {
+                            Ok(Some(goal))
+                                if goal.status == codex_state::ThreadGoalStatus::Active =>
+                            {
+                                let turn_ids = self
+                                    .active_turn_contexts()
+                                    .await
+                                    .into_iter()
+                                    .map(|turn_context| turn_context.sub_id.clone());
+                                let current_token_usage =
+                                    self.total_token_usage().await.unwrap_or_default();
+                                self.mark_active_goal_accounting_for_turns(
+                                    goal.goal_id,
+                                    turn_ids,
+                                    current_token_usage,
+                                )
+                                .await;
+                            }
+                            Ok(Some(_)) | Ok(None) => {}
+                            Err(err) => tracing::warn!(
+                                "failed to read active goal after external set: {err}"
+                            ),
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to open state db after external goal set: {err}");
+                    }
+                    Ok(None) => {}
+                }
                 self.maybe_continue_goal_if_idle_runtime().await;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
@@ -628,6 +650,29 @@ impl Session {
             .lock()
             .await
             .clear_active_goal();
+    }
+
+    async fn mark_active_goal_accounting_for_turns(
+        &self,
+        goal_id: String,
+        turn_ids: impl IntoIterator<Item = String>,
+        token_usage: TokenUsage,
+    ) {
+        {
+            let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
+            for turn_id in turn_ids {
+                let turn_accounting = turn_accounting
+                    .entry(turn_id)
+                    .or_insert_with(|| GoalTurnAccountingSnapshot::new(token_usage.clone()));
+                turn_accounting.reset_baseline(token_usage.clone());
+                turn_accounting.mark_active_goal(goal_id.clone());
+            }
+        }
+        self.goal_runtime
+            .wall_clock_accounting
+            .lock()
+            .await
+            .mark_active_goal(goal_id);
     }
 
     async fn active_turn_context(&self) -> Option<Arc<TurnContext>> {
