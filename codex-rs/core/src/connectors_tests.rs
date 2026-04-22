@@ -33,10 +33,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tempfile::tempdir;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::Semaphore;
 
-static ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK: LazyLock<TokioMutex<()>> =
-    LazyLock::new(|| TokioMutex::new(()));
+static ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK: LazyLock<Semaphore> =
+    LazyLock::new(|| Semaphore::new(1));
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
     ToolAnnotations {
@@ -172,7 +172,10 @@ async fn with_accessible_connectors_cache_cleared<R, F>(f: impl FnOnce() -> F) -
 where
     F: Future<Output = R>,
 {
-    let _guard = ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+    let _guard = ACCESSIBLE_CONNECTORS_CACHE_TEST_LOCK
+        .acquire()
+        .await
+        .expect("accessible connectors cache test lock should not be closed");
     let previous = {
         let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
             .lock()
