@@ -52,7 +52,7 @@ use crate::server::session_registry::SessionRegistry;
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
-    outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
+    server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
     session: StdMutex<Option<SessionHandle>>,
     body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
     file_system: FileSystemHandler,
@@ -64,13 +64,13 @@ impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
-        outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
+        server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
             notifications,
-            outgoing_tx,
+            server_outbound_tx,
             session: StdMutex::new(None),
             body_streams: Mutex::new(HashMap::new()),
             file_system: FileSystemHandler::new(runtime_paths),
@@ -204,7 +204,7 @@ impl ExecServerHandler {
                 }
             }
         };
-        self.outgoing_tx.send(message).await.map_err(|_| {
+        self.server_outbound_tx.send(message).await.map_err(|_| {
             internal_error("RPC connection closed while sending http/request response".into())
         })?;
         if let Some(pending_stream) = pending_stream {

@@ -50,18 +50,18 @@ async fn run_connection(
     let router = Arc::new(build_router());
     let (json_outgoing_tx, mut incoming_rx, mut disconnected_rx, connection_tasks) =
         connection.into_parts();
-    let (outgoing_tx, mut outgoing_rx) =
+    let (server_outbound_tx, mut server_outbound_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
-    let notifications = RpcNotificationSender::new(outgoing_tx.clone());
+    let notifications = RpcNotificationSender::new(server_outbound_tx.clone());
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
         notifications,
-        outgoing_tx.clone(),
+        server_outbound_tx.clone(),
         runtime_paths,
     ));
 
     let outbound_task = tokio::spawn(async move {
-        while let Some(message) = outgoing_rx.recv().await {
+        while let Some(message) = server_outbound_rx.recv().await {
             let json_message = match encode_server_message(message) {
                 Ok(json_message) => json_message,
                 Err(err) => {
@@ -84,7 +84,7 @@ async fn run_connection(
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
                 warn!("ignoring malformed exec-server message: {reason}");
-                if outgoing_tx
+                if server_outbound_tx
                     .send(RpcServerOutboundMessage::Error {
                         request_id: codex_app_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
@@ -106,11 +106,11 @@ async fn run_connection(
                             }
                         };
                         if let RequestRouteOutcome::Message(message) = outcome
-                            && outgoing_tx.send(message).await.is_err()
+                            && server_outbound_tx.send(message).await.is_err()
                         {
                             break;
                         }
-                    } else if outgoing_tx
+                    } else if server_outbound_tx
                         .send(RpcServerOutboundMessage::Error {
                             request_id: request.id,
                             error: method_not_found(format!(
@@ -173,7 +173,7 @@ async fn run_connection(
 
     handler.shutdown().await;
     drop(handler);
-    drop(outgoing_tx);
+    drop(server_outbound_tx);
     for task in connection_tasks {
         task.abort();
         let _ = task.await;
