@@ -635,7 +635,7 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.remove_thread(thread_id).await
+        self.state.threads.write().await.remove(thread_id)
     }
 
     /// Tries to shut down all tracked threads concurrently within the provided timeout.
@@ -791,14 +791,7 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        let thread = self.threads.write().await.remove(thread_id);
-        if let Some(thread) = thread.as_ref()
-            && let Some(live_thread) = thread.codex.session.live_thread()
-            && let Err(err) = live_thread.shutdown().await
-        {
-            warn!("failed to shutdown persistence for removed thread {thread_id}: {err}");
-        }
-        thread
+        self.threads.write().await.remove(thread_id)
     }
 
     /// Spawn a new thread with no history using a provided config.
@@ -963,6 +956,7 @@ impl ThreadManagerState {
             }
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
+        let thread_store = self.thread_store_for_config(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -986,7 +980,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
-            thread_store: Arc::clone(&self.thread_store),
+            thread_store,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
@@ -1023,6 +1017,14 @@ impl ThreadManagerState {
             thread,
             session_configured,
         })
+    }
+
+    fn thread_store_for_config(&self, config: &Config) -> Arc<dyn ThreadStore> {
+        if self.thread_store.as_any().is::<RemoteThreadStore>() {
+            Arc::clone(&self.thread_store)
+        } else {
+            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
+        }
     }
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {

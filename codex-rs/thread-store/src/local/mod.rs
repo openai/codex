@@ -42,7 +42,7 @@ use crate::UpdateThreadMetadataParams;
 pub struct LocalThreadStore {
     pub(super) config: RolloutConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
-    state_db: Arc<OnceCell<Option<StateDbHandle>>>,
+    state_db: Arc<OnceCell<StateDbHandle>>,
 }
 
 impl std::fmt::Debug for LocalThreadStore {
@@ -65,10 +65,12 @@ impl LocalThreadStore {
 
     /// Return the state DB handle used by local rollout writers.
     pub async fn state_db(&self) -> Option<StateDbHandle> {
-        self.state_db
-            .get_or_init(|| async { codex_rollout::state_db::init(&self.config).await })
-            .await
-            .clone()
+        if let Some(state_db) = self.state_db.get() {
+            return Some(Arc::clone(state_db));
+        }
+        let state_db = codex_rollout::state_db::init(&self.config).await?;
+        let _ = self.state_db.set(Arc::clone(&state_db));
+        Some(state_db)
     }
 
     /// Read a local rollout-backed thread by path.
@@ -171,6 +173,20 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory> {
+        if let Ok(rollout_path) = live_writer::rollout_path(self, params.thread_id).await {
+            return read_thread::read_thread_by_rollout_path(
+                self,
+                rollout_path,
+                params.include_archived,
+                /*include_history*/ true,
+            )
+            .await?
+            .history
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: format!("failed to load history for thread {}", params.thread_id),
+            });
+        }
+
         read_thread::read_thread(
             self,
             ReadThreadParams {
@@ -226,6 +242,7 @@ mod tests {
     use super::*;
     use crate::ThreadEventPersistenceMode;
     use crate::local::test_support::test_config;
+    use crate::local::test_support::write_session_file;
 
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {
@@ -392,6 +409,54 @@ mod tests {
 
         assert!(matches!(err, ThreadStoreError::InvalidRequest { .. }));
         assert!(err.to_string().contains("already has a live local writer"));
+    }
+
+    #[tokio::test]
+    async fn load_history_uses_live_writer_rollout_path() {
+        let home = TempDir::new().expect("temp dir");
+        let external_home = TempDir::new().expect("external temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(404);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_session_file(external_home.path(), "2025-01-04T10-00-00", uuid)
+            .expect("external session file");
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume live thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("external history item")],
+            })
+            .await
+            .expect("append live item");
+        store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush live thread");
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load external live history");
+
+        assert!(history.items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "external history item"
+            )
+        }));
     }
 
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
