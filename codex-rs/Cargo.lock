@@ -2864,7 +2864,6 @@ dependencies = [
  "codex-protocol",
  "http 1.4.0",
  "pretty_assertions",
- "tokio",
 ]
 
 [[package]]
