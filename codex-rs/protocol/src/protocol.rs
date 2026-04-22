@@ -455,6 +455,13 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
+        /// Full permissions profile to use for tool calls such as `local_shell`.
+        ///
+        /// When omitted, `sandbox_policy` is used as a legacy compatibility
+        /// projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
         /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,

@@ -3736,6 +3736,7 @@ async fn user_turn_updates_approvals_reviewer() {
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
