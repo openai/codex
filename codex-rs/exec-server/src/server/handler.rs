@@ -4,10 +4,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use serde_json::to_value;
+use tokio::sync::mpsc;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::ExecutorHttpClient;
-use crate::client::http_client::ExecutorPendingHttpBodyStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -25,7 +27,6 @@ use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
-use crate::protocol::HttpRequestResponse;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
@@ -35,6 +36,8 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::RpcServerOutboundMessage;
+use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
@@ -43,6 +46,7 @@ use crate::server::session_registry::SessionRegistry;
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
+    outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
     session: StdMutex<Option<SessionHandle>>,
     http_client: Arc<ExecutorHttpClient>,
     file_system: FileSystemHandler,
@@ -54,12 +58,14 @@ impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
+        outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
             http_client: Arc::new(ExecutorHttpClient::new(notifications.clone())),
             notifications,
+            outgoing_tx,
             session: StdMutex::new(None),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
@@ -155,21 +161,35 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn http_request(
-        &self,
-        params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
-    {
-        self.require_initialized_for("http")?;
-        self.http_client.run_http_request(params).await
-    }
-
-    pub(crate) async fn start_http_body_stream(
         self: &Arc<Self>,
-        pending_stream: ExecutorPendingHttpBodyStream,
-    ) {
-        self.http_client
-            .start_http_body_stream(pending_stream)
-            .await;
+        request_id: RequestId,
+        params: HttpRequestParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.require_initialized_for("http")?;
+        let (response, mut pending_stream) = self.http_client.run_http_request(params).await?;
+        let message = match to_value(response) {
+            Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
+            Err(err) => {
+                if let Some(pending_stream) = pending_stream.take() {
+                    self.http_client
+                        .release_http_body_stream(&pending_stream.request_id)
+                        .await;
+                }
+                RpcServerOutboundMessage::Error {
+                    request_id,
+                    error: internal_error(err.to_string()),
+                }
+            }
+        };
+        self.outgoing_tx.send(message).await.map_err(|_| {
+            internal_error("RPC connection closed while sending http/request response".into())
+        })?;
+        if let Some(pending_stream) = pending_stream {
+            self.http_client
+                .start_http_body_stream(pending_stream)
+                .await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn fs_read_file(
@@ -266,10 +286,6 @@ impl ExecServerHandler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-    }
-
-    pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
-        self.http_client.release_http_body_stream(request_id).await;
     }
 }
 

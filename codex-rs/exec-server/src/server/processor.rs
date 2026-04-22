@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde_json::to_value;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -15,7 +14,6 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::decode_request_params;
 use crate::rpc::encode_server_message;
-use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
@@ -60,6 +58,7 @@ async fn run_connection(
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
         notifications,
+        outgoing_tx.clone(),
         runtime_paths,
     ));
 
@@ -117,48 +116,19 @@ async fn run_connection(
                                 }
                             };
                         let response = tokio::select! {
-                            response = handler.http_request(params) => response,
+                            response = handler.http_request(request_id.clone(), params) => response,
                             _ = disconnected_rx.changed() => {
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
                         };
-                        match response {
-                            Ok((response, pending_stream)) => {
-                                let mut pending_stream = pending_stream;
-                                let message = match to_value(response) {
-                                    Ok(result) => {
-                                        RpcServerOutboundMessage::Response { request_id, result }
-                                    }
-                                    Err(err) => {
-                                        if let Some(pending_stream) = pending_stream.take() {
-                                            handler
-                                                .release_http_body_stream(
-                                                    &pending_stream.request_id,
-                                                )
-                                                .await;
-                                        }
-                                        RpcServerOutboundMessage::Error {
-                                            request_id,
-                                            error: internal_error(err.to_string()),
-                                        }
-                                    }
-                                };
-                                if outgoing_tx.send(message).await.is_err() {
-                                    break;
-                                }
-                                if let Some(pending_stream) = pending_stream {
-                                    handler.start_http_body_stream(pending_stream).await;
-                                }
-                            }
-                            Err(error) => {
-                                if outgoing_tx
-                                    .send(RpcServerOutboundMessage::Error { request_id, error })
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
+                        if let Err(error) = response {
+                            if outgoing_tx
+                                .send(RpcServerOutboundMessage::Error { request_id, error })
+                                .await
+                                .is_err()
+                            {
+                                break;
                             }
                         }
                     } else if let Some(route) = router.request_route(request.method.as_str()) {
