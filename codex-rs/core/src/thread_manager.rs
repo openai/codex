@@ -242,7 +242,7 @@ pub fn build_models_manager(
 }
 
 fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    if let Some(endpoint) = config.experimental_thread_store_endpoint.clone() {
+    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
         return Arc::new(RemoteThreadStore::new(endpoint));
     }
     Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
