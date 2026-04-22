@@ -34,6 +34,7 @@ const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_IDENTITY_JWKS_TIMEOUT: Duration = Duration::from_secs(10);
 const AGENT_IDENTITY_JWT_AUDIENCE: &str = "codex-app-server";
 const AGENT_IDENTITY_JWT_ISSUER: &str = "https://chatgpt.com/codex-backend/agent-identity";
+const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Stored key material for a registered agent identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,11 +43,34 @@ pub struct AgentIdentityKey<'a> {
     pub private_key_pkcs8_base64: &'a str,
 }
 
-/// Task binding to use when constructing a task-scoped AgentAssertion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AgentTaskAuthorizationTarget<'a> {
-    pub agent_runtime_id: &'a str,
-    pub task_id: &'a str,
+/// Runtime identity that owns the Codex run task.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeId(String);
+
+impl AgentRuntimeId {
+    pub fn new(agent_runtime_id: impl Into<String>) -> Self {
+        Self(agent_runtime_id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for AgentRuntimeId {
+    fn from(agent_runtime_id: String) -> Self {
+        Self::new(agent_runtime_id)
+    }
+}
+
+impl From<&str> for AgentRuntimeId {
+    fn from(agent_runtime_id: &str) -> Self {
+        Self::new(agent_runtime_id)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,23 +127,28 @@ struct RegisterTaskResponse {
     encrypted_task_id_camel: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct RegisterAgentRequest {
+    abom: AgentBillOfMaterials,
+    agent_public_key: String,
+    capabilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterAgentResponse {
+    agent_runtime_id: String,
+}
+
 pub fn authorization_header_for_agent_task(
     key: AgentIdentityKey<'_>,
-    target: AgentTaskAuthorizationTarget<'_>,
+    task_id: &str,
 ) -> Result<String> {
-    anyhow::ensure!(
-        key.agent_runtime_id == target.agent_runtime_id,
-        "agent task runtime {} does not match stored agent identity {}",
-        target.agent_runtime_id,
-        key.agent_runtime_id
-    );
-
     let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let envelope = AgentAssertionEnvelope {
-        agent_runtime_id: target.agent_runtime_id.to_string(),
-        task_id: target.task_id.to_string(),
+        agent_runtime_id: key.agent_runtime_id.to_string(),
+        task_id: task_id.to_string(),
         timestamp: timestamp.clone(),
-        signature: sign_agent_assertion_payload(key, target.task_id, &timestamp)?,
+        signature: sign_agent_assertion_payload(key, task_id, &timestamp)?,
     };
     let serialized_assertion = serialize_agent_assertion(&envelope)?;
     Ok(format!("AgentAssertion {serialized_assertion}"))
@@ -231,6 +260,45 @@ pub async fn register_agent_task(
     task_id_from_register_task_response(key, response)
 }
 
+pub async fn register_agent_identity(
+    client: &reqwest::Client,
+    chatgpt_base_url: &str,
+    access_token: &str,
+    account_id: &str,
+    is_fedramp_account: bool,
+    key_material: &GeneratedAgentKeyMaterial,
+    abom: AgentBillOfMaterials,
+) -> Result<AgentRuntimeId> {
+    let url = agent_registration_url(chatgpt_base_url);
+    let request = RegisterAgentRequest {
+        abom,
+        agent_public_key: key_material.public_key_ssh.clone(),
+        capabilities: Vec::new(),
+    };
+
+    let mut request_builder = client
+        .post(&url)
+        .bearer_auth(access_token)
+        .header("ChatGPT-Account-ID", account_id)
+        .json(&request)
+        .timeout(AGENT_REGISTRATION_TIMEOUT);
+    if is_fedramp_account {
+        request_builder = request_builder.header("X-OpenAI-Fedramp", "true");
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .with_context(|| format!("failed to send agent identity registration request to {url}"))?
+        .error_for_status()
+        .with_context(|| format!("agent identity registration failed for {url}"))?
+        .json::<RegisterAgentResponse>()
+        .await
+        .with_context(|| format!("failed to parse agent identity response from {url}"))?;
+
+    Ok(AgentRuntimeId::new(response.agent_runtime_id))
+}
+
 fn task_id_from_register_task_response(
     key: AgentIdentityKey<'_>,
     response: RegisterTaskResponse,
@@ -306,11 +374,6 @@ pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &st
     format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
 }
 
-pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/authenticate_app_v2")
-}
-
 pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     if trimmed.contains("/backend-api") {
@@ -320,15 +383,27 @@ pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
     }
 }
 
-pub fn agent_identity_request_id() -> Result<String> {
-    let mut request_id_bytes = [0u8; 16];
-    OsRng
-        .try_fill_bytes(&mut request_id_bytes)
-        .context("failed to generate agent identity request id")?;
-    Ok(format!(
-        "codex-agent-identity-{}",
-        URL_SAFE_NO_PAD.encode(request_id_bytes)
-    ))
+pub fn normalize_chatgpt_base_url(chatgpt_base_url: &str) -> String {
+    let mut base_url = chatgpt_base_url.trim_end_matches('/').to_string();
+    for suffix in [
+        "/wham/remote/control/server/enroll",
+        "/wham/remote/control/server",
+    ] {
+        if let Some(stripped) = base_url.strip_suffix(suffix) {
+            base_url = stripped.to_string();
+            break;
+        }
+    }
+    if let Some(stripped) = base_url.strip_suffix("/codex") {
+        base_url = stripped.to_string();
+    }
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    base_url
 }
 
 pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
@@ -413,6 +488,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn register_task_request_uses_single_run_task_shape() {
+        let request = RegisterTaskRequest {
+            timestamp: "2026-04-23T00:00:00Z".to_string(),
+            signature: "signature".to_string(),
+        };
+
+        let serialized = serde_json::to_value(request).expect("serialize request");
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "timestamp": "2026-04-23T00:00:00Z",
+                "signature": "signature",
+            })
+        );
+    }
+
+    #[test]
     fn authorization_header_for_agent_task_serializes_signed_agent_assertion() {
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let private_key = signing_key
@@ -422,13 +515,9 @@ mod tests {
             agent_runtime_id: "agent-123",
             private_key_pkcs8_base64: &BASE64_STANDARD.encode(private_key.as_bytes()),
         };
-        let target = AgentTaskAuthorizationTarget {
-            agent_runtime_id: "agent-123",
-            task_id: "task-123",
-        };
 
-        let header =
-            authorization_header_for_agent_task(key, target).expect("build agent assertion header");
+        let header = authorization_header_for_agent_task(key, "task-123")
+            .expect("build agent assertion header");
         let token = header
             .strip_prefix("AgentAssertion ")
             .expect("agent assertion scheme");
@@ -462,31 +551,6 @@ mod tests {
                 &signature,
             )
             .expect("signature should verify");
-    }
-
-    #[test]
-    fn authorization_header_for_agent_task_rejects_mismatched_runtime() {
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let private_key = signing_key
-            .to_pkcs8_der()
-            .expect("encode test key material");
-        let private_key_pkcs8_base64 = BASE64_STANDARD.encode(private_key.as_bytes());
-        let key = AgentIdentityKey {
-            agent_runtime_id: "agent-123",
-            private_key_pkcs8_base64: &private_key_pkcs8_base64,
-        };
-        let target = AgentTaskAuthorizationTarget {
-            agent_runtime_id: "agent-456",
-            task_id: "task-123",
-        };
-
-        let error = authorization_header_for_agent_task(key, target)
-            .expect_err("runtime mismatch should fail");
-
-        assert_eq!(
-            error.to_string(),
-            "agent task runtime agent-456 does not match stored agent identity agent-123"
-        );
     }
 
     #[test]
@@ -701,6 +765,14 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
             }]
         }))
         .expect("test JWKS should parse")
+    }
+
+    #[test]
+    fn normalize_chatgpt_base_url_strips_codex_before_backend_api() {
+        assert_eq!(
+            normalize_chatgpt_base_url("https://chatgpt.com/codex"),
+            "https://chatgpt.com/backend-api"
+        );
     }
 
     #[test]
