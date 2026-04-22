@@ -1877,6 +1877,12 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let inference_trace = sess.services.rollout_trace.inference_trace_context(
+        sess.conversation_id,
+        turn_context.sub_id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let mut stream = client_session
         .stream(
             prompt,
@@ -1886,6 +1892,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
