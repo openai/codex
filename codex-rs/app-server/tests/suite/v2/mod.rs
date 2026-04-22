@@ -10,6 +10,7 @@ mod config_rpc;
 mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
+mod device_key;
 mod dynamic_tools;
 mod experimental_api;
 mod experimental_feature_list;

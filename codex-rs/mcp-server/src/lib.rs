@@ -8,6 +8,7 @@ use std::sync::Arc;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_utils_cli::CliConfigOverrides;
@@ -59,7 +60,7 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
         ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),

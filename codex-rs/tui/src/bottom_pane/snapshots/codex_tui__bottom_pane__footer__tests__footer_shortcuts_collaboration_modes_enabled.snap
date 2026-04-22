@@ -7,5 +7,6 @@ expression: terminal.backend()
 "  @ for file paths                           ctrl + v to paste images           "
 "  ctrl + g to edit in external editor        esc esc to edit previous message   "
 "  ctrl + r search history                    ctrl + c to exit                   "
+"  ⌥ + , reasoning down                       ⌥ + . reasoning up                 "
 "  shift + tab to change mode                                                    "
 "  ctrl + t to view transcript                                                   "

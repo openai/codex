@@ -169,6 +169,7 @@ pub(super) fn implicit_granted_permissions(
 
 pub(super) async fn apply_granted_turn_permissions(
     session: &Session,
+    cwd: &std::path::Path,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
 ) -> EffectiveAdditionalPermissions {
@@ -192,7 +193,7 @@ pub(super) async fn apply_granted_turn_permissions(
     );
     let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
         (Some(effective_permissions), Some(granted_permissions)) => {
-            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
+            intersect_permission_profiles(effective_permissions.clone(), granted_permissions, cwd)
                 == *effective_permissions
         }
         _ => false,

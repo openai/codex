@@ -105,7 +105,7 @@ pub(crate) struct ServerEnvelope {
     pub(crate) seq_id: u64,
 }
 
-fn is_allowed_chatgpt_host(host: &Option<Host<&str>>) -> bool {
+fn is_allowed_remote_control_chatgpt_host(host: &Option<Host<&str>>) -> bool {
     let Some(Host::Domain(host)) = *host else {
         return false;
     };
@@ -156,7 +156,7 @@ pub(super) fn normalize_remote_control_url(
         .map_err(map_url_parse_error)?;
     let host = enroll_url.host();
     match enroll_url.scheme() {
-        "https" if is_localhost(&host) || is_allowed_chatgpt_host(&host) => {
+        "https" if is_localhost(&host) || is_allowed_remote_control_chatgpt_host(&host) => {
             websocket_url.set_scheme("wss").map_err(map_scheme_error)?;
         }
         "http" if is_localhost(&host) => {
@@ -232,6 +232,7 @@ mod tests {
             "http://chatgpt.com/backend-api",
             "http://example.com/backend-api",
             "https://example.com/backend-api",
+            "https://chat.openai.com/backend-api",
             "https://chatgpt.com.evil.com/backend-api",
             "https://evilchatgpt.com/backend-api",
             "https://foo.localhost/backend-api",

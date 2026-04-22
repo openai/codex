@@ -15,6 +15,7 @@ use crate::config_loader::Sourced;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
@@ -573,11 +574,12 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
 fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     let content = "prefix ".repeat(200) + &" suffix".repeat(200);
 
-    let truncated = guardian_truncate_text(&content, /*token_cap*/ 20);
+    let (truncated, was_truncated) = guardian_truncate_text(&content, /*token_cap*/ 20);
 
     assert!(truncated.starts_with("prefix"));
     assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
     assert!(truncated.ends_with("suffix"));
+    assert!(was_truncated);
 }
 
 #[test]
@@ -592,9 +594,27 @@ fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::
 
     let rendered = format_guardian_action_pretty(&action)?;
 
-    assert!(rendered.contains("\"tool\": \"apply_patch\""));
-    assert!(rendered.contains("<truncated omitted_approx_tokens="));
-    assert!(rendered.len() < patch.len());
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(rendered.text.contains("<truncated omitted_approx_tokens="));
+    assert!(rendered.text.len() < patch.len());
+    assert!(rendered.truncated);
+    Ok(())
+}
+
+#[test]
+fn format_guardian_action_pretty_reports_no_truncation_for_small_payload() -> serde_json::Result<()>
+{
+    let action = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+        files: Vec::new(),
+        patch: "line\n".to_string(),
+    };
+
+    let rendered = format_guardian_action_pretty(&action)?;
+
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(!rendered.truncated);
     Ok(())
 }
 
@@ -707,6 +727,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
                 .to_string(),
         },
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::MainTurn,
         cancel_token,
     )
     .await;
@@ -871,9 +892,62 @@ fn parse_guardian_assessment_extracts_embedded_json() {
     ))
     .expect("guardian assessment");
 
-    assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
-    assert_eq!(parsed.user_authorization, GuardianUserAuthorization::Low);
-    assert_eq!(parsed.outcome, GuardianAssessmentOutcome::Allow);
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Medium,
+            user_authorization: GuardianUserAuthorization::Low,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "ok".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
+    let parsed =
+        parse_guardian_assessment(Some(r#"{"outcome":"allow"}"#)).expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Guardian returned a low-risk allow decision.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
+    let schema = guardian_output_schema();
+
+    assert_eq!(
+        schema,
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -941,12 +1015,70 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         /*external_cancel*/ None,
     )
     .await;
-    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+    let (GuardianReviewOutcome::Completed(assessment), metadata) = outcome else {
         panic!("expected guardian assessment");
     };
+    let guardian_thread_id = metadata
+        .guardian_thread_id
+        .as_deref()
+        .expect("guardian thread id");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-
+    assert_ne!(guardian_thread_id, session.conversation_id.to_string());
+    ThreadId::from_string(guardian_thread_id).expect("guardian thread id should be a valid UUID");
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
     let request = request_log.single_request();
+    let request_body = request.body_json();
+    assert_eq!(
+        request_body.pointer("/text/format/strict"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        request_body.pointer("/text/format/schema"),
+        Some(&serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"]
+                },
+                "user_authorization": {
+                    "type": "string",
+                    "enum": ["unknown", "low", "medium", "high"]
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": ["allow", "deny"]
+                },
+                "rationale": {
+                    "type": "string"
+                }
+            },
+            "required": ["outcome"]
+        }))
+    );
+    let request_model = request_body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model");
+    let request_reasoning_effort = request_body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(metadata.guardian_model.as_deref(), Some(request_model));
+    assert_eq!(
+        metadata.guardian_reasoning_effort.as_deref(),
+        request_reasoning_effort
+    );
+    assert_eq!(metadata.had_prior_review_context, Some(false));
+    assert!(
+        metadata.time_to_first_token_ms.is_some(),
+        "guardian review metadata should capture TTFT when the nested turn completes"
+    );
+
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1150,18 +1282,63 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+    let (GuardianReviewOutcome::Completed(first_assessment), first_metadata) = first_outcome else {
         panic!("expected first guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+    let (GuardianReviewOutcome::Completed(second_assessment), second_metadata) = second_outcome
+    else {
         panic!("expected second guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(third_assessment)) = third_outcome else {
+    let (GuardianReviewOutcome::Completed(third_assessment), third_metadata) = third_outcome else {
         panic!("expected third guardian assessment");
     };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(third_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert!(matches!(
+        first_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
+    ));
+    assert!(matches!(
+        second_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+    assert!(matches!(
+        third_metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+    ThreadId::from_string(
+        first_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("first guardian thread id"),
+    )
+    .expect("first guardian thread id should be a valid UUID");
+    ThreadId::from_string(
+        second_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("second guardian thread id"),
+    )
+    .expect("second guardian thread id should be a valid UUID");
+    ThreadId::from_string(
+        third_metadata
+            .guardian_thread_id
+            .as_deref()
+            .expect("third guardian thread id"),
+    )
+    .expect("third guardian thread id should be a valid UUID");
+    assert_eq!(first_metadata.had_prior_review_context, Some(false));
+    assert_eq!(second_metadata.had_prior_review_context, Some(true));
+    assert_eq!(third_metadata.had_prior_review_context, Some(true));
+    assert_eq!(
+        first_metadata.guardian_thread_id,
+        second_metadata.guardian_thread_id
+    );
+    assert_eq!(
+        second_metadata.guardian_thread_id,
+        third_metadata.guardian_thread_id
+    );
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3);

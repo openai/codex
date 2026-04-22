@@ -475,22 +475,10 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let auth = sess.services.auth_manager.auth().await;
-    let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-        sess.services
-            .auth_manager
-            .chatgpt_authorization_header_for_auth(auth)
-            .await
-    } else {
-        None
-    };
     let mcp_servers = sess
         .services
         .mcp_manager
-        .effective_servers_with_authorization_header(
-            config,
-            auth.as_ref(),
-            background_authorization_header_value.as_deref(),
-        )
+        .effective_servers(config, auth.as_ref())
         .await;
     let snapshot = collect_mcp_snapshot_from_manager(
         &mcp_connection_manager,
@@ -519,8 +507,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
     let plugins_manager = &sess.services.plugins_manager;
     let fs = sess
         .services
-        .environment
-        .as_ref()
+        .environment_manager
+        .default_environment()
         .map(|environment| environment.get_filesystem());
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;

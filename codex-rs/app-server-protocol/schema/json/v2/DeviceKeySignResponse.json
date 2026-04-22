@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "DeviceKeyAlgorithm": {
+      "description": "Device-key algorithm reported at enrollment and signing boundaries.",
+      "enum": [
+        "ecdsa_p256_sha256"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "ASN.1 DER signature returned by `device/key/sign`.",
+  "properties": {
+    "algorithm": {
+      "$ref": "#/definitions/DeviceKeyAlgorithm"
+    },
+    "signatureDerBase64": {
+      "description": "ECDSA signature DER encoded as base64.",
+      "type": "string"
+    },
+    "signedPayloadBase64": {
+      "description": "Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "algorithm",
+    "signatureDerBase64",
+    "signedPayloadBase64"
+  ],
+  "title": "DeviceKeySignResponse",
+  "type": "object"
+}

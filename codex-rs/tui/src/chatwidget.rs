@@ -379,6 +379,7 @@ use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod reasoning_shortcuts;
 mod side;
 mod status_surfaces;
 use self::status_surfaces::CachedProjectRootName;
@@ -1673,6 +1674,7 @@ fn request_permissions_from_params(
         call_id: params.item_id,
         reason: params.reason,
         permissions: params.permissions.into(),
+        cwd: Some(params.cwd),
     }
 }
 
@@ -1895,7 +1897,11 @@ impl ChatWidget {
             .config
             .tui_terminal_title
             .as_ref()
-            .is_some_and(|items| items.iter().any(|item| item == "status"));
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item == "run-state" || item == "status")
+            });
         let title_uses_spinner = self
             .config
             .tui_terminal_title
@@ -5275,6 +5281,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.handle_reasoning_shortcut(key_event) {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            return;
+        }
+
         match key_event {
             // Ctrl+O - copy last agent response from the main view.
             KeyEvent {
@@ -5411,6 +5424,12 @@ impl ChatWidget {
                         let should_submit_now =
                             self.is_session_configured() && !self.is_plan_streaming_in_tui();
                         if should_submit_now {
+                            if self.only_user_shell_commands_running()
+                                && !user_message.text.starts_with('!')
+                            {
+                                self.queue_user_message(user_message);
+                                return;
+                            }
                             // Submitted is emitted when user submits.
                             // Reset any reasoning header only when we are actually submitting a turn.
                             self.reasoning_buffer.clear();
@@ -7476,6 +7495,15 @@ impl ChatWidget {
         self.user_turn_pending_start || self.bottom_pane.is_task_running()
     }
 
+    fn only_user_shell_commands_running(&self) -> bool {
+        self.agent_turn_running
+            && !self.running_commands.is_empty()
+            && self
+                .running_commands
+                .values()
+                .all(|command| command.source == ExecCommandSource::UserShell)
+    }
+
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
         let queued_messages: Vec<String> = self
@@ -7646,13 +7674,7 @@ impl ChatWidget {
     fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
         let mut preview_data = self.status_surface_preview_data();
         let now = Instant::now();
-        for item in [
-            TerminalTitleItem::Project,
-            TerminalTitleItem::Thread,
-            TerminalTitleItem::GitBranch,
-            TerminalTitleItem::Model,
-            TerminalTitleItem::TaskProgress,
-        ] {
+        for item in TerminalTitleItem::iter() {
             let Some(preview_item) = item.preview_item() else {
                 continue;
             };
@@ -7663,7 +7685,6 @@ impl ChatWidget {
         }
         preview_data
     }
-
     fn open_theme_picker(&mut self) {
         let codex_home = crate::legacy_core::config::find_codex_home().ok();
         let terminal_width = self
