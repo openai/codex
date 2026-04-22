@@ -146,7 +146,7 @@ pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     matches!(
         turn.approval_policy.value(),
         AskForApproval::OnRequest | AskForApproval::Granular(_)
-    ) && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+    ) && turn.config.approvals_reviewer == ApprovalsReviewer::AutoReview
 }
 
 pub(crate) fn is_guardian_reviewer_source(

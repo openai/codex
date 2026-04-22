@@ -1598,11 +1598,11 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
 }
 
 #[tokio::test]
-async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> Result<()> {
+async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
         .await;
@@ -1616,11 +1616,11 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
     );
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.config.permissions.approval_policy.value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
@@ -1628,7 +1628,7 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
             .permissions
             .approval_policy
             .value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
@@ -1636,11 +1636,11 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
             .permissions
             .sandbox_policy
             .get(),
-        &guardian_approvals.sandbox_policy
+        &auto_review.sandbox_policy
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(app.runtime_sandbox_policy_override, None);
@@ -1648,9 +1648,9 @@ async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> 
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1700,9 +1700,9 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
     app.config
         .permissions
         .approval_policy
@@ -1779,7 +1779,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
     let config_toml_path = codex_home.path().join("config.toml").abs();
     let config_toml = "approvals_reviewer = \"user\"\n";
     std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -1798,15 +1798,15 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.config.permissions.approval_policy.value(),
-        guardian_approvals.approval_policy
+        auto_review.approval_policy
     );
     assert_eq!(
         app.chat_widget
@@ -1814,15 +1814,15 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             .permissions
             .sandbox_policy
             .get(),
-        &guardian_approvals.sandbox_policy
+        &auto_review.sandbox_policy
     );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1908,7 +1908,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let guardian_approvals = guardian_approvals_mode();
+    let auto_review = auto_review_mode();
     app.active_profile = Some("guardian".to_string());
     let config_toml_path = codex_home.path().join("config.toml").abs();
     let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
@@ -1928,19 +1928,19 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
         app.config.approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        guardian_approvals.approvals_reviewer
+        auto_review.approvals_reviewer
     );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
             cwd: None,
-            approval_policy: Some(guardian_approvals.approval_policy),
-            approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
-            sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+            approval_policy: Some(auto_review.approval_policy),
+            approvals_reviewer: Some(auto_review.approvals_reviewer),
+            sandbox_policy: Some(auto_review.sandbox_policy.clone()),
             permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -2003,9 +2003,9 @@ guardian_approval = true
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -2083,9 +2083,9 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
     app.chat_widget
         .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
 
     app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
         .await;
@@ -2097,13 +2097,10 @@ async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_
             .features
             .enabled(Feature::GuardianApproval)
     );
-    assert_eq!(
-        app.config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(
         app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
+        ApprovalsReviewer::AutoReview
     );
     assert!(
         op_rx.try_recv().is_err(),

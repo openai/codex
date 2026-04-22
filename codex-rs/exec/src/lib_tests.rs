@@ -370,7 +370,7 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             ..Default::default()
         })
         .fallback_cwd(Some(cwd.path().to_path_buf()))
@@ -382,7 +382,7 @@ async fn thread_start_params_include_review_policy_when_auto_review_is_enabled()
 
     assert_eq!(
         params.approvals_reviewer,
-        Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
+        Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview)
     );
 }
 
@@ -414,7 +414,7 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
         cwd: test_path_buf("/tmp").abs(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
-        approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+        approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
         sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
@@ -435,8 +435,5 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
     let event = session_configured_from_thread_start_response(&response)
         .expect("build bootstrap session configured event");
 
-    assert_eq!(
-        event.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(event.approvals_reviewer, ApprovalsReviewer::AutoReview);
 }

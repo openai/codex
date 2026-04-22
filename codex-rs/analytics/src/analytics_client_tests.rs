@@ -324,7 +324,7 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         reasoning_summary: None,
         service_tier: None,
         approval_policy: AskForApproval::OnRequest,
-        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,

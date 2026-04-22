@@ -1048,7 +1048,7 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
         }
         if let Some(approvals_reviewer) = approvals_reviewer {
             let mut allowed_reviewers = vec![approvals_reviewer];
-            if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+            if approvals_reviewer == ApprovalsReviewer::AutoReview {
                 allowed_reviewers.push(ApprovalsReviewer::User);
             }
             config_requirements_toml.allowed_approvals_reviewers = Some(allowed_reviewers);
@@ -1135,7 +1135,7 @@ foo = "xyzzy"
     fn legacy_managed_config_backfill_allows_user_when_guardian_is_required() {
         let legacy = LegacyManagedConfigToml {
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
         };
 
@@ -1143,10 +1143,7 @@ foo = "xyzzy"
 
         assert_eq!(
             requirements.allowed_approvals_reviewers,
-            Some(vec![
-                ApprovalsReviewer::GuardianSubagent,
-                ApprovalsReviewer::User,
-            ])
+            Some(vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User,])
         );
     }
 

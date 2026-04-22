@@ -88,7 +88,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         .enable(Feature::GuardianApproval)
         .expect("test setup should allow enabling guardian approvals");
     let mut config = (*turn_context_raw.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
@@ -166,7 +166,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .enable(Feature::GuardianApproval)
         .expect("test setup should allow enabling guardian approvals");
     let mut config = (*turn_context_raw.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(

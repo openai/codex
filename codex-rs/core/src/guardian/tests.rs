@@ -909,7 +909,7 @@ async fn routes_approval_to_guardian_requires_guardian_reviewer() {
 
     assert!(!routes_approval_to_guardian(&turn));
 
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     turn.config = Arc::new(config);
 
     assert!(routes_approval_to_guardian(&turn));
@@ -919,7 +919,7 @@ async fn routes_approval_to_guardian_requires_guardian_reviewer() {
 async fn routes_approval_to_guardian_allows_granular_review_policy() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     turn.config = Arc::new(config);
     turn.approval_policy
         .set(AskForApproval::Granular(GranularApprovalConfig {
