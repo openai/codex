@@ -9,6 +9,7 @@ import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
@@ -26,6 +27,10 @@ approvalsReviewer?: ApprovalsReviewer | null, /**
  * Override the sandbox policy for this turn and subsequent turns.
  */
 sandboxPolicy?: SandboxPolicy | null, /**
+ * Override the full permissions profile for this turn and subsequent
+ * turns. Cannot be combined with `sandboxPolicy`.
+ */
+permissionProfile?: PermissionProfile | null, /**
  * Override the model for this turn and subsequent turns.
  */
 model?: string | null, /**
