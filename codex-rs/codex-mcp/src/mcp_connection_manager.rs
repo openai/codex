@@ -32,6 +32,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
@@ -485,6 +486,7 @@ impl AsyncManagedClient {
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
+        runtime_auth_provider: Option<SharedAuthProvider>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -507,6 +509,7 @@ impl AsyncManagedClient {
                         config.clone(),
                         store_mode,
                         runtime_environment,
+                        runtime_auth_provider,
                     )
                     .await?,
                 );
@@ -744,6 +747,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
+        auth: Option<&CodexAuth>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
@@ -753,6 +757,9 @@ impl McpConnectionManager {
             ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
+        let codex_apps_auth_provider = auth
+            .filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -776,6 +783,19 @@ impl McpConnectionManager {
             } else {
                 None
             };
+            let uses_env_bearer_token = match &cfg.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            };
+            let runtime_auth_provider =
+                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
+                    codex_apps_auth_provider.clone()
+                } else {
+                    None
+                };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 cfg,
@@ -786,6 +806,7 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
+                runtime_auth_provider,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1519,6 +1540,7 @@ async fn make_rmcp_client(
     config: McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
     runtime_environment: McpRuntimeEnvironment,
+    runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let McpServerConfig {
         transport,
@@ -1607,6 +1629,7 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
+                runtime_auth_provider,
             )
             .await
             .map_err(StartupOutcomeError::from)

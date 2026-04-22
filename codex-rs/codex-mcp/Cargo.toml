@@ -15,6 +15,7 @@ workspace = true
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 codex-async-utils = { workspace = true }
+codex-api = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-login = { workspace = true }

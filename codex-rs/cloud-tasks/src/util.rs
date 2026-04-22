@@ -41,14 +41,14 @@ pub fn normalize_base_url(input: &str) -> String {
     base_url
 }
 
-pub async fn load_auth_manager() -> Option<AuthManager> {
+pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
     Some(AuthManager::new(
         config.codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
-        Some(config.chatgpt_base_url),
+        chatgpt_base_url.or(Some(config.chatgpt_base_url)),
     ))
 }
 
@@ -65,7 +65,7 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Some(am) = load_auth_manager().await
+    if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
         && let Some(auth) = am.auth().await
         && auth.uses_codex_backend()
     {

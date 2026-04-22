@@ -55,29 +55,17 @@ impl AuthProvider for AgentIdentityAuthProvider {
     }
 }
 
-#[derive(Clone, Debug)]
-struct CodexBearerAuthProvider {
-    auth: CodexAuth,
-}
-
-impl AuthProvider for CodexBearerAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        BearerAuthProvider {
-            token: self.auth.get_token().ok(),
-            account_id: self.auth.get_account_id(),
-            is_fedramp_account: self.auth.is_fedramp_account(),
-        }
-        .add_auth_headers(headers);
-    }
-}
-
 // Some providers are meant to send no auth headers. Examples include local OSS
 // providers and custom test providers with `requires_openai_auth = false`.
 #[derive(Clone, Debug)]
-struct NoAuthProvider;
+struct UnauthenticatedAuthProvider;
 
-impl AuthProvider for NoAuthProvider {
+impl AuthProvider for UnauthenticatedAuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+}
+
+pub fn unauthenticated_auth_provider() -> SharedAuthProvider {
+    Arc::new(UnauthenticatedAuthProvider)
 }
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
@@ -103,7 +91,7 @@ pub(crate) fn resolve_provider_auth(
 
     Ok(match auth {
         Some(auth) => auth_provider_from_auth(auth),
-        None => Arc::new(NoAuthProvider),
+        None => unauthenticated_auth_provider(),
     })
 }
 
@@ -128,7 +116,11 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
             Arc::new(AgentIdentityAuthProvider { auth: auth.clone() })
         }
         CodexAuth::ApiKey(_) | CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
-            Arc::new(CodexBearerAuthProvider { auth: auth.clone() })
+            Arc::new(BearerAuthProvider {
+                token: auth.get_token().ok(),
+                account_id: auth.get_account_id(),
+                is_fedramp_account: auth.is_fedramp_account(),
+            })
         }
     }
 }
@@ -141,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_auth_provider_adds_no_headers() {
+    fn unauthenticated_auth_provider_adds_no_headers() {
         let provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");

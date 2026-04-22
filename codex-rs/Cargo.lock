@@ -1829,6 +1829,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-analytics",
+ "codex-api",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
@@ -2829,6 +2830,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "codex-api",
  "codex-async-utils",
  "codex-config",
  "codex-exec-server",
@@ -3135,6 +3137,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "codex-api",
  "codex-client",
  "codex-config",
  "codex-exec-server",

@@ -77,6 +77,7 @@ async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
         /*http_headers*/ None,
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
+        /*auth_provider*/ None,
     )
     .await?;
 

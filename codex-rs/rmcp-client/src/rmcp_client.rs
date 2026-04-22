@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::McpServerEnvVar;
 use futures::FutureExt;
@@ -88,11 +89,15 @@ const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
     inner: reqwest::Client,
+    auth_provider: Option<SharedAuthProvider>,
 }
 
 impl StreamableHttpResponseClient {
-    fn new(inner: reqwest::Client) -> Self {
-        Self { inner }
+    fn new(inner: reqwest::Client, auth_provider: Option<SharedAuthProvider>) -> Self {
+        Self {
+            inner,
+            auth_provider,
+        }
     }
 
     fn reqwest_error(
@@ -129,6 +134,9 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
             .inner
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
+        if let Some(auth_provider) = &self.auth_provider {
+            request = request.headers(auth_provider.to_auth_headers());
+        }
         if let Some(auth_header) = auth_token {
             request = request.bearer_auth(auth_header);
         }
@@ -339,6 +347,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        auth_provider: Option<SharedAuthProvider>,
     },
 }
 
@@ -536,6 +545,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -544,6 +554,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
+            auth_provider,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -895,22 +906,25 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                auth_provider,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
 
-                let initial_oauth_tokens =
-                    if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
-                        match load_oauth_tokens(server_name, url, *store_mode) {
-                            Ok(tokens) => tokens,
-                            Err(err) => {
-                                warn!("failed to read tokens for server `{server_name}`: {err}");
-                                None
-                            }
+                let initial_oauth_tokens = if bearer_token.is_none()
+                    && auth_provider.is_none()
+                    && !default_headers.contains_key(AUTHORIZATION)
+                {
+                    match load_oauth_tokens(server_name, url, *store_mode) {
+                        Ok(tokens) => tokens,
+                        Err(err) => {
+                            warn!("failed to read tokens for server `{server_name}`: {err}");
+                            None
                         }
-                    } else {
-                        None
-                    };
+                    }
+                } else {
+                    None
+                };
 
                 if let Some(initial_tokens) = initial_oauth_tokens.clone() {
                     match create_oauth_transport_and_runtime(
@@ -947,7 +961,7 @@ impl RmcpClient {
                                     .auth_header(access_token);
                             let http_client = build_http_client(&default_headers)?;
                             let transport = StreamableHttpClientTransport::with_client(
-                                StreamableHttpResponseClient::new(http_client),
+                                StreamableHttpResponseClient::new(http_client, None),
                                 http_config,
                             );
                             Ok(PendingTransport::StreamableHttp { transport })
@@ -964,7 +978,7 @@ impl RmcpClient {
                     let http_client = build_http_client(&default_headers)?;
 
                     let transport = StreamableHttpClientTransport::with_client(
-                        StreamableHttpResponseClient::new(http_client),
+                        StreamableHttpResponseClient::new(http_client, auth_provider.clone()),
                         http_config,
                     );
                     Ok(PendingTransport::StreamableHttp { transport })
@@ -1178,7 +1192,10 @@ async fn create_oauth_transport_and_runtime(
         }
     };
 
-    let auth_client = AuthClient::new(StreamableHttpResponseClient::new(http_client), manager);
+    let auth_client = AuthClient::new(
+        StreamableHttpResponseClient::new(http_client, None),
+        manager,
+    );
     let auth_manager = auth_client.auth_manager.clone();
 
     let transport = StreamableHttpClientTransport::with_client(
@@ -1199,12 +1216,66 @@ async fn create_oauth_transport_and_runtime(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
+    use codex_api::AuthProvider;
     use pretty_assertions::assert_eq;
+    use reqwest::header::HeaderMap;
+    use rmcp::model::ClientJsonRpcMessage;
+    use rmcp::model::ClientNotification;
+    use rmcp::model::InitializedNotification;
     use tokio::time;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct CountingAuthProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl AuthProvider for CountingAuthProvider {
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn streamable_http_client_applies_runtime_auth_per_request() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = StreamableHttpResponseClient::new(
+            reqwest::Client::new(),
+            Some(Arc::new(CountingAuthProvider {
+                calls: Arc::clone(&calls),
+            })),
+        );
+        let message = || {
+            ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                InitializedNotification::default(),
+            ))
+        };
+
+        let _ = client
+            .post_message(
+                Arc::from("http://127.0.0.1:1/mcp"),
+                message(),
+                /*session_id*/ None,
+                /*auth_token*/ None,
+            )
+            .await;
+        let _ = client
+            .post_message(
+                Arc::from("http://127.0.0.1:1/mcp"),
+                message(),
+                /*session_id*/ None,
+                /*auth_token*/ None,
+            )
+            .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {

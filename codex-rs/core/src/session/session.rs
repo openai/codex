@@ -350,6 +350,7 @@ impl Session {
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
+                auth.as_ref(),
             )
             .await;
             (auth, mcp_servers, auth_statuses)
@@ -787,6 +788,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
+            auth,
         )
         .instrument(info_span!(
             "session_init.mcp_manager_init",
