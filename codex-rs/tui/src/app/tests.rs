@@ -1662,7 +1662,6 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -1755,7 +1754,6 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -1836,7 +1834,6 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
 
@@ -1895,7 +1892,6 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
     assert!(
@@ -1956,7 +1952,6 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
 
@@ -2045,7 +2040,6 @@ guardian_approval = true
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            environments: None,
         })
     );
     let cell = match app_event_rx.try_recv() {

@@ -3,6 +3,7 @@ use crate::config::test_config;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnEnvironmentOverride;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
@@ -309,10 +310,10 @@ async fn start_thread_rejects_sticky_environment_when_environment_access_is_disa
             persist_extended_history: false,
             metrics_service_name: None,
             parent_trace: None,
-            environments: Some(vec![TurnEnvironmentSelection {
+            environments: vec![TurnEnvironmentSelection {
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
-            }]),
+            }],
         })
         .await
     {
@@ -343,10 +344,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
+    let selected_cwd =
+        AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
     let environments = vec![TurnEnvironmentSelection {
         environment_id: "local".to_string(),
-        cwd: config.cwd.clone(),
+        cwd: selected_cwd.clone(),
     }];
+    let default_cwd = config.cwd.clone();
 
     let source = manager
         .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
@@ -356,7 +360,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             persist_extended_history: false,
             metrics_service_name: None,
             parent_trace: None,
-            environments: Some(environments.clone()),
+            environments: environments.clone(),
         })
         .await
         .expect("start source thread");
@@ -387,11 +391,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id(
             "resume-turn".to_string(),
             SessionSettingsUpdate::default(),
-            /*environments*/ None,
+            TurnEnvironmentOverride::Inherit,
         )
         .await
         .expect("build resumed turn context");
-    assert!(resumed_turn.environments.is_none());
+    assert_eq!(resumed_turn.environments.len(), 1);
+    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
+    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
 
     let forked = manager
         .fork_thread(
@@ -410,11 +416,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .new_turn_with_sub_id(
             "fork-turn".to_string(),
             SessionSettingsUpdate::default(),
-            /*environments*/ None,
+            TurnEnvironmentOverride::Inherit,
         )
         .await
         .expect("build forked turn context");
-    assert!(forked_turn.environments.is_none());
+    assert_eq!(forked_turn.environments.len(), 1);
+    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
+    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
 }
 
 #[tokio::test]

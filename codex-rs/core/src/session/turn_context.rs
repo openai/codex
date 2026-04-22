@@ -30,10 +30,22 @@ impl TurnSkillsContext {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnEnvironment {
-    #[allow(dead_code)]
-    pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
+}
+
+pub(crate) enum TurnEnvironmentOverride {
+    Inherit,
+    Explicit(Vec<TurnEnvironmentSelection>),
+}
+
+impl From<Option<Vec<TurnEnvironmentSelection>>> for TurnEnvironmentOverride {
+    fn from(environments: Option<Vec<TurnEnvironmentSelection>>) -> Self {
+        match environments {
+            Some(environments) => Self::Explicit(environments),
+            None => Self::Inherit,
+        }
+    }
 }
 
 /// The context needed for a single turn of the thread.
@@ -51,7 +63,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) environment: Option<Arc<Environment>>,
-    pub(crate) environments: Option<Vec<TurnEnvironment>>,
+    pub(crate) environments: Vec<TurnEnvironment>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -381,7 +393,7 @@ impl Session {
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
         environment: Option<Arc<Environment>>,
-        environments: Option<Vec<TurnEnvironment>>,
+        environments: Vec<TurnEnvironment>,
         cwd: AbsolutePathBuf,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
@@ -488,19 +500,16 @@ impl Session {
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
-        environments: Option<Vec<TurnEnvironmentSelection>>,
+        environments: TurnEnvironmentOverride,
     ) -> CodexResult<Arc<TurnContext>> {
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    if let Some(environments) = next.environments.as_ref() {
-                        Self::validate_turn_environment_selections(
-                            &self.services.environment_manager,
-                            environments,
-                        )?;
-                    }
-                    let effective_environments = environments.or_else(|| next.environments.clone());
+                    let effective_environments = match environments {
+                        TurnEnvironmentOverride::Inherit => next.environments.clone(),
+                        TurnEnvironmentOverride::Explicit(environments) => environments,
+                    };
                     let turn_environments =
                         self.resolve_turn_environments(effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
@@ -569,12 +578,8 @@ impl Session {
 
     fn resolve_turn_environments(
         &self,
-        environments: Option<Vec<TurnEnvironmentSelection>>,
-    ) -> CodexResult<Option<Vec<TurnEnvironment>>> {
-        let Some(environments) = environments else {
-            return Ok(None);
-        };
-
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> CodexResult<Vec<TurnEnvironment>> {
         Self::validate_turn_environment_selections(
             &self.services.environment_manager,
             &environments,
@@ -593,14 +598,10 @@ impl Session {
                     ))
                 })?;
             let cwd = selected_environment.cwd;
-            turn_environments.push(TurnEnvironment {
-                environment_id: selected_environment.environment_id,
-                environment,
-                cwd,
-            });
+            turn_environments.push(TurnEnvironment { environment, cwd });
         }
 
-        Ok(Some(turn_environments))
+        Ok(turn_environments)
     }
 
     pub(super) fn validate_turn_environment_selections(
@@ -637,18 +638,11 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: Option<Vec<TurnEnvironment>>,
+        turn_environments: Vec<TurnEnvironment>,
     ) -> Arc<TurnContext> {
-        // `None` means use the thread's default environment. `Some([])` is an
-        // explicit no-environment turn, so do not fall back in that case.
-        let primary_turn_environment = turn_environments
-            .as_ref()
-            .and_then(|turn_environments| turn_environments.first());
-        let environment = match primary_turn_environment {
-            Some(turn_environment) => Some(Arc::clone(&turn_environment.environment)),
-            None if turn_environments.is_some() => None,
-            None => self.services.environment_manager.default_environment(),
-        };
+        let primary_turn_environment = turn_environments.first();
+        let environment = primary_turn_environment
+            .map(|turn_environment| Arc::clone(&turn_environment.environment));
         let cwd = primary_turn_environment
             .map(|turn_environment| turn_environment.cwd.clone())
             .unwrap_or_else(|| session_configuration.cwd.clone());
@@ -746,11 +740,15 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
+        let turn_environments = self
+            .resolve_turn_environments(session_configuration.environments.clone())
+            .expect("session environments are validated before being stored");
+
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            /*turn_environments*/ None,
+            turn_environments,
         )
         .await
     }

@@ -407,7 +407,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) inherited_rollout_trace: RolloutTraceRecorder,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
-    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) environments: Vec<TurnEnvironmentSelection>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
 }
@@ -598,9 +598,7 @@ impl Codex {
         } else {
             dynamic_tools
         };
-        if let Some(environments) = environments.as_ref() {
-            Session::validate_turn_environment_selections(&environment_manager, environments)?;
-        }
+        Session::validate_turn_environment_selections(&environment_manager, &environments)?;
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.

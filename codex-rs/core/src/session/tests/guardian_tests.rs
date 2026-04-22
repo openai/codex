@@ -770,7 +770,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         inherited_rollout_trace: RolloutTraceRecorder::disabled(),
         user_shell_override: None,
         parent_trace: None,
-        environments: None,
+        environments: Vec::new(),
         analytics_events_client: None,
         thread_store,
     })

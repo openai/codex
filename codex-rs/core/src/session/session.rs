@@ -72,7 +72,7 @@ pub(crate) struct SessionConfiguration {
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
     /// Sticky environments for turns that do not provide a turn-local override.
-    pub(super) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(super) environments: Vec<TurnEnvironmentSelection>,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -224,9 +224,6 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
-        if let Some(environments) = updates.environments.clone() {
-            next_configuration.environments = Some(environments);
-        }
         Ok(next_configuration)
     }
 }
@@ -246,7 +243,6 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
-    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
 pub(crate) struct AppServerClientMetadata {
