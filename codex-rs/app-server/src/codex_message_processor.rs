@@ -4465,8 +4465,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            include_turns,
             persist_extended_history,
         } = params;
+        let include_turns = include_turns.unwrap_or(true);
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -4574,6 +4576,7 @@ impl CodexMessageProcessor {
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
                         persisted_resume_metadata.as_ref(),
+                        include_turns,
                     )
                     .await
                 {
@@ -4835,6 +4838,7 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
+                    include_turns: params.include_turns.unwrap_or(true),
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4940,6 +4944,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
         fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
+        include_turns: bool,
     ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
@@ -4969,13 +4974,15 @@ impl CodexMessageProcessor {
         let mut thread = thread?;
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
-        let history_items = thread_history.get_rollout_items();
-        populate_thread_turns(
-            &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
-            /*active_turn*/ None,
-        )
-        .await?;
+        if include_turns {
+            let history_items = thread_history.get_rollout_items();
+            populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                /*active_turn*/ None,
+            )
+            .await?;
+        }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
@@ -8640,12 +8647,13 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
+    if pending.include_turns
+        && let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
+            active_turn.as_ref(),
+        )
+        .await
     {
         outgoing
             .send_error(
@@ -10610,6 +10618,7 @@ mod tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            include_turns: None,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

@@ -3429,6 +3429,11 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// When false, return only thread metadata and live-resume state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after resuming.
+    #[ts(optional = nullable)]
+    pub include_turns: Option<bool>,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/resume.persistFullHistory")]

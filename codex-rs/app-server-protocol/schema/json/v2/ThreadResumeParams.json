@@ -1313,6 +1313,13 @@
         "null"
       ]
     },
+    "includeTurns": {
+      "description": "When false, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",
       "type": [
