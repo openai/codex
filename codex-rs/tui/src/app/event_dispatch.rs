@@ -1124,6 +1124,8 @@ impl App {
                     Some(self.config.permissions.approval_policy.value());
                 self.chat_widget
                     .set_approval_policy(self.config.permissions.approval_policy.value());
+                self.sync_active_thread_permission_settings_to_cached_session()
+                    .await;
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 #[cfg(target_os = "windows")]
@@ -1152,6 +1154,8 @@ impl App {
                 }
                 self.runtime_sandbox_policy_override =
                     Some(self.config.permissions.sandbox_policy.get().clone());
+                self.sync_active_thread_permission_settings_to_cached_session()
+                    .await;
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -1186,6 +1190,8 @@ impl App {
             AppEvent::UpdateApprovalsReviewer(policy) => {
                 self.config.approvals_reviewer = policy;
                 self.chat_widget.set_approvals_reviewer(policy);
+                self.sync_active_thread_permission_settings_to_cached_session()
+                    .await;
                 let profile = self.active_profile.as_deref();
                 let segments = if let Some(profile) = profile {
                     vec![
