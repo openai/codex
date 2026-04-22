@@ -4,13 +4,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use serde_json::to_value;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::ExecutorPendingHttpBodyStream;
-use crate::client::http_client::HttpRequestResponse;
 use crate::client::http_client::run_executor_http_request;
 use crate::client::http_client::stream_executor_http_body;
 use crate::protocol::ExecParams;
@@ -39,6 +40,7 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
@@ -169,10 +171,10 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn http_request(
-        &self,
+        self: &Arc<Self>,
+        request_id: RequestId,
         params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
-    {
+    ) -> Result<(), JSONRPCErrorError> {
         self.require_initialized_for("http")?;
         let stream_response = params.stream_response;
         let http_request_id = params.request_id.clone();
@@ -183,7 +185,28 @@ impl ExecServerHandler {
         if response.is_err() && stream_response {
             self.release_http_body_stream(&http_request_id).await;
         }
-        response
+        let (response, mut pending_stream) = response?;
+        let result = match to_value(response) {
+            Ok(result) => result,
+            Err(err) => {
+                if let Some(pending_stream) = pending_stream.take() {
+                    self.release_http_body_stream(&pending_stream.request_id)
+                        .await;
+                }
+                return Err(internal_error(err.to_string()));
+            }
+        };
+        if let Err(error) = self.notifications.response(request_id, result).await {
+            if let Some(pending_stream) = pending_stream.take() {
+                self.release_http_body_stream(&pending_stream.request_id)
+                    .await;
+            }
+            return Err(error);
+        }
+        if let Some(pending_stream) = pending_stream {
+            self.start_http_body_stream(pending_stream).await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn fs_read_file(
@@ -282,7 +305,7 @@ impl ExecServerHandler {
             .clone()
     }
 
-    pub(crate) async fn start_http_body_stream(
+    async fn start_http_body_stream(
         self: &Arc<Self>,
         pending_stream: ExecutorPendingHttpBodyStream,
     ) {
@@ -302,7 +325,7 @@ impl ExecServerHandler {
         }
     }
 
-    pub(crate) async fn release_http_body_stream(&self, request_id: &str) {
+    async fn release_http_body_stream(&self, request_id: &str) {
         let mut body_streams = self.body_streams.lock().await;
         body_streams.remove(request_id);
     }
