@@ -4182,19 +4182,25 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         .expect("ephemeral guardian review should receive a shutdown op");
 }
 
-pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
+async fn make_session_and_context_with_auth_and_config_and_rx<F>(
+    auth: CodexAuth,
     dynamic_tools: Vec<DynamicToolSpec>,
+    configure_config: F,
 ) -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
-) {
+)
+where
+    F: FnOnce(&mut Config),
+{
     let (tx_event, rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
-    let config = build_test_config(codex_home.path()).await;
+    let mut config = build_test_config(codex_home.path()).await;
+    configure_config(&mut config);
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager = AuthManager::from_auth_for_testing(auth);
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
@@ -4458,24 +4464,6 @@ async fn upsert_goal_test_thread(session: &Session) {
         .upsert_thread(&metadata)
         .await
         .expect("goal test thread should be upserted");
-}
-
-async fn make_agent_identity_session_and_context_with_rx(
-    auth: CodexAuth,
-    chatgpt_base_url: String,
-) -> (
-    Arc<Session>,
-    Arc<TurnContext>,
-    async_channel::Receiver<Event>,
-) {
-    make_session_and_context_with_auth_and_config_and_rx(auth, Vec::new(), move |config| {
-        config.chatgpt_base_url = chatgpt_base_url;
-        config
-            .features
-            .enable(Feature::UseAgentIdentity)
-            .expect("test config should allow use_agent_identity");
-    })
-    .await
 }
 
 // Like make_session_and_context, but returns Arc<Session> and the event receiver
@@ -6093,6 +6081,7 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "write a cat poem".into(),
                 text_elements: Vec::new(),
@@ -6470,6 +6459,7 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "write a report".into(),
                 text_elements: Vec::new(),

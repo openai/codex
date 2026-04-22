@@ -758,9 +758,7 @@ async fn resumed_thread_activates_paused_goal_and_starts_continuation() -> anyho
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
 
