@@ -406,23 +406,38 @@ mod tests {
         let omitted: HttpRequestParams = serde_json::from_value(serde_json::json!({
             "method": "GET",
             "url": "https://example.test",
+            "requestId": "req-omitted-timeout",
         }))
         .expect("omitted timeout should deserialize");
         let null_timeout: HttpRequestParams = serde_json::from_value(serde_json::json!({
             "method": "GET",
             "url": "https://example.test",
+            "requestId": "req-null-timeout",
             "timeoutMs": null,
         }))
         .expect("null timeout should deserialize");
         let explicit_timeout: HttpRequestParams = serde_json::from_value(serde_json::json!({
             "method": "GET",
             "url": "https://example.test",
+            "requestId": "req-explicit-timeout",
             "timeoutMs": 1234,
         }))
         .expect("numeric timeout should deserialize");
 
-        assert_eq!(omitted.timeout_ms, None);
-        assert_eq!(null_timeout.timeout_ms, None);
-        assert_eq!(explicit_timeout.timeout_ms, Some(1234));
+        assert_eq!(
+            (omitted.request_id.as_str(), omitted.timeout_ms),
+            ("req-omitted-timeout", None)
+        );
+        assert_eq!(
+            (null_timeout.request_id.as_str(), null_timeout.timeout_ms),
+            ("req-null-timeout", None)
+        );
+        assert_eq!(
+            (
+                explicit_timeout.request_id.as_str(),
+                explicit_timeout.timeout_ms
+            ),
+            ("req-explicit-timeout", Some(1234))
+        );
     }
 }
