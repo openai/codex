@@ -773,7 +773,7 @@ mod tests {
                         line.push_str(symbol);
                     }
                 }
-                line
+                line.trim_end().to_string()
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -880,6 +880,8 @@ mod tests {
                 "Global.open_external_editor",
                 "Global.copy",
                 "Global.toggle_vim_mode",
+                "Chat.reasoning_down",
+                "Chat.reasoning_up",
                 "Editor.delete_backward_word",
                 "Editor.delete_forward_word",
                 "Editor.move_word_left",

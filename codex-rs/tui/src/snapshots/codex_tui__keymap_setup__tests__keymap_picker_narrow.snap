@@ -2,23 +2,23 @@
 source: tui/src/keymap_setup.rs
 expression: "render_picker(params, 78)"
 ---
-                                                                              
-  Keymap                                                                      
-  All configurable shortcuts.                                                 
-  91 actions, 0 customized, 1 unbound.                                        
-                                                                              
-  [All]  Common  Customized (0)  Unbound (1)  App  Composer  Editor  Vim      
-  Navigation  Approval                                                        
-                                                                              
-  Type to search shortcuts                                                    
-› Global         Open Transcript                ctrl-t                        
-  Global         Open External Editor           ctrl-g                        
-  Global         Copy                           ctrl-o                        
-  Global       - Toggle Vim Mode                unbound                       
-  Chat           Edit Previous Message          esc                           
-  Chat           Confirm Edit Previous Message  enter                         
-  Composer       Submit                         enter                         
-  Composer       Queue                          tab                           
-                                                                              
-  Open Transcript: Open the transcript overlay.                               
+
+  Keymap
+  All configurable shortcuts.
+  93 actions, 0 customized, 1 unbound.
+
+  [All]  Common  Customized (0)  Unbound (1)  App  Composer  Editor  Vim
+  Navigation  Approval
+
+  Type to search shortcuts
+› Global         Open Transcript                ctrl-t
+  Global         Open External Editor           ctrl-g
+  Global         Copy                           ctrl-o
+  Global       - Toggle Vim Mode                unbound
+  Chat           Edit Previous Message          esc
+  Chat           Confirm Edit Previous Message  enter
+  Chat           Reasoning Down                 alt-,
+  Chat           Reasoning Up                   alt-.
+
+  Open Transcript: Open the transcript overlay.
   left/right group · enter edit shortcut · * custom · - unbound · esc close

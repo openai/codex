@@ -397,6 +397,8 @@ pub(crate) struct ChatComposer {
     footer_external_editor_key: Option<KeyBinding>,
     footer_edit_previous_key: Option<KeyBinding>,
     footer_show_transcript_key: Option<KeyBinding>,
+    footer_reasoning_down_key: Option<KeyBinding>,
+    footer_reasoning_up_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -554,6 +556,8 @@ impl ChatComposer {
             footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
             footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
             footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            footer_reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            footer_reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -636,6 +640,8 @@ impl ChatComposer {
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
         self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
         self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
+        self.footer_reasoning_down_key = primary_binding(&keymap.chat.reasoning_down);
+        self.footer_reasoning_up_key = primary_binding(&keymap.chat.reasoning_up);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -3318,6 +3324,8 @@ impl ChatComposer {
             is_wsl,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            reasoning_down_key: self.footer_reasoning_down_key,
+            reasoning_up_key: self.footer_reasoning_up_key,
             active_agent_label: self.active_agent_label.clone(),
         }
     }

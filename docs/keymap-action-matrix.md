@@ -7,14 +7,14 @@ For runtime behavior, safety invariants, and testing guidance, see
 ## Preset behavior
 
 - `latest` is an alias to the newest shipped preset.
-- Today, `latest -> v3`.
+- Today, `latest -> v4`.
 - To keep stable behavior over time, pin `preset = "v1"`.
 
 ## Precedence
 
 1. `tui.keymap.<context>.<action>`
 2. `tui.keymap.global.<action>` (chat/composer fallback actions only)
-3. Preset default (`v3` today)
+3. Preset default (`v4` today)
 
 ## Default `v1` Compatibility Notes
 
@@ -43,11 +43,15 @@ For runtime behavior, safety invariants, and testing guidance, see
 - `queue`: queue current draft while a task is running
 - `toggle_shortcuts`: toggle composer shortcut overlay
 - `toggle_vim_mode`: toggle Vim mode for composer input
+- `reasoning_down`: lower active reasoning level when possible
+- `reasoning_up`: raise active reasoning level when possible
 
 ### `chat`
 
 - `edit_previous_message`: chat override for edit-previous flow
 - `confirm_edit_previous_message`: chat override for edit confirmation
+- `reasoning_down`: chat override for lowering active reasoning level
+- `reasoning_up`: chat override for raising active reasoning level
 
 ### `composer`
 

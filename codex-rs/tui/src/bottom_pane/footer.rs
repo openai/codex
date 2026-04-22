@@ -76,6 +76,8 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    pub(crate) reasoning_down_key: Option<KeyBinding>,
+    pub(crate) reasoning_up_key: Option<KeyBinding>,
     /// Active thread label shown when the footer is rendering contextual information instead of an
     /// instructional hint.
     ///
@@ -622,6 +624,8 @@ fn footer_from_props_lines(
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
                 collaboration_modes_enabled: props.collaboration_modes_enabled,
+                reasoning_down_key: props.reasoning_down_key,
+                reasoning_up_key: props.reasoning_up_key,
             };
             shortcut_overlay_lines(state)
         }
@@ -739,6 +743,8 @@ struct ShortcutsState {
     esc_backtrack_hint: bool,
     is_wsl: bool,
     collaboration_modes_enabled: bool,
+    reasoning_down_key: Option<KeyBinding>,
+    reasoning_up_key: Option<KeyBinding>,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -791,10 +797,14 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
                 ShortcutId::ChangeMode => change_mode = text,
-                ShortcutId::ReasoningDown => reasoning_down = text,
-                ShortcutId::ReasoningUp => reasoning_up = text,
             }
         }
+    }
+    if let Some(key) = state.reasoning_down_key {
+        reasoning_down = Line::from(vec![key.into(), " reasoning down".into()]);
+    }
+    if let Some(key) = state.reasoning_up_key {
+        reasoning_up = Line::from(vec![key.into(), " reasoning up".into()]);
     }
 
     let mut ordered = vec![
@@ -899,8 +909,6 @@ enum ShortcutId {
     Quit,
     ShowTranscript,
     ChangeMode,
-    ReasoningDown,
-    ReasoningUp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1091,24 +1099,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to change mode",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::ReasoningDown,
-        bindings: &[ShortcutBinding {
-            key: key_hint::alt(KeyCode::Char(',')),
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " reasoning down",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::ReasoningUp,
-        bindings: &[ShortcutBinding {
-            key: key_hint::alt(KeyCode::Char('.')),
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " reasoning up",
     },
 ];
 
@@ -1376,6 +1366,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1392,6 +1384,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1408,6 +1402,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1424,6 +1420,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1440,6 +1438,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1456,6 +1456,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1472,6 +1474,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1488,6 +1492,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
             Some(72),
@@ -1506,6 +1512,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
             /*percent*/ None,
@@ -1524,6 +1532,8 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+                reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
             },
         );
@@ -1538,6 +1548,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1565,6 +1577,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1585,6 +1599,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1600,6 +1616,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1615,6 +1633,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1630,6 +1650,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1651,6 +1673,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1672,6 +1696,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1696,6 +1722,8 @@ mod tests {
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1717,6 +1745,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
 
@@ -1732,6 +1762,8 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: Some("Robie [explorer]".to_string()),
         };
 
@@ -1753,6 +1785,8 @@ mod tests {
                     .to_string(),
             )),
             status_line_enabled: true,
+            reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
         };
 
@@ -1807,6 +1841,8 @@ mod tests {
                 esc_backtrack_hint: false,
                 is_wsl,
                 collaboration_modes_enabled: false,
+                reasoning_down_key: None,
+                reasoning_up_key: None,
             })
             .expect("shortcut binding")
             .key;

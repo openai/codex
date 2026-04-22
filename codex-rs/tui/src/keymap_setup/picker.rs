@@ -61,6 +61,8 @@ const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
     ("global", "open_external_editor"),
     ("global", "copy"),
     ("global", "toggle_vim_mode"),
+    ("chat", "reasoning_down"),
+    ("chat", "reasoning_up"),
     ("editor", "delete_backward_word"),
     ("editor", "delete_forward_word"),
     ("editor", "move_word_left"),

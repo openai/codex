@@ -85,8 +85,8 @@ at `https://github.com/openai/codex/blob/main/docs/default-keymap.toml`.
 Preset semantics:
 
 1. `latest` is an alias to the newest shipped preset.
-2. `v3` is the current baseline; `v1` and `v2` are frozen for historical behavior.
-3. Today, `latest -> v3`.
+2. `v4` is the current baseline; `v1`, `v2`, and `v3` are frozen for historical behavior.
+3. Today, `latest -> v4`.
 
 User guidance:
 

@@ -18,7 +18,7 @@
 
 [tui.keymap]
 # Preset alias for built-in defaults.
-# "latest" currently points to "v3".
+# "latest" currently points to "v4".
 preset = "latest"
 
 [tui.keymap.global]
@@ -42,11 +42,17 @@ toggle_shortcuts = ["?", "shift-?"]
 # Toggle Vim mode for the composer input.
 # Empty list keeps this unbound by default.
 toggle_vim_mode = []
+# Lower active reasoning level when possible.
+reasoning_down = "alt-,"
+# Raise active reasoning level when possible.
+reasoning_up = "alt-."
 
 [tui.keymap.chat]
 # Overrides [tui.keymap.global] for chat-only behavior.
 edit_previous_message = "esc"
 confirm_edit_previous_message = "enter"
+reasoning_down = "alt-,"
+reasoning_up = "alt-."
 
 [tui.keymap.composer]
 # Overrides [tui.keymap.global] for composer behavior.

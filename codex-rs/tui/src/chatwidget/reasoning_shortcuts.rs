@@ -15,14 +15,14 @@
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use strum::IntoEnumIterator;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ChatKeymap;
 
 /// Direction requested by a reasoning-level shortcut.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,15 +32,17 @@ pub(super) enum ReasoningShortcutDirection {
 }
 
 impl ReasoningShortcutDirection {
-    fn from_key_event(key_event: KeyEvent) -> Option<Self> {
-        if key_event.kind != KeyEventKind::Press || key_event.modifiers != KeyModifiers::ALT {
+    fn from_key_event(key_event: KeyEvent, keymap: &ChatKeymap) -> Option<Self> {
+        if key_event.kind != KeyEventKind::Press {
             return None;
         }
 
-        match key_event.code {
-            KeyCode::Char(',') => Some(Self::Lower),
-            KeyCode::Char('.') => Some(Self::Raise),
-            _ => None,
+        if keymap.reasoning_down.is_pressed(key_event) {
+            Some(Self::Lower)
+        } else if keymap.reasoning_up.is_pressed(key_event) {
+            Some(Self::Raise)
+        } else {
+            None
         }
     }
 
@@ -66,7 +68,9 @@ impl ChatWidget {
     /// persisting them. In Plan mode, shortcuts apply only to the active
     /// Plan-mode override and skip the global-vs-Plan scope prompt.
     pub(super) fn handle_reasoning_shortcut(&mut self, key_event: KeyEvent) -> bool {
-        let Some(direction) = ReasoningShortcutDirection::from_key_event(key_event) else {
+        let Some(direction) =
+            ReasoningShortcutDirection::from_key_event(key_event, &self.chat_keymap)
+        else {
             return false;
         };
 
@@ -176,7 +180,42 @@ fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn reasoning_shortcut_direction_uses_configured_chat_bindings() {
+        let keymap = ChatKeymap {
+            edit_previous_message: Vec::new(),
+            confirm_edit_previous_message: Vec::new(),
+            reasoning_down: vec![crate::key_hint::ctrl(KeyCode::Char(','))],
+            reasoning_up: vec![crate::key_hint::ctrl(KeyCode::Char('.'))],
+        };
+
+        assert_eq!(
+            ReasoningShortcutDirection::from_key_event(
+                KeyEvent::new(KeyCode::Char(','), KeyModifiers::CONTROL),
+                &keymap,
+            ),
+            Some(ReasoningShortcutDirection::Lower)
+        );
+        assert_eq!(
+            ReasoningShortcutDirection::from_key_event(
+                KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL),
+                &keymap,
+            ),
+            Some(ReasoningShortcutDirection::Raise)
+        );
+        assert_eq!(
+            ReasoningShortcutDirection::from_key_event(
+                KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT),
+                &keymap,
+            ),
+            None
+        );
+    }
 
     #[test]
     fn next_reasoning_effort_raises_from_default_anchor() {

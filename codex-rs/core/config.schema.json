@@ -2204,7 +2204,9 @@
             },
             "chat": {
               "confirm_edit_previous_message": null,
-              "edit_previous_message": null
+              "edit_previous_message": null,
+              "reasoning_down": null,
+              "reasoning_up": null
             },
             "composer": {
               "queue": null,
@@ -2236,6 +2238,8 @@
               "open_external_editor": null,
               "open_transcript": null,
               "queue": null,
+              "reasoning_down": null,
+              "reasoning_up": null,
               "submit": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
@@ -2458,6 +2462,22 @@
             }
           ],
           "description": "In an empty composer, begin or advance \"edit previous message\" flow."
+        },
+        "reasoning_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Lower the active reasoning level when possible."
+        },
+        "reasoning_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Raise the active reasoning level when possible."
         }
       },
       "type": "object"
@@ -2680,6 +2700,22 @@
           ],
           "description": "Queue the current composer draft while a task is running."
         },
+        "reasoning_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Lower the active reasoning level when possible."
+        },
+        "reasoning_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Raise the active reasoning level when possible."
+        },
         "submit": {
           "allOf": [
             {
@@ -2734,7 +2770,9 @@
           ],
           "default": {
             "confirm_edit_previous_message": null,
-            "edit_previous_message": null
+            "edit_previous_message": null,
+            "reasoning_down": null,
+            "reasoning_up": null
           }
         },
         "composer": {
@@ -2787,6 +2825,8 @@
             "open_external_editor": null,
             "open_transcript": null,
             "queue": null,
+            "reasoning_down": null,
+            "reasoning_up": null,
             "submit": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null
@@ -2912,7 +2952,7 @@
       "description": "Versioned keymap defaults.",
       "oneOf": [
         {
-          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v3`.",
+          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v4`.",
           "enum": [
             "latest"
           ],
@@ -2936,6 +2976,13 @@
           "description": "Current defaults with the copy shortcut exposed through keymap config.",
           "enum": [
             "v3"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Current defaults with reasoning shortcuts exposed through keymap config.",
+          "enum": [
+            "v4"
           ],
           "type": "string"
         }

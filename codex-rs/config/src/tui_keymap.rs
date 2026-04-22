@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 pub enum TuiKeymapPreset {
     /// Pointer alias to the latest shipped preset.
     ///
-    /// Today this resolves to `v3`.
+    /// Today this resolves to `v4`.
     #[default]
     Latest,
     /// Frozen initial configurable keymap defaults.
@@ -38,6 +38,8 @@ pub enum TuiKeymapPreset {
     V2,
     /// Current defaults with the copy shortcut exposed through keymap config.
     V3,
+    /// Current defaults with reasoning shortcuts exposed through keymap config.
+    V4,
 }
 
 /// Normalized string representation of a keybinding (for example `ctrl-a`).
@@ -116,6 +118,10 @@ pub struct TuiGlobalKeymap {
     pub toggle_shortcuts: Option<KeybindingsSpec>,
     /// Toggle Vim mode for the composer input.
     pub toggle_vim_mode: Option<KeybindingsSpec>,
+    /// Lower the active reasoning level when possible.
+    pub reasoning_down: Option<KeybindingsSpec>,
+    /// Raise the active reasoning level when possible.
+    pub reasoning_up: Option<KeybindingsSpec>,
 }
 
 /// Chat context keybindings. These override corresponding `global` actions.
@@ -126,6 +132,10 @@ pub struct TuiChatKeymap {
     pub edit_previous_message: Option<KeybindingsSpec>,
     /// Confirm editing the selected previous message.
     pub confirm_edit_previous_message: Option<KeybindingsSpec>,
+    /// Lower the active reasoning level when possible.
+    pub reasoning_down: Option<KeybindingsSpec>,
+    /// Raise the active reasoning level when possible.
+    pub reasoning_up: Option<KeybindingsSpec>,
 }
 
 /// Composer context keybindings. These override corresponding `global` actions.

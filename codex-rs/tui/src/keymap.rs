@@ -33,7 +33,7 @@ use std::collections::HashMap;
 ///
 /// 1. Context-specific binding (`tui.keymap.<context>`).
 /// 2. `tui.keymap.global` for actions that support global fallback.
-/// 3. Built-in preset defaults (`latest` currently points to `v3`).
+/// 3. Built-in preset defaults (`latest` currently points to `v4`).
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
@@ -72,6 +72,10 @@ pub(crate) struct ChatKeymap {
     pub(crate) edit_previous_message: Vec<KeyBinding>,
     /// Confirm edit-previous selection.
     pub(crate) confirm_edit_previous_message: Vec<KeyBinding>,
+    /// Lower the active reasoning level when possible.
+    pub(crate) reasoning_down: Vec<KeyBinding>,
+    /// Raise the active reasoning level when possible.
+    pub(crate) reasoning_up: Vec<KeyBinding>,
 }
 
 /// Composer-level keybindings validated in the second app-scope conflict pass.
@@ -376,6 +380,8 @@ impl RuntimeKeymap {
                 chat,
                 confirm_edit_previous_message
             ),
+            reasoning_down: resolve_with_global!(keymap, defaults, chat, reasoning_down),
+            reasoning_up: resolve_with_global!(keymap, defaults, chat, reasoning_up),
         };
 
         let composer = ComposerKeymap {
@@ -521,7 +527,8 @@ impl RuntimeKeymap {
 
     fn defaults_for_preset(preset: TuiKeymapPreset) -> Self {
         match preset {
-            TuiKeymapPreset::Latest | TuiKeymapPreset::V3 => Self::defaults_v3(),
+            TuiKeymapPreset::Latest | TuiKeymapPreset::V4 => Self::defaults_v4(),
+            TuiKeymapPreset::V3 => Self::defaults_v3(),
             TuiKeymapPreset::V2 => Self::defaults_v2(),
             TuiKeymapPreset::V1 => Self::defaults_v1(),
         }
@@ -543,6 +550,8 @@ impl RuntimeKeymap {
             chat: ChatKeymap {
                 edit_previous_message: default_bindings![plain(KeyCode::Esc)],
                 confirm_edit_previous_message: default_bindings![plain(KeyCode::Enter)],
+                reasoning_down: default_bindings![],
+                reasoning_up: default_bindings![],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -751,6 +760,17 @@ impl RuntimeKeymap {
         defaults
     }
 
+    /// Current keymap defaults for preset `v4`.
+    ///
+    /// This keeps earlier presets intact while moving reasoning-step shortcuts
+    /// into configurable keymap defaults.
+    fn defaults_v4() -> Self {
+        let mut defaults = Self::defaults_v3();
+        defaults.chat.reasoning_down = default_bindings![alt(KeyCode::Char(','))];
+        defaults.chat.reasoning_up = default_bindings![alt(KeyCode::Char('.'))];
+        defaults
+    }
+
     /// Reject ambiguous bindings in scopes that are evaluated together.
     ///
     /// We validate in multiple passes because runtime handling has mixed
@@ -782,6 +802,8 @@ impl RuntimeKeymap {
                     "confirm_edit_previous_message",
                     self.chat.confirm_edit_previous_message.as_slice(),
                 ),
+                ("reasoning_down", self.chat.reasoning_down.as_slice()),
+                ("reasoning_up", self.chat.reasoning_up.as_slice()),
             ],
         )?;
 
@@ -1282,6 +1304,19 @@ mod tests {
     }
 
     #[test]
+    fn default_latest_reasoning_bindings_are_alt_comma_and_alt_period() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.chat.reasoning_down,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
+        assert_eq!(
+            runtime.chat.reasoning_up,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
     fn invalid_global_copy_binding_reports_global_path() {
         let mut keymap = TuiKeymap::default();
         keymap.global.copy = Some(one("meta-o"));
@@ -1300,6 +1335,18 @@ mod tests {
             &keymap,
             "edit_previous_message",
             "confirm_edit_previous_message",
+        );
+    }
+
+    #[test]
+    fn resolves_reasoning_binding_from_global_fallback() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.reasoning_up = Some(one("ctrl-."));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+        assert_eq!(
+            runtime.chat.reasoning_up,
+            vec![key_hint::ctrl(KeyCode::Char('.'))]
         );
     }
 
