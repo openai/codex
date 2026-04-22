@@ -48,6 +48,15 @@ impl LiveThreadInitGuard {
     pub(crate) fn commit(&mut self) {
         self.live_thread = None;
     }
+
+    pub(crate) async fn discard(&mut self) {
+        let Some(live_thread) = self.live_thread.take() else {
+            return;
+        };
+        if let Err(err) = live_thread.discard().await {
+            warn!("failed to discard thread persistence for failed session init: {err}");
+        }
+    }
 }
 
 impl Drop for LiveThreadInitGuard {

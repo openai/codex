@@ -65,12 +65,13 @@ impl LocalThreadStore {
 
     /// Return the state DB handle used by local rollout writers.
     pub async fn state_db(&self) -> Option<StateDbHandle> {
-        if let Some(state_db) = self.state_db.get() {
-            return Some(Arc::clone(state_db));
-        }
-        let state_db = codex_rollout::state_db::init(&self.config).await?;
-        let _ = self.state_db.set(Arc::clone(&state_db));
-        Some(state_db)
+        self.state_db
+            .get_or_try_init(|| async {
+                codex_rollout::state_db::init(&self.config).await.ok_or(())
+            })
+            .await
+            .ok()
+            .cloned()
     }
 
     /// Read a local rollout-backed thread by path.
@@ -177,7 +178,7 @@ impl ThreadStore for LocalThreadStore {
             return read_thread::read_thread_by_rollout_path(
                 self,
                 rollout_path,
-                params.include_archived,
+                /*include_archived*/ true,
                 /*include_history*/ true,
             )
             .await?
@@ -242,6 +243,7 @@ mod tests {
     use super::*;
     use crate::ThreadEventPersistenceMode;
     use crate::local::test_support::test_config;
+    use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
 
     #[tokio::test]
@@ -455,6 +457,53 @@ mod tests {
             matches!(
                 item,
                 RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "external history item"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn load_history_uses_live_writer_rollout_path_for_archived_source() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = uuid::Uuid::from_u128(405);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = write_archived_session_file(home.path(), "2025-01-04T10-30-00", uuid)
+            .expect("archived session file");
+
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(rollout_path),
+                history: None,
+                include_archived: true,
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume live archived thread");
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id,
+                items: vec![user_message_item("archived live history item")],
+            })
+            .await
+            .expect("append live item");
+        store
+            .flush_thread(thread_id)
+            .await
+            .expect("flush live thread");
+
+        let history = store
+            .load_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load archived live history");
+
+        assert!(history.items.iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == "archived live history item"
             )
         }));
     }
