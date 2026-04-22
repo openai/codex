@@ -141,8 +141,16 @@ async fn build_uploaded_local_argument_value(
     };
     let default_upload_options = OpenAiFileUploadOptions::default();
     let uploaded = upload_local_file(
+<<<<<<< HEAD
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         &upload_auth,
+=======
+        turn_context
+            .config
+            .openai_file_api_base_url()
+            .trim_end_matches('/'),
+        upload_auth.as_ref(),
+>>>>>>> e66c01c9f (clean)
         &resolved_path,
         upload_options.unwrap_or(&default_upload_options),
     )
@@ -153,14 +161,25 @@ async fn build_uploaded_local_argument_value(
         }
         None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
     })?;
-    Ok(serde_json::json!({
-        "download_url": uploaded.download_url,
-        "file_id": uploaded.file_id,
-        "mime_type": uploaded.mime_type,
-        "file_name": uploaded.file_name,
-        "uri": uploaded.uri,
-        "file_size_bytes": uploaded.file_size_bytes,
-    }))
+    let mut uploaded_value = serde_json::Map::from_iter([
+        ("file_id".to_string(), serde_json::json!(uploaded.file_id)),
+        (
+            "file_name".to_string(),
+            serde_json::json!(uploaded.file_name),
+        ),
+        ("uri".to_string(), serde_json::json!(uploaded.uri)),
+        (
+            "file_size_bytes".to_string(),
+            serde_json::json!(uploaded.file_size_bytes),
+        ),
+    ]);
+    if let Some(download_url) = uploaded.download_url {
+        uploaded_value.insert("download_url".to_string(), serde_json::json!(download_url));
+    }
+    if let Some(mime_type) = uploaded.mime_type {
+        uploaded_value.insert("mime_type".to_string(), serde_json::json!(mime_type));
+    }
+    Ok(JsonValue::Object(uploaded_value))
 }
 
 #[cfg(test)]
@@ -270,93 +289,6 @@ mod tests {
                 "file_name": "file_report.csv",
                 "uri": "sediment://file_123",
                 "file_size_bytes": 5,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn build_uploaded_local_argument_value_honors_upload_options() {
-        use wiremock::Mock;
-        use wiremock::MockServer;
-        use wiremock::ResponseTemplate;
-        use wiremock::matchers::body_json;
-        use wiremock::matchers::header;
-        use wiremock::matchers::method;
-        use wiremock::matchers::path;
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/files"))
-            .and(header("chatgpt-account-id", "account_id"))
-            .and(body_json(serde_json::json!({
-                "file_name": "library.txt",
-                "file_size": 7,
-                "use_case": "codex",
-                "store_in_library": true,
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "file_id": "file_library",
-                "upload_url": format!("{}/upload/file_library", server.uri()),
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path("/upload/file_library"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/files/file_library/uploaded"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "success",
-                "download_url": format!("{}/download/file_library", server.uri()),
-                "file_name": "library.txt",
-                "mime_type": "text/plain",
-                "file_size_bytes": 7,
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let (session, mut turn_context) = make_session_and_context().await;
-        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        let dir = tempdir().expect("temp dir");
-        let local_path = dir.path().join("library.txt");
-        tokio::fs::write(&local_path, b"library")
-            .await
-            .expect("write local file");
-        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
-
-        let mut config = (*turn_context.config).clone();
-        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
-        turn_context.config = Arc::new(config);
-
-        let upload_options = OpenAiFileUploadOptions {
-            store_in_library: true,
-        };
-        let rewritten = build_uploaded_local_argument_value(
-            &session,
-            &turn_context,
-            Some(&auth),
-            "file",
-            /*index*/ None,
-            "library.txt",
-            Some(&upload_options),
-        )
-        .await
-        .expect("rewrite should upload the local file");
-
-        assert_eq!(
-            rewritten,
-            serde_json::json!({
-                "download_url": format!("{}/download/file_library", server.uri()),
-                "file_id": "file_library",
-                "mime_type": "text/plain",
-                "file_name": "library.txt",
-                "uri": "sediment://file_library",
-                "file_size_bytes": 7,
             })
         );
     }

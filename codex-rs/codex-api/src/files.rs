@@ -37,7 +37,7 @@ impl Default for OpenAiFileUploadOptions {
 pub struct UploadedOpenAiFile {
     pub file_id: String,
     pub uri: String,
-    pub download_url: String,
+    pub download_url: Option<String>,
     pub file_name: String,
     pub file_size_bytes: u64,
     pub mime_type: Option<String>,
@@ -114,6 +114,10 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
+fn openai_file_api_base_url(base_url: &str) -> String {
+    base_url.trim_end_matches('/').to_string()
+}
+
 pub async fn download_openai_file(
     base_url: &str,
     auth: &impl AuthProvider,
@@ -188,7 +192,8 @@ pub async fn upload_local_file(
         .and_then(|value| value.to_str())
         .unwrap_or("file")
         .to_string();
-    let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    let api_base_url = openai_file_api_base_url(base_url);
+    let create_url = format!("{api_base_url}/files");
     let mut create_request = serde_json::json!({
         "file_name": file_name,
         "file_size": metadata.len(),
@@ -248,11 +253,19 @@ pub async fn upload_local_file(
         });
     }
 
-    let finalize_url = format!(
-        "{}/files/{}/uploaded",
-        base_url.trim_end_matches('/'),
-        create_payload.file_id,
-    );
+    if options.store_in_library {
+        return Ok(UploadedOpenAiFile {
+            file_id: create_payload.file_id.clone(),
+            uri: openai_file_uri(&create_payload.file_id),
+            download_url: None,
+            file_name,
+            file_size_bytes: metadata.len(),
+            mime_type: None,
+            path: path.to_path_buf(),
+        });
+    }
+
+    let finalize_url = format!("{api_base_url}/files/{}/uploaded", create_payload.file_id);
     let finalize_started_at = Instant::now();
     loop {
         let finalize_response = authorized_request(auth, reqwest::Method::POST, &finalize_url)
@@ -283,12 +296,12 @@ pub async fn upload_local_file(
                 return Ok(UploadedOpenAiFile {
                     file_id: create_payload.file_id.clone(),
                     uri: openai_file_uri(&create_payload.file_id),
-                    download_url: finalize_payload.download_url.ok_or_else(|| {
+                    download_url: Some(finalize_payload.download_url.ok_or_else(|| {
                         OpenAiFileError::UploadFailed {
                             file_id: create_payload.file_id.clone(),
                             message: "missing download_url".to_string(),
                         }
-                    })?,
+                    })?),
                     file_name: finalize_payload.file_name.unwrap_or(file_name),
                     file_size_bytes: metadata.len(),
                     mime_type: finalize_payload.mime_type,
@@ -506,7 +519,7 @@ mod tests {
         assert_eq!(uploaded.uri, "sediment://file_123");
         assert_eq!(
             uploaded.download_url,
-            format!("{}/download/file_123", server.uri())
+            Some(format!("{}/download/file_123", server.uri()))
         );
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));

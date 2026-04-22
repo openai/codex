@@ -272,6 +272,8 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+    /// Optional override for the OpenAI file upload/download API base.
+    pub openai_file_api_base_url: Option<String>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,

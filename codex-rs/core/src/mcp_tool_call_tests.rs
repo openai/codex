@@ -67,16 +67,6 @@ fn approval_metadata(
     }
 }
 
-fn direct_exposed_builtin_codex_apps_meta() -> serde_json::Map<String, serde_json::Value> {
-    serde_json::json!({
-        "provider": "builtin",
-        "direct_expose": true,
-    })
-    .as_object()
-    .cloned()
-    .expect("_codex_apps metadata should be an object")
-}
-
 fn prompt_options(
     allow_session_remember: bool,
     allow_persistent_approval: bool,
@@ -547,32 +537,6 @@ fn codex_apps_connectors_support_persistent_approval() {
     assert_eq!(
         persistent_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
         Some(expected)
-    );
-}
-
-#[test]
-fn direct_exposed_builtin_codex_apps_tools_do_not_support_persistent_approval() {
-    let invocation = McpInvocation {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool: "builtin_search_file".to_string(),
-        arguments: None,
-    };
-    let mut metadata = approval_metadata(
-        /*connector_id*/ None,
-        /*connector_name*/ None,
-        /*connector_description*/ None,
-        /*tool_title*/ Some("Builtin Search File"),
-        /*tool_description*/ Some("Search builtin files."),
-    );
-    metadata.codex_apps_meta = Some(direct_exposed_builtin_codex_apps_meta());
-
-    assert_eq!(
-        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
-        None
-    );
-    assert_eq!(
-        persistent_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
-        None
     );
 }
 

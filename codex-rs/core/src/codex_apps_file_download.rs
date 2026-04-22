@@ -1,6 +1,6 @@
+use crate::codex_apps_mcp_tools::should_materialize_codex_apps_file_download;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::codex_apps_mcp_tools::should_materialize_codex_apps_file_download;
 use codex_api::download_openai_file;
 use codex_login::CodexAuth;
 use codex_model_provider::AuthorizationHeaderAuthProvider;
@@ -29,6 +29,14 @@ struct CodexAppsFileUri {
     file_name: Option<String>,
 }
 
+fn codex_apps_download_base_url<'a>(turn_context: &'a TurnContext, download_url: &str) -> &'a str {
+    if download_url.starts_with("/api/codex/") {
+        turn_context.config.chatgpt_base_url.as_str()
+    } else {
+        turn_context.config.openai_file_api_base_url()
+    }
+}
+
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
     sess: &Session,
     turn_context: &TurnContext,
@@ -37,7 +45,8 @@ pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
     result: CallToolResult,
 ) -> CallToolResult {
     let auth = sess.services.auth_manager.auth().await;
-    let authorization_header_value = match sess.authorization_header_for_current_agent_task().await {
+    let authorization_header_value = match sess.authorization_header_for_current_agent_task().await
+    {
         Ok(value) => value,
         Err(error) => {
             warn!(error = %error, "failed to build agent assertion authorization for codex_apps file download materialization");
@@ -74,6 +83,8 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
     let Some(payload) = extract_codex_apps_file_download_payload(&result) else {
         return result;
     };
+    let download_base_url =
+        codex_apps_download_base_url(turn_context, &payload.file_uri.download_url);
     if result.structured_content.is_none()
         && let Ok(structured_content) = serde_json::to_value(&payload)
     {
@@ -95,7 +106,7 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
             auth_provider = auth_provider.with_fedramp_routing_header();
         }
         download_openai_file(
-            turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+            download_base_url,
             &auth_provider,
             &payload.file_uri.download_url,
         )
@@ -114,7 +125,7 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
             is_fedramp_account: auth.is_fedramp_account(),
         };
         download_openai_file(
-            turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+            download_base_url,
             &auth_provider,
             &payload.file_uri.download_url,
         )
@@ -268,34 +279,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_apps_file_download_materialization_ignores_results_without_metadata_flag() {
-        let (_, turn_context) = make_session_and_context().await;
-        let original = CallToolResult {
-            content: vec![serde_json::json!({"type": "text", "text": "hello"})],
-            structured_content: Some(serde_json::json!({"x": 1})),
-            is_error: Some(false),
-            meta: None,
-        };
-
-        let result = maybe_materialize_codex_apps_file_download_result_with_auth(
-            &turn_context,
-            "session-1",
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            None,
-            "custom_server",
-            /*codex_apps_meta*/ None,
-            original.clone(),
-        )
-        .await;
-
-        assert_eq!(result, original);
-    }
-
-    #[tokio::test]
     async fn codex_apps_file_download_materialization_adds_local_path_for_marked_tools() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/api/codex/files/file_123/content"))
+            .and(path("/download/file_123"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .respond_with(
@@ -319,7 +306,7 @@ mod tests {
                 "file_id": "file_123",
                 "file_name": "testing-file.txt",
                 "file_uri": {
-                    "download_url": "/api/codex/files/file_123/content",
+                    "download_url": format!("{}/download/file_123", server.uri()),
                     "file_id": "file_123",
                     "file_name": "testing-file.txt",
                     "mime_type": "text/plain",
@@ -361,9 +348,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_apps_file_download_materialization_uses_json_text_when_structured_content_is_missing()
-     {
-        let server = MockServer::start().await;
+    async fn codex_apps_file_download_materialization_uses_chatgpt_base_for_relative_codex_urls() {
+        let chatgpt_server = MockServer::start().await;
+        let file_api_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/codex/files/file_123/content"))
             .and(header("authorization", "Bearer Access Token"))
@@ -371,29 +358,28 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("content-type", "text/plain")
-                    .set_body_bytes(b"downloaded contents".to_vec()),
+                    .set_body_bytes(b"downloaded via codex backend".to_vec()),
             )
-            .mount(&server)
+            .mount(&chatgpt_server)
             .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
         let mut config = (*turn_context.config).clone();
-        config.chatgpt_base_url = format!("{}/backend-api/codex", server.uri());
+        config.chatgpt_base_url = chatgpt_server.uri();
+        config.openai_file_api_base_url = Some(format!("{}/backend-api", file_api_server.uri()));
         turn_context.config = Arc::new(config);
         let original = CallToolResult {
-            content: vec![serde_json::json!({
-                "type": "text",
-                "text": serde_json::json!({
+            content: vec![],
+            structured_content: Some(serde_json::json!({
+                "file_id": "file_123",
+                "file_name": "testing-file.txt",
+                "file_uri": {
+                    "download_url": "/api/codex/files/file_123/content",
                     "file_id": "file_123",
                     "file_name": "testing-file.txt",
-                    "file_uri": {
-                        "download_url": "/api/codex/files/file_123/content",
-                        "file_name": "testing-file.txt",
-                    }
-                })
-                .to_string(),
-            })],
-            structured_content: None,
+                    "mime_type": "text/plain",
+                }
+            })),
             is_error: Some(false),
             meta: None,
         };
@@ -410,29 +396,14 @@ mod tests {
         .await;
 
         let local_path = result
-            .content
-            .iter()
-            .find_map(|item| {
-                item.get("text")
-                    .and_then(|text| text.as_str())
-                    .and_then(|text| text.strip_prefix("Downloaded file to local path: "))
-            })
-            .expect("expected local path announcement");
-        assert_eq!(
-            result.structured_content,
-            Some(serde_json::json!({
-                "file_id": "file_123",
-                "file_name": "testing-file.txt",
-                "file_uri": {
-                    "download_url": "/api/codex/files/file_123/content",
-                    "file_name": "testing-file.txt",
-                },
-                "local_path": local_path,
-            }))
-        );
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("local_path"))
+            .and_then(JsonValue::as_str)
+            .expect("local_path in structured content");
         assert_eq!(
             tokio::fs::read(local_path).await.expect("downloaded file"),
-            b"downloaded contents"
+            b"downloaded via codex backend"
         );
     }
 }

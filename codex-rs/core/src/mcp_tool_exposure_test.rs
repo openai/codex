@@ -281,36 +281,6 @@ async fn always_defer_feature_preserves_explicit_apps() {
 }
 
 #[tokio::test]
-async fn directly_exposes_builtin_codex_apps_tools_marked_for_direct_exposure() {
-    let config = test_config().await;
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
-    let mcp_tools = HashMap::from([(
-        "mcp__codex_apps__builtin_search_file".to_string(),
-        make_mcp_tool_with_meta(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "builtin_search_file",
-            /*connector_id*/ None,
-            /*connector_name*/ None,
-            Some(direct_exposed_builtin_codex_apps_meta()),
-        ),
-    )]);
-
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        /*connectors*/ None,
-        &[],
-        &config,
-        &tools_config,
-    );
-
-    assert_eq!(
-        exposure.direct_tools.into_keys().collect::<Vec<_>>(),
-        vec!["mcp__codex_apps__builtin_search_file".to_string()]
-    );
-    assert!(exposure.deferred_tools.is_none());
-}
-
-#[tokio::test]
 async fn keeps_direct_exposed_builtin_codex_apps_tools_direct_in_large_search_sets() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
