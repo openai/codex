@@ -118,7 +118,22 @@ fn openai_file_api_base_url(base_url: &str) -> String {
     base_url.trim_end_matches('/').to_string()
 }
 
-fn local_dev_openai_file_api_base_url(base_url: &str) -> Option<String> {
+fn is_localhost_url(url: &Url) -> bool {
+    matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+}
+
+fn local_dev_same_origin_api_base_url(base_url: &str) -> Option<String> {
+    let mut url = Url::parse(base_url).ok()?;
+    if !is_localhost_url(&url) || !matches!(url.path(), "" | "/") {
+        return None;
+    }
+    url.set_path("/api");
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn local_dev_sa_server_api_base_url(base_url: &str) -> Option<String> {
     let mut url = Url::parse(base_url).ok()?;
     match url.host_str()? {
         "localhost" | "127.0.0.1" | "::1" => {}
@@ -132,6 +147,21 @@ fn local_dev_openai_file_api_base_url(base_url: &str) -> Option<String> {
     url.set_query(None);
     url.set_fragment(None);
     Some(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn openai_file_api_base_url_candidates(base_url: &str) -> Vec<String> {
+    let mut candidates = vec![openai_file_api_base_url(base_url)];
+    if let Some(candidate) = local_dev_same_origin_api_base_url(base_url)
+        && !candidates.contains(&candidate)
+    {
+        candidates.push(candidate);
+    }
+    if let Some(candidate) = local_dev_sa_server_api_base_url(base_url)
+        && !candidates.contains(&candidate)
+    {
+        candidates.push(candidate);
+    }
+    candidates
 }
 
 pub async fn download_openai_file(
@@ -216,19 +246,31 @@ pub async fn upload_local_file(
     if options.store_in_library {
         create_request["store_in_library"] = serde_json::json!(true);
     }
+    let mut last_not_found_error = None;
+    let mut create_payload = None;
     let mut api_base_url = openai_file_api_base_url(base_url);
-    let create_payload = match create_file(auth, &api_base_url, &create_request).await {
-        Ok(payload) => payload,
-        Err(OpenAiFileError::UnexpectedStatus { status, .. })
-            if status == StatusCode::NOT_FOUND =>
-        {
-            let Some(local_dev_api_base_url) = local_dev_openai_file_api_base_url(base_url) else {
-                return create_file(auth, &api_base_url, &create_request).await;
-            };
-            api_base_url = local_dev_api_base_url;
-            create_file(auth, &api_base_url, &create_request).await?
+    for candidate in openai_file_api_base_url_candidates(base_url) {
+        match create_file(auth, &candidate, &create_request).await {
+            Ok(payload) => {
+                api_base_url = candidate;
+                create_payload = Some(payload);
+                break;
+            }
+            Err(error @ OpenAiFileError::UnexpectedStatus { status, .. })
+                if status == StatusCode::NOT_FOUND =>
+            {
+                last_not_found_error = Some(error);
+            }
+            Err(error) => return Err(error),
         }
-        Err(error) => return Err(error),
+    }
+    let Some(create_payload) = create_payload else {
+        return Err(
+            last_not_found_error.unwrap_or(OpenAiFileError::UploadFailed {
+                file_id: "unknown".to_string(),
+                message: "file creation did not produce a response".to_string(),
+            }),
+        );
     };
 
     let upload_file = File::open(path)

@@ -12,7 +12,6 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use codex_api::AuthProvider;
 use codex_api::OpenAiFileUploadOptions;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
@@ -44,7 +43,6 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
             continue;
         };
         let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
-            sess,
             turn_context,
             auth.as_ref(),
             field_name,
@@ -132,11 +130,8 @@ async fn build_uploaded_local_argument_value(
     };
     let default_upload_options = OpenAiFileUploadOptions::default();
     let uploaded = upload_local_file(
-        turn_context
-            .config
-            .openai_file_api_base_url()
-            .trim_end_matches('/'),
-        upload_auth.as_ref(),
+        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+        &upload_auth,
         &resolved_path,
         upload_options.unwrap_or(&default_upload_options),
     )

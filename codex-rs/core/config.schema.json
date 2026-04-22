@@ -318,9 +318,6 @@
         "chatgpt_base_url": {
           "type": "string"
         },
-        "openai_file_api_base_url": {
-          "type": "string"
-        },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -2265,13 +2262,6 @@
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
-    },
-    "openai_file_api_base_url": {
-      "description": "Optional override for the OpenAI file upload/download API base.",
-      "type": [
-        "string",
-        "null"
-      ]
     },
     "check_for_update_on_startup": {
       "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",

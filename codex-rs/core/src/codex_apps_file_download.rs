@@ -3,7 +3,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::download_openai_file;
 use codex_login::CodexAuth;
-use codex_model_provider::AuthorizationHeaderAuthProvider;
 use codex_model_provider::BearerAuthProvider;
 use codex_protocol::mcp::CallToolResult;
 use serde::Deserialize;
@@ -41,19 +40,10 @@ pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
     result: CallToolResult,
 ) -> CallToolResult {
     let auth = sess.services.auth_manager.auth().await;
-    let authorization_header_value = match sess.authorization_header_for_current_agent_task().await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            warn!(error = %error, "failed to build agent assertion authorization for codex_apps file download materialization");
-            None
-        }
-    };
     maybe_materialize_codex_apps_file_download_result_with_auth(
         turn_context,
         &sess.conversation_id.to_string(),
         auth.as_ref(),
-        authorization_header_value,
         server,
         codex_apps_meta,
         result,
@@ -65,7 +55,6 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
     turn_context: &TurnContext,
     session_id: &str,
     auth: Option<&CodexAuth>,
-    authorization_header_value: Option<String>,
     server: &str,
     codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
     mut result: CallToolResult,
@@ -92,40 +81,25 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
         );
         return result;
     };
-    let downloaded = match if let Some(authorization_header_value) = authorization_header_value {
-        let mut auth_provider = AuthorizationHeaderAuthProvider::new(
-            Some(authorization_header_value),
-            /*account_id*/ None,
-        );
-        if auth.is_fedramp_account() {
-            auth_provider = auth_provider.with_fedramp_routing_header();
+    let token_data = match auth.get_token_data() {
+        Ok(token_data) => token_data,
+        Err(error) => {
+            warn!(error = %error, "failed to read ChatGPT auth for codex_apps file download materialization");
+            return result;
         }
-        download_openai_file(
-            download_base_url,
-            &auth_provider,
-            &payload.file_uri.download_url,
-        )
-        .await
-    } else {
-        let token_data = match auth.get_token_data() {
-            Ok(token_data) => token_data,
-            Err(error) => {
-                warn!(error = %error, "failed to read ChatGPT auth for codex_apps file download materialization");
-                return result;
-            }
-        };
-        let auth_provider = BearerAuthProvider {
-            token: Some(token_data.access_token),
-            account_id: token_data.account_id,
-            is_fedramp_account: auth.is_fedramp_account(),
-        };
-        download_openai_file(
-            download_base_url,
-            &auth_provider,
-            &payload.file_uri.download_url,
-        )
-        .await
-    } {
+    };
+    let auth_provider = BearerAuthProvider {
+        token: Some(token_data.access_token),
+        account_id: token_data.account_id,
+        is_fedramp_account: auth.is_fedramp_account(),
+    };
+    let downloaded = match download_openai_file(
+        download_base_url,
+        &auth_provider,
+        &payload.file_uri.download_url,
+    )
+    .await
+    {
         Ok(downloaded) => downloaded,
         Err(error) => {
             warn!(
@@ -315,7 +289,6 @@ mod tests {
             &turn_context,
             "session-1",
             Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            None,
             codex_mcp::CODEX_APPS_MCP_SERVER_NAME,
             Some(&download_materialization_meta()),
             original,
@@ -381,7 +354,6 @@ mod tests {
             &turn_context,
             "session-1",
             Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            None,
             codex_mcp::CODEX_APPS_MCP_SERVER_NAME,
             Some(&download_materialization_meta()),
             original,
