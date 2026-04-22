@@ -12,6 +12,7 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -728,6 +729,50 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 }
 
 #[test]
+fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_json::Result<()> {
+    let cwd = test_path_buf("/repo").abs();
+    let action = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+        trigger: Some(GuardianNetworkAccessTrigger {
+            call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            command: vec!["curl".to_string(), "https://example.com".to_string()],
+            cwd: cwd.clone(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Fetch the release metadata.".to_string()),
+            tty: None,
+        }),
+    };
+
+    assert_eq!(
+        guardian_approval_request_to_json(&action)?,
+        serde_json::json!({
+            "tool": "network_access",
+            "target": "https://example.com:443",
+            "host": "example.com",
+            "protocol": "https",
+            "port": 443,
+            "trigger": {
+                "callId": "call-1",
+                "toolName": "shell",
+                "command": ["curl", "https://example.com"],
+                "cwd": cwd.to_string_lossy().to_string(),
+                "sandboxPermissions": "use_default",
+                "justification": "Fetch the release metadata.",
+            },
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
 fn guardian_assessment_action_redacts_apply_patch_patch_text() {
     let cwd = test_path_buf("/tmp").abs();
     let file = test_path_buf("/tmp/guardian.txt").abs();
@@ -758,6 +803,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
         port: 443,
+        trigger: None,
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -775,6 +821,30 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
     );
+}
+
+#[test]
+fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+        trigger: Some(GuardianNetworkAccessTrigger {
+            call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            command: vec!["curl".to_string(), "https://example.com".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+            tty: None,
+        }),
+    };
+
+    assert_eq!(guardian_request_target_item_id(&network_access), None);
 }
 
 #[tokio::test]
