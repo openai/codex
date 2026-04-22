@@ -34,12 +34,19 @@ pub trait AuthProvider: Send + Sync {
     /// used by telemetry and non-HTTP request paths.
     fn add_auth_headers(&self, headers: &mut HeaderMap);
 
-    /// Applies auth to a complete outbound request.
+    /// Applies auth to a complete outbound request and returns the request to send.
+    ///
+    /// The input `request` is moved into this method. Implementations may mutate
+    /// the owned request, or replace it entirely, before returning.
     ///
     /// Header-only auth providers can rely on the default implementation.
     /// Request-signing providers can override this to inspect the final URL,
     /// headers, and body bytes before the transport sends the request.
-    async fn apply_auth(&self, mut request: Request) -> Result<Request, AuthError> {
+    ///
+    /// Callers must always use the returned request as authoritative.
+    /// If this returns [`AuthError`], the request should not be sent.
+    async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
+        let mut request = request;
         self.add_auth_headers(&mut request.headers);
         Ok(request)
     }

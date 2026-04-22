@@ -135,7 +135,8 @@ impl BedrockMantleSigV4AuthProvider {
 impl AuthProvider for BedrockMantleSigV4AuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
-    async fn apply_auth(&self, mut request: Request) -> std::result::Result<Request, AuthError> {
+    async fn apply_auth(&self, request: Request) -> std::result::Result<Request, AuthError> {
+        let mut request = request;
         remove_headers_not_preserved_by_bedrock_mantle(&mut request.headers);
         let prepared = request.prepare_body_for_send().map_err(AuthError::Build)?;
         let context = self.context().await?;
