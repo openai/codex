@@ -40,6 +40,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
@@ -194,8 +195,16 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         })
     }
 
-    fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+    fn sandbox_mode_for_first_attempt(
+        &self,
+        req: &UnifiedExecRequest,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    ) -> SandboxOverride {
+        sandbox_override_for_first_attempt(
+            req.sandbox_permissions,
+            &req.exec_approval_requirement,
+            file_system_sandbox_policy,
+        )
     }
 }
 

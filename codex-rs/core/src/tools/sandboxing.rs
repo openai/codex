@@ -230,18 +230,27 @@ pub(crate) enum SandboxOverride {
 pub(crate) fn sandbox_override_for_first_attempt(
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> SandboxOverride {
     // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
     // which supersedes `with_additional_permissions` sandboxed execution hints.
-    if sandbox_permissions.requires_escalated_permissions()
-        || matches!(
-            exec_approval_requirement,
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: true,
-                ..
-            }
-        )
-    {
+    if matches!(
+        exec_approval_requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            ..
+        }
+    ) {
+        return SandboxOverride::BypassSandboxFirstAttempt;
+    }
+
+    // Deny-read restrictions suppress explicit escalation because that path
+    // would otherwise discard the filesystem policy entirely.
+    if file_system_sandbox_policy.has_denied_read_restrictions() {
+        return SandboxOverride::NoOverride;
+    }
+
+    if sandbox_permissions.requires_escalated_permissions() {
         SandboxOverride::BypassSandboxFirstAttempt
     } else {
         SandboxOverride::NoOverride
@@ -263,7 +272,11 @@ pub(crate) trait Approvable<Req> {
     /// Some tools may request to skip the sandbox on the first attempt
     /// (e.g., when the request explicitly asks for escalated permissions).
     /// Defaults to `NoOverride`.
-    fn sandbox_mode_for_first_attempt(&self, _req: &Req) -> SandboxOverride {
+    fn sandbox_mode_for_first_attempt(
+        &self,
+        _req: &Req,
+        _file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    ) -> SandboxOverride {
         SandboxOverride::NoOverride
     }
 
