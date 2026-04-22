@@ -5,6 +5,7 @@
 //! any other backing store.
 
 mod error;
+mod live_thread;
 mod local;
 mod remote;
 mod store;
@@ -12,6 +13,8 @@ mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
+pub use live_thread::LiveThread;
+pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
 pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;

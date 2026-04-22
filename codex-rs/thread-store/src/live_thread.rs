@@ -4,25 +4,26 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_thread_store::AppendThreadItemsParams;
-use codex_thread_store::CreateThreadParams;
-use codex_thread_store::LoadThreadHistoryParams;
-use codex_thread_store::LocalThreadStore;
-use codex_thread_store::ResumeThreadParams;
-use codex_thread_store::StoredThreadHistory;
-use codex_thread_store::ThreadMetadataPatch;
-use codex_thread_store::ThreadStore;
-use codex_thread_store::ThreadStoreResult;
-use codex_thread_store::UpdateThreadMetadataParams;
 use tracing::warn;
 
-/// Session-owned handle for the active thread's persistence lifecycle.
+use crate::AppendThreadItemsParams;
+use crate::CreateThreadParams;
+use crate::LoadThreadHistoryParams;
+use crate::LocalThreadStore;
+use crate::ResumeThreadParams;
+use crate::StoredThreadHistory;
+use crate::ThreadMetadataPatch;
+use crate::ThreadStore;
+use crate::ThreadStoreResult;
+use crate::UpdateThreadMetadataParams;
+
+/// Handle for an active thread's persistence lifecycle.
 ///
-/// `LiveThread` keeps lifecycle decisions in core while delegating storage details to
+/// `LiveThread` keeps lifecycle decisions with the caller while delegating storage details to
 /// [`ThreadStore`]. Local stores may use a rollout file internally and remote stores may use a
 /// service, but session code should only need this handle for the active thread.
 #[derive(Clone)]
-pub(crate) struct LiveThread {
+pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
 }
@@ -32,24 +33,24 @@ pub(crate) struct LiveThread {
 /// If initialization returns early after persistence has been opened, dropping this guard discards
 /// the live writer without forcing lazy in-memory state to become durable. Call [`commit`] once the
 /// session owns the live thread for normal operation.
-pub(crate) struct LiveThreadInitGuard {
+pub struct LiveThreadInitGuard {
     live_thread: Option<LiveThread>,
 }
 
 impl LiveThreadInitGuard {
-    pub(crate) fn new(live_thread: Option<LiveThread>) -> Self {
+    pub fn new(live_thread: Option<LiveThread>) -> Self {
         Self { live_thread }
     }
 
-    pub(crate) fn as_ref(&self) -> Option<&LiveThread> {
+    pub fn as_ref(&self) -> Option<&LiveThread> {
         self.live_thread.as_ref()
     }
 
-    pub(crate) fn commit(&mut self) {
+    pub fn commit(&mut self) {
         self.live_thread = None;
     }
 
-    pub(crate) async fn discard(&mut self) {
+    pub async fn discard(&mut self) {
         let Some(live_thread) = self.live_thread.take() else {
             return;
         };
@@ -77,7 +78,7 @@ impl Drop for LiveThreadInitGuard {
 }
 
 impl LiveThread {
-    pub(crate) async fn create(
+    pub async fn create(
         thread_store: Arc<dyn ThreadStore>,
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
@@ -89,7 +90,7 @@ impl LiveThread {
         })
     }
 
-    pub(crate) async fn resume(
+    pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
         params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
@@ -101,7 +102,7 @@ impl LiveThread {
         })
     }
 
-    pub(crate) async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+    pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
@@ -110,23 +111,23 @@ impl LiveThread {
             .await
     }
 
-    pub(crate) async fn persist(&self) -> ThreadStoreResult<()> {
+    pub async fn persist(&self) -> ThreadStoreResult<()> {
         self.thread_store.persist_thread(self.thread_id).await
     }
 
-    pub(crate) async fn flush(&self) -> ThreadStoreResult<()> {
+    pub async fn flush(&self) -> ThreadStoreResult<()> {
         self.thread_store.flush_thread(self.thread_id).await
     }
 
-    pub(crate) async fn shutdown(&self) -> ThreadStoreResult<()> {
+    pub async fn shutdown(&self) -> ThreadStoreResult<()> {
         self.thread_store.shutdown_thread(self.thread_id).await
     }
 
-    pub(crate) async fn discard(&self) -> ThreadStoreResult<()> {
+    pub async fn discard(&self) -> ThreadStoreResult<()> {
         self.thread_store.discard_thread(self.thread_id).await
     }
 
-    pub(crate) async fn load_history(
+    pub async fn load_history(
         &self,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThreadHistory> {
@@ -138,7 +139,7 @@ impl LiveThread {
             .await
     }
 
-    pub(crate) async fn update_memory_mode(
+    pub async fn update_memory_mode(
         &self,
         mode: ThreadMemoryMode,
         include_archived: bool,
@@ -156,21 +157,20 @@ impl LiveThread {
         Ok(())
     }
 
-    pub(crate) async fn local_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
+    /// Returns the live local rollout path for legacy local-only callers.
+    ///
+    /// Remote stores do not expose rollout files, so they return `Ok(None)`.
+    pub async fn local_rollout_path(&self) -> ThreadStoreResult<Option<PathBuf>> {
         let Some(local_store) = self
             .thread_store
             .as_any()
             .downcast_ref::<LocalThreadStore>()
         else {
-            anyhow::bail!(
-                "rollout path requested for thread {} but the configured thread store is not local; this legacy path is unsupported for remote thread storage",
-                self.thread_id
-            );
+            return Ok(None);
         };
         local_store
             .live_rollout_path(self.thread_id)
             .await
             .map(Some)
-            .map_err(anyhow::Error::from)
     }
 }

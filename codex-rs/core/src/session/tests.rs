@@ -2607,6 +2607,7 @@ async fn attach_thread_persistence(session: &Session) -> PathBuf {
     session
         .current_rollout_path()
         .await
+        .expect("load rollout path")
         .expect("thread should have rollout path")
 }
 

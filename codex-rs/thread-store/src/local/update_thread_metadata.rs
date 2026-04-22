@@ -5,6 +5,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::find_archived_thread_path_by_id_str;
@@ -152,10 +153,8 @@ async fn resolve_rollout_path(
     include_archived: bool,
 ) -> ThreadStoreResult<ResolvedRolloutPath> {
     if let Ok(path) = live_writer::rollout_path(store, thread_id).await {
-        return Ok(ResolvedRolloutPath {
-            path,
-            archived: false,
-        });
+        let archived = rollout_path_is_archived(store, path.as_path());
+        return Ok(ResolvedRolloutPath { path, archived });
     }
 
     let active_path =
@@ -187,6 +186,10 @@ async fn resolve_rollout_path(
         .ok_or_else(|| ThreadStoreError::InvalidRequest {
             message: format!("thread not found: {thread_id}"),
         })
+}
+
+fn rollout_path_is_archived(store: &LocalThreadStore, path: &std::path::Path) -> bool {
+    path.starts_with(store.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR))
 }
 
 #[cfg(test)]
@@ -430,6 +433,70 @@ mod tests {
                 thread_id,
                 patch: ThreadMetadataPatch {
                     name: Some("Archived title".to_string()),
+                    ..Default::default()
+                },
+                include_archived: true,
+            })
+            .await
+            .expect("set archived thread name");
+
+        assert!(thread.archived_at.is_some());
+        assert!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("get metadata")
+                .expect("metadata")
+                .archived_at
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_keeps_live_archived_thread_archived_in_sqlite() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(308);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let archived_path = write_archived_session_file(home.path(), "2025-01-03T16-30-00", uuid)
+            .expect("archived session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("backfill should be complete");
+        codex_rollout::state_db::reconcile_rollout(
+            Some(runtime.as_ref()),
+            archived_path.as_path(),
+            config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ Some(true),
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+        store
+            .resume_thread(ResumeThreadParams {
+                thread_id,
+                rollout_path: Some(archived_path.clone()),
+                history: None,
+                include_archived: true,
+                event_persistence_mode: ThreadEventPersistenceMode::Limited,
+            })
+            .await
+            .expect("resume archived live thread");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some("Live archived title".to_string()),
                     ..Default::default()
                 },
                 include_archived: true,

@@ -127,6 +127,8 @@ use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
+use codex_thread_store::LiveThread;
+use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
@@ -169,8 +171,6 @@ use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::live_thread::LiveThread;
-use crate::live_thread::LiveThreadInitGuard;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -3194,26 +3194,22 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
-        match self.try_current_rollout_path().await {
+    pub(crate) async fn current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
+        let Some(live_thread) = self.live_thread() else {
+            return Ok(None);
+        };
+        live_thread.local_rollout_path().await.map_err(Into::into)
+    }
+
+    pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
+        self.ensure_rollout_materialized().await;
+        match self.current_rollout_path().await {
             Ok(path) => path,
             Err(err) => {
                 warn!("{err}");
                 None
             }
         }
-    }
-
-    pub(crate) async fn try_current_rollout_path(&self) -> anyhow::Result<Option<PathBuf>> {
-        let Some(live_thread) = self.live_thread() else {
-            return Ok(None);
-        };
-        live_thread.local_rollout_path().await
-    }
-
-    pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
-        self.ensure_rollout_materialized().await;
-        self.current_rollout_path().await
     }
 
     pub(crate) async fn take_pending_session_start_source(

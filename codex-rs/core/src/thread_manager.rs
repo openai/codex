@@ -217,7 +217,6 @@ pub(crate) struct ThreadManagerState {
     skills_watcher: Arc<SkillsWatcher>,
     session_source: SessionSource,
     analytics_events_client: Option<AnalyticsEventsClient>,
-    thread_store: Arc<dyn ThreadStore>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -272,7 +271,6 @@ impl ThreadManager {
             restriction_product,
         ));
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
-        let thread_store = configured_thread_store(config);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -290,7 +288,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 analytics_events_client,
-                thread_store,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -348,13 +345,6 @@ impl ThreadManager {
             restriction_product,
         ));
         let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
-        let thread_store: Arc<dyn ThreadStore> = Arc::new(LocalThreadStore::new(RolloutConfig {
-            codex_home: codex_home.clone(),
-            sqlite_home: codex_home.clone(),
-            cwd: std::env::current_dir().unwrap_or_else(|_| codex_home.clone()),
-            model_provider_id: OPENAI_PROVIDER_ID.to_string(),
-            generate_memories: true,
-        }));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -372,7 +362,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 analytics_events_client: None,
-                thread_store,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -956,7 +945,7 @@ impl ThreadManagerState {
             }
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
-        let thread_store = self.thread_store_for_config(&config);
+        let thread_store = configured_thread_store(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1017,14 +1006,6 @@ impl ThreadManagerState {
             thread,
             session_configured,
         })
-    }
-
-    fn thread_store_for_config(&self, config: &Config) -> Arc<dyn ThreadStore> {
-        if self.thread_store.as_any().is::<RemoteThreadStore>() {
-            Arc::clone(&self.thread_store)
-        } else {
-            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
-        }
     }
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
