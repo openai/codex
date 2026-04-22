@@ -201,8 +201,6 @@ mod thread_session_state;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
-#[cfg(test)]
-use self::background_requests::*;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::platform_actions::*;
@@ -1153,5 +1151,7 @@ impl Drop for App {
     }
 }
 
+#[cfg(test)]
+pub(super) mod test_support;
 #[cfg(test)]
 mod tests;

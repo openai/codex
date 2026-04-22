@@ -36,6 +36,7 @@ use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
 use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::EnvironmentManagerArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
@@ -426,7 +427,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
-        Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        Arc::new(EnvironmentManager::default_for_tests()),
     )
     .await
 }
@@ -624,7 +625,9 @@ fn config_cwd_for_app_server_target(
     app_server_target: &AppServerTarget,
     environment_manager: &EnvironmentManager,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if environment_manager.is_remote()
+    if environment_manager
+        .default_environment()
+        .is_some_and(|environment| environment.is_remote())
         || matches!(app_server_target, AppServerTarget::Remote { .. })
     {
         return Ok(None);
@@ -727,7 +730,7 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
         ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
@@ -1772,7 +1775,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::default_for_tests()),
         )
         .await
     }
@@ -1920,8 +1923,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn config_cwd_for_app_server_target_omits_cwd_for_remote_sessions() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn config_cwd_for_app_server_target_omits_cwd_for_remote_sessions() -> std::io::Result<()>
+    {
         let remote_only_cwd = if cfg!(windows) {
             Path::new(r"C:\definitely\not\local\to\this\test")
         } else {
@@ -1931,7 +1935,7 @@ mod tests {
             websocket_url: "ws://127.0.0.1:1234/".to_string(),
             auth_token: None,
         };
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -1940,11 +1944,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()>
+    {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
@@ -1958,13 +1963,13 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn config_cwd_for_app_server_target_errors_for_missing_embedded_cli_cwd() -> std::io::Result<()>
-    {
+    #[tokio::test]
+    async fn config_cwd_for_app_server_target_errors_for_missing_embedded_cli_cwd()
+    -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let missing = temp_dir.path().join("missing");
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::default_for_tests();
 
         let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
             .expect_err("missing embedded cwd should fail");
@@ -1973,15 +1978,23 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn config_cwd_for_app_server_target_omits_cwd_for_remote_exec_server() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn config_cwd_for_app_server_target_omits_cwd_for_remote_exec_server()
+    -> std::io::Result<()> {
         let remote_only_cwd = if cfg!(windows) {
             Path::new(r"C:\definitely\not\local\to\this\test")
         } else {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
+        let environment_manager =
+            EnvironmentManager::new(codex_exec_server::EnvironmentManagerArgs {
+                exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
+                local_runtime_paths: ExecServerRuntimePaths::new(
+                    std::env::current_exe().expect("current exe"),
+                    /*codex_linux_sandbox_exe*/ None,
+                )?,
+            });
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -2108,7 +2121,7 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::default_for_tests()),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
         .await;

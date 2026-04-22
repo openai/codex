@@ -8,6 +8,7 @@ use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
+use codex_client::TransportError;
 use http::HeaderMap;
 use http::Method;
 use serde_json::Value;
@@ -55,7 +56,6 @@ impl<T: HttpTransport> EndpointSession<T> {
         if let Some(body) = body {
             req.body = Some(RequestBody::Json(body.clone()));
         }
-        self.auth.add_auth_headers(&mut req.headers);
         req
     }
 
@@ -97,7 +97,14 @@ impl<T: HttpTransport> EndpointSession<T> {
             self.provider.retry.to_policy(),
             self.request_telemetry.clone(),
             make_request,
-            |req| self.transport.execute(req),
+            |req| {
+                let auth = self.auth.clone();
+                let transport = &self.transport;
+                async move {
+                    let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
+                    transport.execute(req).await
+                }
+            },
         )
         .await?;
 
@@ -131,7 +138,14 @@ impl<T: HttpTransport> EndpointSession<T> {
             self.provider.retry.to_policy(),
             self.request_telemetry.clone(),
             make_request,
-            |req| self.transport.stream(req),
+            |req| {
+                let auth = self.auth.clone();
+                let transport = &self.transport;
+                async move {
+                    let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
+                    transport.stream(req).await
+                }
+            },
         )
         .await?;
 

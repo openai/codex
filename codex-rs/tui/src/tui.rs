@@ -57,9 +57,113 @@ mod job_control;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
+const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT";
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+fn keyboard_enhancement_disabled() -> bool {
+    let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
+    let is_wsl = running_in_wsl();
+    let is_vscode_terminal = is_wsl && running_in_vscode_terminal();
+    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, is_vscode_terminal)
+}
+
+fn keyboard_enhancement_disabled_for(
+    disable_env: Option<&str>,
+    is_wsl: bool,
+    is_vscode_terminal: bool,
+) -> bool {
+    if let Some(disabled) = parse_bool_env(disable_env) {
+        return disabled;
+    }
+
+    // VS Code running a WSL shell can hide TERM_PROGRAM from the Linux process
+    // environment, so `running_in_vscode_terminal` also probes the Windows-side
+    // environment through WSL interop.
+    is_wsl && is_vscode_terminal
+}
+
+fn parse_bool_env(value: Option<&str>) -> Option<bool> {
+    match value.map(str::trim) {
+        Some("1") => Some(true),
+        Some(value) if value.eq_ignore_ascii_case("true") => Some(true),
+        Some(value) if value.eq_ignore_ascii_case("yes") => Some(true),
+        Some("0") => Some(false),
+        Some(value) if value.eq_ignore_ascii_case("false") => Some(false),
+        Some(value) if value.eq_ignore_ascii_case("no") => Some(false),
+        _ => None,
+    }
+}
+
+fn running_in_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        crate::clipboard_paste::is_probably_wsl()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+fn running_in_vscode_terminal() -> bool {
+    vscode_terminal_detected(
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+        windows_term_program().as_deref(),
+    )
+}
+
+fn vscode_terminal_detected(
+    linux_term_program: Option<&str>,
+    windows_term_program: Option<&str>,
+) -> bool {
+    term_program_is_vscode(linux_term_program) || term_program_is_vscode(windows_term_program)
+}
+
+fn term_program_is_vscode(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.eq_ignore_ascii_case("vscode"))
+}
+
+fn windows_term_program() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        static WINDOWS_TERM_PROGRAM: std::sync::OnceLock<Option<String>> =
+            std::sync::OnceLock::new();
+        WINDOWS_TERM_PROGRAM
+            .get_or_init(read_windows_term_program)
+            .clone()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_windows_term_program() -> Option<String> {
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/d", "/s", "/c", "set TERM_PROGRAM"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            line.trim_end_matches('\r')
+                .strip_prefix("TERM_PROGRAM=")
+                .map(str::to_string)
+        })
+        .filter(|value| !value.trim().is_empty())
+}
 
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
     match condition {
@@ -70,7 +174,10 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 #[cfg(test)]
 mod tests {
+    use super::keyboard_enhancement_disabled_for;
+    use super::parse_bool_env;
     use super::should_emit_notification;
+    use super::vscode_terminal_detected;
     use codex_config::types::NotificationCondition;
 
     #[test]
@@ -96,6 +203,68 @@ mod tests {
             /*terminal_focused*/ false
         ));
     }
+
+    #[test]
+    fn keyboard_enhancement_env_flag_parses_common_values() {
+        assert_eq!(parse_bool_env(Some("1")), Some(true));
+        assert_eq!(parse_bool_env(Some("true")), Some(true));
+        assert_eq!(parse_bool_env(Some("YES")), Some(true));
+        assert_eq!(parse_bool_env(Some("0")), Some(false));
+        assert_eq!(parse_bool_env(Some("false")), Some(false));
+        assert_eq!(parse_bool_env(Some("NO")), Some(false));
+        assert_eq!(parse_bool_env(Some("unexpected")), None);
+        assert_eq!(parse_bool_env(/*value*/ None), None);
+    }
+
+    #[test]
+    fn keyboard_enhancement_auto_disables_for_vscode_in_wsl() {
+        assert!(keyboard_enhancement_disabled_for(
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true
+        ));
+    }
+
+    #[test]
+    fn keyboard_enhancement_auto_disable_requires_wsl_and_vscode() {
+        assert!(!keyboard_enhancement_disabled_for(
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false
+        ));
+        assert!(!keyboard_enhancement_disabled_for(
+            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true
+        ));
+    }
+
+    #[test]
+    fn keyboard_enhancement_env_flag_overrides_auto_detection() {
+        assert!(!keyboard_enhancement_disabled_for(
+            Some("0"),
+            /*is_wsl*/ true,
+            /*is_vscode_terminal*/ true
+        ));
+        assert!(keyboard_enhancement_disabled_for(
+            Some("1"),
+            /*is_wsl*/ false,
+            /*is_vscode_terminal*/ false
+        ));
+    }
+
+    #[test]
+    fn vscode_terminal_detection_uses_linux_and_windows_term_program() {
+        assert!(vscode_terminal_detected(
+            Some("vscode"),
+            /*windows_term_program*/ None
+        ));
+        assert!(vscode_terminal_detected(
+            /*linux_term_program*/ None,
+            Some("vscode")
+        ));
+        assert!(!vscode_terminal_detected(
+            /*linux_term_program*/ None,
+            Some("WindowsTerminal")
+        ));
+        assert!(!vscode_terminal_detected(
+            /*linux_term_program*/ None, /*windows_term_program*/ None
+        ));
+    }
 }
 
 pub fn set_modes() -> Result<()> {
@@ -108,14 +277,16 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    let _ = execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    if !keyboard_enhancement_disabled() {
+        let _ = execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
 
     let _ = execute!(stdout(), EnableFocusChange);
     Ok(())
@@ -305,7 +476,8 @@ impl Tui {
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported =
+            !keyboard_enhancement_disabled() && supports_keyboard_enhancement().unwrap_or(false);
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();

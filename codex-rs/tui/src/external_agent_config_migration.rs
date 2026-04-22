@@ -775,7 +775,49 @@ mod tests {
     use ratatui::layout::Rect;
     use std::path::PathBuf;
 
+    fn sample_plugin_details() -> codex_app_server_protocol::MigrationDetails {
+        codex_app_server_protocol::MigrationDetails {
+            plugins: vec![
+                PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec![
+                        "deployer".to_string(),
+                        "formatter".to_string(),
+                        "lint".to_string(),
+                    ],
+                },
+                PluginsMigration {
+                    marketplace_name: "team-marketplace".to_string(),
+                    plugin_names: vec!["asana".to_string()],
+                },
+                PluginsMigration {
+                    marketplace_name: "debug".to_string(),
+                    plugin_names: vec!["sample".to_string()],
+                },
+                PluginsMigration {
+                    marketplace_name: "data-tools".to_string(),
+                    plugin_names: vec!["warehouse".to_string()],
+                },
+            ],
+        }
+    }
+
+    #[cfg(windows)]
+    fn sample_project_root() -> PathBuf {
+        PathBuf::from(r"C:\workspace\project")
+    }
+
+    #[cfg(not(windows))]
+    fn sample_project_root() -> PathBuf {
+        PathBuf::from("/workspace/project")
+    }
+
+    fn sample_project_path(path: &str) -> String {
+        sample_project_root().join(path).display().to_string()
+    }
+
     fn sample_items() -> Vec<ExternalAgentConfigMigrationItem> {
+        let project_root = sample_project_root();
         vec![
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
@@ -787,40 +829,21 @@ mod tests {
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
-                description:
-                    "Migrate enabled plugins from /workspace/project/.claude/settings.json"
-                        .to_string(),
-                cwd: Some(PathBuf::from("/workspace/project")),
-                details: Some(codex_app_server_protocol::MigrationDetails {
-                    plugins: vec![
-                        PluginsMigration {
-                            marketplace_name: "acme-tools".to_string(),
-                            plugin_names: vec![
-                                "deployer".to_string(),
-                                "formatter".to_string(),
-                                "lint".to_string(),
-                            ],
-                        },
-                        PluginsMigration {
-                            marketplace_name: "team-marketplace".to_string(),
-                            plugin_names: vec!["asana".to_string()],
-                        },
-                        PluginsMigration {
-                            marketplace_name: "debug".to_string(),
-                            plugin_names: vec!["sample".to_string()],
-                        },
-                        PluginsMigration {
-                            marketplace_name: "data-tools".to_string(),
-                            plugin_names: vec!["warehouse".to_string()],
-                        },
-                    ],
-                }),
+                description: format!(
+                    "Migrate enabled plugins from {}",
+                    sample_project_path(".claude/settings.json")
+                ),
+                cwd: Some(project_root.clone()),
+                details: Some(sample_plugin_details()),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: "Migrate /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md"
-                    .to_string(),
-                cwd: Some(PathBuf::from("/workspace/project")),
+                description: format!(
+                    "Migrate {} to {}",
+                    sample_project_path("CLAUDE.md"),
+                    sample_project_path("AGENTS.md")
+                ),
+                cwd: Some(project_root),
                 details: None,
             },
         ]
@@ -853,6 +876,9 @@ mod tests {
         );
 
         let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
+        #[cfg(windows)]
+        assert_snapshot!("external_agent_config_migration_prompt_windows", rendered);
+        #[cfg(not(windows))]
         assert_snapshot!("external_agent_config_migration_prompt", rendered);
     }
 

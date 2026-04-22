@@ -6,6 +6,7 @@ use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -116,7 +117,7 @@ impl PathStyle {
 pub struct Client {
     base_url: String,
     http: reqwest::Client,
-    authorization_header_value: Option<String>,
+    bearer_token: Option<String>,
     user_agent: Option<HeaderValue>,
     chatgpt_account_id: Option<String>,
     chatgpt_account_is_fedramp: bool,
@@ -137,12 +138,14 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
+            reqwest::Client::builder(),
+        ))?;
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
             base_url,
             http,
-            authorization_header_value: None,
+            bearer_token: None,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
@@ -165,12 +168,7 @@ impl Client {
     }
 
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
-        self.authorization_header_value = Some(format!("Bearer {}", token.into()));
-        self
-    }
-
-    pub fn with_authorization_header_value(mut self, value: impl Into<String>) -> Self {
-        self.authorization_header_value = Some(value.into());
+        self.bearer_token = Some(token.into());
         self
     }
 
@@ -203,10 +201,11 @@ impl Client {
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
-        if let Some(value) = &self.authorization_header_value
-            && let Ok(hv) = HeaderValue::from_str(value)
-        {
-            h.insert(AUTHORIZATION, hv);
+        if let Some(token) = &self.bearer_token {
+            let value = format!("Bearer {token}");
+            if let Ok(hv) = HeaderValue::from_str(&value) {
+                h.insert(AUTHORIZATION, hv);
+            }
         }
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
@@ -820,7 +819,7 @@ mod tests {
         let codex_client = Client {
             base_url: "https://example.test".to_string(),
             http: reqwest::Client::new(),
-            authorization_header_value: None,
+            bearer_token: None,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
@@ -834,7 +833,7 @@ mod tests {
         let chatgpt_client = Client {
             base_url: "https://chatgpt.com/backend-api".to_string(),
             http: reqwest::Client::new(),
-            authorization_header_value: None,
+            bearer_token: None,
             user_agent: None,
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
