@@ -23,25 +23,21 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use reqwest::header::WWW_AUTHENTICATE;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
-use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 
-/// MIME type for server-sent Streamable HTTP responses.
-const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
-/// MIME type for single JSON Streamable HTTP responses.
-const JSON_MIME_TYPE: &str = "application/json";
-/// Session header used by MCP Streamable HTTP.
-const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
-/// Maximum bytes included in non-JSON response-body error previews.
-const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+use crate::streamable_http::common::EVENT_STREAM_MIME_TYPE;
+use crate::streamable_http::common::HEADER_SESSION_ID;
+use crate::streamable_http::common::JSON_MIME_TYPE;
+use crate::streamable_http::common::body_preview;
+use crate::streamable_http::common::insert_header;
+use crate::streamable_http::common::is_streamable_http_content_type;
+use crate::streamable_http::remote_client::RemoteStreamableHttpClientError::Header;
 
 /// RMCP Streamable HTTP client that sends HTTP requests through exec-server.
 ///
@@ -89,24 +85,36 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         auth_token: Option<String>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
-        insert_static_header(
+        insert_header(
             &mut headers,
             ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
+            Header,
         )?;
-        insert_static_header(&mut headers, CONTENT_TYPE, JSON_MIME_TYPE.to_string())?;
-        insert_auth_header(&mut headers, auth_token)?;
+        insert_header(
+            &mut headers,
+            CONTENT_TYPE,
+            JSON_MIME_TYPE.to_string(),
+            Header,
+        )?;
+        if let Some(auth_token) = auth_token {
+            insert_header(
+                &mut headers,
+                AUTHORIZATION,
+                format!("Bearer {auth_token}"),
+                Header,
+            )?;
+        }
         if let Some(session_id_value) = session_id.as_ref() {
-            insert_static_header(
+            insert_header(
                 &mut headers,
                 HeaderName::from_static("mcp-session-id"),
                 session_id_value.to_string(),
+                Header,
             )?;
         }
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
-        // Use the streaming executor request even for JSON responses so status
-        // and headers are available before the body parser is selected.
         let (response, mut body_stream) = self
             .exec_client
             .http_request_stream(HttpRequestParams {
@@ -128,11 +136,14 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
             ));
         }
         if response.status == StatusCode::UNAUTHORIZED.as_u16()
-            && let Some(header) = response_header(&response.headers, WWW_AUTHENTICATE)
+            && let Some(header) =
+                response_header(&response.headers, reqwest::header::WWW_AUTHENTICATE)
         {
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header: header,
-            }));
+            return Err(StreamableHttpError::AuthRequired(
+                rmcp::transport::streamable_http_client::AuthRequiredError {
+                    www_authenticate_header: header,
+                },
+            ));
         }
         if matches!(
             StatusCode::from_u16(response.status).ok(),
@@ -144,11 +155,11 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         let content_type = response_header(&response.headers, CONTENT_TYPE);
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
         match content_type.as_deref() {
-            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+            Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = sse_stream_from_body(body_stream).boxed();
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
-            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+            Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
                 let body = collect_body(&mut body_stream).await?;
                 let message: ServerJsonRpcMessage =
                     serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
@@ -156,10 +167,10 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
             }
             _ => {
                 let body = collect_body(&mut body_stream).await?;
-                let body_preview = body_preview(body);
                 let content_type = content_type.unwrap_or_else(|| "missing-content-type".into());
                 Err(StreamableHttpError::UnexpectedContentType(Some(format!(
-                    "{content_type}; body: {body_preview}"
+                    "{content_type}; body: {}",
+                    body_preview(String::from_utf8_lossy(&body).to_string())
                 ))))
             }
         }
@@ -173,11 +184,19 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
-        insert_auth_header(&mut headers, auth_token)?;
-        insert_static_header(
+        if let Some(auth_token) = auth_token {
+            insert_header(
+                &mut headers,
+                AUTHORIZATION,
+                format!("Bearer {auth_token}"),
+                Header,
+            )?;
+        }
+        insert_header(
             &mut headers,
             HeaderName::from_static("mcp-session-id"),
             session.to_string(),
+            Header,
         )?;
 
         let response = self
@@ -218,27 +237,35 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         StreamableHttpError<Self::Error>,
     > {
         let mut headers = self.default_headers.clone();
-        insert_static_header(
+        insert_header(
             &mut headers,
             ACCEPT,
             [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "),
+            Header,
         )?;
-        insert_static_header(
+        insert_header(
             &mut headers,
             HeaderName::from_static("mcp-session-id"),
             session_id.to_string(),
+            Header,
         )?;
         if let Some(last_event_id) = last_event_id {
-            insert_static_header(
+            insert_header(
                 &mut headers,
                 HeaderName::from_static("last-event-id"),
                 last_event_id,
+                Header,
             )?;
         }
-        insert_auth_header(&mut headers, auth_token)?;
+        if let Some(auth_token) = auth_token {
+            insert_header(
+                &mut headers,
+                AUTHORIZATION,
+                format!("Bearer {auth_token}"),
+                Header,
+            )?;
+        }
 
-        // Long-lived server streams need the same body notification path as
-        // POST responses; RMCP consumes the returned byte stream as SSE frames.
         let (response, body_stream) = self
             .exec_client
             .http_request_stream(HttpRequestParams {
@@ -269,12 +296,10 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
         }
 
         match response_header(&response.headers, CONTENT_TYPE).as_deref() {
-            Some(ct)
-                if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
-                    || ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {}
-            Some(ct) => {
+            Some(content_type) if is_streamable_http_content_type(content_type) => {}
+            Some(content_type) => {
                 return Err(StreamableHttpError::UnexpectedContentType(Some(
-                    ct.to_string(),
+                    content_type.to_string(),
                 )));
             }
             None => {
@@ -286,31 +311,6 @@ impl StreamableHttpClient for RemoteStreamableHttpClient {
     }
 }
 
-/// Inserts a statically named header after validating its value.
-fn insert_static_header(
-    headers: &mut HeaderMap,
-    name: HeaderName,
-    value: String,
-) -> std::result::Result<(), StreamableHttpError<RemoteStreamableHttpClientError>> {
-    let value = HeaderValue::from_str(&value).map_err(|error| {
-        StreamableHttpError::Client(RemoteStreamableHttpClientError::Header(error.to_string()))
-    })?;
-    headers.insert(name, value);
-    Ok(())
-}
-
-/// Inserts bearer authentication when RMCP supplies an active token.
-fn insert_auth_header(
-    headers: &mut HeaderMap,
-    auth_token: Option<String>,
-) -> std::result::Result<(), StreamableHttpError<RemoteStreamableHttpClientError>> {
-    if let Some(auth_token) = auth_token {
-        insert_static_header(headers, AUTHORIZATION, format!("Bearer {auth_token}"))?;
-    }
-    Ok(())
-}
-
-/// Converts reqwest headers to the executor protocol header representation.
 fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
     headers
         .iter()
@@ -323,7 +323,6 @@ fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
         .collect()
 }
 
-/// Looks up a protocol response header without depending on name casing.
 fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<String> {
     let name = name.as_ref();
     headers
@@ -332,12 +331,10 @@ fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<Stri
         .map(|header| header.value.clone())
 }
 
-/// Returns whether a numeric status code is a successful HTTP status.
 fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
 }
 
-/// Collects an executor response-body stream into one byte vector.
 async fn collect_body(
     body_stream: &mut HttpResponseBodyStream,
 ) -> std::result::Result<Vec<u8>, StreamableHttpError<RemoteStreamableHttpClientError>> {
@@ -353,7 +350,6 @@ async fn collect_body(
     Ok(body)
 }
 
-/// Adapts executor body chunks into the SSE byte stream expected by RMCP.
 fn sse_stream_from_body(
     body_stream: HttpResponseBodyStream,
 ) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
@@ -366,22 +362,4 @@ fn sse_stream_from_body(
         }
     });
     SseStream::from_byte_stream(byte_stream).boxed()
-}
-
-/// Builds a bounded text preview for non-JSON error responses.
-fn body_preview(body: Vec<u8>) -> String {
-    let mut body_preview = String::from_utf8_lossy(&body).to_string();
-    let body_len = body_preview.len();
-    if body_len > NON_JSON_RESPONSE_BODY_PREVIEW_BYTES {
-        let mut boundary = NON_JSON_RESPONSE_BODY_PREVIEW_BYTES;
-        while !body_preview.is_char_boundary(boundary) {
-            boundary = boundary.saturating_sub(1);
-        }
-        body_preview.truncate(boundary);
-        body_preview.push_str(&format!(
-            "... (truncated {} bytes)",
-            body_len.saturating_sub(boundary)
-        ));
-    }
-    body_preview
 }

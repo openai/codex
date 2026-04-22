@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,22 +7,21 @@ use futures::stream::BoxStream;
 use reqwest::header::ACCEPT;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
-use reqwest::header::WWW_AUTHENTICATE;
-use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 
-use crate::streamable_http_transport_client::StreamableHttpTransportClientError;
+use crate::streamable_http::common::EVENT_STREAM_MIME_TYPE;
+use crate::streamable_http::common::HEADER_LAST_EVENT_ID;
+use crate::streamable_http::common::HEADER_SESSION_ID;
+use crate::streamable_http::common::JSON_MIME_TYPE;
+use crate::streamable_http::common::body_preview;
+use crate::streamable_http::common::is_streamable_http_content_type;
+use crate::streamable_http::common::www_authenticate_error;
+use crate::streamable_http::transport_client::StreamableHttpTransportClientError;
 use crate::utils::apply_default_headers;
-
-const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
-const JSON_MIME_TYPE: &str = "application/json";
-const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
-const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
-const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 pub(crate) struct LocalStreamableHttpClient {
@@ -74,19 +72,9 @@ impl StreamableHttpClient for LocalStreamableHttpClient {
             ));
         }
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+            && let Some(error) = www_authenticate_error(response.headers())?
         {
-            let header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header: header,
-            }));
+            return Err(StreamableHttpError::AuthRequired(error));
         }
 
         let status = response.status();
@@ -109,11 +97,11 @@ impl StreamableHttpClient for LocalStreamableHttpClient {
             .map(str::to_string);
 
         match content_type.as_deref() {
-            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+            Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
-            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+            Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
                 let message = response
                     .json()
                     .await
@@ -127,23 +115,10 @@ impl StreamableHttpClient for LocalStreamableHttpClient {
                     .await
                     .map_err(StreamableHttpTransportClientError::from)
                     .map_err(StreamableHttpError::Client)?;
-                let mut body_preview = body;
-                let body_len = body_preview.len();
-                if body_len > NON_JSON_RESPONSE_BODY_PREVIEW_BYTES {
-                    let mut boundary = NON_JSON_RESPONSE_BODY_PREVIEW_BYTES;
-                    while !body_preview.is_char_boundary(boundary) {
-                        boundary = boundary.saturating_sub(1);
-                    }
-                    body_preview.truncate(boundary);
-                    body_preview.push_str(&format!(
-                        "... (truncated {} bytes)",
-                        body_len.saturating_sub(boundary)
-                    ));
-                }
-
                 let content_type = content_type.unwrap_or_else(|| "missing-content-type".into());
                 Err(StreamableHttpError::UnexpectedContentType(Some(format!(
-                    "{content_type}; body: {body_preview}"
+                    "{content_type}; body: {}",
+                    body_preview(body)
                 ))))
             }
         }
@@ -218,12 +193,13 @@ impl StreamableHttpClient for LocalStreamableHttpClient {
             .map_err(StreamableHttpTransportClientError::from)
             .map_err(StreamableHttpError::Client)?;
         match response.headers().get(CONTENT_TYPE) {
-            Some(ct)
-                if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
-                    || ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {}
-            Some(ct) => {
+            Some(content_type)
+                if is_streamable_http_content_type(
+                    String::from_utf8_lossy(content_type.as_bytes()).as_ref(),
+                ) => {}
+            Some(content_type) => {
                 return Err(StreamableHttpError::UnexpectedContentType(Some(
-                    String::from_utf8_lossy(ct.as_bytes()).to_string(),
+                    String::from_utf8_lossy(content_type.as_bytes()).to_string(),
                 )));
             }
             None => {

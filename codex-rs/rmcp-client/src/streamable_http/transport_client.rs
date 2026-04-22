@@ -9,9 +9,9 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 
-use crate::streamable_http_local_client::LocalStreamableHttpClient;
-use crate::streamable_http_remote_client::RemoteStreamableHttpClient;
-use crate::streamable_http_remote_client::RemoteStreamableHttpClientError;
+use crate::streamable_http::local_client::LocalStreamableHttpClient;
+use crate::streamable_http::remote_client::RemoteStreamableHttpClient;
+use crate::streamable_http::remote_client::RemoteStreamableHttpClientError;
 
 #[derive(Clone)]
 pub(crate) enum StreamableHttpTransportClient {
