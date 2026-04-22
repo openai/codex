@@ -1,9 +1,6 @@
-use std::any::Any;
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_rollout::StateDbHandle;
+use std::any::Any;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -49,12 +46,6 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Implementations should release any live writer resources for the thread while preserving
     /// already-durable thread data.
     async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
-
-    /// Returns the local rollout path when this thread is backed by a filesystem rollout.
-    async fn rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>>;
-
-    /// Returns the local state database handle when one is available.
-    async fn state_db(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<StateDbHandle>>;
 
     /// Loads persisted history for resume, fork, rollback, and memory jobs.
     async fn load_history(

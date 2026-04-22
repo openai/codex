@@ -2,6 +2,7 @@ mod archive_thread;
 mod create_thread;
 mod helpers;
 mod list_threads;
+mod live_thread;
 mod read_thread;
 mod unarchive_thread;
 mod update_thread_metadata;
@@ -13,10 +14,6 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
-use codex_rollout::RolloutRecorderParams;
-use codex_rollout::StateDbHandle;
-use codex_rollout::builder_from_items;
-use codex_rollout::state_db;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +61,7 @@ impl LocalThreadStore {
     /// Read a local rollout-backed thread by path.
     pub async fn read_thread_by_rollout_path(
         &self,
-        rollout_path: std::path::PathBuf,
+        rollout_path: PathBuf,
         include_archived: bool,
         include_history: bool,
     ) -> ThreadStoreResult<StoredThread> {
@@ -77,7 +74,15 @@ impl LocalThreadStore {
         .await
     }
 
-    async fn live_recorder(&self, thread_id: ThreadId) -> ThreadStoreResult<RolloutRecorder> {
+    /// Return the live local rollout path for legacy local-only code paths.
+    pub async fn live_rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<PathBuf> {
+        live_thread::rollout_path(self, thread_id).await
+    }
+
+    pub(super) async fn live_recorder(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<RolloutRecorder> {
         self.live_recorders
             .lock()
             .await
@@ -86,7 +91,11 @@ impl LocalThreadStore {
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
     }
 
-    async fn insert_live_recorder(&self, thread_id: ThreadId, recorder: RolloutRecorder) {
+    pub(super) async fn insert_live_recorder(
+        &self,
+        thread_id: ThreadId,
+        recorder: RolloutRecorder,
+    ) {
         self.live_recorders.lock().await.insert(thread_id, recorder);
     }
 }
@@ -98,115 +107,31 @@ impl ThreadStore for LocalThreadStore {
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
-        let thread_id = params.thread_id;
-        let recorder = create_thread::create_thread(self, params).await?;
-        self.insert_live_recorder(thread_id, recorder).await;
-        Ok(())
+        live_thread::create_thread(self, params).await
     }
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
-        let (rollout_path, history) = match (params.rollout_path, params.history) {
-            (Some(rollout_path), history) => (rollout_path, history),
-            (None, history) => {
-                let thread = read_thread::read_thread(
-                    self,
-                    ReadThreadParams {
-                        thread_id: params.thread_id,
-                        include_archived: params.include_archived,
-                        include_history: history.is_none(),
-                    },
-                )
-                .await?;
-                let rollout_path =
-                    thread
-                        .rollout_path
-                        .ok_or_else(|| ThreadStoreError::Internal {
-                            message: format!(
-                                "thread {} does not have a rollout path",
-                                params.thread_id
-                            ),
-                        })?;
-                (
-                    rollout_path,
-                    history.or_else(|| thread.history.map(|history| history.items)),
-                )
-            }
-        };
-        let state_builder = history
-            .as_deref()
-            .and_then(|items| builder_from_items(items, rollout_path.as_path()));
-        let state_db_ctx = state_db::init(&self.config).await;
-        let recorder = RolloutRecorder::new(
-            &self.config,
-            RolloutRecorderParams::resume(
-                rollout_path,
-                create_thread::event_persistence_mode(params.event_persistence_mode),
-            ),
-            state_db_ctx,
-            state_builder,
-        )
-        .await
-        .map_err(|err| ThreadStoreError::Internal {
-            message: format!("failed to resume local thread recorder: {err}"),
-        })?;
-        self.insert_live_recorder(params.thread_id, recorder).await;
-        Ok(())
+        live_thread::resume_thread(self, params).await
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
-        self.live_recorder(params.thread_id)
-            .await?
-            .record_items(params.items.as_slice())
-            .await
-            .map_err(thread_store_io_error)
+        live_thread::append_items(self, params).await
     }
 
     async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        self.live_recorder(thread_id)
-            .await?
-            .persist()
-            .await
-            .map_err(thread_store_io_error)
+        live_thread::persist_thread(self, thread_id).await
     }
 
     async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        self.live_recorder(thread_id)
-            .await?
-            .flush()
-            .await
-            .map_err(thread_store_io_error)
+        live_thread::flush_thread(self, thread_id).await
     }
 
     async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        let recorder = self.live_recorder(thread_id).await?;
-        recorder.shutdown().await.map_err(thread_store_io_error)?;
-        self.live_recorders.lock().await.remove(&thread_id);
-        Ok(())
+        live_thread::shutdown_thread(self, thread_id).await
     }
 
     async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()> {
-        self.live_recorders
-            .lock()
-            .await
-            .remove(&thread_id)
-            .map(|_| ())
-            .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
-    }
-
-    async fn rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>> {
-        Ok(Some(
-            self.live_recorders
-                .lock()
-                .await
-                .get(&thread_id)
-                .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?
-                .rollout_path()
-                .to_path_buf(),
-        ))
-    }
-
-    async fn state_db(&self, thread_id: ThreadId) -> ThreadStoreResult<Option<StateDbHandle>> {
-        Ok(self.live_recorder(thread_id).await?.state_db())
+        live_thread::discard_thread(self, thread_id).await
     }
 
     async fn load_history(
@@ -255,12 +180,6 @@ impl ThreadStore for LocalThreadStore {
     }
 }
 
-fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {
-    ThreadStoreError::Internal {
-        message: err.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use codex_protocol::ThreadId;
@@ -286,10 +205,9 @@ mod tests {
             .await
             .expect("create live thread");
         let rollout_path = store
-            .rollout_path(thread_id)
+            .live_rollout_path(thread_id)
             .await
-            .expect("load rollout path")
-            .expect("live thread should expose rollout path");
+            .expect("load rollout path");
 
         store
             .append_items(AppendThreadItemsParams {
@@ -336,10 +254,9 @@ mod tests {
             .await
             .expect("create live thread");
         let rollout_path = store
-            .rollout_path(thread_id)
+            .live_rollout_path(thread_id)
             .await
-            .expect("load rollout path")
-            .expect("live thread should expose rollout path");
+            .expect("load rollout path");
         store
             .discard_thread(thread_id)
             .await
@@ -389,10 +306,9 @@ mod tests {
             .await
             .expect("flush initial thread");
         let rollout_path = first_store
-            .rollout_path(thread_id)
+            .live_rollout_path(thread_id)
             .await
-            .expect("load rollout path")
-            .expect("initial thread should expose rollout path");
+            .expect("load rollout path");
         first_store
             .shutdown_thread(thread_id)
             .await

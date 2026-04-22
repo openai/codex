@@ -128,6 +128,7 @@ use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::CreateThreadParams;
+use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadStore;
@@ -3200,12 +3201,15 @@ impl Session {
     }
 
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
-        self.services
+        let local_store = self
+            .services
             .thread_store
-            .rollout_path(self.conversation_id)
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()?;
+        local_store
+            .live_rollout_path(self.conversation_id)
             .await
             .ok()
-            .flatten()
     }
 
     pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {

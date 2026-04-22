@@ -3,8 +3,6 @@ mod list_threads;
 
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_rollout::StateDbHandle;
-use std::path::PathBuf;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -80,14 +78,6 @@ impl ThreadStore for RemoteThreadStore {
 
     async fn discard_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
         Err(not_implemented("discard_thread"))
-    }
-
-    async fn rollout_path(&self, _thread_id: ThreadId) -> ThreadStoreResult<Option<PathBuf>> {
-        Err(not_implemented("rollout_path"))
-    }
-
-    async fn state_db(&self, _thread_id: ThreadId) -> ThreadStoreResult<Option<StateDbHandle>> {
-        Err(not_implemented("state_db"))
     }
 
     async fn load_history(

@@ -47,6 +47,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::LocalThreadStore;
+use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
@@ -242,10 +243,8 @@ pub fn build_models_manager(
 }
 
 fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
-        warn!(
-            "experimental_thread_store_endpoint `{endpoint}` is configured, but remote thread write APIs are not implemented yet; using local thread store"
-        );
+    if let Some(endpoint) = config.experimental_thread_store_endpoint.clone() {
+        return Arc::new(RemoteThreadStore::new(endpoint));
     }
     Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
 }
