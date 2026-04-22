@@ -118,6 +118,22 @@ fn openai_file_api_base_url(base_url: &str) -> String {
     base_url.trim_end_matches('/').to_string()
 }
 
+fn local_dev_openai_file_api_base_url(base_url: &str) -> Option<String> {
+    let mut url = Url::parse(base_url).ok()?;
+    match url.host_str()? {
+        "localhost" | "127.0.0.1" | "::1" => {}
+        _ => return None,
+    }
+    if url.port_or_known_default() == Some(8000) {
+        return None;
+    }
+    url.set_port(Some(8000)).ok()?;
+    url.set_path("/api");
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string().trim_end_matches('/').to_string())
+}
+
 pub async fn download_openai_file(
     base_url: &str,
     auth: &impl AuthProvider,
@@ -192,8 +208,6 @@ pub async fn upload_local_file(
         .and_then(|value| value.to_str())
         .unwrap_or("file")
         .to_string();
-    let api_base_url = openai_file_api_base_url(base_url);
-    let create_url = format!("{api_base_url}/files");
     let mut create_request = serde_json::json!({
         "file_name": file_name,
         "file_size": metadata.len(),
@@ -202,28 +216,20 @@ pub async fn upload_local_file(
     if options.store_in_library {
         create_request["store_in_library"] = serde_json::json!(true);
     }
-    let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&create_request)
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: create_url.clone(),
-            source,
-        })?;
-    let create_status = create_response.status();
-    let create_body = create_response.text().await.unwrap_or_default();
-    if !create_status.is_success() {
-        return Err(OpenAiFileError::UnexpectedStatus {
-            url: create_url,
-            status: create_status,
-            body: create_body,
-        });
-    }
-    let create_payload: CreateFileResponse =
-        serde_json::from_str(&create_body).map_err(|source| OpenAiFileError::Decode {
-            url: create_url.clone(),
-            source,
-        })?;
+    let mut api_base_url = openai_file_api_base_url(base_url);
+    let create_payload = match create_file(auth, &api_base_url, &create_request).await {
+        Ok(payload) => payload,
+        Err(OpenAiFileError::UnexpectedStatus { status, .. })
+            if status == StatusCode::NOT_FOUND =>
+        {
+            let Some(local_dev_api_base_url) = local_dev_openai_file_api_base_url(base_url) else {
+                return create_file(auth, &api_base_url, &create_request).await;
+            };
+            api_base_url = local_dev_api_base_url;
+            create_file(auth, &api_base_url, &create_request).await?
+        }
+        Err(error) => return Err(error),
+    };
 
     let upload_file = File::open(path)
         .await
@@ -326,6 +332,35 @@ pub async fn upload_local_file(
             }
         }
     }
+}
+
+async fn create_file(
+    auth: &dyn AuthProvider,
+    api_base_url: &str,
+    create_request: &serde_json::Value,
+) -> Result<CreateFileResponse, OpenAiFileError> {
+    let create_url = format!("{api_base_url}/files");
+    let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
+        .json(create_request)
+        .send()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: create_url.clone(),
+            source,
+        })?;
+    let create_status = create_response.status();
+    let create_body = create_response.text().await.unwrap_or_default();
+    if !create_status.is_success() {
+        return Err(OpenAiFileError::UnexpectedStatus {
+            url: create_url,
+            status: create_status,
+            body: create_body,
+        });
+    }
+    serde_json::from_str(&create_body).map_err(|source| OpenAiFileError::Decode {
+        url: create_url,
+        source,
+    })
 }
 
 fn authorized_request(

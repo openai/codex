@@ -512,8 +512,6 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
-    /// Optional override for the OpenAI file upload/download API base.
-    pub openai_file_api_base_url: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
@@ -800,12 +798,6 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub fn openai_file_api_base_url(&self) -> &str {
-        self.openai_file_api_base_url
-            .as_deref()
-            .unwrap_or(self.chatgpt_base_url.as_str())
-    }
-
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
@@ -2317,9 +2309,6 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            openai_file_api_base_url: config_profile
-                .openai_file_api_base_url
-                .or(cfg.openai_file_api_base_url),
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {

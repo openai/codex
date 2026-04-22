@@ -12,11 +12,8 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-<<<<<<< HEAD
-=======
 use codex_api::AuthProvider;
 use codex_api::OpenAiFileUploadOptions;
->>>>>>> 39d265536 (Add metadata-driven OpenAI file support for builtin codex_apps tools)
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
@@ -46,11 +43,6 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-<<<<<<< HEAD
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
-=======
         let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
             sess,
             turn_context,
@@ -60,7 +52,6 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
             upload_options,
         )
         .await?
->>>>>>> 39d265536 (Add metadata-driven OpenAI file support for builtin codex_apps tools)
         else {
             continue;
         };
@@ -141,16 +132,11 @@ async fn build_uploaded_local_argument_value(
     };
     let default_upload_options = OpenAiFileUploadOptions::default();
     let uploaded = upload_local_file(
-<<<<<<< HEAD
-        turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        &upload_auth,
-=======
         turn_context
             .config
             .openai_file_api_base_url()
             .trim_end_matches('/'),
         upload_auth.as_ref(),
->>>>>>> e66c01c9f (clean)
         &resolved_path,
         upload_options.unwrap_or(&default_upload_options),
     )
@@ -519,92 +505,4 @@ mod tests {
         assert!(error.contains("failed to upload"));
         assert!(error.contains("file"));
     }
-<<<<<<< HEAD
-=======
-
-    #[tokio::test]
-    async fn build_uploaded_local_argument_value_uses_agent_assertion_for_cached_task() {
-        use wiremock::Mock;
-        use wiremock::MockServer;
-        use wiremock::ResponseTemplate;
-        use wiremock::matchers::body_json;
-        use wiremock::matchers::header_regex;
-        use wiremock::matchers::method;
-        use wiremock::matchers::path;
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/files"))
-            .and(header_regex("authorization", r"^AgentAssertion .+"))
-            .and(body_json(serde_json::json!({
-                "file_name": "file_report.csv",
-                "file_size": 5,
-                "use_case": "codex",
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "file_id": "file_123",
-                "upload_url": format!("{}/upload/file_123", server.uri()),
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path("/upload/file_123"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/files/file_123/uploaded"))
-            .and(header_regex("authorization", r"^AgentAssertion .+"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "success",
-                "download_url": format!("{}/download/file_123", server.uri()),
-                "file_name": "file_report.csv",
-                "mime_type": "text/csv",
-                "file_size_bytes": 5,
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let (mut session, mut turn_context) = make_session_and_context().await;
-        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        let dir = tempdir().expect("temp dir");
-        let local_path = dir.path().join("file_report.csv");
-        tokio::fs::write(&local_path, b"hello")
-            .await
-            .expect("write local file");
-        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
-
-        let mut config = (*turn_context.config).clone();
-        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
-        turn_context.config = Arc::new(config);
-        install_cached_agent_task_auth(&mut session, &mut turn_context, server.uri()).await;
-
-        let rewritten = build_uploaded_local_argument_value(
-            &session,
-            &turn_context,
-            Some(&auth),
-            "file",
-            /*index*/ None,
-            "file_report.csv",
-            None,
-        )
-        .await
-        .expect("rewrite should upload the local file");
-
-        assert_eq!(
-            rewritten,
-            serde_json::json!({
-                "download_url": format!("{}/download/file_123", server.uri()),
-                "file_id": "file_123",
-                "mime_type": "text/csv",
-                "file_name": "file_report.csv",
-                "uri": "sediment://file_123",
-                "file_size_bytes": 5,
-            })
-        );
-    }
->>>>>>> 39d265536 (Add metadata-driven OpenAI file support for builtin codex_apps tools)
 }

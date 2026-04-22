@@ -39,8 +39,6 @@ fn configure_apps(config: &mut Config, chatgpt_base_url: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Result<()> {
     let server = start_mock_server().await;
-    let upload_server = start_mock_server().await;
-    let upload_server_uri = upload_server.uri();
     let apps_server = AppsTestServer::mount(&server).await?;
 
     Mock::given(method("POST"))
@@ -53,33 +51,32 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "file_id": "file_123",
-            "upload_url": format!("{}/upload/file_123", upload_server_uri),
+            "upload_url": format!("{}/upload/file_123", server.uri()),
         })))
         .expect(1)
-        .mount(&upload_server)
+        .mount(&server)
         .await;
     Mock::given(method("PUT"))
         .and(path("/upload/file_123"))
         .and(header("content-length", "11"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
-        .mount(&upload_server)
+        .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/api/files/file_123/uploaded"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "status": "success",
-            "download_url": format!("{}/download/file_123", upload_server_uri),
+            "download_url": format!("{}/download/file_123", server.uri()),
             "file_name": "report.txt",
             "mime_type": "text/plain",
             "file_size_bytes": 11,
         })))
         .expect(1)
-        .mount(&upload_server)
+        .mount(&server)
         .await;
 
     let call_id = "extract-call-1";
-    let upload_server_api_base = format!("{}/api", upload_server_uri);
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -104,10 +101,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            configure_apps(config, apps_server.chatgpt_base_url.as_str());
-            config.openai_file_api_base_url = Some(upload_server_api_base.clone());
-        });
+        .with_config(move |config| configure_apps(config, apps_server.chatgpt_base_url.as_str()));
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
 
@@ -153,7 +147,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     assert_eq!(
         apps_tool_call.pointer("/params/arguments/file"),
         Some(&json!({
-            "download_url": format!("{}/download/file_123", upload_server_uri),
+            "download_url": format!("{}/download/file_123", server.uri()),
             "file_id": "file_123",
             "mime_type": "text/plain",
             "file_name": "report.txt",

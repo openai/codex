@@ -29,12 +29,8 @@ struct CodexAppsFileUri {
     file_name: Option<String>,
 }
 
-fn codex_apps_download_base_url<'a>(turn_context: &'a TurnContext, download_url: &str) -> &'a str {
-    if download_url.starts_with("/api/codex/") {
-        turn_context.config.chatgpt_base_url.as_str()
-    } else {
-        turn_context.config.openai_file_api_base_url()
-    }
+fn codex_apps_download_base_url(turn_context: &TurnContext) -> &str {
+    turn_context.config.chatgpt_base_url.as_str()
 }
 
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
@@ -83,8 +79,7 @@ async fn maybe_materialize_codex_apps_file_download_result_with_auth(
     let Some(payload) = extract_codex_apps_file_download_payload(&result) else {
         return result;
     };
-    let download_base_url =
-        codex_apps_download_base_url(turn_context, &payload.file_uri.download_url);
+    let download_base_url = codex_apps_download_base_url(turn_context);
     if result.structured_content.is_none()
         && let Ok(structured_content) = serde_json::to_value(&payload)
     {
@@ -350,7 +345,6 @@ mod tests {
     #[tokio::test]
     async fn codex_apps_file_download_materialization_uses_chatgpt_base_for_relative_codex_urls() {
         let chatgpt_server = MockServer::start().await;
-        let file_api_server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/codex/files/file_123/content"))
             .and(header("authorization", "Bearer Access Token"))
@@ -366,7 +360,6 @@ mod tests {
         let (_, mut turn_context) = make_session_and_context().await;
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = chatgpt_server.uri();
-        config.openai_file_api_base_url = Some(format!("{}/backend-api", file_api_server.uri()));
         turn_context.config = Arc::new(config);
         let original = CallToolResult {
             content: vec![],
