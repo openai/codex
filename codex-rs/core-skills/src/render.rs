@@ -10,6 +10,7 @@ use codex_utils_output_truncation::approx_token_count;
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 10;
+const APPROX_BYTES_PER_TOKEN: usize = 4;
 pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX: &str = "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of";
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Warning: Exceeded skills context budget. All skill descriptions were removed and";
@@ -33,6 +34,17 @@ impl SkillMetadataBudget {
             Self::Characters(_) => text.chars().count(),
         }
     }
+
+    fn cost_from_counts(self, chars: usize, bytes: usize) -> usize {
+        match self {
+            Self::Tokens(_) => approx_token_count_from_bytes(bytes),
+            Self::Characters(_) => chars,
+        }
+    }
+}
+
+fn approx_token_count_from_bytes(bytes: usize) -> usize {
+    bytes.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +123,7 @@ pub fn build_available_skills(
             skill_word,
             verb
         ))
-    } else if report.truncated_description_chars
+    } else if report.average_truncated_description_chars()
         > SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS
     {
         Some(format!(
@@ -331,6 +343,12 @@ struct RenderedSkillLine {
     truncated_chars: usize,
 }
 
+struct DescriptionBudgetLine<'a> {
+    line: &'a SkillLine<'a>,
+    description_char_count: usize,
+    extra_costs: Vec<usize>,
+}
+
 fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) {
     rendered
         .iter()
@@ -401,6 +419,38 @@ impl<'a> SkillLine<'a> {
     }
 }
 
+impl<'a> DescriptionBudgetLine<'a> {
+    fn new(line: &'a SkillLine<'a>, budget: SkillMetadataBudget) -> Self {
+        let minimum_line = line.render_minimum();
+        let minimum_chars = minimum_line.chars().count().saturating_add(1);
+        let minimum_bytes = minimum_line.len().saturating_add(1);
+        let minimum_cost = budget.cost_from_counts(minimum_chars, minimum_bytes);
+
+        let description_char_count = line.description_char_count();
+        let mut extra_costs = Vec::with_capacity(description_char_count.saturating_add(1));
+        extra_costs.push(0);
+
+        let mut prefix_chars = 0usize;
+        let mut prefix_bytes = 0usize;
+        for ch in line.description.chars() {
+            prefix_chars = prefix_chars.saturating_add(1);
+            prefix_bytes = prefix_bytes.saturating_add(ch.len_utf8());
+            let rendered_chars = minimum_chars.saturating_add(prefix_chars).saturating_add(1);
+            let rendered_bytes = minimum_bytes.saturating_add(prefix_bytes).saturating_add(1);
+            let cost = budget
+                .cost_from_counts(rendered_chars, rendered_bytes)
+                .saturating_sub(minimum_cost);
+            extra_costs.push(cost);
+        }
+
+        Self {
+            line,
+            description_char_count,
+            extra_costs,
+        }
+    }
+}
+
 fn line_cost(budget: SkillMetadataBudget, line: &str) -> usize {
     budget.cost(&format!("{line}\n"))
 }
@@ -410,8 +460,12 @@ fn render_lines_with_description_budget(
     skill_lines: &[SkillLine<'_>],
     limit: usize,
 ) -> Vec<RenderedSkillLine> {
-    let mut char_allocations = vec![0usize; skill_lines.len()];
-    let mut extra_costs = vec![0usize; skill_lines.len()];
+    let budget_lines = skill_lines
+        .iter()
+        .map(|line| DescriptionBudgetLine::new(line, budget))
+        .collect::<Vec<_>>();
+    let mut char_allocations = vec![0usize; budget_lines.len()];
+    let mut current_extra_costs = vec![0usize; budget_lines.len()];
     let mut remaining = limit;
 
     // Distribute description space one character at a time across skills.
@@ -419,19 +473,18 @@ fn render_lines_with_description_budget(
     // longer descriptions instead of being stranded in a fixed per-skill quota.
     loop {
         let mut changed = false;
-        for (index, line) in skill_lines.iter().enumerate() {
-            if char_allocations[index] >= line.description_char_count() {
+        for (index, line) in budget_lines.iter().enumerate() {
+            if char_allocations[index] >= line.description_char_count {
                 continue;
             }
 
-            let current_cost = extra_costs[index];
+            let current_cost = current_extra_costs[index];
             let next_chars = char_allocations[index].saturating_add(1);
-            let next_cost = line_cost(budget, &line.render_with_description_chars(next_chars))
-                .saturating_sub(line.minimum_cost(budget));
+            let next_cost = line.extra_costs[next_chars];
             let delta = next_cost.saturating_sub(current_cost);
             if delta <= remaining {
                 char_allocations[index] = next_chars;
-                extra_costs[index] = next_cost;
+                current_extra_costs[index] = next_cost;
                 remaining = remaining.saturating_sub(delta);
                 changed = true;
             }
@@ -442,15 +495,15 @@ fn render_lines_with_description_budget(
         }
     }
 
-    skill_lines
+    budget_lines
         .iter()
         .zip(char_allocations)
         .map(|(line, description_chars)| {
             let truncated_chars = line
-                .description_char_count()
+                .description_char_count
                 .saturating_sub(description_chars);
             RenderedSkillLine {
-                line: line.render_with_description_chars(description_chars),
+                line: line.line.render_with_description_chars(description_chars),
                 truncated_chars,
             }
         })
@@ -557,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn budgeted_rendering_warns_when_description_truncation_exceeds_threshold() {
+    fn budgeted_rendering_does_not_warn_when_average_description_truncation_is_within_threshold() {
         let alpha = make_skill_with_description("alpha-skill", SkillScope::Repo, "abcdefghij");
         let beta = make_skill_with_description("beta-skill", SkillScope::Repo, "uvwxyzabcd");
         let minimum_cost = SkillLine::new(&alpha)
@@ -571,10 +624,31 @@ mod tests {
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
         assert_eq!(rendered.report.truncated_description_chars, 16);
+        assert_eq!(rendered.report.truncated_description_count, 2);
+        assert_eq!(rendered.warning_message, None);
+    }
+
+    #[test]
+    fn budgeted_rendering_warns_when_average_description_truncation_exceeds_threshold() {
+        let alpha =
+            make_skill_with_description("alpha-skill", SkillScope::Repo, "abcdefghijklmnop");
+        let beta = make_skill_with_description("beta-skill", SkillScope::Repo, "uvwxyzabcdefghij");
+        let minimum_cost = SkillLine::new(&alpha)
+            .minimum_cost(SkillMetadataBudget::Characters(usize::MAX))
+            + SkillLine::new(&beta).minimum_cost(SkillMetadataBudget::Characters(usize::MAX));
+        let budget = SkillMetadataBudget::Characters(minimum_cost + 6);
+
+        let rendered = build_available_skills(&[alpha, beta], budget, SkillRenderSideEffects::None)
+            .expect("skills should render");
+
+        assert_eq!(rendered.report.included_count, 2);
+        assert_eq!(rendered.report.omitted_count, 0);
+        assert_eq!(rendered.report.truncated_description_chars, 28);
+        assert_eq!(rendered.report.truncated_description_count, 2);
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of 8 characters per skill."
+                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of 14 characters per skill."
                     .to_string()
             )
         );
