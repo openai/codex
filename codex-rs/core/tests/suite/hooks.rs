@@ -1937,16 +1937,42 @@ async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
         "shell command output should still reach the model",
     );
 
-    let json_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    let json_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?
+        .into_iter()
+        .map(|hook_input| {
+            serde_json::json!({
+                "hook_event_name": hook_input["hook_event_name"],
+                "tool_name": hook_input["tool_name"],
+                "tool_use_id": hook_input["tool_use_id"],
+                "tool_input": hook_input["tool_input"],
+            })
+        })
+        .collect::<Vec<_>>();
     let toml_hook_inputs = read_hook_inputs_from_log(
         test.codex_home_path()
             .join("pre_tool_use_toml_hook_log.jsonl")
             .as_path(),
-    )?;
-    assert_eq!(json_hook_inputs.len(), 1);
-    assert_eq!(toml_hook_inputs.len(), 1);
-    assert_eq!(json_hook_inputs[0]["tool_use_id"], call_id);
-    assert_eq!(toml_hook_inputs[0]["tool_use_id"], call_id);
+    )?
+    .into_iter()
+    .map(|hook_input| {
+        serde_json::json!({
+            "hook_event_name": hook_input["hook_event_name"],
+            "tool_name": hook_input["tool_name"],
+            "tool_use_id": hook_input["tool_use_id"],
+            "tool_input": hook_input["tool_input"],
+        })
+    })
+    .collect::<Vec<_>>();
+    let expected_hook_inputs = vec![serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_use_id": call_id,
+        "tool_input": {
+            "command": command,
+        },
+    })];
+    assert_eq!(expected_hook_inputs, json_hook_inputs);
+    assert_eq!(expected_hook_inputs, toml_hook_inputs);
 
     Ok(())
 }
