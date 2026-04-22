@@ -135,8 +135,10 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 }
 
-static CLI_AUTH_SECRET_NAME: Lazy<SecretName> =
-    Lazy::new(|| SecretName::new("CLI_AUTH").expect("CLI_AUTH should be valid"));
+static CLI_AUTH_SECRET_NAME: Lazy<SecretName> = Lazy::new(|| match SecretName::new("CLI_AUTH") {
+    Ok(name) => name,
+    Err(err) => panic!("CLI_AUTH should be valid: {err}"),
+});
 
 // turns codex_home path into a stable, short key string
 fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
