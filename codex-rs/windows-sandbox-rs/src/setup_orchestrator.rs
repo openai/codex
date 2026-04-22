@@ -334,6 +334,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && should_include_helper_read_root(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -341,6 +342,15 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn should_include_helper_read_root(path: &Path) -> bool {
+    !path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 fn gather_legacy_full_read_roots(
@@ -1007,6 +1017,20 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_read_root_skips_windowsapps_paths() {
+        assert!(!should_include_helper_read_root(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.417.5275.0_x64__2p2nqsd0c76g0\app\resources"
+        )));
+    }
+
+    #[test]
+    fn helper_read_root_keeps_normal_install_paths() {
+        assert!(should_include_helper_read_root(Path::new(
+            r"C:\Users\alice\.codex\.sandbox-bin"
+        )));
     }
 
     #[test]
