@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 from statistics import median
 import sys
-from typing import Iterable, Tuple
+from typing import Tuple
 
 
 Color = Tuple[int, int, int]
@@ -186,8 +186,8 @@ def _cleanup_spill(rgb: Color, key: Color, alpha: int = 255) -> Color:
     )
 
 
-def _alpha_for_pixels(
-    pixels: Iterable[tuple[int, int, int, int]],
+def _apply_alpha_to_image(
+    image,
     *,
     key: Color,
     tolerance: int,
@@ -195,36 +195,39 @@ def _alpha_for_pixels(
     soft_matte: bool,
     transparent_threshold: float,
     opaque_threshold: float,
-) -> tuple[list[tuple[int, int, int, int]], int]:
-    output: list[tuple[int, int, int, int]] = []
+) -> int:
+    pixels = image.load()
+    width, height = image.size
     transparent = 0
 
-    for red, green, blue, alpha in pixels:
-        rgb = (red, green, blue)
-        distance = _channel_distance(rgb, key)
-        key_like = _looks_key_colored(rgb, key, distance)
-        output_alpha = (
-            min(
-                _soft_alpha(distance, transparent_threshold, opaque_threshold),
-                _dominance_alpha(rgb, key),
+    for y in range(height):
+        for x in range(width):
+            red, green, blue, alpha = pixels[x, y]
+            rgb = (red, green, blue)
+            distance = _channel_distance(rgb, key)
+            key_like = _looks_key_colored(rgb, key, distance)
+            output_alpha = (
+                min(
+                    _soft_alpha(distance, transparent_threshold, opaque_threshold),
+                    _dominance_alpha(rgb, key),
+                )
+                if soft_matte and key_like
+                else (0 if distance <= tolerance else 255)
             )
-            if soft_matte and key_like
-            else (0 if distance <= tolerance else 255)
-        )
-        output_alpha = int(round(output_alpha * (alpha / 255.0)))
-        if 0 < output_alpha <= ALPHA_NOISE_FLOOR:
-            output_alpha = 0
+            output_alpha = int(round(output_alpha * (alpha / 255.0)))
+            if 0 < output_alpha <= ALPHA_NOISE_FLOOR:
+                output_alpha = 0
 
-        if output_alpha == 0:
-            output.append((0, 0, 0, 0))
-            transparent += 1
-            continue
+            if output_alpha == 0:
+                pixels[x, y] = (0, 0, 0, 0)
+                transparent += 1
+                continue
 
-        if spill_cleanup and key_like:
-            red, green, blue = _cleanup_spill(rgb, key, output_alpha)
-        output.append((red, green, blue, output_alpha))
+            if spill_cleanup and key_like:
+                red, green, blue = _cleanup_spill(rgb, key, output_alpha)
+            pixels[x, y] = (red, green, blue, output_alpha)
 
-    return output, transparent
+    return transparent
 
 
 def _contract_alpha(image, pixels: int):
@@ -232,7 +235,7 @@ def _contract_alpha(image, pixels: int):
         return image
 
     _, ImageFilter = _load_pillow()
-    alpha = image.split()[-1]
+    alpha = image.getchannel("A")
     for _ in range(pixels):
         alpha = alpha.filter(ImageFilter.MinFilter(3))
     image.putalpha(alpha)
@@ -244,7 +247,7 @@ def _apply_edge_feather(image, radius: float):
         return image
 
     _, ImageFilter = _load_pillow()
-    alpha = image.split()[-1]
+    alpha = image.getchannel("A")
     alpha = alpha.filter(ImageFilter.GaussianBlur(radius=radius))
     image.putalpha(alpha)
     return image
@@ -256,14 +259,28 @@ def _encode_image(image, output_format: str) -> bytes:
     return out.getvalue()
 
 
-def _get_pixels(image):
-    getter = getattr(image, "get_flattened_data", None)
-    return getter() if getter else image.getdata()
+def _alpha_counts(image) -> tuple[int, int, int]:
+    pixels = image.load()
+    width, height = image.size
+    total = 0
+    transparent = 0
+    partial = 0
+
+    for y in range(height):
+        for x in range(width):
+            alpha = pixels[x, y][3]
+            total += 1
+            if alpha == 0:
+                transparent += 1
+            elif alpha < 255:
+                partial += 1
+
+    return total, transparent, partial
 
 
 def _sample_border_key(image, mode: str) -> Color:
-    rgb = image.convert("RGB")
-    width, height = rgb.size
+    width, height = image.size
+    pixels = image.load()
     samples: list[Color] = []
 
     if mode == "corners":
@@ -277,18 +294,23 @@ def _sample_border_key(image, mode: str) -> Color:
         for left, top, right, bottom in boxes:
             for y in range(top, bottom):
                 for x in range(left, right):
-                    samples.append(rgb.getpixel((x, y)))
+                    red, green, blue = pixels[x, y][:3]
+                    samples.append((red, green, blue))
     else:
         band = max(1, min(width, height, 6))
         step = max(1, min(width, height) // 256)
         for x in range(0, width, step):
             for y in range(band):
-                samples.append(rgb.getpixel((x, y)))
-                samples.append(rgb.getpixel((x, height - 1 - y)))
+                red, green, blue = pixels[x, y][:3]
+                samples.append((red, green, blue))
+                red, green, blue = pixels[x, height - 1 - y][:3]
+                samples.append((red, green, blue))
         for y in range(0, height, step):
             for x in range(band):
-                samples.append(rgb.getpixel((x, y)))
-                samples.append(rgb.getpixel((width - 1 - x, y)))
+                red, green, blue = pixels[x, y][:3]
+                samples.append((red, green, blue))
+                red, green, blue = pixels[width - 1 - x, y][:3]
+                samples.append((red, green, blue))
 
     if not samples:
         _die("Could not sample background key color from image border.")
@@ -313,8 +335,8 @@ def _remove_chroma_key(args: argparse.Namespace) -> None:
         else _parse_key_color(args.key_color)
     )
 
-    pixels, transparent = _alpha_for_pixels(
-        _get_pixels(rgba),
+    transparent = _apply_alpha_to_image(
+        rgba,
         key=key,
         tolerance=args.tolerance,
         spill_cleanup=args.spill_cleanup,
@@ -322,14 +344,10 @@ def _remove_chroma_key(args: argparse.Namespace) -> None:
         transparent_threshold=args.transparent_threshold,
         opaque_threshold=args.opaque_threshold,
     )
-    rgba.putdata(pixels)
     rgba = _contract_alpha(rgba, args.edge_contract)
     rgba = _apply_edge_feather(rgba, args.edge_feather)
 
-    alpha_values = [pixel[3] for pixel in _get_pixels(rgba)]
-    total = len(alpha_values)
-    transparent_after = sum(1 for alpha in alpha_values if alpha == 0)
-    partial_after = sum(1 for alpha in alpha_values if 0 < alpha < 255)
+    total, transparent_after, partial_after = _alpha_counts(rgba)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     output_format = "PNG" if out.suffix.lower() == ".png" else "WEBP"

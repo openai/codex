@@ -77,7 +77,7 @@ Do not add:
 - Prompt for a perfectly flat solid chroma-key background, usually `#00ff00`; use `#ff00ff` when the subject is green, and avoid key colors that appear in the subject.
 - Explicitly prohibit shadows, gradients, floor planes, reflections, texture, and lighting variation in the background.
 - Ask for crisp edges, generous padding, and no use of the key color inside the subject.
-- After generation, remove the background locally with `python scripts/remove_chroma_key.py --input <source> --out <final.png> --auto-key border --soft-matte --transparent-threshold 12 --opaque-threshold 220 --despill` and validate the alpha result before shipping it.
+- After generation, remove the background locally with `python "${CODEX_HOME:-$HOME/.codex}/skills/.system/imagegen/scripts/remove_chroma_key.py" --input <source> --out <final.png> --auto-key border --soft-matte --transparent-threshold 12 --opaque-threshold 220 --despill` and validate the alpha result before shipping it.
 - Use soft matte and despill for antialiased edges; hard tolerance-only removal is mainly for flat pixel-art or exact-color fixtures.
 - Use CLI `gpt-image-1.5 --background transparent --output-format png` only after the user explicitly confirms the fallback, or when the user already explicitly requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback. Ask first for true/native transparency requests, failed chroma-key validation, or complex transparent subjects such as hair, fur, glass, smoke, liquids, translucent materials, reflective objects, or soft shadows.
 

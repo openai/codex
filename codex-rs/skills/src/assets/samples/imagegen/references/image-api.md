@@ -68,7 +68,7 @@ Model-specific note for `input_fidelity`:
 
 ## Transparent backgrounds
 
-`gpt-image-2` does not currently support the Image API `background=transparent` parameter. The skill's default transparent-image path is built-in `image_gen` with a flat chroma-key background, followed by local alpha extraction with `python scripts/remove_chroma_key.py`.
+`gpt-image-2` does not currently support the Image API `background=transparent` parameter. The skill's default transparent-image path is built-in `image_gen` with a flat chroma-key background, followed by local alpha extraction with `python "${CODEX_HOME:-$HOME/.codex}/skills/.system/imagegen/scripts/remove_chroma_key.py"`.
 
 Use CLI `gpt-image-1.5` with `background=transparent` and a transparent-capable output format such as `png` or `webp` only after the user explicitly confirms that fallback, unless they already requested `gpt-image-1.5`, `scripts/image_gen.py`, or CLI fallback. If the user asks for true/native transparency, the subject is too complex for clean chroma-key removal, or local background removal fails validation, explain the tradeoff and ask before switching.
 
