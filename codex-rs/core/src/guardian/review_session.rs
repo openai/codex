@@ -672,6 +672,7 @@ async fn run_review_on_session(
             );
         }
     };
+    let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
     let transcript_cursor = prompt_items.transcript_cursor;
     let token_usage_at_review_start = review_session
         .codex
@@ -711,6 +712,7 @@ async fn run_review_on_session(
         }
         Err(outcome) => return (outcome, false, analytics_result),
     }
+    analytics_result.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome =
         wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
