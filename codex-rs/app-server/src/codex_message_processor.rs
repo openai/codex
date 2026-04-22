@@ -4524,7 +4524,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
@@ -4574,7 +4573,6 @@ impl CodexMessageProcessor {
                         codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
-                        fallback_model_provider.as_str(),
                         persisted_resume_metadata.as_ref(),
                         include_turns,
                     )
@@ -4942,23 +4940,22 @@ impl CodexMessageProcessor {
         thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
-        fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
+        let config_snapshot = thread.config_snapshot().await;
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
                     &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
-                    fallback_provider,
+                    config_snapshot.model_provider_id.as_str(),
                     persisted_resume_metadata,
                 )
                 .await
             }
             InitialHistory::Forked(items) => {
-                let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
