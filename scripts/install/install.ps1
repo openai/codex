@@ -55,27 +55,35 @@ function Normalize-Version {
     return $RawVersion
 }
 
-function Get-ReleaseAssetMetadata {
+function Get-ReleaseAssetUrl {
     param(
         [string]$AssetName,
         [string]$ResolvedVersion
     )
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
-    $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-    if ($null -eq $asset) {
-        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+    return "https://github.com/openai/codex/releases/download/rust-v$ResolvedVersion/$AssetName"
+}
+
+function Get-ChecksumForAsset {
+    param(
+        [string]$ChecksumsPath,
+        [string]$AssetName
+    )
+
+    foreach ($line in Get-Content -LiteralPath $ChecksumsPath) {
+        $parts = $line -split "\s+", 2
+        if ($parts.Length -ne 2) {
+            continue
+        }
+
+        $digest = $parts[0]
+        $filename = $parts[1].TrimStart("*")
+        if ($filename -eq $AssetName -and $digest -match "^[0-9a-fA-F]{64}$") {
+            return $digest.ToLowerInvariant()
+        }
     }
 
-    $digestMatch = [regex]::Match([string]$asset.digest, "^sha256:([0-9a-fA-F]{64})$")
-    if (-not $digestMatch.Success) {
-        throw "Could not find SHA-256 digest for release asset $AssetName."
-    }
-
-    return [PSCustomObject]@{
-        Url = $asset.browser_download_url
-        Sha256 = $digestMatch.Groups[1].Value.ToLowerInvariant()
-    }
+    throw "Could not find SHA-256 checksum for release asset $AssetName."
 }
 
 function Test-ArchiveDigest {
@@ -86,7 +94,7 @@ function Test-ArchiveDigest {
 
     $actualDigest = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualDigest -ne $ExpectedDigest) {
-        throw "Downloaded Codex archive checksum did not match release metadata. Expected $ExpectedDigest but got $actualDigest."
+        throw "Downloaded Codex archive checksum did not match release checksums. Expected $ExpectedDigest but got $actualDigest."
     }
 }
 
@@ -637,7 +645,7 @@ Write-Step "Resolved version: $resolvedVersion"
 $conflictingInstall = Get-ConflictingInstall -VisibleBinDir $visibleBinDir
 $oldStandaloneBackup = $null
 
-$packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
+$packageAsset = "codex-standalone-$npmTag-$resolvedVersion.tar.gz"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
@@ -651,13 +659,17 @@ try {
             }
 
             $archivePath = Join-Path $tempDir $packageAsset
+            $checksumsPath = Join-Path $tempDir "codex-installer_SHA256SUMS"
             $extractDir = Join-Path $tempDir "extract"
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
-            $assetMetadata = Get-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+            $archiveUrl = Get-ReleaseAssetUrl -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+            $checksumsUrl = Get-ReleaseAssetUrl -AssetName "codex-installer_SHA256SUMS" -ResolvedVersion $resolvedVersion
 
             Write-Step "Downloading Codex CLI"
-            Invoke-WebRequest -Uri $assetMetadata.Url -OutFile $archivePath
-            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $assetMetadata.Sha256
+            Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath
+            $expectedDigest = Get-ChecksumForAsset -ChecksumsPath $checksumsPath -AssetName $packageAsset
+            Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $expectedDigest
 
             New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
             New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
@@ -667,18 +679,17 @@ try {
             New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
             tar -xzf $archivePath -C $extractDir
 
-            $vendorRoot = Join-Path $extractDir "package/vendor/$target"
             $resourcesDir = Join-Path $stagingDir "codex-resources"
             New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
             $copyMap = @{
-                "codex/codex.exe" = "codex.exe"
-                "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
-                "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
-                "path/rg.exe" = "codex-resources\rg.exe"
+                "codex.exe" = "codex.exe"
+                "codex-resources\codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
+                "codex-resources\codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                "codex-resources\rg.exe" = "codex-resources\rg.exe"
             }
 
             foreach ($relativeSource in $copyMap.Keys) {
-                Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+                Copy-Item -LiteralPath (Join-Path $extractDir $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
             }
 
             if (Test-Path -LiteralPath $releaseDir) {
