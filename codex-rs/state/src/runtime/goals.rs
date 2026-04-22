@@ -105,6 +105,55 @@ RETURNING
         thread_goal_from_row(&row)
     }
 
+    pub async fn insert_thread_goal(
+        &self,
+        thread_id: ThreadId,
+        objective: &str,
+        status: crate::ThreadGoalStatus,
+        token_budget: Option<i64>,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        let goal_id = Uuid::new_v4().to_string();
+        let now_ms = datetime_to_epoch_millis(Utc::now());
+        let status = status_after_budget_limit(status, /*tokens_used*/ 0, token_budget);
+        let row = sqlx::query(
+            r#"
+INSERT INTO thread_goals (
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+ON CONFLICT(thread_id) DO NOTHING
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(goal_id)
+        .bind(objective)
+        .bind(status.as_str())
+        .bind(token_budget)
+        .bind(now_ms)
+        .bind(now_ms)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+
+        row.map(|row| thread_goal_from_row(&row)).transpose()
+    }
+
     pub async fn update_thread_goal(
         &self,
         thread_id: ThreadId,
@@ -483,6 +532,63 @@ mod tests {
         assert_eq!(Some(0), replaced.token_budget);
         assert_eq!(0, replaced.tokens_used);
         assert_eq!(0, replaced.time_used_seconds);
+    }
+
+    #[tokio::test]
+    async fn insert_thread_goal_does_not_replace_existing_goal() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        let inserted = runtime
+            .insert_thread_goal(
+                thread_id,
+                "optimize the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100_000),
+            )
+            .await
+            .expect("goal insertion should succeed")
+            .expect("goal should be inserted");
+
+        let duplicate = runtime
+            .insert_thread_goal(
+                thread_id,
+                "replace the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(200_000),
+            )
+            .await
+            .expect("duplicate insert should not fail");
+
+        assert_eq!(None, duplicate);
+        assert_eq!(
+            Some(inserted),
+            runtime.get_thread_goal(thread_id).await.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_thread_goal_applies_budget_limit_immediately() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        let inserted = runtime
+            .insert_thread_goal(
+                thread_id,
+                "stay within budget",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(0),
+            )
+            .await
+            .expect("goal insertion should succeed")
+            .expect("goal should be inserted");
+
+        assert_eq!(crate::ThreadGoalStatus::BudgetLimited, inserted.status);
+        assert_eq!(Some(0), inserted.token_budget);
+        assert_eq!(0, inserted.tokens_used);
+        assert_eq!(0, inserted.time_used_seconds);
     }
 
     #[tokio::test]
