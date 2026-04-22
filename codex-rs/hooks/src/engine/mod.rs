@@ -297,6 +297,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
             tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
             tool_use_id: "tool-1".to_string(),
             command: "echo hello".to_string(),
         });
@@ -312,6 +313,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                 model: "gpt-test".to_string(),
                 permission_mode: "default".to_string(),
                 tool_name: "Bash".to_string(),
+                matcher_aliases: Vec::new(),
                 tool_use_id: "tool-1".to_string(),
                 command: "echo hello".to_string(),
             })
@@ -382,6 +384,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
                     model: "gpt-test".to_string(),
                     permission_mode: "default".to_string(),
                     tool_name: "Bash".to_string(),
+                    matcher_aliases: Vec::new(),
                     tool_use_id: "tool-1".to_string(),
                     command: "echo hello".to_string(),
                 })
@@ -488,6 +491,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
             tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
             tool_use_id: "tool-1".to_string(),
             command: "echo hello".to_string(),
         });
