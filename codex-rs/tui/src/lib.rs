@@ -729,11 +729,12 @@ pub async fn run_main(
         }
     };
 
+    let runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
     let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs::from_env(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
+        runtime_paths.clone(),
     )));
     let cwd = cli.cwd.clone();
     let config_cwd =
@@ -848,6 +849,13 @@ pub async fn run_main(
         cloud_requirements.clone(),
     )
     .await;
+    let exec_server_url = EnvironmentManagerArgs::from_env(runtime_paths.clone()).exec_server_url;
+    let environment_provider = config.environment_provider(exec_server_url)?;
+    let environment_manager = Arc::new(
+        EnvironmentManager::try_from_provider(environment_provider.as_ref(), runtime_paths)
+            .await
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
+    );
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -2184,6 +2192,7 @@ mod tests {
             turn_id: None,
             trace_id: None,
             cwd,
+            environments: None,
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),

@@ -1,5 +1,6 @@
 use std::io::Write as _;
 use std::net::SocketAddr;
+use tokio::io;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tracing::warn;
@@ -21,7 +22,7 @@ impl std::fmt::Display for ExecServerListenUrlParseError {
         match self {
             ExecServerListenUrlParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT`"
+                "unsupported --listen URL `{listen_url}`; expected `ws://IP:PORT` or `stdio://`"
             ),
             ExecServerListenUrlParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -51,8 +52,26 @@ pub(crate) async fn run_transport(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if listen_url == "stdio://" {
+        return run_stdio(runtime_paths).await;
+    }
+
     let bind_address = parse_listen_url(listen_url)?;
     run_websocket_listener(bind_address, runtime_paths).await
+}
+
+async fn run_stdio(
+    runtime_paths: ExecServerRuntimePaths,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let processor = ConnectionProcessor::new(runtime_paths);
+    processor
+        .run_connection(JsonRpcConnection::from_stdio(
+            io::stdin(),
+            io::stdout(),
+            "exec-server stdio".to_string(),
+        ))
+        .await;
+    Ok(())
 }
 
 async fn run_websocket_listener(

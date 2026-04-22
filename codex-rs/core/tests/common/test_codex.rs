@@ -208,6 +208,7 @@ pub struct TestCodexBuilder {
     home: Option<Arc<TempDir>>,
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
+    environment_provider: Option<codex_exec_server::StaticEnvironmentProvider>,
 }
 
 impl TestCodexBuilder {
@@ -261,6 +262,14 @@ impl TestCodexBuilder {
 
     pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
         self.exec_server_url = Some(exec_server_url.into());
+        self
+    }
+
+    pub fn with_environment_provider(
+        mut self,
+        provider: codex_exec_server::StaticEnvironmentProvider,
+    ) -> Self {
+        self.environment_provider = Some(provider);
         self
     }
 
@@ -359,19 +368,31 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let exec_server_url = self
-            .exec_server_url
-            .clone()
-            .or_else(|| test_env.exec_server_url().map(str::to_owned));
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            codex_exec_server::EnvironmentManagerArgs {
-                exec_server_url,
-                local_runtime_paths: codex_exec_server::ExecServerRuntimePaths::new(
-                    std::env::current_exe()?,
-                    /*codex_linux_sandbox_exe*/ None,
-                )?,
-            },
-        ));
+        let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?;
+        let environment_manager = match self.environment_provider.clone() {
+            Some(provider) => Arc::new(
+                codex_exec_server::EnvironmentManager::try_from_provider(
+                    &provider,
+                    local_runtime_paths,
+                )
+                .await?,
+            ),
+            None => {
+                let exec_server_url = self
+                    .exec_server_url
+                    .clone()
+                    .or_else(|| test_env.exec_server_url().map(str::to_owned));
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    codex_exec_server::EnvironmentManagerArgs {
+                        exec_server_url,
+                        local_runtime_paths,
+                    },
+                ))
+            }
+        };
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -924,6 +945,7 @@ pub fn test_codex() -> TestCodexBuilder {
         home: None,
         user_shell_override: None,
         exec_server_url: None,
+        environment_manager_config: None,
     }
 }
 
