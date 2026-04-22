@@ -4104,7 +4104,7 @@ pub struct PluginSummary {
 #[ts(export_to = "v2/")]
 pub struct PluginDetail {
     pub marketplace_name: String,
-    pub marketplace_path: AbsolutePathBuf,
+    pub marketplace_path: Option<AbsolutePathBuf>,
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
@@ -4120,7 +4120,7 @@ pub struct SkillSummary {
     pub description: String,
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
-    pub path: AbsolutePathBuf,
+    pub path: Option<AbsolutePathBuf>,
     pub enabled: bool,
 }
 
