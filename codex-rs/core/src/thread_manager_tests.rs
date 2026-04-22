@@ -391,7 +391,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         )
         .await
         .expect("build resumed turn context");
-    assert_eq!(resumed_turn.environments, None);
+    assert!(resumed_turn.environments.is_none());
 
     let forked = manager
         .fork_thread(
@@ -414,7 +414,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         )
         .await
         .expect("build forked turn context");
-    assert_eq!(forked_turn.environments, None);
+    assert!(forked_turn.environments.is_none());
 }
 
 #[tokio::test]
