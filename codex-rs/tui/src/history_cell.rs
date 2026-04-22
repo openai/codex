@@ -50,7 +50,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ServiceTier;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
@@ -1241,12 +1240,7 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| {
-                    tooltips::get_tooltip(
-                        auth_plan,
-                        matches!(config.service_tier, Some(ServiceTier::Fast)),
-                    )
-                })
+                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status))
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));

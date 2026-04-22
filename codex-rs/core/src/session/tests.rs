@@ -26,6 +26,8 @@ use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
@@ -2614,6 +2616,86 @@ fn session_telemetry(
         "test".to_string(),
         session_source,
     )
+}
+
+#[test]
+fn get_service_tier_defaults_enterprise_accounts_to_fast() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::EnterpriseCbpUsageBased),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Business),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+}
+
+#[test]
+fn get_service_tier_respects_fast_default_opt_out() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ true,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ true,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Team),
+            /*fast_mode_enabled*/ true,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ false,
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn session_settings_null_service_tier_update_clears_service_tier() {
+    let session_configuration = make_session_configuration_for_tests().await;
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            service_tier: Some(None),
+            ..Default::default()
+        })
+        .expect("null service tier update should apply");
+
+    assert_eq!(updated.service_tier, None);
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {

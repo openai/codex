@@ -631,7 +631,12 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "$ref": "#/definitions/ServiceTier"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            }
+          ],
+          "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
@@ -1396,6 +1401,10 @@
             "projects": {}
           },
           "description": "Tracks scopes where external config migration prompts should be suppressed."
+        },
+        "fast_default_opt_out": {
+          "description": "Tracks whether the user opted out of Codex-managed fast defaults.",
+          "type": "boolean"
         },
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
