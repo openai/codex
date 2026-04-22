@@ -528,22 +528,16 @@ impl RolloutRecorder {
                     )
                     .await;
                 }
-                return Ok(page_from_filesystem_scan(
-                    fs_page,
-                    sort_direction,
-                    page_size,
-                    sort_key,
-                ));
+                let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
+                return Ok(
+                    fill_missing_git_info_from_state_db(state_db_ctx.as_deref(), page).await,
+                );
             }
             return Ok(db_page.into());
         }
         if listing_has_metadata_filters {
-            return Ok(page_from_filesystem_scan(
-                fs_page,
-                sort_direction,
-                page_size,
-                sort_key,
-            ));
+            let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
+            return Ok(fill_missing_git_info_from_state_db(state_db_ctx.as_deref(), page).await);
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
@@ -976,6 +970,45 @@ fn page_from_filesystem_scan(
         SortDirection::Asc => page,
         SortDirection::Desc => truncate_fs_page(page, page_size, sort_key),
     }
+}
+
+async fn fill_missing_git_info_from_state_db(
+    state_db_ctx: Option<&StateRuntime>,
+    mut page: ThreadsPage,
+) -> ThreadsPage {
+    let Some(state_db_ctx) = state_db_ctx else {
+        return page;
+    };
+
+    for item in &mut page.items {
+        if item.git_branch.is_some() && item.git_sha.is_some() && item.git_origin_url.is_some() {
+            continue;
+        }
+        let Some(thread_id) = item.thread_id else {
+            continue;
+        };
+        let metadata = match state_db_ctx.get_thread(thread_id).await {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => continue,
+            Err(err) => {
+                warn!(
+                    "state db get_thread failed while overlaying filesystem scan git info: {err}"
+                );
+                continue;
+            }
+        };
+        if item.git_branch.is_none() {
+            item.git_branch = metadata.git_branch;
+        }
+        if item.git_sha.is_none() {
+            item.git_sha = metadata.git_sha;
+        }
+        if item.git_origin_url.is_none() {
+            item.git_origin_url = metadata.git_origin_url;
+        }
+    }
+
+    page
 }
 
 #[allow(clippy::too_many_arguments)]

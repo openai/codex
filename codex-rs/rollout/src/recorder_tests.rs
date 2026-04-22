@@ -714,6 +714,71 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
 }
 
 #[tokio::test]
+async fn list_threads_metadata_filter_overlays_state_db_git_info() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9015);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let rollout_path = write_session_file(home.path(), "2025-01-03T16-00-00", uuid)?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 16, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path,
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    builder.git_branch = Some("sqlite-branch".to_string());
+    builder.git_sha = Some("sqlite-sha".to_string());
+    builder.git_origin_url = Some("https://example.com/repo.git".to_string());
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.first_user_message = Some("Hello from user".to_string());
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[SessionSource::Cli],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].git_branch.as_deref(), Some("sqlite-branch"));
+    assert_eq!(page.items[0].git_sha.as_deref(), Some("sqlite-sha"));
+    assert_eq!(
+        page.items[0].git_origin_url.as_deref(),
+        Some("https://example.com/repo.git")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
