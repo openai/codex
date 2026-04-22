@@ -45,7 +45,13 @@ fn make_mcp_tool(
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> ToolInfo {
-    make_mcp_tool_with_meta(server_name, tool_name, connector_id, connector_name, None)
+    make_mcp_tool_with_meta(
+        server_name,
+        tool_name,
+        connector_id,
+        connector_name,
+        /*meta*/ None,
+    )
 }
 
 fn make_mcp_tool_with_meta(
