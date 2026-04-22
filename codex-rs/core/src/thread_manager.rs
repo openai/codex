@@ -525,8 +525,10 @@ impl ThreadManager {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
             config,
+            thread_store,
             initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -565,8 +567,10 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
             config,
+            thread_store,
             initial_history,
             auth_manager,
             self.agent_control(),
@@ -584,8 +588,10 @@ impl ThreadManager {
         config: Config,
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
             config,
+            thread_store,
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -606,8 +612,10 @@ impl ThreadManager {
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
             config,
+            thread_store,
             initial_history,
             auth_manager,
             self.agent_control(),
@@ -714,8 +722,10 @@ impl ThreadManager {
                 }
             }
         };
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
             config,
+            thread_store,
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
@@ -812,8 +822,10 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.spawn_thread_with_source(
             config,
+            thread_store,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -839,8 +851,10 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.spawn_thread_with_source(
             config,
+            thread_store,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -867,8 +881,10 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
+        let thread_store = configured_thread_store(&config);
         Box::pin(self.spawn_thread_with_source(
             config,
+            thread_store,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
@@ -889,6 +905,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -900,6 +917,7 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
+            thread_store,
             initial_history,
             auth_manager,
             agent_control,
@@ -919,6 +937,7 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
+        thread_store: Arc<dyn ThreadStore>,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
@@ -945,7 +964,6 @@ impl ThreadManagerState {
             }
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
-        let thread_store = configured_thread_store(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
