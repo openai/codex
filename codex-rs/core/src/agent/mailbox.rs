@@ -1,6 +1,7 @@
 use codex_protocol::protocol::InterAgentCommunication;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -12,6 +13,7 @@ pub(crate) struct Mailbox {
     tx: mpsc::UnboundedSender<InterAgentCommunication>,
     next_seq: AtomicU64,
     seq_tx: watch::Sender<u64>,
+    waiter_count: AtomicUsize,
 }
 
 pub(crate) struct MailboxReceiver {
@@ -28,6 +30,7 @@ impl Mailbox {
                 tx,
                 next_seq: AtomicU64::new(0),
                 seq_tx,
+                waiter_count: AtomicUsize::new(0),
             },
             MailboxReceiver {
                 rx,
@@ -45,6 +48,25 @@ impl Mailbox {
         let _ = self.tx.send(communication);
         self.seq_tx.send_replace(seq);
         seq
+    }
+
+    pub(crate) fn begin_wait(&self) -> MailboxWaitGuard<'_> {
+        self.waiter_count.fetch_add(1, Ordering::Relaxed);
+        MailboxWaitGuard { mailbox: self }
+    }
+
+    pub(crate) fn has_waiters(&self) -> bool {
+        self.waiter_count.load(Ordering::Relaxed) > 0
+    }
+}
+
+pub(crate) struct MailboxWaitGuard<'a> {
+    mailbox: &'a Mailbox,
+}
+
+impl Drop for MailboxWaitGuard<'_> {
+    fn drop(&mut self) {
+        self.mailbox.waiter_count.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

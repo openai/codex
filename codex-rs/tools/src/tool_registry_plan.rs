@@ -36,6 +36,7 @@ use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
+use crate::create_parent_message_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
@@ -414,6 +415,13 @@ pub fn build_tool_registry_plan(
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
+            if config.parent_message_tool {
+                plan.push_spec(
+                    create_parent_message_tool(),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
+            }
             plan.push_spec(
                 create_wait_agent_tool_v2(params.wait_agent_timeouts),
                 /*supports_parallel_tool_calls*/ false,
@@ -432,6 +440,7 @@ pub fn build_tool_registry_plan(
             plan.register_handler("spawn_agent", ToolHandlerKind::SpawnAgentV2);
             plan.register_handler("send_message", ToolHandlerKind::SendMessageV2);
             plan.register_handler("followup_task", ToolHandlerKind::FollowupTaskV2);
+            plan.register_handler("send_parent_message", ToolHandlerKind::ParentMessageV2);
             plan.register_handler("wait_agent", ToolHandlerKind::WaitAgentV2);
             plan.register_handler("close_agent", ToolHandlerKind::CloseAgentV2);
             plan.register_handler("list_agents", ToolHandlerKind::ListAgentsV2);

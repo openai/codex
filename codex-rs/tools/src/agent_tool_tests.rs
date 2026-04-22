@@ -210,6 +210,52 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
 }
 
 #[test]
+fn parent_message_tool_separates_queue_interrupt_and_trigger_turn() {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        output_schema,
+        ..
+    }) = create_parent_message_tool()
+    else {
+        panic!("send_parent_message should be a function tool");
+    };
+    assert_eq!(
+        parameters.schema_type,
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
+    );
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("send_parent_message should use object params");
+    assert!(properties.contains_key("message"));
+    assert!(properties.contains_key("mode"));
+    assert!(properties.contains_key("trigger_turn"));
+    assert!(!properties.contains_key("target"));
+    assert!(!properties.contains_key("items"));
+    assert!(description.contains("direct parent"));
+    assert_eq!(
+        properties
+            .get("mode")
+            .and_then(|schema| schema.enum_values.as_ref()),
+        Some(&vec![json!("queue"), json!("enqueue"), json!("interrupt")])
+    );
+    assert_eq!(
+        properties
+            .get("trigger_turn")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(
+            "When true, ensure the parent processes this message: start an idle parent turn, wake wait_agent, or queue it for a follow-up turn when the parent is busy. Defaults to true for mode=\"interrupt\" and false for mode=\"queue\"/\"enqueue\"."
+        )
+    );
+    assert_eq!(
+        parameters.required.as_ref(),
+        Some(&vec!["message".to_string()])
+    );
+    assert_eq!(output_schema, None);
+}
+
+#[test]
 fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     let ToolSpec::Function(ResponsesApiTool {
         description,

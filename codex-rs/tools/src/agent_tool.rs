@@ -184,6 +184,44 @@ pub fn create_followup_task_tool() -> ToolSpec {
     })
 }
 
+pub fn create_parent_message_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "message".to_string(),
+            JsonSchema::string(Some(
+                "Message text to send to this sub-agent's direct parent.".to_string(),
+            )),
+        ),
+        (
+            "mode".to_string(),
+            JsonSchema::string_enum(
+                vec![json!("queue"), json!("enqueue"), json!("interrupt")],
+                Some(
+                    "`queue` queues the message in the parent mailbox. `enqueue` is accepted as a legacy alias for `queue`. `interrupt` cancels the parent's current turn before delivering the message."
+                        .to_string(),
+                ),
+            ),
+        ),
+        (
+            "trigger_turn".to_string(),
+            JsonSchema::boolean(Some(
+                "When true, ensure the parent processes this message: start an idle parent turn, wake wait_agent, or queue it for a follow-up turn when the parent is busy. Defaults to true for mode=\"interrupt\" and false for mode=\"queue\"/\"enqueue\"."
+                    .to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "send_parent_message".to_string(),
+        description: "Send a string message to this sub-agent's direct parent. `mode` controls queue vs interrupt; `trigger_turn` controls whether the parent must process the message when free."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, Some(vec!["message".to_string()]), Some(false.into())),
+        output_schema: None,
+    })
+}
+
 pub fn create_resume_agent_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "id".to_string(),

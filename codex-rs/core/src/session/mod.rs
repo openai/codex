@@ -477,6 +477,7 @@ impl Codex {
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
+            && !config.features.enabled(Feature::MultiAgentV2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -2965,6 +2966,23 @@ impl Session {
 
     pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {
         self.mailbox.subscribe()
+    }
+
+    pub(crate) fn begin_mailbox_wait(&self) -> crate::agent::mailbox::MailboxWaitGuard<'_> {
+        self.mailbox.begin_wait()
+    }
+
+    pub(crate) fn has_mailbox_waiters(&self) -> bool {
+        self.mailbox.has_waiters()
+    }
+
+    pub(crate) async fn session_source(&self) -> SessionSource {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .session_source
+            .clone()
     }
 
     pub(crate) fn enqueue_mailbox_communication(&self, communication: InterAgentCommunication) {

@@ -104,6 +104,7 @@ pub struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
+    pub parent_message_tool: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -201,6 +202,11 @@ impl ToolsConfig {
                 SessionSource::SubAgent(SubAgentSource::Other(label))
                     if label.starts_with("agent_job:")
             );
+        let include_parent_message_tool = include_multi_agent_v2
+            && matches!(
+                session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            );
 
         Self {
             available_models: available_models.to_vec(),
@@ -225,6 +231,7 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
+            parent_message_tool: include_parent_message_tool,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
