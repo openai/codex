@@ -832,27 +832,6 @@
         }
       ]
     },
-    "InjectedHeaderConfigSchema": {
-      "properties": {
-        "name": {
-          "default": "",
-          "type": "string"
-        },
-        "prefix": {
-          "default": null,
-          "type": "string"
-        },
-        "secret_env_var": {
-          "default": null,
-          "type": "string"
-        },
-        "secret_file": {
-          "default": null,
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -992,101 +971,6 @@
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
           "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "MitmHookActionsConfigSchema": {
-      "properties": {
-        "inject_request_headers": {
-          "default": [],
-          "items": {
-            "$ref": "#/definitions/InjectedHeaderConfigSchema"
-          },
-          "type": "array"
-        },
-        "strip_request_headers": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "MitmHookConfigSchema": {
-      "properties": {
-        "actions": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/MitmHookActionsConfigSchema"
-            }
-          ],
-          "default": {
-            "inject_request_headers": [],
-            "strip_request_headers": []
-          }
-        },
-        "host": {
-          "default": "",
-          "type": "string"
-        },
-        "match": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/MitmHookMatchConfigSchema"
-            }
-          ],
-          "default": {
-            "body": null,
-            "headers": {},
-            "methods": [],
-            "path_prefixes": [],
-            "query": {}
-          }
-        }
-      },
-      "type": "object"
-    },
-    "MitmHookMatchConfigSchema": {
-      "properties": {
-        "body": {
-          "default": null
-        },
-        "headers": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "default": {},
-          "type": "object"
-        },
-        "methods": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "path_prefixes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "query": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "default": {},
-          "type": "object"
         }
       },
       "type": "object"
@@ -1294,6 +1178,121 @@
     "NetworkDomainPermissionsToml": {
       "type": "object"
     },
+    "NetworkMitmActionToml": {
+      "properties": {
+        "inject_request_headers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/NetworkMitmInjectedHeaderToml"
+          },
+          "type": "array"
+        },
+        "strip_request_headers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmHookToml": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": true,
+        "headers": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "host": {
+          "type": "string"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path_prefixes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "query": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "action",
+        "host",
+        "methods",
+        "path_prefixes"
+      ],
+      "type": "object"
+    },
+    "NetworkMitmInjectedHeaderToml": {
+      "properties": {
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "prefix": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_env_var": {
+          "default": null,
+          "type": "string"
+        },
+        "secret_file": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMitmToml": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmActionToml"
+          },
+          "type": "object"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NetworkMitmHookToml"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "NetworkModeSchema": {
       "enum": [
         "limited",
@@ -1329,13 +1328,7 @@
           "type": "boolean"
         },
         "mitm": {
-          "type": "boolean"
-        },
-        "mitm_hooks": {
-          "items": {
-            "$ref": "#/definitions/MitmHookConfigSchema"
-          },
-          "type": "array"
+          "$ref": "#/definitions/NetworkMitmToml"
         },
         "mode": {
           "$ref": "#/definitions/NetworkModeSchema"
