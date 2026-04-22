@@ -359,7 +359,6 @@ use codex_thread_store::UpdateThreadMetadataParams as StoreUpdateThreadMetadataP
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use futures::FutureExt;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Error as IoError;

@@ -1880,6 +1880,7 @@ dependencies = [
  "gethostname",
  "hmac",
  "jsonwebtoken",
+ "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "owo-colors",

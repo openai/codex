@@ -12,7 +12,6 @@
 //! 4. Apply the guardian's explicit allow/deny outcome.
 
 mod approval_request;
-mod observability;
 mod prompt;
 mod review;
 mod review_session;
@@ -39,7 +38,6 @@ pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::review_approval_request;
 #[cfg(test)]
 pub(crate) use review::review_approval_request_with_cancel;
-pub(crate) use review::review_approval_request_with_cancel_and_trace;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;

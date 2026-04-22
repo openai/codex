@@ -374,12 +374,14 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
     let cwd_dir = tmp.path().join("project");
     tokio::fs::create_dir_all(&cwd_dir).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&cwd_dir)?;
+    let overrides = LoaderOverrides::without_managed_config_for_tests();
+    let system_config_path = overrides.system_config_path.clone();
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[("features.plugins".to_string(), TomlValue::Boolean(true))],
-        LoaderOverrides::without_managed_config_for_tests(),
+        overrides,
         CloudRequirementsLoader::default(),
         &StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(SessionThreadConfig {
             features: BTreeMap::from([("plugins".to_string(), false)]),
@@ -403,7 +405,11 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
                 file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path()),
             },
             super::ConfigLayerSource::System {
-                file: super::system_config_toml_file()?,
+                file: AbsolutePathBuf::from_absolute_path(
+                    system_config_path
+                        .as_deref()
+                        .expect("test override sets system config path"),
+                )?,
             },
         ]
     );

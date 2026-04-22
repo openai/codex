@@ -60,6 +60,7 @@ pub(crate) struct GuardianPromptItems {
     pub(crate) items: Vec<UserInput>,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
     pub(crate) reviewed_action_truncated: bool,
+    #[allow(dead_code)]
     pub(crate) stats: GuardianPromptStats,
 }
 
@@ -81,15 +82,6 @@ pub(crate) enum GuardianPromptMode {
 pub(crate) enum GuardianPromptModeKind {
     Full,
     Delta,
-}
-
-impl GuardianPromptModeKind {
-    pub(crate) fn as_tag(self) -> &'static str {
-        match self {
-            Self::Full => "full",
-            Self::Delta => "delta",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -346,6 +346,7 @@ pub async fn read_mcp_resource(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
+        McpStartupTraceMetadata::default(),
     )
     .await;
 

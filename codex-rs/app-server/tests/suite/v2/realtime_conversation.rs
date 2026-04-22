@@ -78,6 +78,11 @@ const V2_STEERING_ACKNOWLEDGEMENT: &str =
 const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
     "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 
+fn normalized_json_string(json: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(json)?;
+    Ok(serde_json::to_string(&value)?)
+}
+
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
     Generated,

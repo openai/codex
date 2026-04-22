@@ -150,9 +150,10 @@ async fn shutdown_signal() -> IoResult<()> {
         use tokio::signal::unix::SignalKind;
         use tokio::signal::unix::signal;
 
+        let mut interrupt = signal(SignalKind::interrupt())?;
         let mut term = signal(SignalKind::terminate())?;
         tokio::select! {
-            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result,
+            _ = interrupt.recv() => Ok(()),
             _ = term.recv() => Ok(()),
         }
     }

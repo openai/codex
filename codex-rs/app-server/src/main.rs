@@ -39,6 +39,7 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    restore_sigint_if_inherited_ignored();
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
         let loader_overrides = if disable_managed_config_from_debug_env() {
@@ -65,6 +66,30 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     })
 }
+
+#[cfg(unix)]
+fn restore_sigint_if_inherited_ignored() {
+    // Test harnesses and parent shells can start child processes with SIGINT
+    // ignored or blocked. Reset that inherited state so the app-server can
+    // install its own graceful Ctrl-C handler.
+    unsafe {
+        let previous = libc::signal(libc::SIGINT, libc::SIG_DFL);
+        if previous != libc::SIG_ERR && previous != libc::SIG_IGN {
+            let _ = libc::signal(libc::SIGINT, previous);
+        }
+
+        let mut signal_set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        if libc::sigemptyset(signal_set.as_mut_ptr()) == 0
+            && libc::sigaddset(signal_set.as_mut_ptr(), libc::SIGINT) == 0
+        {
+            let signal_set = signal_set.assume_init();
+            let _ = libc::pthread_sigmask(libc::SIG_UNBLOCK, &signal_set, std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigint_if_inherited_ignored() {}
 
 fn disable_managed_config_from_debug_env() -> bool {
     #[cfg(debug_assertions)]

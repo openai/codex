@@ -263,6 +263,7 @@ pub(crate) async fn record_guardian_denial_for_test(
 /// This function always fails closed: timeouts, review-session failures, and
 /// parse failures all block execution, but timeouts are still surfaced to the
 /// caller as distinct from explicit guardian denials.
+#[allow(clippy::too_many_arguments)]
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -594,6 +595,7 @@ pub(crate) async fn review_approval_request(
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -616,6 +618,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn review_approval_request_with_cancel_and_trace(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,

@@ -578,6 +578,7 @@ async fn spawn_guardian_review_session(
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
         Arc::clone(&params.parent_turn),
+        guardian_review_submit_trace(&params.parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -720,7 +721,7 @@ async fn run_review_on_session(
                     review_trace,
                 )
                 .await
-        })),
+        }),
     )
     .await;
     match submit_result {
