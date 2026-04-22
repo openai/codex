@@ -129,6 +129,17 @@ pub(crate) fn matches_matcher(matcher: Option<&str>, input: Option<&str>) -> boo
     }
 }
 
+pub(crate) fn matcher_inputs<'a>(
+    tool_name: &'a str,
+    matcher_aliases: &'a [String],
+) -> Vec<&'a str> {
+    // Keep the canonical name first so matcher previews and execution preserve
+    // the same primary identity that hook stdin will serialize.
+    std::iter::once(tool_name)
+        .chain(matcher_aliases.iter().map(String::as_str))
+        .collect()
+}
+
 fn is_match_all_matcher(matcher: &str) -> bool {
     matcher.is_empty() || matcher == "*"
 }

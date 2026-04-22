@@ -533,6 +533,10 @@ You can optionally specify config overrides on the new turn. If specified, these
     "input": [ { "type": "text", "text": "Run tests" } ],
     // Below are optional config overrides
     "cwd": "/Users/me/project",
+    // Experimental: turn-scoped environment selection.
+    "environments": [
+        { "environmentId": "local", "cwd": "/Users/me/project" }
+    ],
     "approvalPolicy": "unlessTrusted",
     "sandboxPolicy": {
         "type": "workspaceWrite",

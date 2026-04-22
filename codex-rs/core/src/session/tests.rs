@@ -779,6 +779,7 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
                 ..Default::default()
             },
+            /*environment_selections*/ None,
         )
         .await?;
 
@@ -1495,6 +1496,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     initial
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "fork seed".into(),
                 text_elements: Vec::new(),
@@ -1555,6 +1557,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     forked
         .thread
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "after fork".into(),
                 text_elements: Vec::new(),
@@ -3021,7 +3024,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -3137,6 +3141,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &models_manager,
         /*network*/ None,
         Some(environment),
+        /*environments*/ None,
+        session_configuration.cwd.clone(),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
@@ -3707,6 +3713,7 @@ fn op_kind_distinguishes_turn_ops() {
     );
     assert_eq!(
         Op::UserInput {
+            environments: None,
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -3725,6 +3732,7 @@ async fn user_turn_updates_approvals_reviewer() {
         &session,
         "sub-1".to_string(),
         Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
@@ -3749,6 +3757,133 @@ async fn user_turn_updates_approvals_reviewer() {
         state.session_configuration.approvals_reviewer,
         codex_config::types::ApprovalsReviewer::GuardianSubagent
     );
+}
+
+#[tokio::test]
+async fn turn_environment_selection_sets_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let selected_cwd =
+        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
+            .expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_cwd.clone(),
+            }]),
+        )
+        .await
+        .expect("turn should start");
+
+    let turn_environments = turn_context
+        .environments
+        .as_ref()
+        .expect("turn environments should be recorded");
+    assert_eq!(turn_environments.len(), 1);
+    assert_eq!(turn_environments[0].environment_id, "local");
+    assert!(std::sync::Arc::ptr_eq(
+        turn_context
+            .environment
+            .as_ref()
+            .expect("primary environment should be set"),
+        &turn_environments[0].environment
+    ));
+    assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
+    assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
+}
+
+#[tokio::test]
+async fn multiple_turn_environment_selections_use_first_as_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let session_cwd = session.get_config().await.cwd.clone();
+    let first_cwd =
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("first")).expect("absolute path");
+    let second_cwd =
+        AbsolutePathBuf::try_from(session_cwd.as_path().join("second")).expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![
+                codex_protocol::protocol::TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: first_cwd.clone(),
+                },
+                codex_protocol::protocol::TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: second_cwd.clone(),
+                },
+            ]),
+        )
+        .await
+        .expect("turn should start");
+
+    let turn_environments = turn_context
+        .environments
+        .as_ref()
+        .expect("turn environments should be recorded");
+    assert_eq!(turn_environments.len(), 2);
+    assert_eq!(turn_environments[0].cwd, first_cwd);
+    assert_eq!(turn_environments[1].cwd, second_cwd);
+    assert!(std::sync::Arc::ptr_eq(
+        turn_context
+            .environment
+            .as_ref()
+            .expect("primary environment should be set"),
+        &turn_environments[0].environment
+    ));
+    assert_eq!(turn_context.cwd, first_cwd);
+    assert_eq!(turn_context.config.cwd, first_cwd);
+}
+
+#[tokio::test]
+async fn empty_turn_environment_selection_clears_primary_environment() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![]),
+        )
+        .await
+        .expect("turn should start");
+
+    assert!(turn_context.environment.is_none());
+    assert_eq!(turn_context.cwd, session.get_config().await.cwd);
+    assert_eq!(turn_context.config.cwd, session.get_config().await.cwd);
+    assert_eq!(
+        turn_context
+            .environments
+            .as_ref()
+            .expect("turn environments should be recorded")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn unknown_turn_environment_selection_returns_error() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "missing".to_string(),
+                cwd: session.get_config().await.cwd.clone(),
+            }]),
+        )
+        .await
+        .expect_err("unknown environment should fail");
+
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("missing"));
 }
 
 #[tokio::test]
@@ -4107,7 +4242,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let per_turn_config =
+        Session::build_per_turn_config(&session_configuration, session_configuration.cwd.clone());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         session_configuration.collaboration_mode.model(),
         &per_turn_config.to_models_manager_config(),
@@ -4223,6 +4359,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         &models_manager,
         /*network*/ None,
         Some(environment),
+        /*environments*/ None,
+        session_configuration.cwd.clone(),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,

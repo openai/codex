@@ -88,6 +88,13 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
+    /// Returns the stable value exposed to `PostToolUse` hooks for this tool output.
+    ///
+    /// Tool handlers decide whether a tool participates in `PostToolUse`, but
+    /// this method lets the output type own any conversion from model-facing
+    /// response content to hook-facing data. Returning `None` means the output
+    /// should not produce a post-use hook payload, not merely that the tool had
+    /// empty output.
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
         None
     }
@@ -304,6 +311,10 @@ impl ToolOutput for ApplyPatchToolOutput {
             }],
             Some(true),
         )
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(JsonValue::String(self.text.clone()))
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
