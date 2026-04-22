@@ -144,36 +144,35 @@ fn managed_hooks_source_path(
         ));
         return None;
     };
+
     if !source_path.is_absolute() {
         warnings.push(format!(
             "skipping managed hooks from {source}: managed hook directory {} is not absolute",
             source_path.display()
         ));
-        return None;
-    }
-    if !source_path.exists() {
+        None
+    } else if !source_path.exists() {
         warnings.push(format!(
             "skipping managed hooks from {source}: managed hook directory {} does not exist",
             source_path.display()
         ));
-        return None;
-    }
-    if !source_path.is_dir() {
+        None
+    } else if !source_path.is_dir() {
         warnings.push(format!(
             "skipping managed hooks from {source}: managed hook directory {} is not a directory",
             source_path.display()
         ));
-        return None;
+        None
+    } else {
+        AbsolutePathBuf::from_absolute_path(source_path)
+            .inspect_err(|err| {
+                warnings.push(format!(
+                    "skipping managed hooks from {source}: could not normalize managed hook directory {}: {err}",
+                    source_path.display()
+                ));
+            })
+            .ok()
     }
-
-    AbsolutePathBuf::from_absolute_path(source_path)
-        .inspect_err(|err| {
-            warnings.push(format!(
-                "skipping managed hooks from {source}: could not normalize managed hook directory {}: {err}",
-                source_path.display()
-            ));
-        })
-        .ok()
 }
 
 fn load_hooks_json(
