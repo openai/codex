@@ -4761,14 +4761,14 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
     .expect("skills should render");
 
     assert_eq!(rendered.report.omitted_count, 0);
-    assert_eq!(rendered.report.truncated_description_chars, 10);
+    assert_eq!(rendered.report.truncated_description_chars, 8);
     let snapshot = session_telemetry
         .snapshot_metrics()
         .expect("runtime metrics snapshot");
     assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 0);
     assert_eq!(
         histogram_sum(&snapshot, THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC),
-        10
+        8
     );
 }
 

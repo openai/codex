@@ -10,9 +10,7 @@ use codex_utils_output_truncation::approx_token_count;
 const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS: usize = 10;
-const TRUNCATED_DESCRIPTION_MARKER: &str = "...";
-pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX: &str =
-    "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by";
+pub const SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX: &str = "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of";
 pub const SKILL_DESCRIPTIONS_REMOVED_WARNING_PREFIX: &str =
     "Warning: Exceeded skills context budget. All skill descriptions were removed and";
 
@@ -43,6 +41,7 @@ pub struct SkillRenderReport {
     pub included_count: usize,
     pub omitted_count: usize,
     pub truncated_description_chars: usize,
+    pub truncated_description_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -57,7 +56,6 @@ pub enum SkillRenderSideEffects<'a> {
 pub struct AvailableSkills {
     pub skill_lines: Vec<String>,
     pub report: SkillRenderReport,
-    pub emit_warning: bool,
     pub warning_message: Option<String>,
 }
 
@@ -117,14 +115,13 @@ pub fn build_available_skills(
         > SKILL_DESCRIPTION_TRUNCATION_WARNING_THRESHOLD_CHARS
     {
         Some(format!(
-            "{} {} characters.",
+            "{} {} characters per skill.",
             budget_warning_prefix(budget, SKILL_DESCRIPTION_TRUNCATED_WARNING_PREFIX),
-            report.truncated_description_chars
+            report.average_truncated_description_chars()
         ))
     } else {
         None
     };
-    let emit_warning = warning_message.is_some();
     record_skill_render_side_effects(
         side_effects,
         report.total_count,
@@ -138,14 +135,14 @@ pub fn build_available_skills(
             total_skills = report.total_count,
             included_skills = report.included_count,
             omitted_skills = report.omitted_count,
-            truncated_description_chars = report.truncated_description_chars,
+            truncated_description_chars_per_skill = report.average_truncated_description_chars(),
+            truncated_skill_descriptions = report.truncated_description_count,
             "truncated skill metadata to fit skills context budget"
         );
     }
     Some(AvailableSkills {
         skill_lines,
         report,
-        emit_warning,
         warning_message,
     })
 }
@@ -211,7 +208,7 @@ fn render_skill_lines(
     if full_cost <= budget.limit() {
         let included = skill_lines
             .iter()
-            .map(|line| line.render_full())
+            .map(SkillLine::render_full)
             .collect::<Vec<_>>();
 
         return (
@@ -221,6 +218,7 @@ fn render_skill_lines(
                 /*included_count*/ skill_lines.len(),
                 /*omitted_count*/ 0,
                 /*truncated_description_chars*/ 0,
+                /*truncated_description_count*/ 0,
             ),
         );
     }
@@ -234,9 +232,8 @@ fn render_skill_lines(
             &skill_lines,
             budget.limit().saturating_sub(minimum_cost),
         );
-        let truncated_description_chars = rendered.iter().fold(0usize, |total, rendered| {
-            total.saturating_add(rendered.truncated_chars)
-        });
+        let (truncated_description_chars, truncated_description_count) =
+            sum_description_truncation(&rendered);
         let included = rendered
             .into_iter()
             .map(|rendered| rendered.line)
@@ -249,6 +246,7 @@ fn render_skill_lines(
                 /*included_count*/ skill_lines.len(),
                 /*omitted_count*/ 0,
                 truncated_description_chars,
+                truncated_description_count,
             ),
         );
     }
@@ -265,17 +263,21 @@ fn render_minimum_skill_lines_until_budget(
     let mut used = 0usize;
     let mut omitted_count = 0usize;
     let mut truncated_description_chars = 0usize;
+    let mut truncated_description_count = 0usize;
     for line in skill_lines {
         let line_cost = line.minimum_cost(budget);
+        let description_char_count = line.description_char_count();
         if used.saturating_add(line_cost) <= budget.limit() {
             used = used.saturating_add(line_cost);
             included.push(line.render_minimum());
-            truncated_description_chars =
-                truncated_description_chars.saturating_add(line.description_char_count());
         } else {
             omitted_count = omitted_count.saturating_add(1);
-            truncated_description_chars =
-                truncated_description_chars.saturating_add(line.description_char_count());
+        }
+
+        truncated_description_chars =
+            truncated_description_chars.saturating_add(description_char_count);
+        if description_char_count > 0 {
+            truncated_description_count = truncated_description_count.saturating_add(1);
         }
     }
 
@@ -284,6 +286,7 @@ fn render_minimum_skill_lines_until_budget(
         included.len(),
         omitted_count,
         truncated_description_chars,
+        truncated_description_count,
     );
 
     (included, report)
@@ -294,12 +297,26 @@ fn skill_render_report(
     included_count: usize,
     omitted_count: usize,
     truncated_description_chars: usize,
+    truncated_description_count: usize,
 ) -> SkillRenderReport {
     SkillRenderReport {
         total_count,
         included_count,
         omitted_count,
         truncated_description_chars,
+        truncated_description_count,
+    }
+}
+
+impl SkillRenderReport {
+    fn average_truncated_description_chars(&self) -> usize {
+        if self.truncated_description_count == 0 {
+            return 0;
+        }
+
+        self.truncated_description_chars
+            .saturating_add(self.truncated_description_count.saturating_sub(1))
+            / self.truncated_description_count
     }
 }
 
@@ -312,6 +329,21 @@ struct SkillLine<'a> {
 struct RenderedSkillLine {
     line: String,
     truncated_chars: usize,
+}
+
+fn sum_description_truncation(rendered: &[RenderedSkillLine]) -> (usize, usize) {
+    rendered
+        .iter()
+        .fold((0usize, 0usize), |(chars, count), line| {
+            if line.truncated_chars == 0 {
+                (chars, count)
+            } else {
+                (
+                    chars.saturating_add(line.truncated_chars),
+                    count.saturating_add(1),
+                )
+            }
+        })
 }
 
 impl<'a> SkillLine<'a> {
@@ -355,10 +387,7 @@ impl<'a> SkillLine<'a> {
             format!("- {}: (file: {})", self.name, self.path)
         } else {
             let end = self.rendered_description_prefix_len(description_chars);
-            let mut description = self.description[..end].to_string();
-            if description_chars < self.description_char_count() {
-                description.push_str(TRUNCATED_DESCRIPTION_MARKER);
-            }
+            let description = &self.description[..end];
             format!("- {}: {} (file: {})", self.name, description, self.path)
         }
     }
@@ -516,13 +545,13 @@ mod tests {
 
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
-        assert_eq!(rendered.report.truncated_description_chars, 10);
+        assert_eq!(rendered.report.truncated_description_chars, 8);
         assert_eq!(rendered.warning_message, None);
         assert_eq!(
             rendered.skill_lines,
             vec![
-                "- alpha-skill: ab... (file: /tmp/alpha-skill/SKILL.md)",
-                "- beta-skill: (file: /tmp/beta-skill/SKILL.md)",
+                "- alpha-skill: ab (file: /tmp/alpha-skill/SKILL.md)",
+                "- beta-skill: uv (file: /tmp/beta-skill/SKILL.md)",
             ]
         );
     }
@@ -541,11 +570,11 @@ mod tests {
 
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 0);
-        assert_eq!(rendered.report.truncated_description_chars, 18);
+        assert_eq!(rendered.report.truncated_description_chars, 16);
         assert_eq!(
             rendered.warning_message,
             Some(
-                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by 18 characters."
+                "Warning: Exceeded skills context budget. Loaded skill descriptions were truncated by an average of 8 characters per skill."
                     .to_string()
             )
         );
@@ -569,7 +598,7 @@ mod tests {
         assert_eq!(
             rendered.skill_lines,
             vec![
-                "- long-skill: abcde... (file: /tmp/long-skill/SKILL.md)",
+                "- long-skill: abcdefgh (file: /tmp/long-skill/SKILL.md)",
                 "- short-skill: x (file: /tmp/short-skill/SKILL.md)",
             ]
         );
