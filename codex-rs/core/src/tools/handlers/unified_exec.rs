@@ -251,11 +251,11 @@ impl ToolHandler for UnifiedExecHandler {
                     .requests_sandbox_override()
                     && !effective_additional_permissions.permissions_preapproved
                     && !matches!(
-                        context.turn.approval_policy.value(),
+                        context.turn.approval_policy(),
                         codex_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
-                    let approval_policy = context.turn.approval_policy.value();
+                    let approval_policy = context.turn.approval_policy();
                     manager.release_process_id(process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
@@ -275,7 +275,7 @@ impl ToolHandler for UnifiedExecHandler {
                     || {
                         normalize_and_validate_additional_permissions(
                             additional_permissions_allowed,
-                            context.turn.approval_policy.value(),
+                            context.turn.approval_policy(),
                             effective_additional_permissions.sandbox_permissions,
                             effective_additional_permissions.additional_permissions,
                             effective_additional_permissions.permissions_preapproved,

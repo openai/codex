@@ -3772,6 +3772,44 @@
       ],
       "type": "object"
     },
+    "TurnOverrideActiveContextParams": {
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override the active turn approval policy and the default for subsequent turns."
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on the active turn and subsequent turns."
+        },
+        "expectedTurnId": {
+          "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectedTurnId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "TurnStartParams": {
       "properties": {
         "approvalPolicy": {
@@ -5049,6 +5087,30 @@
         "params"
       ],
       "title": "Turn/steerRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "turn/overrideActiveContext"
+          ],
+          "title": "Turn/overrideActiveContextRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnOverrideActiveContextParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/overrideActiveContextRequest",
       "type": "object"
     },
     {

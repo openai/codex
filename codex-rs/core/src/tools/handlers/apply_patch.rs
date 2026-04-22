@@ -426,7 +426,7 @@ impl ToolHandler for ApplyPatchHandler {
                                 &req,
                                 &tool_ctx,
                                 turn.as_ref(),
-                                turn.approval_policy.value(),
+                                turn.approval_policy(),
                             )
                             .await
                             .map(|result| result.output);
@@ -534,7 +534,7 @@ pub(crate) async fn intercept_apply_patch(
                             &req,
                             &tool_ctx,
                             turn.as_ref(),
-                            turn.approval_policy.value(),
+                            turn.approval_policy(),
                         )
                         .await
                         .map(|result| result.output);

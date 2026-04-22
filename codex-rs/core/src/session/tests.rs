@@ -3724,6 +3724,15 @@ fn op_kind_distinguishes_turn_ops() {
         "override_turn_context"
     );
     assert_eq!(
+        Op::OverrideActiveTurnContext {
+            turn_id: "turn-1".to_string(),
+            approval_policy: None,
+            approvals_reviewer: None,
+        }
+        .kind(),
+        "override_active_turn_context"
+    );
+    assert_eq!(
         Op::UserInput {
             environments: None,
             items: vec![],
@@ -5679,6 +5688,84 @@ async fn steer_input_requires_active_turn() {
         .expect_err("steering without active turn should fail");
 
     assert!(matches!(err, SteerInputError::NoActiveTurn(_)));
+}
+
+#[tokio::test]
+async fn override_active_turn_context_updates_current_turn_and_defaults() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let turn_id = sess
+        .override_active_turn_context(
+            &tc.sub_id,
+            Some(AskForApproval::Never),
+            Some(ApprovalsReviewer::GuardianSubagent),
+        )
+        .await
+        .expect("active context override should succeed");
+
+    assert_eq!(turn_id, tc.sub_id);
+    assert_eq!(tc.approval_policy(), AskForApproval::Never);
+    assert_eq!(tc.approvals_reviewer(), ApprovalsReviewer::GuardianSubagent);
+
+    let state = sess.state.lock().await;
+    assert_eq!(
+        state.session_configuration.approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        state.session_configuration.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+}
+
+#[tokio::test]
+async fn override_active_turn_context_rejects_missing_or_wrong_active_turn() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+
+    let err = sess
+        .override_active_turn_context(&tc.sub_id, Some(AskForApproval::Never), None)
+        .await
+        .expect_err("override without active turn should fail");
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let err = sess
+        .override_active_turn_context("other-turn", Some(AskForApproval::Never), None)
+        .await
+        .expect_err("mismatched turn id should fail");
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+
+    let err = sess
+        .override_active_turn_context(&tc.sub_id, None, None)
+        .await
+        .expect_err("empty override should fail");
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
 }
 
 #[tokio::test]

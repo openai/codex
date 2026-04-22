@@ -818,7 +818,7 @@ async fn maybe_request_mcp_tool_approval(
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
     if mcp_permission_prompt_is_auto_approved(
-        turn_context.approval_policy.value(),
+        turn_context.approval_policy(),
         turn_context.sandbox_policy.get(),
     ) {
         return None;

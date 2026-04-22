@@ -439,6 +439,11 @@ client_request_definitions! {
         inspect_params: true,
         response: v2::TurnSteerResponse,
     },
+    TurnOverrideActiveContext => "turn/overrideActiveContext" {
+        params: v2::TurnOverrideActiveContextParams,
+        inspect_params: true,
+        response: v2::TurnOverrideActiveContextResponse,
+    },
     TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,

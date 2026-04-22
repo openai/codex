@@ -63,6 +63,7 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    per_turn_config.approvals_reviewer = parent_turn_context.approvals_reviewer();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -122,7 +123,8 @@ pub(super) async fn spawn_review_thread(
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
-        approval_policy: parent_turn_context.approval_policy.clone(),
+        approval_policy: parent_turn_context.approval_policy_constrained(),
+        active_overrides: Default::default(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,

@@ -359,7 +359,7 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
-        if !allows_network_approval_flow(turn_context.approval_policy.value()) {
+        if !allows_network_approval_flow(turn_context.approval_policy()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(

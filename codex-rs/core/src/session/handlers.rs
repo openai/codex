@@ -4,6 +4,8 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
@@ -102,6 +104,28 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
 
 pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
     if let Err(err) = sess.update_settings(updates).await {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
+    }
+}
+
+pub async fn override_active_turn_context(
+    sess: &Session,
+    sub_id: String,
+    turn_id: String,
+    approval_policy: Option<AskForApproval>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
+) {
+    if let Err(err) = sess
+        .override_active_turn_context(&turn_id, approval_policy, approvals_reviewer)
+        .await
+    {
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
@@ -1095,6 +1119,21 @@ pub(super) async fn submission_loop(
                             personality,
                             ..Default::default()
                         },
+                    )
+                    .await;
+                    false
+                }
+                Op::OverrideActiveTurnContext {
+                    turn_id,
+                    approval_policy,
+                    approvals_reviewer,
+                } => {
+                    override_active_turn_context(
+                        &sess,
+                        sub.id.clone(),
+                        turn_id,
+                        approval_policy,
+                        approvals_reviewer,
                     )
                     .await;
                     false

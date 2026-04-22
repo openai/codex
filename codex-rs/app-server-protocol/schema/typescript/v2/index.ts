@@ -381,6 +381,8 @@ export type { TurnEnvironmentParams } from "./TurnEnvironmentParams";
 export type { TurnError } from "./TurnError";
 export type { TurnInterruptParams } from "./TurnInterruptParams";
 export type { TurnInterruptResponse } from "./TurnInterruptResponse";
+export type { TurnOverrideActiveContextParams } from "./TurnOverrideActiveContextParams";
+export type { TurnOverrideActiveContextResponse } from "./TurnOverrideActiveContextResponse";
 export type { TurnPlanStep } from "./TurnPlanStep";
 export type { TurnPlanStepStatus } from "./TurnPlanStepStatus";
 export type { TurnPlanUpdatedNotification } from "./TurnPlanUpdatedNotification";

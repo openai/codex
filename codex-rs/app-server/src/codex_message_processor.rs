@@ -201,6 +201,8 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnOverrideActiveContextParams;
+use codex_app_server_protocol::TurnOverrideActiveContextResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -1014,6 +1016,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnSteer { request_id, params } => {
                 self.turn_steer(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::TurnOverrideActiveContext { request_id, params } => {
+                self.turn_override_active_context(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
@@ -7074,6 +7080,77 @@ impl CodexMessageProcessor {
                 };
                 self.track_error_response(&request_id, &error, error_type);
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn turn_override_active_context(
+        &self,
+        request_id: ConnectionRequestId,
+        params: TurnOverrideActiveContextParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.track_error_response(&request_id, &error, /*error_type*/ None);
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if params.expected_turn_id.is_empty() {
+            self.send_invalid_request_error(
+                request_id,
+                "expectedTurnId must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+        if params.approval_policy.is_none() && params.approvals_reviewer.is_none() {
+            self.send_invalid_request_error(
+                request_id,
+                "at least one of approvalPolicy or approvalsReviewer must be set".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        self.outgoing
+            .record_request_turn_id(&request_id, &params.expected_turn_id)
+            .await;
+
+        match thread
+            .override_active_turn_context(
+                &params.expected_turn_id,
+                params.approval_policy.map(AskForApproval::to_core),
+                params
+                    .approvals_reviewer
+                    .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
+            )
+            .await
+        {
+            Ok(turn_id) => {
+                let response = TurnOverrideActiveContextResponse { turn_id };
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::TurnOverrideActiveContext {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
+                }
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to override active turn context: {err}"),
+                )
+                .await;
             }
         }
     }
