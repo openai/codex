@@ -228,6 +228,7 @@ impl GoalWallClockAccountingSnapshot {
 
     fn clear_active_goal(&mut self) {
         self.active_goal_id = None;
+        self.reset_baseline();
     }
 
     fn active_goal_id(&self) -> Option<String> {
@@ -820,6 +821,10 @@ impl Session {
     }
 
     pub(crate) async fn pause_active_thread_goal_for_interrupt(&self) -> anyhow::Result<()> {
+        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
+            return Ok(());
+        }
+
         self.pause_active_thread_goal_with_event_id(uuid::Uuid::new_v4().to_string())
             .await
     }
