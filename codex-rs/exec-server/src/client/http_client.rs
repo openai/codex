@@ -2,7 +2,7 @@
 //!
 //! This module is the facade for the environment-owned [`crate::HttpClient`]
 //! capability:
-//! - [`DirectHttpClient`] executes requests directly with `reqwest`
+//! - [`ReqwestHttpClient`] executes requests directly with `reqwest`
 //! - [`ExecServerClient`] forwards requests over the JSON-RPC transport
 //! - [`HttpResponseBodyStream`] presents buffered local bodies and streamed
 //!   remote `http/request/bodyDelta` notifications through one byte-stream API
@@ -13,14 +13,14 @@
 //! - remote runtime: serves the `http/request` RPC and runs the concrete local
 //!   HTTP request there when the orchestrator uses [`ExecServerClient`]
 
-#[path = "http_body_stream.rs"]
-pub(crate) mod body_stream;
-#[path = "direct_http_client.rs"]
-mod direct_http_client;
+#[path = "reqwest_http_client.rs"]
+mod reqwest_http_client;
+#[path = "http_response_body_stream.rs"]
+pub(crate) mod response_body_stream;
 #[path = "rpc_http_client.rs"]
 mod rpc_http_client;
 
-pub use body_stream::HttpResponseBodyStream;
-pub(crate) use direct_http_client::DirectHttpClient;
-pub(crate) use direct_http_client::DirectHttpRequestRunner;
-pub(crate) use direct_http_client::PendingDirectHttpBodyStream;
+pub(crate) use reqwest_http_client::PendingReqwestHttpBodyStream;
+pub(crate) use reqwest_http_client::ReqwestHttpClient;
+pub(crate) use reqwest_http_client::ReqwestHttpRequestRunner;
+pub use response_body_stream::HttpResponseBodyStream;

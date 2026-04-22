@@ -5,7 +5,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
-use crate::client::http_client::DirectHttpClient;
+use crate::client::http_client::ReqwestHttpClient;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -149,7 +149,7 @@ impl Environment {
             exec_server_url: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
-            http_client: Arc::new(DirectHttpClient),
+            http_client: Arc::new(ReqwestHttpClient),
             local_runtime_paths: None,
         }
     }
@@ -206,7 +206,7 @@ impl Environment {
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
-            http_client: Arc::new(DirectHttpClient),
+            http_client: Arc::new(ReqwestHttpClient),
             local_runtime_paths: Some(local_runtime_paths),
         }
     }

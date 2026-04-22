@@ -1,6 +1,6 @@
-//! Direct HTTP implementation for the `HttpClient` capability.
+//! `reqwest`-backed `HttpClient` implementation.
 //!
-//! This code runs where the actual network request should originate:
+//! This code runs wherever the real network request should originate:
 //! - in a local environment, that means the orchestrator process
 //! - in a remote environment, that means the remote runtime after the
 //!   orchestrator has forwarded `http/request` over JSON-RPC
@@ -19,7 +19,7 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 
 use super::HttpResponseBodyStream;
-use super::body_stream::send_body_delta;
+use super::response_body_stream::send_body_delta;
 use crate::HttpClient;
 use crate::client::ExecServerError;
 use crate::protocol::HttpHeader;
@@ -30,25 +30,25 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 
-/// Direct HTTP implementation for whichever process is responsible for issuing
-/// the real network request.
+/// `HttpClient` implementation that performs the actual HTTP request with
+/// `reqwest`.
 #[derive(Clone, Default)]
-pub(crate) struct DirectHttpClient;
+pub(crate) struct ReqwestHttpClient;
 
-/// Local streaming response state held between the initial HTTP response and
+/// Streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
-pub(crate) struct PendingDirectHttpBodyStream {
+pub(crate) struct PendingReqwestHttpBodyStream {
     pub(crate) request_id: String,
     pub(crate) response: reqwest::Response,
 }
 
 /// Validates `http/request` parameters and runs the actual `reqwest` call used
 /// by the exec-server route and the local [`HttpClient`] backend.
-pub(crate) struct DirectHttpRequestRunner {
+pub(crate) struct ReqwestHttpRequestRunner {
     client: reqwest::Client,
 }
 
-impl DirectHttpClient {
+impl ReqwestHttpClient {
     fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
         let builder = match timeout_ms {
             None => reqwest::Client::builder(),
@@ -61,13 +61,13 @@ impl DirectHttpClient {
     }
 }
 
-impl HttpClient for DirectHttpClient {
+impl HttpClient for ReqwestHttpClient {
     fn http_request(
         &self,
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
-            let runner = DirectHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, _) = runner
                 .run(HttpRequestParams {
@@ -86,7 +86,7 @@ impl HttpClient for DirectHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
-            let runner = DirectHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, pending_stream) = runner
                 .run(HttpRequestParams {
@@ -109,9 +109,9 @@ impl HttpClient for DirectHttpClient {
     }
 }
 
-impl DirectHttpRequestRunner {
+impl ReqwestHttpRequestRunner {
     pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
-        let client = DirectHttpClient::build_client(timeout_ms)
+        let client = ReqwestHttpClient::build_client(timeout_ms)
             .map_err(|error| internal_error(error.to_string()))?;
         Ok(Self { client })
     }
@@ -119,7 +119,8 @@ impl DirectHttpRequestRunner {
     pub(crate) async fn run(
         &self,
         params: HttpRequestParams,
-    ) -> Result<(HttpRequestResponse, Option<PendingDirectHttpBodyStream>), JSONRPCErrorError> {
+    ) -> Result<(HttpRequestResponse, Option<PendingReqwestHttpBodyStream>), JSONRPCErrorError>
+    {
         let method = Method::from_bytes(params.method.as_bytes())
             .map_err(|error| invalid_params(format!("http/request method is invalid: {error}")))?;
         let url = Url::parse(&params.url)
@@ -153,7 +154,7 @@ impl DirectHttpRequestRunner {
                     headers,
                     body: Vec::new().into(),
                 },
-                Some(PendingDirectHttpBodyStream {
+                Some(PendingReqwestHttpBodyStream {
                     request_id: params.request_id,
                     response,
                 }),
@@ -177,10 +178,10 @@ impl DirectHttpRequestRunner {
     }
 
     pub(crate) async fn stream_body(
-        pending_stream: PendingDirectHttpBodyStream,
+        pending_stream: PendingReqwestHttpBodyStream,
         notifications: RpcNotificationSender,
     ) {
-        let PendingDirectHttpBodyStream {
+        let PendingReqwestHttpBodyStream {
             request_id,
             response,
         } = pending_stream;
