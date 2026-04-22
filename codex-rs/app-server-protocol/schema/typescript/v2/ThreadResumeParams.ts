@@ -37,7 +37,6 @@ model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier 
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-<<<<<<< HEAD
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, /**
  * Full permissions override for the resumed thread. Cannot be combined
  * with `sandbox`.

@@ -17,6 +17,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_protocol::ThreadId;
@@ -60,14 +61,19 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 
 pub(super) async fn latest_token_usage_turn_id_for_thread_path(thread: &Thread) -> Option<String> {
     let rollout_path = thread.path.as_deref()?;
-    latest_token_usage_turn_id_from_rollout_path(rollout_path).await
+    latest_token_usage_turn_id_from_rollout_path(
+        rollout_path,
+        (!thread.turns.is_empty()).then_some(thread.turns.as_slice()),
+    )
+    .await
 }
 
 pub(super) async fn latest_token_usage_turn_id_from_rollout_path(
     rollout_path: &Path,
+    turns: Option<&[Turn]>,
 ) -> Option<String> {
     let rollout_items = read_rollout_items_from_rollout(rollout_path).await.ok()?;
-    latest_token_usage_turn_id_from_rollout_items(&rollout_items)
+    latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns)
 }
 
 /// Identifies the turn that was active when a `TokenCount` record appeared.
@@ -81,21 +87,8 @@ struct TokenUsageTurnOwner {
 
 pub(super) fn latest_token_usage_turn_id_from_rollout_items(
     rollout_items: &[RolloutItem],
+    turns: Option<&[Turn]>,
 ) -> Option<String> {
-    let owner = latest_token_usage_turn_owner_from_rollout_items(rollout_items)?;
-    let rebuilt_turns = super::build_turns_from_rollout_items(rollout_items);
-    if rebuilt_turns.iter().any(|turn| turn.id == owner.id) {
-        return Some(owner.id);
-    }
-    owner
-        .position
-        .and_then(|position| rebuilt_turns.get(position))
-        .map(|turn| turn.id.clone())
-}
-
-fn latest_token_usage_turn_owner_from_rollout_items(
-    rollout_items: &[RolloutItem],
-) -> Option<TokenUsageTurnOwner> {
     let mut builder = ThreadHistoryBuilder::new();
     let mut token_usage_turn_owner = None;
 
@@ -112,7 +105,22 @@ fn latest_token_usage_turn_owner_from_rollout_items(
         builder.handle_rollout_item(item);
     }
 
-    token_usage_turn_owner
+    let owner = token_usage_turn_owner?;
+    let rebuilt_turns;
+    let turns = if let Some(turns) = turns {
+        turns
+    } else {
+        rebuilt_turns = builder.finish();
+        rebuilt_turns.as_slice()
+    };
+
+    if turns.iter().any(|turn| turn.id == owner.id) {
+        return Some(owner.id);
+    }
+    owner
+        .position
+        .and_then(|position| turns.get(position))
+        .map(|turn| turn.id.clone())
 }
 
 /// Chooses a fallback turn id that should own a replayed token usage update.
