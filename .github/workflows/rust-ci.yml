@@ -41,6 +41,7 @@ jobs:
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
             [[ $f == codex-rs/* || $f == tools/argument-comment-lint/* || $f == justfile ]] && argument_comment_lint=true
+            [[ $f == defs.bzl || $f == workspace_root_test_launcher.sh.tpl || $f == workspace_root_test_launcher.bat.tpl ]] && argument_comment_lint=true
             [[ $f == tools/argument-comment-lint/* || $f == .github/workflows/rust-ci.yml || $f == .github/workflows/rust-ci-full.yml ]] && argument_comment_lint_package=true
             [[ $f == .github/* ]] && workflows=true
           done
@@ -136,7 +137,6 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
-    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -154,19 +154,25 @@ jobs:
               group: codex-runners
               labels: codex-windows-x64
     steps:
+      - name: Skip argument comment lint
+        if: ${{ needs.changed.outputs.argument_comment_lint != 'true' && needs.changed.outputs.workflows != 'true' }}
+        shell: bash
+        run: echo "No argument-comment-lint relevant changes."
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
       - uses: ./.github/actions/setup-bazel-ci
+        if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' }}
         with:
           target: ${{ runner.os }}
           install-test-prereqs: true
       - name: Install Linux sandbox build dependencies
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && (needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true') }}
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ runner.os != 'Windows' }}
+        if: ${{ runner.os != 'Windows' && (needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true') }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -181,7 +187,7 @@ jobs:
             -- \
             ${bazel_targets}
       - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ runner.os == 'Windows' }}
+        if: ${{ runner.os == 'Windows' && (needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true') }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
