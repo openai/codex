@@ -933,11 +933,27 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         ),
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
+            vulnerable_root_canonical.join(".agents").to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_EXCLUDED_2={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
             "-DWRITABLE_ROOT_2={}",
             empty_root_canonical.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
+            empty_root_canonical.join(".git").to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
+            empty_root_canonical.join(".agents").to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_EXCLUDED_2={}",
+            empty_root_canonical.join(".codex").to_string_lossy()
         ),
     ];
     let writable_definitions: Vec<String> = args
@@ -1264,7 +1280,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) )"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_5"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_5"))) )"#
     } else {
         ""
     };
@@ -1273,13 +1289,14 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its preserved paths), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to WRITABLE_ROOT_0, WRITABLE_ROOT_1, and cwd as
+    //   WRITABLE_ROOT_2, each with preserved path carveouts.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_2"))) ){tempdir_policy_entry}
 )
 
 "#,
@@ -1311,20 +1328,47 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
                 .expect("canonicalize /tmp")
                 .to_string_lossy()
         ),
+        format!(
+            "-DWRITABLE_ROOT_1_EXCLUDED_0={}",
+            PathBuf::from("/tmp")
+                .canonicalize()
+                .expect("canonicalize /tmp")
+                .join(".git")
+                .to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
+            PathBuf::from("/tmp")
+                .canonicalize()
+                .expect("canonicalize /tmp")
+                .join(".agents")
+                .to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_EXCLUDED_2={}",
+            PathBuf::from("/tmp")
+                .canonicalize()
+                .expect("canonicalize /tmp")
+                .join(".codex")
+                .to_string_lossy()
+        ),
     ];
 
     if let Some(p) = tmpdir_env_var {
         expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_EXCLUDED_0={p}/.git"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_EXCLUDED_1={p}/.agents"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_EXCLUDED_2={p}/.codex"));
         expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
+            "-DWRITABLE_ROOT_2_EXCLUDED_3={}",
             dot_git_canonical.to_string_lossy()
         ));
         expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
+            "-DWRITABLE_ROOT_2_EXCLUDED_4={}",
             dot_agents_canonical.to_string_lossy()
         ));
         expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_2={}",
+            "-DWRITABLE_ROOT_2_EXCLUDED_5={}",
             dot_codex_canonical.to_string_lossy()
         ));
     }

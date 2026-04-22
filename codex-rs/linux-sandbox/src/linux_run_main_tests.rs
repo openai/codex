@@ -1,6 +1,10 @@
 #[cfg(test)]
 use super::*;
 #[cfg(test)]
+use crate::linux_run_main::install_bwrap_signal_forwarders;
+#[cfg(test)]
+use crate::linux_run_main::wait_for_bwrap_child;
+#[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
@@ -264,11 +268,12 @@ fn cleanup_synthetic_mount_targets_removes_only_empty_files() {
     std::fs::write(&empty_file, "").expect("write empty file");
     std::fs::write(&non_empty_file, "keep").expect("write nonempty file");
 
-    cleanup_synthetic_mount_targets(&[
+    let registrations = register_synthetic_mount_targets(&[
         crate::bwrap::SyntheticMountTarget::missing(&empty_file),
         crate::bwrap::SyntheticMountTarget::missing(&non_empty_file),
         crate::bwrap::SyntheticMountTarget::missing(&missing_file),
     ]);
+    cleanup_synthetic_mount_targets(&registrations);
 
     assert!(!empty_file.exists());
     assert_eq!(
@@ -276,6 +281,115 @@ fn cleanup_synthetic_mount_targets_removes_only_empty_files() {
         "keep"
     );
     assert!(!missing_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_waits_for_other_active_registrations() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    let target = crate::bwrap::SyntheticMountTarget::missing(&empty_file);
+
+    let registrations = register_synthetic_mount_targets(std::slice::from_ref(&target));
+    let active_marker = registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, "").expect("write active marker");
+
+    cleanup_synthetic_mount_targets(&registrations);
+    assert!(empty_file.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    let registrations = register_synthetic_mount_targets(std::slice::from_ref(&target));
+    cleanup_synthetic_mount_targets(&registrations);
+
+    assert!(!empty_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_removes_transient_file_after_concurrent_owner_exits() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    let first_target = crate::bwrap::SyntheticMountTarget::missing(&empty_file);
+
+    let first_registrations = register_synthetic_mount_targets(&[first_target]);
+    std::fs::write(&empty_file, "").expect("write transient empty file");
+    let active_marker = first_registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, SYNTHETIC_MOUNT_MARKER_SYNTHETIC).expect("write active marker");
+    let metadata = std::fs::symlink_metadata(&empty_file).expect("stat empty file");
+    let second_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+    let second_registrations = register_synthetic_mount_targets(&[second_target]);
+
+    cleanup_synthetic_mount_targets(&first_registrations);
+    assert!(empty_file.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    cleanup_synthetic_mount_targets(&second_registrations);
+
+    assert!(!empty_file.exists());
+}
+
+#[test]
+fn cleanup_synthetic_mount_targets_preserves_real_pre_existing_empty_file() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".git");
+    std::fs::write(&empty_file, "").expect("write pre-existing empty file");
+    let metadata = std::fs::symlink_metadata(&empty_file).expect("stat empty file");
+    let first_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+    let second_target =
+        crate::bwrap::SyntheticMountTarget::existing_empty_file(&empty_file, &metadata);
+
+    let first_registrations = register_synthetic_mount_targets(&[first_target]);
+    let second_registrations = register_synthetic_mount_targets(&[second_target]);
+
+    cleanup_synthetic_mount_targets(&first_registrations);
+    cleanup_synthetic_mount_targets(&second_registrations);
+
+    assert!(empty_file.exists());
+}
+
+#[test]
+fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
+    let supervisor_pid = unsafe { libc::fork() };
+    assert!(supervisor_pid >= 0, "failed to fork supervisor");
+
+    if supervisor_pid == 0 {
+        run_bwrap_signal_forwarder_test_supervisor();
+    }
+
+    let status = wait_for_bwrap_child(supervisor_pid);
+    assert!(libc::WIFEXITED(status), "supervisor status: {status}");
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+#[cfg(test)]
+fn run_bwrap_signal_forwarder_test_supervisor() -> ! {
+    let child_pid = unsafe { libc::fork() };
+    if child_pid < 0 {
+        unsafe {
+            libc::_exit(2);
+        }
+    }
+
+    if child_pid == 0 {
+        loop {
+            unsafe {
+                libc::pause();
+            }
+        }
+    }
+
+    install_bwrap_signal_forwarders(child_pid);
+    unsafe {
+        libc::raise(libc::SIGTERM);
+    }
+
+    let status = wait_for_bwrap_child(child_pid);
+    let child_terminated_by_sigterm =
+        libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM;
+    unsafe {
+        libc::_exit(if child_terminated_by_sigterm { 0 } else { 1 });
+    }
 }
 
 #[test]

@@ -45,6 +45,7 @@ codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }

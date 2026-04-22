@@ -3,10 +3,15 @@ use std::ffi::CString;
 use std::fmt;
 use std::fs;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
@@ -20,6 +25,20 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
+
+static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
+
+const FORWARDED_SIGNALS: &[libc::c_int] =
+    &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
+const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
+const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
+
+#[derive(Debug)]
+struct SyntheticMountTargetRegistration {
+    target: crate::bwrap::SyntheticMountTarget,
+    marker_file: PathBuf,
+    marker_dir: PathBuf,
+}
 
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
@@ -578,7 +597,13 @@ fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
 }
 
 fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
-    let synthetic_mount_targets = bwrap_args.synthetic_mount_targets.clone();
+    let crate::bwrap::BwrapArgs {
+        args,
+        preserved_files,
+        synthetic_mount_targets,
+    } = bwrap_args;
+    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+    let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
@@ -586,43 +611,303 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     }
 
     if pid == 0 {
-        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+        let setpgid_res = unsafe { libc::setpgid(0, 0) };
+        if setpgid_res < 0 {
+            let err = std::io::Error::last_os_error();
+            panic!("failed to place bubblewrap child in its own process group: {err}");
+        }
+        terminate_with_parent(parent_pid);
+        exec_bwrap(args, preserved_files);
     }
 
-    let mut status: libc::c_int = 0;
-    let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
-    if wait_res < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!("waitpid failed for bubblewrap child: {err}");
-    }
-
-    cleanup_synthetic_mount_targets(&synthetic_mount_targets);
+    install_bwrap_signal_forwarders(pid);
+    let status = wait_for_bwrap_child(pid);
+    BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
+    cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
     exit_with_wait_status(status);
 }
 
-fn cleanup_synthetic_mount_targets(targets: &[crate::bwrap::SyntheticMountTarget]) {
-    for target in targets.iter().rev() {
-        let path = target.path();
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => panic!(
-                "failed to inspect synthetic bubblewrap mount target {}: {err}",
-                path.display()
-            ),
-        };
-        if !target.should_remove_after_bwrap(&metadata) {
-            continue;
-        }
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => panic!(
-                "failed to remove synthetic bubblewrap mount target {}: {err}",
-                path.display()
-            ),
+fn terminate_with_parent(parent_pid: libc::pid_t) {
+    let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+    if res < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to set bubblewrap child parent-death signal: {err}");
+    }
+    if unsafe { libc::getppid() } != parent_pid {
+        unsafe {
+            libc::raise(libc::SIGTERM);
         }
     }
+}
+
+fn install_bwrap_signal_forwarders(pid: libc::pid_t) {
+    BWRAP_CHILD_PID.store(pid, Ordering::SeqCst);
+    for signal in FORWARDED_SIGNALS {
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = forward_signal_to_bwrap_child as *const () as libc::sighandler_t;
+        unsafe {
+            libc::sigemptyset(&mut action.sa_mask);
+            if libc::sigaction(*signal, &action, std::ptr::null_mut()) < 0 {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to install bubblewrap signal forwarder for {signal}: {err}");
+            }
+        }
+    }
+}
+
+extern "C" fn forward_signal_to_bwrap_child(signal: libc::c_int) {
+    let pid = BWRAP_CHILD_PID.load(Ordering::SeqCst);
+    if pid > 0 {
+        unsafe {
+            libc::kill(-pid, signal);
+            libc::kill(pid, signal);
+        }
+    }
+}
+
+fn wait_for_bwrap_child(pid: libc::pid_t) -> libc::c_int {
+    loop {
+        let mut status: libc::c_int = 0;
+        let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
+        if wait_res >= 0 {
+            return status;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        panic!("waitpid failed for bubblewrap child: {err}");
+    }
+}
+
+fn register_synthetic_mount_targets(
+    targets: &[crate::bwrap::SyntheticMountTarget],
+) -> Vec<SyntheticMountTargetRegistration> {
+    with_synthetic_mount_registry_lock(|| {
+        targets
+            .iter()
+            .map(|target| {
+                let marker_dir = synthetic_mount_marker_dir(target.path());
+                fs::create_dir_all(&marker_dir).unwrap_or_else(|err| {
+                    panic!(
+                        "failed to create synthetic bubblewrap mount marker directory {}: {err}",
+                        marker_dir.display()
+                    )
+                });
+                let target = if target.preserves_pre_existing_file()
+                    && synthetic_mount_marker_dir_has_active_synthetic_owner(&marker_dir)
+                {
+                    crate::bwrap::SyntheticMountTarget::missing(target.path())
+                } else {
+                    target.clone()
+                };
+                let marker_file = marker_dir.join(std::process::id().to_string());
+                fs::write(&marker_file, synthetic_mount_marker_contents(&target)).unwrap_or_else(
+                    |err| {
+                        panic!(
+                            "failed to register synthetic bubblewrap mount target {}: {err}",
+                            target.path().display()
+                        )
+                    },
+                );
+                SyntheticMountTargetRegistration {
+                    target,
+                    marker_file,
+                    marker_dir,
+                }
+            })
+            .collect()
+    })
+}
+
+fn synthetic_mount_marker_contents(target: &crate::bwrap::SyntheticMountTarget) -> &'static [u8] {
+    if target.preserves_pre_existing_file() {
+        SYNTHETIC_MOUNT_MARKER_EXISTING
+    } else {
+        SYNTHETIC_MOUNT_MARKER_SYNTHETIC
+    }
+}
+
+fn synthetic_mount_marker_dir_has_active_synthetic_owner(marker_dir: &Path) -> bool {
+    synthetic_mount_marker_dir_has_active_process_matching(marker_dir, |path| {
+        match fs::read(path) {
+            Ok(contents) => contents == SYNTHETIC_MOUNT_MARKER_SYNTHETIC,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => panic!(
+                "failed to read synthetic bubblewrap mount marker {}: {err}",
+                path.display()
+            ),
+        }
+    })
+}
+
+fn synthetic_mount_marker_dir_has_active_process(marker_dir: &Path) -> bool {
+    synthetic_mount_marker_dir_has_active_process_matching(marker_dir, |_| true)
+}
+
+fn synthetic_mount_marker_dir_has_active_process_matching(
+    marker_dir: &Path,
+    matches_marker: impl Fn(&Path) -> bool,
+) -> bool {
+    let entries = match fs::read_dir(marker_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(err) => panic!(
+            "failed to read synthetic bubblewrap mount marker directory {}: {err}",
+            marker_dir.display()
+        ),
+    };
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read synthetic bubblewrap mount marker in {}: {err}",
+                marker_dir.display()
+            )
+        });
+        let path = entry.path();
+        let Some(pid) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        if !process_is_active(pid) {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => panic!(
+                    "failed to remove stale synthetic bubblewrap mount marker {}: {err}",
+                    path.display()
+                ),
+            }
+            continue;
+        }
+        let matches_marker = matches_marker(&path);
+        if matches_marker {
+            return true;
+        }
+    }
+    false
+}
+
+fn cleanup_synthetic_mount_targets(targets: &[SyntheticMountTargetRegistration]) {
+    with_synthetic_mount_registry_lock(|| {
+        for target in targets.iter().rev() {
+            match fs::remove_file(&target.marker_file) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => panic!(
+                    "failed to unregister synthetic bubblewrap mount target {}: {err}",
+                    target.target.path().display()
+                ),
+            }
+        }
+
+        for target in targets.iter().rev() {
+            if synthetic_mount_marker_dir_has_active_process(&target.marker_dir) {
+                continue;
+            }
+            remove_synthetic_mount_target(&target.target);
+            match fs::remove_dir(&target.marker_dir) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                Err(err) => panic!(
+                    "failed to remove synthetic bubblewrap mount marker directory {}: {err}",
+                    target.marker_dir.display()
+                ),
+            }
+        }
+    });
+}
+
+fn remove_synthetic_mount_target(target: &crate::bwrap::SyntheticMountTarget) {
+    let path = target.path();
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => panic!(
+            "failed to inspect synthetic bubblewrap mount target {}: {err}",
+            path.display()
+        ),
+    };
+    if !target.should_remove_after_bwrap(&metadata) {
+        return;
+    }
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => panic!(
+            "failed to remove synthetic bubblewrap mount target {}: {err}",
+            path.display()
+        ),
+    }
+}
+
+fn process_is_active(pid: libc::pid_t) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        return true;
+    }
+    let err = std::io::Error::last_os_error();
+    !matches!(err.raw_os_error(), Some(libc::ESRCH))
+}
+
+fn with_synthetic_mount_registry_lock<T>(f: impl FnOnce() -> T) -> T {
+    let registry_root = synthetic_mount_registry_root();
+    fs::create_dir_all(&registry_root).unwrap_or_else(|err| {
+        panic!(
+            "failed to create synthetic bubblewrap mount registry {}: {err}",
+            registry_root.display()
+        )
+    });
+    let lock_path = registry_root.join("lock");
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to open synthetic bubblewrap mount registry lock {}: {err}",
+                lock_path.display()
+            )
+        });
+    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!(
+            "failed to lock synthetic bubblewrap mount registry {}: {err}",
+            lock_path.display()
+        );
+    }
+    let result = f();
+    if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) } < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!(
+            "failed to unlock synthetic bubblewrap mount registry {}: {err}",
+            lock_path.display()
+        );
+    }
+    result
+}
+
+fn synthetic_mount_marker_dir(path: &Path) -> PathBuf {
+    synthetic_mount_registry_root().join(format!("{:016x}", hash_path(path)))
+}
+
+fn synthetic_mount_registry_root() -> PathBuf {
+    std::env::temp_dir().join("codex-bwrap-synthetic-mount-targets")
+}
+
+fn hash_path(path: &Path) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in path.as_os_str().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn exit_with_wait_status(status: libc::c_int) -> ! {
@@ -655,7 +940,12 @@ fn exit_with_wait_status(status: libc::c_int) -> ! {
 ///   command, and reads are bounded to a fixed max size.
 fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
-    let synthetic_mount_targets = bwrap_args.synthetic_mount_targets.clone();
+    let crate::bwrap::BwrapArgs {
+        args,
+        preserved_files,
+        synthetic_mount_targets,
+    } = bwrap_args;
+    let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
 
     let mut pipe_fds = [0; 2];
     let pipe_res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -683,7 +973,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+        exec_bwrap(args, preserved_files);
     }
 
     // Parent: close the write end and read stderr while the child runs.
@@ -697,13 +987,8 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         panic!("failed to read bubblewrap stderr: {err}");
     }
 
-    let mut status: libc::c_int = 0;
-    let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
-    if wait_res < 0 {
-        let err = std::io::Error::last_os_error();
-        panic!("waitpid failed for bubblewrap child: {err}");
-    }
-    cleanup_synthetic_mount_targets(&synthetic_mount_targets);
+    wait_for_bwrap_child(pid);
+    cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
 }
