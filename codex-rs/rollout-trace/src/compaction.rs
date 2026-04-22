@@ -230,6 +230,14 @@ impl CompactionTraceAttempt {
         );
     }
 
+    /// Records the compact endpoint result without forcing callers to branch on trace events.
+    pub fn record_result<E: Display>(&self, result: Result<&[ResponseItem], E>) {
+        match result {
+            Ok(output_items) => self.record_completed(output_items),
+            Err(err) => self.record_failed(err),
+        }
+    }
+
     /// Records pre-response failures from the compact endpoint.
     pub fn record_failed(&self, error: impl Display) {
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {

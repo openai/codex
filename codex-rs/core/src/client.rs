@@ -470,17 +470,12 @@ impl ModelClient {
             self.state.conversation_id.to_string(),
         )));
         let trace_attempt = compaction_trace.start_attempt(&payload);
-        match client.compact_input(&payload, extra_headers).await {
-            Ok(output) => {
-                trace_attempt.record_completed(&output);
-                Ok(output)
-            }
-            Err(err) => {
-                let err = map_api_error(err);
-                trace_attempt.record_failed(&err);
-                Err(err)
-            }
-        }
+        let result = client
+            .compact_input(&payload, extra_headers)
+            .await
+            .map_err(map_api_error);
+        trace_attempt.record_result(result.as_deref());
+        result
     }
 
     pub(crate) async fn create_realtime_call_with_headers(
@@ -1358,22 +1353,20 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             inference_trace_attempt.record_started(&ws_request);
-            let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
-                map_api_error(ApiError::Stream(
-                    "websocket connection is unavailable".to_string(),
-                ))
-            })?;
-            let stream_result = match stream_result
+            let websocket_connection =
+                self.websocket_session.connection.as_ref().ok_or_else(|| {
+                    map_api_error(ApiError::Stream(
+                        "websocket connection is unavailable".to_string(),
+                    ))
+                })?;
+            let stream_result = websocket_connection
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
-            {
-                Ok(stream_result) => stream_result,
-                Err(err) => {
+                .map_err(|err| {
                     let err = map_api_error(err);
                     inference_trace_attempt.record_failed(&err);
-                    return Err(err);
-                }
-            };
+                    err
+                })?;
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
                 session_telemetry.clone(),
