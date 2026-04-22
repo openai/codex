@@ -857,9 +857,15 @@ impl Session {
             }
             InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
         };
+        let should_persist_initial_environments =
+            !matches!(initial_history, InitialHistory::Resumed(_));
+        let initial_environments = session_configuration.environments.clone();
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
+        if should_persist_initial_environments && let Some(environments) = initial_environments {
+            sess.persist_sticky_environment_update(environments).await;
+        }
         sess.start_agent_identity_registration();
         {
             let mut state = sess.state.lock().await;

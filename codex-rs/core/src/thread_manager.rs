@@ -564,6 +564,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        let environments = initial_history.get_environments();
         Box::pin(self.state.spawn_thread(
             config,
             initial_history,
@@ -573,7 +574,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
-            /*environments*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -607,6 +608,7 @@ impl ThreadManager {
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let environments = initial_history.get_environments();
         Box::pin(self.state.spawn_thread(
             config,
             initial_history,
@@ -616,7 +618,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
-            /*environments*/ None,
+            environments,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -716,6 +718,7 @@ impl ThreadManager {
                 }
             }
         };
+        let environments = history.get_environments();
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -725,7 +728,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
-            /*environments*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -843,6 +846,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let environments = initial_history.get_environments();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -855,7 +859,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
-            /*environments*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -872,6 +876,7 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
+        let environments = initial_history.get_environments();
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
@@ -884,7 +889,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
-            /*environments*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await

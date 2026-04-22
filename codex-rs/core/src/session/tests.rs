@@ -1311,12 +1311,23 @@ async fn record_initial_history_restores_latest_persisted_agent_task() {
     let rollout_items = vec![
         RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
             agent_task: Some(expected.to_session_agent_task()),
+            ..Default::default()
         }),
         RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
             agent_task: None,
+            ..Default::default()
         }),
         RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
             agent_task: Some(expected.to_session_agent_task()),
+            ..Default::default()
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            preserve_agent_task: true,
+            environments: Some(vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: session.get_config().await.cwd.clone(),
+            }]),
+            ..Default::default()
         }),
     ];
 
@@ -1353,6 +1364,7 @@ async fn record_initial_history_discards_persisted_agent_task_for_different_iden
                 }
                 .to_session_agent_task(),
             ),
+            ..Default::default()
         },
     )];
 
@@ -1391,9 +1403,11 @@ async fn record_initial_history_honors_cleared_persisted_agent_task() {
                 }
                 .to_session_agent_task(),
             ),
+            ..Default::default()
         }),
         RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
             agent_task: None,
+            ..Default::default()
         }),
     ];
 
@@ -3328,8 +3342,33 @@ async fn make_session_with_config(
     Ok(session)
 }
 
+fn disabled_environment_manager_for_tests() -> Arc<codex_exec_server::EnvironmentManager> {
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    Arc::new(codex_exec_server::EnvironmentManager::new(
+        codex_exec_server::EnvironmentManagerArgs {
+            exec_server_url: Some("none".to_string()),
+            local_runtime_paths: runtime_paths,
+        },
+    ))
+}
+
 async fn make_session_with_config_and_rx(
     mutator: impl FnOnce(&mut Config),
+) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+    make_session_with_config_environment_manager_and_rx(
+        mutator,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    )
+    .await
+}
+
+async fn make_session_with_config_environment_manager_and_rx(
+    mutator: impl FnOnce(&mut Config),
+    environment_manager: Arc<codex_exec_server::EnvironmentManager>,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -3413,7 +3452,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        environment_manager,
         /*analytics_events_client*/ None,
     )
     .await?;
@@ -4035,6 +4074,120 @@ async fn unknown_turn_environment_returns_error() {
 
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
     assert!(err.to_string().contains("missing"));
+}
+
+#[tokio::test]
+async fn disabled_environment_access_rejects_named_turn_environments() -> anyhow::Result<()> {
+    let environment_manager = disabled_environment_manager_for_tests();
+    assert!(environment_manager.default_environment().is_none());
+    assert!(environment_manager.get_environment("local").is_some());
+    let (session, _rx) =
+        make_session_with_config_environment_manager_and_rx(|_| {}, environment_manager).await?;
+    let cwd = session.get_config().await.cwd.clone();
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: cwd.clone(),
+            }]),
+        )
+        .await
+        .expect_err("named environments should fail when environment access is disabled");
+
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert_eq!(err.to_string(), "environment access is disabled");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-2".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(Vec::new()),
+        )
+        .await?;
+    assert!(turn_context.environment.is_none());
+    assert_eq!(
+        turn_context
+            .environments
+            .as_ref()
+            .expect("empty turn environments should be recorded")
+            .len(),
+        0
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sticky_environment_updates_validate_before_mutating_session_state() -> anyhow::Result<()> {
+    let environment_manager = disabled_environment_manager_for_tests();
+    let (session, rx) =
+        make_session_with_config_environment_manager_and_rx(|_| {}, environment_manager).await?;
+    let cwd = session.get_config().await.cwd.clone();
+
+    handlers::override_turn_context(
+        &session,
+        "sub-1".to_string(),
+        SessionSettingsUpdate {
+            environments: Some(vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd,
+            }]),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let evt = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("error event should arrive")
+        .expect("error event should be readable");
+    let EventMsg::Error(err) = evt.msg else {
+        panic!("expected error event, got {:?}", evt.msg);
+    };
+
+    assert_eq!(err.message, "environment access is disabled");
+    assert_eq!(err.codex_error_info, Some(CodexErrorInfo::BadRequest));
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.environments, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_environment_validation_happens_before_session_settings_mutate() -> anyhow::Result<()>
+{
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let original_cwd = session.get_config().await.cwd.clone();
+    let next_cwd = tempfile::tempdir()
+        .expect("create temp dir")
+        .path()
+        .join("next");
+
+    let err = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(next_cwd),
+                ..Default::default()
+            },
+            Some(vec![TurnEnvironmentSelection {
+                environment_id: "missing".to_string(),
+                cwd: original_cwd.clone(),
+            }]),
+        )
+        .await
+        .expect_err("unknown turn environment should fail");
+
+    assert!(matches!(err, CodexErr::InvalidRequest(_)));
+    assert!(err.to_string().contains("missing"));
+    let state = session.state.lock().await;
+    assert_eq!(state.session_configuration.cwd, original_cwd);
+    assert_eq!(state.session_configuration.environments, None);
+
+    Ok(())
 }
 
 #[tokio::test]

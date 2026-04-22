@@ -103,7 +103,7 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: AbsolutePathBuf,
@@ -2638,11 +2638,26 @@ impl InitialHistory {
             }),
         }
     }
+
+    pub fn get_environments(&self) -> Option<Vec<TurnEnvironmentSelection>> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => session_environments_from_items(&resumed.history),
+            InitialHistory::Forked(items) => session_environments_from_items(items),
+        }
+    }
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
     items.iter().find_map(|item| match item {
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.cwd.clone()),
+        _ => None,
+    })
+}
+
+fn session_environments_from_items(items: &[RolloutItem]) -> Option<Vec<TurnEnvironmentSelection>> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionState(update) => update.environments.clone(),
         _ => None,
     })
 }
@@ -2815,6 +2830,11 @@ pub struct SessionAgentTask {
 pub struct SessionStateUpdate {
     #[serde(default)]
     pub agent_task: Option<SessionAgentTask>,
+    /// Environment-only updates should not implicitly clear the persisted agent task.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_agent_task: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.

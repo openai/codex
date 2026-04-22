@@ -590,6 +590,10 @@ impl Codex {
         } else {
             dynamic_tools
         };
+        let environments = environments.or_else(|| conversation_history.get_environments());
+        if let Some(environments) = environments.as_ref() {
+            Session::validate_turn_environment_selections(&environment_manager, environments)?;
+        }
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -630,7 +634,6 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
-            environments,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -1185,6 +1188,7 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
                 self.restore_persisted_agent_task(&rollout_items).await;
+                self.restore_persisted_environments(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -1223,6 +1227,7 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                self.restore_persisted_environments(&rollout_items).await;
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 

@@ -23,7 +23,9 @@ impl Session {
         rollout_items: &[RolloutItem],
     ) -> Option<Option<SessionAgentTask>> {
         rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::SessionState(update) => Some(update.agent_task.clone()),
+            RolloutItem::SessionState(update) if !update.preserve_agent_task => {
+                Some(update.agent_task.clone())
+            }
             _ => None,
         })
     }
@@ -65,6 +67,7 @@ impl Session {
     async fn persist_agent_task_update(&self, agent_task: Option<&RegisteredAgentTask>) {
         self.persist_rollout_items(&[RolloutItem::SessionState(SessionStateUpdate {
             agent_task: agent_task.map(RegisteredAgentTask::to_session_agent_task),
+            ..Default::default()
         })])
         .await;
     }

@@ -97,6 +97,24 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
 }
 
 pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
+    let environments_update = updates.environments.clone();
+    if let Some(environments) = updates.environments.as_ref()
+        && let Err(err) = Session::validate_turn_environment_selections(
+            &sess.services.environment_manager,
+            environments,
+        )
+    {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: err.to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
+        return;
+    }
+
     if let Err(err) = sess.update_settings(updates).await {
         sess.send_event_raw(Event {
             id: sub_id,
@@ -106,6 +124,8 @@ pub async fn override_turn_context(sess: &Session, sub_id: String, updates: Sess
             }),
         })
         .await;
+    } else if let Some(environments) = environments_update {
+        sess.persist_sticky_environment_update(environments).await;
     }
 }
 
