@@ -10896,6 +10896,64 @@
           }
         ]
       },
+      "PermissionProfile": {
+        "properties": {
+          "fileSystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PermissionProfileFileSystemPermissions": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+            },
+            "type": "array"
+          },
+          "globScanMaxDepth": {
+            "format": "uint",
+            "minimum": 1.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
+      "PermissionProfileNetworkPermissions": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Personality": {
         "enum": [
           "none",
@@ -14067,6 +14125,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -14078,7 +14148,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [
@@ -15457,6 +15532,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15468,7 +15555,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [
@@ -15756,6 +15848,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15767,7 +15871,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [

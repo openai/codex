@@ -65,6 +65,7 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NonSteerableTurnKind;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -91,6 +92,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -152,9 +154,18 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
+}
+
+fn sample_permission_profile() -> AppServerPermissionProfile {
+    CorePermissionProfile::from_legacy_sandbox_policy(
+        &SandboxPolicy::DangerFullAccess,
+        &test_path_buf("/tmp"),
+    )
+    .into()
 }
 
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
@@ -203,6 +214,7 @@ fn sample_thread_resume_response_with_source(
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
