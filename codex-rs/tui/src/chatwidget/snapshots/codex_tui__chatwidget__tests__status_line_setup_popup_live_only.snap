@@ -7,14 +7,14 @@ expression: status_line_popup_snapshot(&mut chat)
 
   Type to search
   >
-› [x] project-root          Project root directory (omitted when unavailable)
+› [x] project-name          Project name (omitted when unavailable)
   [x] git-branch            Current Git branch (omitted when unavailable)
-  [x] thread-title          Current thread title (omitted unless changed by user)
-  [ ] model-name            Current model name
+  [x] thread-title          Current thread title (omitted when unavailable)
+  [ ] model                 Current model name
   [ ] model-with-reasoning  Current model name with reasoning level
   [ ] current-dir           Current working directory
+  [ ] run-state             Compact session run-state text (Ready, Working, Thinking)
   [ ] context-remaining     Percentage of context window remaining (omitted when unknown)
-  [ ] context-used          Percentage of context window used (omitted when unknown)
 
   preview-live-root · feature/live-preview-branch · Live preview thread
   Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
