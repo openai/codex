@@ -1,6 +1,10 @@
 use super::*;
 
 impl Session {
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_mcp_server_elicitation(
         &self,
         turn_context: &TurnContext,
@@ -80,6 +84,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and manager fallback must stay serialized"
+    )]
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -111,6 +119,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn list_resources(
         &self,
         server: &str,
@@ -124,6 +136,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn list_resource_templates(
         &self,
         server: &str,
@@ -137,6 +153,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP resource calls are serialized through the session-owned manager guard"
+    )]
     pub async fn read_resource(
         &self,
         server: &str,
@@ -150,6 +170,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP tool calls are serialized through the session-owned manager guard"
+    )]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -165,6 +189,10 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP tool metadata reads through the session-owned manager guard"
+    )]
     pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
@@ -190,20 +218,7 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-            self.services
-                .auth_manager
-                .chatgpt_authorization_header_for_auth(auth)
-                .await
-        } else {
-            None
-        };
-        let mcp_servers = with_codex_apps_mcp_with_authorization_header(
-            mcp_servers,
-            auth.as_ref(),
-            &mcp_config,
-            background_authorization_header_value.as_deref(),
-        );
+        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
@@ -222,7 +237,7 @@ impl Session {
                 turn_context
                     .environment
                     .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
                 turn_context.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),

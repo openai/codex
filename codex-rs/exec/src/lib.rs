@@ -15,6 +15,7 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
+use codex_app_server_client::EnvironmentManagerArgs;
 use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
@@ -86,6 +87,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::SharedCliOptions;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -219,27 +221,31 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let Cli {
         command,
-        images,
-        model: model_cli_arg,
-        oss,
-        oss_provider,
-        config_profile,
-        full_auto,
-        dangerously_bypass_approvals_and_sandbox,
-        cwd,
+        shared,
         skip_git_repo_check,
-        add_dir,
         ephemeral,
         ignore_user_config,
         ignore_rules,
         color,
         last_message_file,
         json: json_mode,
-        sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
+    let shared = shared.into_inner();
+    let SharedCliOptions {
+        images,
+        model: model_cli_arg,
+        oss,
+        oss_provider,
+        config_profile,
+        sandbox_mode: sandbox_mode_cli_arg,
+        full_auto,
+        dangerously_bypass_approvals_and_sandbox,
+        cwd,
+        add_dir,
+    } = shared;
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -492,8 +498,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         log_db: None,
-        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env_with_runtime_paths(
-            Some(local_runtime_paths),
+        environment_manager: std::sync::Arc::new(EnvironmentManager::new(
+            EnvironmentManagerArgs::from_env(local_runtime_paths),
         )),
         config_warnings,
         session_source: SessionSource::Exec,
@@ -739,6 +745,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         thread_id: primary_thread_id_for_span.clone(),
                         input: items.into_iter().map(Into::into).collect(),
                         responsesapi_client_metadata: None,
+                        environments: None,
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,

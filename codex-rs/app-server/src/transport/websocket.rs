@@ -1,4 +1,5 @@
 use super::CHANNEL_CAPACITY;
+use super::ConnectionOrigin;
 use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
@@ -172,6 +173,7 @@ async fn run_websocket_connection(
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
+            origin: ConnectionOrigin::WebSocket,
             writer: writer_tx,
             disconnect_sender: Some(disconnect_token.clone()),
         })

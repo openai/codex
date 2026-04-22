@@ -41,10 +41,12 @@ use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 pub use codex_exec_server::EnvironmentManager;
+pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -385,6 +387,7 @@ impl InProcessClientStartArgs {
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
+            thread_config_loader: Arc::new(NoopThreadConfigLoader),
             feedback: self.feedback,
             log_db: self.log_db,
             environment_manager: self.environment_manager,
@@ -966,7 +969,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -1967,9 +1970,14 @@ mod tests {
     #[tokio::test]
     async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
-        let environment_manager = Arc::new(EnvironmentManager::new(Some(
-            "ws://127.0.0.1:8765".to_string(),
-        )));
+        let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
+            exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
+            local_runtime_paths: ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("runtime paths"),
+        }));
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
@@ -1996,7 +2004,13 @@ mod tests {
             &runtime_args.environment_manager,
             &environment_manager
         ));
-        assert!(runtime_args.environment_manager.is_remote());
+        assert!(
+            runtime_args
+                .environment_manager
+                .default_environment()
+                .expect("default environment")
+                .is_remote()
+        );
     }
 
     #[tokio::test]

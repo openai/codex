@@ -1,22 +1,18 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
-use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::config_types::ApprovalsReviewer;
-use crate::config_types::CollaborationMode;
-use crate::config_types::SandboxMode;
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
@@ -24,35 +20,13 @@ use crate::permissions::FileSystemSandboxKind;
 use crate::permissions::FileSystemSandboxPolicy;
 use crate::permissions::FileSystemSpecialPath;
 use crate::permissions::NetworkSandboxPolicy;
-use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
-use crate::protocol::GranularApprovalConfig;
-use crate::protocol::NetworkAccess;
-use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
-use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use crate::protocol::SandboxPolicy;
-use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
-use codex_execpolicy::Policy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
-
-static SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end())
-        .unwrap_or_else(|err| panic!("danger-full-access sandbox template must parse: {err}"))
-});
-static SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_WORKSPACE_WRITE.trim_end())
-        .unwrap_or_else(|err| panic!("workspace-write sandbox template must parse: {err}"))
-});
-static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_READ_ONLY.trim_end())
-        .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
-});
 
 type CommitID = String;
 
@@ -146,6 +120,7 @@ impl SandboxPermissions {
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
 pub struct FileSystemPermissions {
     pub entries: Vec<FileSystemSandboxEntry>,
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 pub type LegacyReadWriteRoots = (Option<Vec<AbsolutePathBuf>>, Option<Vec<AbsolutePathBuf>>);
@@ -172,7 +147,10 @@ impl FileSystemPermissions {
                 access: FileSystemAccessMode::Write,
             }));
         }
-        Self { entries }
+        Self {
+            entries,
+            glob_scan_max_depth: None,
+        }
     }
 
     pub fn explicit_path_entries(
@@ -190,6 +168,10 @@ impl FileSystemPermissions {
     }
 
     fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
+        if self.glob_scan_max_depth.is_some() {
+            return None;
+        }
+
         let mut read = Vec::new();
         let mut write = Vec::new();
 
@@ -225,6 +207,8 @@ struct LegacyFileSystemPermissions {
 struct CanonicalFileSystemPermissions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    glob_scan_max_depth: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,6 +228,7 @@ impl Serialize for FileSystemPermissions {
         } else {
             CanonicalFileSystemPermissions {
                 entries: self.entries.clone(),
+                glob_scan_max_depth: self.glob_scan_max_depth,
             }
             .serialize(serializer)
         }
@@ -256,9 +241,13 @@ impl<'de> Deserialize<'de> for FileSystemPermissions {
         D: Deserializer<'de>,
     {
         match FileSystemPermissionsDe::deserialize(deserializer)? {
-            FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions { entries }) => {
-                Ok(Self { entries })
-            }
+            FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            }) => Ok(Self {
+                entries,
+                glob_scan_max_depth,
+            }),
             FileSystemPermissionsDe::Legacy(LegacyFileSystemPermissions { read, write }) => {
                 Ok(Self::from_read_write_roots(read, write))
             }
@@ -352,13 +341,18 @@ impl From<&FileSystemSandboxPolicy> for FileSystemPermissions {
                 }]
             }
         };
-        Self { entries }
+        Self {
+            entries,
+            glob_scan_max_depth: value.glob_scan_max_depth.and_then(NonZeroUsize::new),
+        }
     }
 }
 
 impl From<&FileSystemPermissions> for FileSystemSandboxPolicy {
     fn from(value: &FileSystemPermissions) -> Self {
-        FileSystemSandboxPolicy::restricted(value.entries.clone())
+        let mut policy = FileSystemSandboxPolicy::restricted(value.entries.clone());
+        policy.glob_scan_max_depth = value.glob_scan_max_depth.map(usize::from);
+        policy
     }
 }
 
@@ -615,345 +609,6 @@ impl Default for BaseInstructions {
     }
 }
 
-/// Developer-provided guidance that is injected into a turn as a developer role
-/// message.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename = "developer_instructions", rename_all = "snake_case")]
-pub struct DeveloperInstructions {
-    text: String,
-}
-
-const APPROVAL_POLICY_NEVER: &str = include_str!("prompts/permissions/approval_policy/never.md");
-const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
-    include_str!("prompts/permissions/approval_policy/unless_trusted.md");
-const APPROVAL_POLICY_ON_FAILURE: &str =
-    include_str!("prompts/permissions/approval_policy/on_failure.md");
-const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
-    include_str!("prompts/permissions/approval_policy/on_request.md");
-const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
-    include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
-const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
-
-const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
-    include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
-const SANDBOX_MODE_WORKSPACE_WRITE: &str =
-    include_str!("prompts/permissions/sandbox_mode/workspace_write.md");
-const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_mode/read_only.md");
-
-const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
-const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
-
-struct PermissionsPromptConfig<'a> {
-    approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
-    exec_policy: &'a Policy,
-    exec_permission_approvals_enabled: bool,
-    request_permissions_tool_enabled: bool,
-}
-
-impl DeveloperInstructions {
-    pub fn new<T: Into<String>>(text: T) -> Self {
-        Self { text: text.into() }
-    }
-
-    pub fn from(
-        approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
-        exec_permission_approvals_enabled: bool,
-        request_permissions_tool_enabled: bool,
-    ) -> DeveloperInstructions {
-        let with_request_permissions_tool = |text: &str| {
-            if request_permissions_tool_enabled {
-                format!("{text}\n\n{}", request_permissions_tool_prompt_section())
-            } else {
-                text.to_string()
-            }
-        };
-        let on_request_instructions = || {
-            let on_request_rule = if exec_permission_approvals_enabled {
-                APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string()
-            } else {
-                APPROVAL_POLICY_ON_REQUEST_RULE.to_string()
-            };
-            let mut sections = vec![on_request_rule];
-            if request_permissions_tool_enabled {
-                sections.push(request_permissions_tool_prompt_section().to_string());
-            }
-            if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-                sections.push(format!(
-                    "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                ));
-            }
-            sections.join("\n\n")
-        };
-        let text = match approval_policy {
-            AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
-            AskForApproval::UnlessTrusted => {
-                with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
-            }
-            AskForApproval::OnFailure => with_request_permissions_tool(APPROVAL_POLICY_ON_FAILURE),
-            AskForApproval::OnRequest => on_request_instructions(),
-            AskForApproval::Granular(granular_config) => granular_instructions(
-                granular_config,
-                exec_policy,
-                exec_permission_approvals_enabled,
-                request_permissions_tool_enabled,
-            ),
-        };
-
-        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
-            && approval_policy != AskForApproval::Never
-        {
-            format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
-        } else {
-            text
-        };
-
-        DeveloperInstructions::new(text)
-    }
-
-    pub fn into_text(self) -> String {
-        self.text
-    }
-
-    pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
-        let mut text = self.text;
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&other.into().text);
-        Self { text }
-    }
-
-    pub fn model_switch_message(model_instructions: String) -> Self {
-        DeveloperInstructions::new(format!(
-            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
-        ))
-    }
-
-    pub fn realtime_start_message() -> Self {
-        Self::realtime_start_message_with_instructions(REALTIME_START_INSTRUCTIONS.trim())
-    }
-
-    pub fn realtime_start_message_with_instructions(instructions: &str) -> Self {
-        DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{instructions}\n{REALTIME_CONVERSATION_CLOSE_TAG}"
-        ))
-    }
-
-    pub fn realtime_end_message(reason: &str) -> Self {
-        DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n\nReason: {reason}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_END_INSTRUCTIONS.trim()
-        ))
-    }
-
-    pub fn personality_spec_message(spec: String) -> Self {
-        let message = format!(
-            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
-        );
-        DeveloperInstructions::new(message)
-    }
-
-    pub fn from_policy(
-        sandbox_policy: &SandboxPolicy,
-        approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
-        cwd: &Path,
-        exec_permission_approvals_enabled: bool,
-        request_permissions_tool_enabled: bool,
-    ) -> Self {
-        let network_access = if sandbox_policy.has_full_network_access() {
-            NetworkAccess::Enabled
-        } else {
-            NetworkAccess::Restricted
-        };
-
-        let (sandbox_mode, writable_roots) = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
-            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
-                (SandboxMode::WorkspaceWrite, Some(roots))
-            }
-        };
-
-        DeveloperInstructions::from_permissions_with_network(
-            sandbox_mode,
-            network_access,
-            PermissionsPromptConfig {
-                approval_policy,
-                approvals_reviewer,
-                exec_policy,
-                exec_permission_approvals_enabled,
-                request_permissions_tool_enabled,
-            },
-            writable_roots,
-        )
-    }
-
-    /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
-    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
-        collaboration_mode
-            .settings
-            .developer_instructions
-            .as_ref()
-            .filter(|instructions| !instructions.is_empty())
-            .map(|instructions| {
-                DeveloperInstructions::new(format!(
-                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
-                ))
-            })
-    }
-
-    fn from_permissions_with_network(
-        sandbox_mode: SandboxMode,
-        network_access: NetworkAccess,
-        config: PermissionsPromptConfig<'_>,
-        writable_roots: Option<Vec<WritableRoot>>,
-    ) -> Self {
-        let start_tag = DeveloperInstructions::new("<permissions instructions>");
-        let end_tag = DeveloperInstructions::new("</permissions instructions>");
-        start_tag
-            .concat(DeveloperInstructions::sandbox_text(
-                sandbox_mode,
-                network_access,
-            ))
-            .concat(DeveloperInstructions::from(
-                config.approval_policy,
-                config.approvals_reviewer,
-                config.exec_policy,
-                config.exec_permission_approvals_enabled,
-                config.request_permissions_tool_enabled,
-            ))
-            .concat(DeveloperInstructions::from_writable_roots(writable_roots))
-            .concat(end_tag)
-    }
-
-    fn from_writable_roots(writable_roots: Option<Vec<WritableRoot>>) -> Self {
-        let Some(roots) = writable_roots else {
-            return DeveloperInstructions::new("");
-        };
-
-        if roots.is_empty() {
-            return DeveloperInstructions::new("");
-        }
-
-        let roots_list: Vec<String> = roots
-            .iter()
-            .map(|r| format!("`{}`", r.root.to_string_lossy()))
-            .collect();
-        let text = if roots_list.len() == 1 {
-            format!(" The writable root is {}.", roots_list[0])
-        } else {
-            format!(" The writable roots are {}.", roots_list.join(", "))
-        };
-        DeveloperInstructions::new(text)
-    }
-
-    fn sandbox_text(mode: SandboxMode, network_access: NetworkAccess) -> DeveloperInstructions {
-        let template = match mode {
-            SandboxMode::DangerFullAccess => &*SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE,
-            SandboxMode::WorkspaceWrite => &*SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE,
-            SandboxMode::ReadOnly => &*SANDBOX_MODE_READ_ONLY_TEMPLATE,
-        };
-        let network_access = network_access.to_string();
-        let text = template
-            .render([("network_access", network_access.as_str())])
-            .unwrap_or_else(|err| panic!("sandbox template must render: {err}"));
-
-        DeveloperInstructions::new(text)
-    }
-}
-
-fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {
-    format_allow_prefixes(exec_policy.get_allowed_prefixes())
-        .filter(|prefixes| !prefixes.is_empty())
-}
-
-fn granular_prompt_intro_text() -> &'static str {
-    "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user."
-}
-
-fn request_permissions_tool_prompt_section() -> &'static str {
-    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
-}
-
-fn granular_instructions(
-    granular_config: GranularApprovalConfig,
-    exec_policy: &Policy,
-    exec_permission_approvals_enabled: bool,
-    request_permissions_tool_enabled: bool,
-) -> String {
-    let sandbox_approval_prompts_allowed = granular_config.allows_sandbox_approval();
-    let shell_permission_requests_available =
-        exec_permission_approvals_enabled && sandbox_approval_prompts_allowed;
-    let request_permissions_tool_prompts_allowed =
-        request_permissions_tool_enabled && granular_config.allows_request_permissions();
-    let categories = [
-        Some((
-            granular_config.allows_sandbox_approval(),
-            "`sandbox_approval`",
-        )),
-        Some((granular_config.allows_rules_approval(), "`rules`")),
-        Some((granular_config.allows_skill_approval(), "`skill_approval`")),
-        request_permissions_tool_enabled.then_some((
-            granular_config.allows_request_permissions(),
-            "`request_permissions`",
-        )),
-        Some((
-            granular_config.allows_mcp_elicitations(),
-            "`mcp_elicitations`",
-        )),
-    ];
-    let prompted_categories = categories
-        .iter()
-        .flatten()
-        .filter(|&&(is_allowed, _)| is_allowed)
-        .map(|&(_, category)| format!("- {category}"))
-        .collect::<Vec<_>>();
-    let rejected_categories = categories
-        .iter()
-        .flatten()
-        .filter(|&&(is_allowed, _)| !is_allowed)
-        .map(|&(_, category)| format!("- {category}"))
-        .collect::<Vec<_>>();
-
-    let mut sections = vec![granular_prompt_intro_text().to_string()];
-
-    if !prompted_categories.is_empty() {
-        sections.push(format!(
-            "These approval categories may still prompt the user when needed:\n{}",
-            prompted_categories.join("\n")
-        ));
-    }
-    if !rejected_categories.is_empty() {
-        sections.push(format!(
-            "These approval categories are automatically rejected instead of prompting the user:\n{}",
-            rejected_categories.join("\n")
-        ));
-    }
-
-    if shell_permission_requests_available {
-        sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
-    }
-
-    if request_permissions_tool_prompts_allowed {
-        sections.push(request_permissions_tool_prompt_section().to_string());
-    }
-
-    if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-        sections.push(format!(
-            "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-        ));
-    }
-
-    sections.join("\n\n")
-}
-
 const MAX_RENDERED_PREFIXES: usize = 100;
 const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
 const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
@@ -1008,31 +663,6 @@ fn render_command_prefix(prefix: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{tokens}]")
-}
-
-impl From<DeveloperInstructions> for ResponseItem {
-    fn from(di: DeveloperInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: di.into_text(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
-    }
-}
-
-impl From<SandboxMode> for DeveloperInstructions {
-    fn from(mode: SandboxMode) -> Self {
-        let network_access = match mode {
-            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
-            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
-        };
-
-        DeveloperInstructions::sandbox_text(mode, network_access)
-    }
 }
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
@@ -1709,13 +1339,9 @@ impl std::fmt::Display for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::SandboxMode;
-    use crate::protocol::AskForApproval;
-    use crate::protocol::GranularApprovalConfig;
     use anyhow::Result;
     use codex_execpolicy::Policy;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -1829,6 +1455,69 @@ mod tests {
     }
 
     #[test]
+    fn permission_profile_round_trip_preserves_glob_scan_max_depth() {
+        let mut file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::None,
+            }]);
+        file_system_sandbox_policy.glob_scan_max_depth = Some(2);
+
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &file_system_sandbox_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(
+            permission_profile.file_system_sandbox_policy(),
+            file_system_sandbox_policy
+        );
+    }
+
+    #[test]
+    fn file_system_permissions_with_glob_scan_depth_uses_canonical_json() -> Result<()> {
+        let path = AbsolutePathBuf::try_from(PathBuf::from(if cfg!(windows) {
+            r"C:\tmp\allowed"
+        } else {
+            "/tmp/allowed"
+        }))
+        .expect("absolute path");
+        let file_system_permissions = FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: FileSystemAccessMode::Read,
+            }],
+            glob_scan_max_depth: NonZeroUsize::new(2),
+        };
+
+        let serialized = serde_json::to_value(&file_system_permissions)?;
+
+        assert_eq!(serialized.get("read"), None);
+        assert_eq!(serialized.get("write"), None);
+        assert_eq!(
+            serialized.get("glob_scan_max_depth"),
+            Some(&serde_json::json!(2))
+        );
+        assert!(serialized.get("entries").is_some());
+        assert_eq!(
+            serde_json::from_value::<FileSystemPermissions>(serialized)?,
+            file_system_permissions
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<FileSystemPermissions>(serde_json::json!({
+            "entries": [],
+            "glob_scan_max_depth": 0,
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
     fn convert_mcp_content_to_items_builds_data_urls_when_missing_prefix() {
         let contents = vec![serde_json::json!({
             "type": "image",
@@ -1935,433 +1624,6 @@ mod tests {
                 call_id: "call-1".to_string(),
             }
         );
-    }
-
-    #[test]
-    fn converts_sandbox_mode_into_developer_instructions() {
-        let workspace_write: DeveloperInstructions = SandboxMode::WorkspaceWrite.into();
-        assert_eq!(
-            workspace_write,
-            DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
-            )
-        );
-
-        let read_only: DeveloperInstructions = SandboxMode::ReadOnly.into();
-        assert_eq!(
-            read_only,
-            DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
-            )
-        );
-
-        let danger_full_access: DeveloperInstructions = SandboxMode::DangerFullAccess.into();
-        assert_eq!(
-            danger_full_access,
-            DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
-            )
-        );
-    }
-
-    #[test]
-    fn builds_permissions_with_network_access_override() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: false,
-                request_permissions_tool_enabled: false,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(
-            text.contains("Network access is enabled."),
-            "expected network access to be enabled in message"
-        );
-        assert!(
-            text.contains("How to request escalation"),
-            "expected approval guidance to be included"
-        );
-    }
-
-    #[test]
-    fn builds_permissions_from_policy() {
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: Default::default(),
-            network_access: true,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        };
-
-        let instructions = DeveloperInstructions::from_policy(
-            &policy,
-            AskForApproval::UnlessTrusted,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            &PathBuf::from("/tmp"),
-            /*exec_permission_approvals_enabled*/ false,
-            /*request_permissions_tool_enabled*/ false,
-        );
-        let text = instructions.into_text();
-        assert!(text.contains("Network access is enabled."));
-        assert!(text.contains("`approval_policy` is `unless-trusted`"));
-    }
-
-    #[test]
-    fn includes_request_rule_instructions_for_on_request() {
-        let mut exec_policy = Policy::empty();
-        exec_policy
-            .add_prefix_rule(
-                &["git".to_string(), "pull".to_string()],
-                codex_execpolicy::Decision::Allow,
-            )
-            .expect("add rule");
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &exec_policy,
-                exec_permission_approvals_enabled: false,
-                request_permissions_tool_enabled: false,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("prefix_rule"));
-        assert!(text.contains("Approved command prefixes"));
-        assert!(text.contains(r#"["git", "pull"]"#));
-    }
-
-    #[test]
-    fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enabled() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::UnlessTrusted,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: false,
-                request_permissions_tool_enabled: true,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("`approval_policy` is `unless-trusted`"));
-        assert!(text.contains("# request_permissions Tool"));
-    }
-
-    #[test]
-    fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnFailure,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: false,
-                request_permissions_tool_enabled: true,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("`approval_policy` is `on-failure`"));
-        assert!(text.contains("# request_permissions Tool"));
-    }
-
-    #[test]
-    fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: true,
-                request_permissions_tool_enabled: false,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("with_additional_permissions"));
-        assert!(text.contains("additional_permissions"));
-    }
-
-    #[test]
-    fn includes_request_permissions_tool_instructions_for_on_request_when_tool_is_enabled() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: false,
-                request_permissions_tool_enabled: true,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("# request_permissions Tool"));
-        assert!(
-            text.contains("The built-in `request_permissions` tool is available in this session.")
-        );
-    }
-
-    #[test]
-    fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_both_exist() {
-        let instructions = DeveloperInstructions::from_permissions_with_network(
-            SandboxMode::WorkspaceWrite,
-            NetworkAccess::Enabled,
-            PermissionsPromptConfig {
-                approval_policy: AskForApproval::OnRequest,
-                approvals_reviewer: ApprovalsReviewer::User,
-                exec_policy: &Policy::empty(),
-                exec_permission_approvals_enabled: true,
-                request_permissions_tool_enabled: true,
-            },
-            /*writable_roots*/ None,
-        );
-
-        let text = instructions.into_text();
-        assert!(text.contains("with_additional_permissions"));
-        assert!(text.contains("# request_permissions Tool"));
-    }
-
-    #[test]
-    fn guardian_subagent_approvals_append_guardian_specific_guidance() {
-        let text = DeveloperInstructions::from(
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::GuardianSubagent,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ false,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert!(text.contains("`approvals_reviewer` is `auto_review`"));
-        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
-        assert!(text.contains("materially safer alternative"));
-    }
-
-    #[test]
-    fn guardian_subagent_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
-        let text = DeveloperInstructions::from(
-            AskForApproval::Never,
-            ApprovalsReviewer::GuardianSubagent,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ false,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
-        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
-    }
-
-    fn granular_categories_section(title: &str, categories: &[&str]) -> String {
-        format!("{title}\n{}", categories.join("\n"))
-    }
-
-    fn granular_prompt_expected(
-        prompted_categories: &[&str],
-        rejected_categories: &[&str],
-        include_shell_permission_request_instructions: bool,
-        include_request_permissions_tool_section: bool,
-    ) -> String {
-        let mut sections = vec![granular_prompt_intro_text().to_string()];
-        if !prompted_categories.is_empty() {
-            sections.push(granular_categories_section(
-                "These approval categories may still prompt the user when needed:",
-                prompted_categories,
-            ));
-        }
-        if !rejected_categories.is_empty() {
-            sections.push(granular_categories_section(
-                "These approval categories are automatically rejected instead of prompting the user:",
-                rejected_categories,
-            ));
-        }
-        if include_shell_permission_request_instructions {
-            sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
-        }
-        if include_request_permissions_tool_section {
-            sections.push(request_permissions_tool_prompt_section().to_string());
-        }
-        sections.join("\n\n")
-    }
-
-    #[test]
-    fn granular_policy_lists_prompted_and_rejected_categories_separately() {
-        let text = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: false,
-                rules: true,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: false,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ true,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert_eq!(
-            text,
-            [
-                granular_prompt_intro_text().to_string(),
-                granular_categories_section(
-                    "These approval categories may still prompt the user when needed:",
-                    &["- `rules`"],
-                ),
-                granular_categories_section(
-                    "These approval categories are automatically rejected instead of prompting the user:",
-                    &["- `sandbox_approval`", "- `skill_approval`", "- `mcp_elicitations`",],
-                ),
-            ]
-            .join("\n\n")
-        );
-    }
-
-    #[test]
-    fn granular_policy_includes_command_permission_instructions_when_sandbox_approval_can_prompt() {
-        let text = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ true,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert_eq!(
-            text,
-            granular_prompt_expected(
-                &[
-                    "- `sandbox_approval`",
-                    "- `rules`",
-                    "- `skill_approval`",
-                    "- `mcp_elicitations`",
-                ],
-                &[],
-                /*include_shell_permission_request_instructions*/ true,
-                /*include_request_permissions_tool_section*/ false,
-            )
-        );
-    }
-
-    #[test]
-    fn granular_policy_omits_shell_permission_instructions_when_inline_requests_are_disabled() {
-        let text = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ false,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert_eq!(
-            text,
-            granular_prompt_expected(
-                &[
-                    "- `sandbox_approval`",
-                    "- `rules`",
-                    "- `skill_approval`",
-                    "- `mcp_elicitations`",
-                ],
-                &[],
-                /*include_shell_permission_request_instructions*/ false,
-                /*include_request_permissions_tool_section*/ false,
-            )
-        );
-    }
-
-    #[test]
-    fn granular_policy_includes_request_permissions_tool_only_when_that_prompt_can_still_fire() {
-        let allowed = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ true,
-            /*request_permissions_tool_enabled*/ true,
-        )
-        .into_text();
-        assert!(allowed.contains("# request_permissions Tool"));
-
-        let rejected = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: false,
-                mcp_elicitations: true,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ true,
-            /*request_permissions_tool_enabled*/ true,
-        )
-        .into_text();
-        assert!(!rejected.contains("# request_permissions Tool"));
-    }
-
-    #[test]
-    fn granular_policy_lists_request_permissions_category_without_tool_section_when_tool_is_unavailable()
-     {
-        let text = DeveloperInstructions::from(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: false,
-            }),
-            ApprovalsReviewer::User,
-            &Policy::empty(),
-            /*exec_permission_approvals_enabled*/ true,
-            /*request_permissions_tool_enabled*/ false,
-        )
-        .into_text();
-
-        assert!(!text.contains("- `request_permissions`"));
-        assert!(!text.contains("# request_permissions Tool"));
     }
 
     #[test]

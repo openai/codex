@@ -13,6 +13,8 @@ pub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;
 pub use pipe::spawn_process as spawn_pipe_process;
 /// Spawn a non-interactive process using regular pipes, but close stdin immediately.
 pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
+/// Driver-backed process adapter used by integrations with their own process transport.
+pub use process::ProcessDriver;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
 /// Bundle of process handles plus split output and exit receivers returned by spawn helpers.
@@ -21,6 +23,8 @@ pub use process::SpawnedProcess;
 pub use process::TerminalSize;
 /// Combine stdout/stderr receivers into a single broadcast receiver.
 pub use process::combine_output_receivers;
+/// Adapt an externally-driven process into the standard spawned-process handle.
+pub use process::spawn_from_driver;
 /// Backwards-compatible alias for ProcessHandle.
 pub type ExecCommandSession = ProcessHandle;
 /// Backwards-compatible alias for SpawnedProcess.

@@ -424,32 +424,29 @@ impl NetworkProxyState {
         let blocked_for_observer = entry.clone();
         let blocked_request_observer = self.blocked_request_observer.read().await.clone();
         let violation_line = blocked_request_violation_log_line(&entry);
-        let mut guard = self.state.write().await;
         let host = entry.host.clone();
         let reason = entry.reason.clone();
         let decision = entry.decision.clone();
         let source = entry.source.clone();
         let protocol = entry.protocol.clone();
         let port = entry.port;
-        guard.blocked.push_back(entry);
-        guard.blocked_total = guard.blocked_total.saturating_add(1);
-        let total = guard.blocked_total;
-        while guard.blocked.len() > MAX_BLOCKED_EVENTS {
-            guard.blocked.pop_front();
-        }
+        let (total, buffered) = {
+            let mut guard = self.state.write().await;
+            guard.blocked.push_back(entry);
+            guard.blocked_total = guard.blocked_total.saturating_add(1);
+            let total = guard.blocked_total;
+            while guard.blocked.len() > MAX_BLOCKED_EVENTS {
+                guard.blocked.pop_front();
+            }
+            (total, guard.blocked.len())
+        };
         debug!(
-            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, buffered={})",
-            total,
-            host,
-            reason,
-            decision,
-            source,
-            protocol,
-            port,
-            guard.blocked.len()
+            "recorded blocked request telemetry (\
+             total={total}, host={host}, reason={reason}, \
+             decision={decision:?}, source={source:?}, \
+             protocol={protocol}, port={port:?}, buffered={buffered})"
         );
         debug!("{violation_line}");
-        drop(guard);
 
         if let Some(observer) = blocked_request_observer {
             observer.on_blocked_request(blocked_for_observer).await;

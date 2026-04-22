@@ -34,6 +34,10 @@ impl ToolHandler for ToolSuggestHandler {
         ToolKind::Function
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "tool suggestion discovery reads through the session-owned manager guard"
+    )]
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             payload,
@@ -193,6 +197,10 @@ async fn verify_tool_suggestion_completed(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "connector cache refresh reads through the session-owned manager guard"
+)]
 async fn refresh_missing_suggested_connectors(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,

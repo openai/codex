@@ -998,6 +998,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
     let submission_id = test
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1085,6 +1086,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
     let submission_id = test
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1736,6 +1738,7 @@ fn websocket_provider_with_connect_timeout(
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
