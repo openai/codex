@@ -10,6 +10,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
+use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -3702,6 +3703,116 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
         config.guardian_policy_config.as_deref(),
         Some("Use the workspace-managed guardian policy.")
     );
+
+    Ok(())
+}
+
+#[test]
+fn config_toml_deserializes_auto_review_policy() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[auto_review]
+policy = "Use the user-configured guardian policy."
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.auto_review
+            .as_ref()
+            .and_then(|auto_review| auto_review.policy.as_deref()),
+        Some("Use the user-configured guardian policy.")
+    );
+}
+
+#[tokio::test]
+async fn load_config_uses_auto_review_guardian_policy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("  Use the user-configured guardian policy.  ".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian_policy_config.as_deref(),
+        Some("Use the user-configured guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("Use the user-configured guardian policy.".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        config_layer_stack,
+    )
+    .await?;
+
+    assert_eq!(
+        config.guardian_policy_config.as_deref(),
+        Some("Use the managed guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        auto_review: Some(AutoReviewToml {
+            policy: Some("   ".to_string()),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.guardian_policy_config, None);
 
     Ok(())
 }

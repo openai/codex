@@ -133,6 +133,8 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -160,6 +162,7 @@ use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -412,8 +415,9 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    cwd: Option<PathBuf>,
+    cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
+    use_state_db_only: bool,
 }
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -976,6 +980,13 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
                     .await;
+            }
+            ClientRequest::ThreadApproveGuardianDeniedAction { request_id, params } => {
+                self.thread_approve_guardian_denied_action(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
@@ -1807,7 +1818,9 @@ impl CodexMessageProcessor {
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) =
-                        if include_token && permanent_refresh_failure {
+                        if matches!(auth, CodexAuth::AgentIdentity(_))
+                            || include_token && permanent_refresh_failure
+                        {
                             (Some(auth_mode), None)
                         } else {
                             match auth.get_token() {
@@ -1859,7 +1872,9 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                CoreAuthMode::Chatgpt
+                | CoreAuthMode::ChatgptAuthTokens
+                | CoreAuthMode::AgentIdentity => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -2712,6 +2727,11 @@ impl CodexMessageProcessor {
                     /*has_in_progress_turn*/ false,
                 );
 
+                let permission_profile = thread_response_permission_profile(
+                    &config_snapshot.sandbox_policy,
+                    config_snapshot.permission_profile,
+                );
+
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
                     model: config_snapshot.model,
@@ -2722,6 +2742,7 @@ impl CodexMessageProcessor {
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
+                    permission_profile,
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
                 if listener_task_context.general_analytics_enabled {
@@ -3727,6 +3748,59 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_approve_guardian_denied_action(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadApproveGuardianDeniedActionParams,
+    ) {
+        let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
+        let event = match serde_json::from_value(event) {
+            Ok(event) => event,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid Guardian denial event: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::ApproveGuardianDeniedAction { event },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadApproveGuardianDeniedActionResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to approve Guardian denial: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -3737,10 +3811,11 @@ impl CodexMessageProcessor {
             source_kinds,
             archived,
             cwd,
+            use_state_db_only,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd) {
-            Ok(cwd) => cwd,
+        let cwd_filters = match normalize_thread_list_cwd_filters(cwd) {
+            Ok(cwd_filters) => cwd_filters,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -3766,8 +3841,9 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd,
+                    cwd_filters,
                     search_term,
+                    use_state_db_only,
                 },
             )
             .await;
@@ -4444,6 +4520,10 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
+                let permission_profile = thread_response_permission_profile(
+                    &session_configured.sandbox_policy,
+                    codex_thread.config_snapshot().await.permission_profile,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4455,6 +4535,7 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
+                    permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
                 if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -5106,6 +5187,10 @@ impl CodexMessageProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        let permission_profile = thread_response_permission_profile(
+            &session_configured.sandbox_policy,
+            forked_thread.config_snapshot().await.permission_profile,
+        );
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5117,6 +5202,7 @@ impl CodexMessageProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
+            permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
         if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -5239,8 +5325,9 @@ impl CodexMessageProcessor {
             model_providers,
             source_kinds,
             archived,
-            cwd,
+            cwd_filters,
             search_term,
+            use_state_db_only,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -5277,28 +5364,27 @@ impl CodexMessageProcessor {
                     sort_direction: store_sort_direction,
                     allowed_sources: allowed_sources.to_vec(),
                     model_providers: model_provider_filter.clone(),
+                    cwd_filters: cwd_filters.clone(),
                     archived,
                     search_term: search_term.clone(),
+                    use_state_db_only,
                 })
                 .await
                 .map_err(thread_store_list_error)?;
 
-            let mut candidate_summaries = Vec::with_capacity(page.items.len());
+            let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
                 let Some(summary) = summary_from_stored_thread(it, fallback_provider.as_str())
                 else {
                     continue;
                 };
-                candidate_summaries.push(summary);
-            }
-
-            let mut filtered = Vec::with_capacity(candidate_summaries.len());
-            for summary in candidate_summaries {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd.as_ref().is_none_or(|expected_cwd| {
-                        path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
+                        expected_cwds.iter().any(|expected_cwd| {
+                            path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                        })
                     })
                 {
                     filtered.push(summary);
@@ -5310,25 +5396,22 @@ impl CodexMessageProcessor {
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
-            let next_cursor_value = page.next_cursor.clone();
-            next_cursor = next_cursor_value.clone();
+            next_cursor = page.next_cursor;
             if remaining == 0 {
                 break;
             }
 
-            match next_cursor_value {
-                Some(cursor_val) if remaining > 0 => {
-                    // Break if our pagination would reuse the same cursor again; this avoids
-                    // an infinite loop when filtering drops everything on the page.
-                    if last_cursor.as_ref() == Some(&cursor_val) {
-                        next_cursor = None;
-                        break;
-                    }
-                    last_cursor = Some(cursor_val.clone());
-                    cursor_obj = Some(cursor_val);
-                }
-                _ => break,
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            // Break if our pagination would reuse the same cursor again; this avoids
+            // an infinite loop when filtering drops everything on the page.
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
             }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
         }
 
         Ok((items, next_cursor))
@@ -8295,25 +8378,36 @@ impl CodexMessageProcessor {
     }
 }
 
-fn normalize_thread_list_cwd_filter(
-    cwd: Option<String>,
-) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+fn normalize_thread_list_cwd_filters(
+    cwd: Option<ThreadListCwdFilter>,
+) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
-        .map(AbsolutePathBuf::into_path_buf)
-        .map(Some)
-        .map_err(|err| JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-            data: None,
-        })
+
+    let cwds = match cwd {
+        ThreadListCwdFilter::One(cwd) => vec![cwd],
+        ThreadListCwdFilter::Many(cwds) => cwds,
+    };
+    let mut normalized_cwds = Vec::with_capacity(cwds.len());
+    for cwd in cwds {
+        let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+            .map(AbsolutePathBuf::into_path_buf)
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+                data: None,
+            })?;
+        normalized_cwds.push(cwd);
+    }
+
+    Ok(Some(normalized_cwds))
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
-    use super::normalize_thread_list_cwd_filter;
+    use super::normalize_thread_list_cwd_filters;
+    use codex_app_server_protocol::ThreadListCwdFilter;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -8327,8 +8421,9 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
-            Some(PathBuf::from(cwd))
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::One(cwd.clone())))
+                .expect("cwd filter should parse"),
+            Some(vec![PathBuf::from(cwd)])
         );
     }
 
@@ -8338,9 +8433,11 @@ mod thread_list_cwd_filter_tests {
         let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
-                .expect("cwd filter should parse"),
-            Some(expected)
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::Many(vec![String::from(
+                "repo-b"
+            ),])))
+            .expect("cwd filter should parse"),
+            Some(vec![expected])
         );
         Ok(())
     }
@@ -8517,11 +8614,15 @@ async fn handle_pending_thread_resume_request(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile,
         cwd,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
+    let permission_profile =
+        thread_response_permission_profile(&sandbox_policy, permission_profile);
+
     let response = ThreadResumeResponse {
         thread,
         model,
@@ -8532,6 +8633,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
+        permission_profile,
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
@@ -9700,6 +9802,20 @@ fn with_thread_spawn_agent_metadata(
     }
 }
 
+fn thread_response_permission_profile(
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    permission_profile: codex_protocol::models::PermissionProfile,
+) -> Option<codex_app_server_protocol::PermissionProfile> {
+    match sandbox_policy {
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
+        | codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+            Some(permission_profile.into())
+        }
+        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
+    }
+}
+
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -10189,6 +10305,29 @@ mod tests {
     }
 
     #[test]
+    fn thread_response_permission_profile_omits_external_sandbox() {
+        let cwd = test_path_buf("/tmp").abs();
+        let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::DangerFullAccess,
+            cwd.as_path(),
+        );
+
+        assert_eq!(
+            thread_response_permission_profile(
+                &SandboxPolicy::ExternalSandbox {
+                    network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+                },
+                profile.clone(),
+            ),
+            None
+        );
+        assert_eq!(
+            thread_response_permission_profile(&SandboxPolicy::DangerFullAccess, profile.clone()),
+            Some(profile.into())
+        );
+    }
+
+    #[test]
     fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::Auth,
@@ -10338,6 +10477,11 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    std::path::Path::new("/tmp"),
+                ),
             cwd: test_path_buf("/tmp").abs(),
             ephemeral: false,
             reasoning_effort: None,

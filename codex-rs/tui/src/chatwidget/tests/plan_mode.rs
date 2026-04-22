@@ -686,6 +686,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
         last_agent_message: Some("Plan details".to_string()),
         completed_at: None,
         duration_ms: None,
+        time_to_first_token_ms: None,
     })]);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -712,6 +713,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         last_agent_message: Some("Plan details".to_string()),
         completed_at: None,
         duration_ms: None,
+        time_to_first_token_ms: None,
     })]);
     let replay_popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
@@ -726,6 +728,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             last_agent_message: Some("Plan details".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -749,6 +752,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             last_agent_message: Some("Plan details".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let duplicate_popup = render_bottom_popup(&chat, /*width*/ 80);
