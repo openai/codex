@@ -1576,7 +1576,7 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
     app.config.sqlite_home = codex_home.path().to_path_buf();
 
     let memory_root = codex_home.path().join("memories");
-    let extensions_root = codex_home.path().join("memories_extensions");
+    let extensions_root = memory_root.join("extensions");
     std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
     std::fs::create_dir_all(&extensions_root)?;
     std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
@@ -1591,7 +1591,6 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
     app.reset_memories_with_app_server(&mut app_server).await;
 
     assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
-    assert_eq!(std::fs::read_dir(&extensions_root)?.count(), 0);
 
     app_server.shutdown().await?;
     Ok(())

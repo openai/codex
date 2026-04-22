@@ -237,6 +237,77 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
 }
 
 #[tokio::test]
+async fn sync_empty_inputs_preserves_consolidated_outputs() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    ensure_layout(&root).await.expect("ensure layout");
+
+    let stale_rollout_summary_path = rollout_summaries_dir(&root).join("stale.md");
+    tokio::fs::write(&stale_rollout_summary_path, "stale summary\n")
+        .await
+        .expect("write stale rollout summary");
+    let memory_index_path = root.join("MEMORY.md");
+    tokio::fs::write(&memory_index_path, "consolidated memory index\n")
+        .await
+        .expect("write memory index");
+    let memory_summary_path = root.join("memory_summary.md");
+    tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
+        .await
+        .expect("write memory summary");
+    let skill_path = root.join("skills/demo/SKILL.md");
+    tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
+        .await
+        .expect("create skill dir");
+    tokio::fs::write(&skill_path, "consolidated skill\n")
+        .await
+        .expect("write skill");
+
+    sync_rollout_summaries_from_memories(
+        &root,
+        &[],
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+    )
+    .await
+    .expect("sync empty rollout summaries");
+    rebuild_raw_memories_file_from_memories(
+        &root,
+        &[],
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+    )
+    .await
+    .expect("rebuild empty raw memories");
+
+    assert!(
+        !tokio::fs::try_exists(&stale_rollout_summary_path)
+            .await
+            .expect("check stale rollout summary existence"),
+        "empty sync should prune stale rollout summaries"
+    );
+    let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
+        .await
+        .expect("read raw memories");
+    assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
+    assert!(
+        tokio::fs::try_exists(&memory_index_path)
+            .await
+            .expect("check memory index existence"),
+        "empty sync should not remove MEMORY.md"
+    );
+    assert!(
+        tokio::fs::try_exists(&memory_summary_path)
+            .await
+            .expect("check memory summary existence"),
+        "empty sync should not remove memory_summary.md"
+    );
+    assert!(
+        tokio::fs::try_exists(&skill_path)
+            .await
+            .expect("check skill existence"),
+        "empty sync should not remove skills"
+    );
+}
+
+#[tokio::test]
 async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
@@ -422,6 +493,9 @@ mod phase2 {
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+    use crate::memories::storage::sync_rollout_summaries_from_memories;
+    use crate::memories::workspace::prepare_memory_workspace;
     use crate::session::session::Session;
     use crate::session::tests::make_session_and_context;
     use chrono::Duration as ChronoDuration;
@@ -506,7 +580,7 @@ mod phase2 {
             }
         }
 
-        async fn seed_stage1_output(&self, source_updated_at: i64) {
+        async fn seed_stage1_output(&self, source_updated_at: i64) -> ThreadId {
             let thread_id = ThreadId::new();
             let mut metadata_builder = ThreadMetadataBuilder::new(
                 thread_id,
@@ -555,6 +629,7 @@ mod phase2 {
                     .expect("mark stage-1 success"),
                 "stage-1 success should enqueue global consolidation"
             );
+            thread_id
         }
 
         async fn shutdown_threads(&self) {
@@ -599,14 +674,114 @@ mod phase2 {
     }
 
     #[tokio::test]
-    async fn dispatch_skips_when_global_job_is_not_dirty() {
+    async fn dispatch_skips_when_memory_workspace_is_not_dirty() {
         let harness = DispatchHarness::new().await;
+        let root = memory_root(&harness.config.codex_home);
+        let memory_index_path = root.join("MEMORY.md");
+        let memory_summary_path = root.join("memory_summary.md");
+        let skill_path = root.join("skills/demo/SKILL.md");
+        rebuild_raw_memories_file_from_memories(
+            &root,
+            &[],
+            /*max_raw_memories_for_consolidation*/ 0,
+        )
+        .await
+        .expect("write empty raw memories baseline");
+        tokio::fs::write(&memory_index_path, "consolidated memory index\n")
+            .await
+            .expect("write memory index baseline");
+        tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
+            .await
+            .expect("write memory summary baseline");
+        tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
+            .await
+            .expect("create skill dir baseline");
+        tokio::fs::write(&skill_path, "consolidated skill\n")
+            .await
+            .expect("write skill baseline");
+        prepare_memory_workspace(&root)
+            .await
+            .expect("commit empty memory workspace as baseline");
 
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        assert!(
+            tokio::fs::try_exists(&memory_index_path)
+                .await
+                .expect("check memory index existence"),
+            "clean no-input phase2 should leave MEMORY.md untouched"
+        );
+        assert!(
+            tokio::fs::try_exists(&memory_summary_path)
+                .await
+                .expect("check memory summary existence"),
+            "clean no-input phase2 should leave memory_summary.md untouched"
+        );
+        assert!(
+            tokio::fs::try_exists(&skill_path)
+                .await
+                .expect("check skill existence"),
+            "clean no-input phase2 should leave skills untouched"
+        );
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_uses_git_dirty_state_without_db_dirty_watermark() {
+        let harness = DispatchHarness::new().await;
+        let root = memory_root(&harness.config.codex_home);
+        rebuild_raw_memories_file_from_memories(
+            &root,
+            &[],
+            /*max_raw_memories_for_consolidation*/ 0,
+        )
+        .await
+        .expect("write empty raw memories baseline");
+        prepare_memory_workspace(&root)
+            .await
+            .expect("commit empty memory workspace as baseline");
+        let extension_resource = root
+            .join("extensions")
+            .join("chronicle")
+            .join("resources")
+            .join("2026-04-22T12-00-00-abcd-10min-memory.md");
+        tokio::fs::create_dir_all(
+            extension_resource
+                .parent()
+                .expect("extension resource parent"),
+        )
+        .await
+        .expect("create extension resource dir");
+        tokio::fs::write(
+            root.join("extensions/chronicle/instructions.md"),
+            "instructions\n",
+        )
+        .await
+        .expect("write extension instructions");
+        tokio::fs::write(&extension_resource, "extension memory\n")
+            .await
+            .expect("write extension resource");
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
+        let workspace_diff = tokio::fs::read_to_string(root.join("phase2_workspace_diff.md"))
+            .await
+            .expect("read workspace diff");
+        assert!(
+            workspace_diff.contains("- A extensions/chronicle/instructions.md"),
+            "git-only extension instructions should dirty phase2: {workspace_diff}"
+        );
+        assert!(
+            workspace_diff.contains("- A extensions/chronicle/resources/"),
+            "git-only extension resource should dirty phase2: {workspace_diff}"
+        );
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 1);
+
+        harness.shutdown_threads().await;
     }
 
     #[tokio::test]
@@ -665,7 +840,8 @@ mod phase2 {
         assert!(
             matches!(
                 post_dispatch_claim,
-                Phase2JobClaimOutcome::SkippedRunning | Phase2JobClaimOutcome::SkippedNotDirty
+                Phase2JobClaimOutcome::SkippedRunning
+                    | Phase2JobClaimOutcome::SkippedRetryUnavailable
             ),
             "stale-lock dispatch should either keep the reclaimed job running or finish it before re-claim"
         );
@@ -774,7 +950,7 @@ mod phase2 {
     }
 
     #[tokio::test]
-    async fn dispatch_with_empty_stage1_outputs_rebuilds_local_artifacts() {
+    async fn dispatch_with_empty_stage1_outputs_spawns_for_workspace_changes() {
         let harness = DispatchHarness::new().await;
         let root = memory_root(&harness.config.codex_home);
         let summaries_dir = rollout_summaries_dir(&root);
@@ -829,40 +1005,175 @@ mod phase2 {
             .expect("read rebuilt raw memories");
         pretty_assertions::assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
         assert!(
-            !tokio::fs::try_exists(&memory_index_path)
+            tokio::fs::try_exists(&memory_index_path)
                 .await
                 .expect("check memory index existence"),
-            "empty consolidation should remove stale MEMORY.md"
+            "empty consolidation should leave MEMORY.md to the consolidation agent"
         );
         assert!(
-            !tokio::fs::try_exists(&memory_summary_path)
+            tokio::fs::try_exists(&memory_summary_path)
                 .await
                 .expect("check memory summary existence"),
-            "empty consolidation should remove stale memory_summary.md"
+            "empty consolidation should leave memory_summary.md to the consolidation agent"
         );
         assert!(
-            !tokio::fs::try_exists(&stale_skill_file)
+            tokio::fs::try_exists(&stale_skill_file)
                 .await
                 .expect("check stale skill existence"),
-            "empty consolidation should remove stale skills artifacts"
-        );
-        assert!(
-            !tokio::fs::try_exists(root.join("skills"))
-                .await
-                .expect("check skills dir existence"),
-            "empty consolidation should remove stale skills directory"
+            "empty consolidation should leave skills to the consolidation agent"
         );
         let next_claim = harness
             .state_db
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
-            .expect("claim global job after empty consolidation success");
-        pretty_assertions::assert_eq!(next_claim, Phase2JobClaimOutcome::SkippedNotDirty);
-        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+            .expect("claim global job after empty consolidation dispatch");
+        pretty_assertions::assert_eq!(next_claim, Phase2JobClaimOutcome::SkippedRunning);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
         let thread_ids = harness.manager.list_thread_ids().await;
-        pretty_assertions::assert_eq!(thread_ids.len(), 0);
+        pretty_assertions::assert_eq!(thread_ids.len(), 1);
 
         harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_empty_selected_inputs_preserves_consolidated_outputs() {
+        let harness = DispatchHarness::new().await;
+        let source_updated_at = Utc::now().timestamp();
+        let thread_id = harness.seed_stage1_output(source_updated_at).await;
+        let root = memory_root(&harness.config.codex_home);
+        let selected = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection");
+        sync_rollout_summaries_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected rollout summaries");
+        rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected raw memories");
+        let memory_index_path = root.join("MEMORY.md");
+        let memory_summary_path = root.join("memory_summary.md");
+        let skill_path = root.join("skills/demo/SKILL.md");
+        tokio::fs::write(&memory_index_path, "consolidated memory index\n")
+            .await
+            .expect("write memory index");
+        tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
+            .await
+            .expect("write memory summary");
+        tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
+            .await
+            .expect("create skill dir");
+        tokio::fs::write(&skill_path, "consolidated skill\n")
+            .await
+            .expect("write skill");
+        prepare_memory_workspace(&root)
+            .await
+            .expect("commit current memory workspace as baseline");
+
+        let claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 job");
+        let Phase2JobClaimOutcome::Claimed {
+            ownership_token, ..
+        } = claim
+        else {
+            panic!("unexpected phase2 claim outcome: {claim:?}");
+        };
+        assert!(
+            harness
+                .state_db
+                .mark_global_phase2_job_succeeded(&ownership_token, source_updated_at, &selected)
+                .await
+                .expect("mark phase2 succeeded"),
+            "phase2 success should update selected baseline"
+        );
+        assert!(
+            harness
+                .state_db
+                .mark_thread_memory_mode_polluted(thread_id)
+                .await
+                .expect("mark thread polluted"),
+            "polluted selected thread should enqueue phase2 forgetting"
+        );
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
+        assert!(
+            tokio::fs::try_exists(&memory_index_path)
+                .await
+                .expect("check memory index existence"),
+            "empty selected phase2 should leave MEMORY.md to the consolidation agent"
+        );
+        assert!(
+            tokio::fs::try_exists(&memory_summary_path)
+                .await
+                .expect("check memory summary existence"),
+            "empty selected phase2 should leave memory_summary.md to the consolidation agent"
+        );
+        assert!(
+            tokio::fs::try_exists(&skill_path)
+                .await
+                .expect("check skill existence"),
+            "empty selected phase2 should leave skills to the consolidation agent"
+        );
+        let workspace_diff = tokio::fs::read_to_string(root.join("phase2_workspace_diff.md"))
+            .await
+            .expect("read workspace diff");
+        assert!(
+            workspace_diff.contains("- D rollout_summaries/"),
+            "empty selected phase2 should surface deleted rollout summaries: {workspace_diff}"
+        );
+        assert!(
+            !workspace_diff.contains("- D MEMORY.md"),
+            "empty selected phase2 should not delete MEMORY.md directly: {workspace_diff}"
+        );
+        assert!(
+            !workspace_diff.contains("- D memory_summary.md"),
+            "empty selected phase2 should not delete memory_summary.md directly: {workspace_diff}"
+        );
+        assert!(
+            !workspace_diff.contains("- D skills/demo/SKILL.md"),
+            "empty selected phase2 should not delete skills directly: {workspace_diff}"
+        );
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_clean_workspace_preserves_selected_phase2_baseline() {
+        let harness = DispatchHarness::new().await;
+        let thread_id = harness.seed_stage1_output(Utc::now().timestamp()).await;
+        let root = memory_root(&harness.config.codex_home);
+        let selected = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection");
+
+        sync_rollout_summaries_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected rollout summaries");
+        rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected raw memories");
+        prepare_memory_workspace(&root)
+            .await
+            .expect("commit current memory workspace as baseline");
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let selected = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection after clean workspace success");
+        pretty_assertions::assert_eq!(selected.len(), 1);
+        pretty_assertions::assert_eq!(selected[0].thread_id, thread_id);
     }
 
     #[tokio::test]
@@ -884,7 +1195,7 @@ mod phase2 {
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
             .expect("claim global job after sandbox policy failure");
-        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedRetryUnavailable);
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 0);
@@ -906,7 +1217,7 @@ mod phase2 {
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
             .expect("claim global job after sync failure");
-        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedRetryUnavailable);
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 0);
@@ -928,7 +1239,7 @@ mod phase2 {
             .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
             .await
             .expect("claim global job after rebuild failure");
-        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedRetryUnavailable);
         pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 0);
@@ -1005,14 +1316,14 @@ mod phase2 {
 
         let chronicle_resources = config
             .codex_home
-            .join("memories_extensions/chronicle/resources");
+            .join("memories/extensions/chronicle/resources");
         tokio::fs::create_dir_all(&chronicle_resources)
             .await
             .expect("create chronicle resources");
         tokio::fs::write(
             config
                 .codex_home
-                .join("memories_extensions/chronicle/instructions.md"),
+                .join("memories/extensions/chronicle/instructions.md"),
             "instructions",
         )
         .await
@@ -1033,14 +1344,22 @@ mod phase2 {
             .expect("claim global job after spawn failure");
         pretty_assertions::assert_eq!(
             retry_claim,
-            Phase2JobClaimOutcome::SkippedNotDirty,
+            Phase2JobClaimOutcome::SkippedRetryUnavailable,
             "spawn failures should leave the job in retry backoff instead of running"
         );
         assert!(
-            tokio::fs::try_exists(&old_file)
+            !tokio::fs::try_exists(&old_file)
                 .await
                 .expect("check old extension resource"),
-            "spawn failures should not prune extension resources before retry"
+            "old extension resources should still be pruned on failed phase2 attempts"
+        );
+        let workspace_diff =
+            tokio::fs::read_to_string(config.codex_home.join("memories/phase2_workspace_diff.md"))
+                .await
+                .expect("read workspace diff");
+        assert!(
+            workspace_diff.contains("- D extensions/chronicle/resources/"),
+            "spawn failures should keep a retryable workspace diff: {workspace_diff}"
         );
     }
 }

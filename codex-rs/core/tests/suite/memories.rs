@@ -27,13 +27,13 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -> Result<()> {
+async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
 
     let now = Utc::now();
-    let thread_a = seed_stage1_output(
+    let _thread_a = seed_stage1_output(
         db.as_ref(),
         home.path(),
         now - ChronoDuration::hours(2),
@@ -57,28 +57,12 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     let first_request = wait_for_single_request(&first_phase2).await;
     let first_prompt = phase2_prompt_text(&first_request);
     assert!(
-        first_prompt.contains("- selected inputs this run: 1"),
-        "expected selected count in first prompt: {first_prompt}"
-    );
-    assert!(
-        first_prompt.contains("- newly added since the last successful Phase 2 run: 1"),
-        "expected added count in first prompt: {first_prompt}"
-    );
-    assert!(
-        first_prompt.contains("- removed from the last successful Phase 2 run: 0"),
-        "expected removed count in first prompt: {first_prompt}"
-    );
-    assert!(
-        first_prompt.contains(&format!("- [added] thread_id={thread_a},")),
-        "expected thread A to be marked added: {first_prompt}"
-    );
-    assert!(
-        first_prompt.contains("Removed from the last successful Phase 2 selection:\n- none"),
-        "expected no removed items in first prompt: {first_prompt}"
+        first_prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file in first prompt: {first_prompt}"
     );
 
-    wait_for_phase2_success(db.as_ref(), thread_a).await?;
     let memory_root = home.path().join("memories");
+    wait_for_phase2_success(&memory_root).await?;
     let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
     assert!(raw_memories.contains("raw memory A"));
     assert!(!raw_memories.contains("raw memory B"));
@@ -89,7 +73,7 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 
     shutdown_test_codex(&first).await?;
 
-    let thread_b = seed_stage1_output(
+    let _thread_b = seed_stage1_output(
         db.as_ref(),
         home.path(),
         now - ChronoDuration::hours(1),
@@ -113,32 +97,16 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     let second_request = wait_for_single_request(&second_phase2).await;
     let second_prompt = phase2_prompt_text(&second_request);
     assert!(
-        second_prompt.contains("- selected inputs this run: 1"),
-        "expected selected count in second prompt: {second_prompt}"
-    );
-    assert!(
-        second_prompt.contains("- newly added since the last successful Phase 2 run: 1"),
-        "expected added count in second prompt: {second_prompt}"
-    );
-    assert!(
-        second_prompt.contains("- removed from the last successful Phase 2 run: 1"),
-        "expected removed count in second prompt: {second_prompt}"
-    );
-    assert!(
-        second_prompt.contains(&format!("- [added] thread_id={thread_b},")),
-        "expected thread B to be marked added: {second_prompt}"
-    );
-    assert!(
-        second_prompt.contains(&format!("- thread_id={thread_a},")),
-        "expected thread A to be marked removed: {second_prompt}"
+        second_prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file in second prompt: {second_prompt}"
     );
 
-    wait_for_phase2_success(db.as_ref(), thread_b).await?;
+    wait_for_phase2_success(&memory_root).await?;
     let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
     assert!(raw_memories.contains("raw memory B"));
-    assert!(raw_memories.contains("raw memory A"));
+    assert!(!raw_memories.contains("raw memory A"));
     let rollout_summaries = read_rollout_summary_bodies(&memory_root).await?;
-    assert_eq!(rollout_summaries.len(), 2);
+    assert_eq!(rollout_summaries.len(), 1);
     assert!(
         rollout_summaries
             .iter()
@@ -152,7 +120,7 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     assert!(
         rollout_summaries
             .iter()
-            .any(|summary| summary.contains("rollout summary A"))
+            .all(|summary| !summary.contains("rollout summary A"))
     );
 
     shutdown_test_codex(&second).await?;
@@ -160,12 +128,12 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them() -> Result<()> {
+async fn memories_startup_phase2_prunes_old_extension_resources() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
     let now = Utc::now();
-    let thread_id = seed_stage1_output(
+    let _thread_id = seed_stage1_output(
         db.as_ref(),
         home.path(),
         now - ChronoDuration::hours(1),
@@ -175,11 +143,11 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
     )
     .await?;
 
-    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    let chronicle_resources = home.path().join("memories/extensions/chronicle/resources");
     tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/chronicle/instructions.md"),
+            .join("memories/extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -210,23 +178,11 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
     let prompt = phase2_prompt_text(&request);
 
     assert!(
-        prompt.contains("Memory extension resources removed by retention pruning:"),
-        "expected extension resource prune report in prompt: {prompt}"
-    );
-    assert!(
-        prompt.contains("- retention window: 7 days"),
-        "expected retention window in prompt: {prompt}"
-    );
-    assert!(
-        prompt.contains("- extension: chronicle"),
-        "expected extension name in prompt: {prompt}"
-    );
-    assert!(
-        prompt.contains(&format!("  - resources/{old_file_name}")),
-        "expected old resource in prompt: {prompt}"
+        prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file in prompt: {prompt}"
     );
 
-    wait_for_phase2_success(db.as_ref(), thread_id).await?;
+    wait_for_phase2_success(&home.path().join("memories")).await?;
     wait_for_file_removed(&old_file).await?;
     assert!(
         !tokio::fs::try_exists(&old_file).await?,
@@ -242,8 +198,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn memories_startup_phase2_processes_old_extension_resources_without_stage1_input()
--> Result<()> {
+async fn memories_startup_phase2_prunes_old_extension_resources_without_stage1_input() -> Result<()>
+{
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
@@ -251,11 +207,11 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
         .await?;
 
     let now = Utc::now();
-    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    let chronicle_resources = home.path().join("memories/extensions/chronicle/resources");
     tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/chronicle/instructions.md"),
+            .join("memories/extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -281,25 +237,18 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
     let prompt = phase2_prompt_text(&request);
 
     assert!(
-        prompt.contains("- selected inputs this run: 0"),
-        "expected no selected raw inputs in prompt: {prompt}"
-    );
-    assert!(
-        prompt.contains("Memory extension resources removed by retention pruning:"),
-        "expected extension resource prune report in prompt: {prompt}"
-    );
-    assert!(
-        prompt.contains(&format!("  - resources/{old_file_name}")),
-        "expected old resource in prompt: {prompt}"
+        prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file in prompt: {prompt}"
     );
     wait_for_file_removed(&old_file).await?;
+    wait_for_phase2_success(&home.path().join("memories")).await?;
 
     shutdown_test_codex(&codex).await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs() -> Result<()> {
+async fn web_search_pollution_moves_selected_thread_out_of_phase2_inputs() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
@@ -397,19 +346,11 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
         .remove(0);
     let first_phase2_prompt = phase2_prompt_text(&first_phase2_request);
     assert!(
-        first_phase2_prompt.contains("- selected inputs this run: 1"),
-        "expected seeded thread to be selected before pollution: {first_phase2_prompt}"
-    );
-    assert!(
-        first_phase2_prompt.contains("- newly added since the last successful Phase 2 run: 1"),
-        "expected seeded thread to be added before pollution: {first_phase2_prompt}"
-    );
-    assert!(
-        first_phase2_prompt.contains(&format!("- [added] thread_id={thread_id},")),
-        "expected selected thread in first phase2 prompt: {first_phase2_prompt}"
+        first_phase2_prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file before pollution: {first_phase2_prompt}"
     );
 
-    wait_for_phase2_success(db.as_ref(), thread_id).await?;
+    wait_for_phase2_success(&home.path().join("memories")).await?;
 
     resumed
         .submit_turn("search the web for weather seattle")
@@ -439,28 +380,41 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
             let selection = db
                 .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
                 .await?;
-            if selection.selected.is_empty()
-                && selection.retained_thread_ids.is_empty()
-                && selection.removed.len() == 1
-                && selection.removed[0].thread_id == thread_id
-            {
+            if selection.is_empty() {
                 break selection;
             }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for polluted thread to move into removed phase2 inputs: \
+                "timed out waiting for polluted thread to leave selected phase2 inputs: \
                  {selection:?}"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
     assert_eq!(responses.requests().len(), 2);
-    assert!(selection.selected.is_empty());
-    assert_eq!(selection.retained_thread_ids, Vec::<ThreadId>::new());
-    assert_eq!(selection.removed.len(), 1);
-    assert_eq!(selection.removed[0].thread_id, thread_id);
+    assert!(selection.is_empty());
 
     shutdown_test_codex(&resumed).await?;
+
+    let cleanup_phase2 = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase2-cleanup"),
+            ev_assistant_message("msg-phase2-cleanup", "phase2 cleanup complete"),
+            ev_completed("resp-phase2-cleanup"),
+        ]),
+    )
+    .await;
+    let cleanup = build_test_codex(&server, home.clone()).await?;
+    let cleanup_request = wait_for_single_request(&cleanup_phase2).await;
+    let cleanup_prompt = phase2_prompt_text(&cleanup_request);
+    assert!(
+        cleanup_prompt.contains("phase2_workspace_diff.md"),
+        "expected workspace diff file during polluted-thread cleanup: {cleanup_prompt}"
+    );
+
+    wait_for_phase2_success(&home.path().join("memories")).await?;
+    shutdown_test_codex(&cleanup).await?;
     Ok(())
 }
 
@@ -560,33 +514,12 @@ fn phase2_prompt_text(request: &ResponsesRequest) -> String {
     request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.contains("Current selected Phase 1 inputs:"))
+        .find(|text| text.contains("Memory workspace diff:"))
         .expect("phase2 prompt text")
 }
 
-async fn wait_for_phase2_success(
-    db: &codex_state::StateRuntime,
-    expected_thread_id: ThreadId,
-) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let selection = db
-            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
-            .await?;
-        if selection.selected.len() == 1
-            && selection.selected[0].thread_id == expected_thread_id
-            && selection.retained_thread_ids == vec![expected_thread_id]
-            && selection.removed.is_empty()
-        {
-            return Ok(());
-        }
-
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for phase2 success for {expected_thread_id}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+async fn wait_for_phase2_success(memory_root: &Path) -> Result<()> {
+    wait_for_file_removed(&memory_root.join("phase2_workspace_diff.md")).await
 }
 
 async fn seed_stage1_output_for_existing_thread(

@@ -311,7 +311,7 @@ fn keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> 
 }
 
 #[test]
-fn auto_auth_storage_load_prefers_keyring_value() -> anyhow::Result<()> {
+fn auto_auth_storage_load_prefers_file_value() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let mock_keyring = MockKeyringStore::default();
     let storage = AutoAuthStorage::new(
@@ -329,7 +329,27 @@ fn auto_auth_storage_load_prefers_keyring_value() -> anyhow::Result<()> {
     storage.file_storage.save(&file_auth)?;
 
     let loaded = storage.load()?;
-    assert_eq!(loaded, Some(keyring_auth));
+    assert_eq!(loaded, Some(file_auth));
+    Ok(())
+}
+
+#[test]
+fn auto_auth_storage_load_uses_keyring_when_file_missing() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = AutoAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+    );
+    let expected = auth_with_prefix("keyring-only");
+    seed_keyring_with_auth(
+        &mock_keyring,
+        || compute_store_key(codex_home.path()),
+        &expected,
+    )?;
+
+    let loaded = storage.load()?;
+    assert_eq!(loaded, Some(expected));
     Ok(())
 }
 
