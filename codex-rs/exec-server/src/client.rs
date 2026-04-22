@@ -22,7 +22,7 @@ use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
-use crate::client_api::ExecutorHttpClient;
+use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -209,7 +209,7 @@ impl LazyRemoteExecServerClient {
     }
 }
 
-impl ExecutorHttpClient for ExecServerClient {
+impl HttpClient for ExecServerClient {
     fn http_request(
         &self,
         params: crate::HttpRequestParams,
@@ -228,7 +228,7 @@ impl ExecutorHttpClient for ExecServerClient {
     }
 }
 
-impl ExecutorHttpClient for LazyRemoteExecServerClient {
+impl HttpClient for LazyRemoteExecServerClient {
     fn http_request(
         &self,
         params: crate::HttpRequestParams,

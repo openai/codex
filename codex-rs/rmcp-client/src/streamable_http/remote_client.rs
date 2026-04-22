@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use codex_exec_server::ExecServerError;
-use codex_exec_server::ExecutorHttpClient;
+use codex_exec_server::HttpClient;
 use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpResponseBodyStream;
@@ -45,7 +45,7 @@ use crate::streamable_http::remote_client::RemoteStreamableHttpClientError::Head
 /// executor protocol calls and lets RMCP own MCP session and recovery behavior.
 #[derive(Clone)]
 pub(crate) struct RemoteStreamableHttpClient {
-    exec_client: Arc<dyn ExecutorHttpClient>,
+    exec_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
 }
 
@@ -65,10 +65,7 @@ pub(crate) enum RemoteStreamableHttpClientError {
 
 impl RemoteStreamableHttpClient {
     /// Creates an adapter with shared executor client and static default headers.
-    pub(crate) fn new(
-        exec_client: Arc<dyn ExecutorHttpClient>,
-        default_headers: HeaderMap,
-    ) -> Self {
+    pub(crate) fn new(exec_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
         Self {
             exec_client,
             default_headers,

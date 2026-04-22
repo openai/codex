@@ -13,7 +13,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::McpServerEnvVar;
-use codex_exec_server::ExecutorHttpClient;
+use codex_exec_server::HttpClient;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use oauth2::TokenResponse;
@@ -337,7 +337,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
-        exec_client: Arc<dyn ExecutorHttpClient>,
+        exec_client: Arc<dyn HttpClient>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),

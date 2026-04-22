@@ -25,12 +25,12 @@ pub struct RemoteExecServerConnectArgs {
     pub resume_session_id: Option<String>,
 }
 
-/// Sends HTTP requests through an exec-server-backed transport.
+/// Sends HTTP requests through a runtime-selected transport.
 ///
 /// This is the HTTP capability counterpart to [`crate::ExecBackend`]. Callers
 /// use it when they need executor-owned network requests but should not depend
 /// on the concrete connection type or how that connection is established.
-pub trait ExecutorHttpClient: Send + Sync {
+pub trait HttpClient: Send + Sync {
     /// Perform an executor-side HTTP request and buffer the response body.
     fn http_request(
         &self,
