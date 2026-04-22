@@ -360,6 +360,18 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    DeviceKeyCreate => "device/key/create" {
+        params: v2::DeviceKeyCreateParams,
+        response: v2::DeviceKeyCreateResponse,
+    },
+    DeviceKeyPublic => "device/key/public" {
+        params: v2::DeviceKeyPublicParams,
+        response: v2::DeviceKeyPublicResponse,
+    },
+    DeviceKeySign => "device/key/sign" {
+        params: v2::DeviceKeySignParams,
+        response: v2::DeviceKeySignResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,
@@ -2056,6 +2068,7 @@ mod tests {
                 file_system: Some(v2::AdditionalFileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/allowed")]),
                     write: None,
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }),

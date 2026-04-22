@@ -1736,6 +1736,7 @@ fn websocket_provider_with_connect_timeout(
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
