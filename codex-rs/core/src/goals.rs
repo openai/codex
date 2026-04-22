@@ -117,6 +117,11 @@ pub(crate) struct GoalRuntimeState {
     pub(crate) continuation_suppressed: AtomicBool,
 }
 
+struct GoalContinuationCandidate {
+    goal_id: String,
+    items: Vec<ResponseInputItem>,
+}
+
 impl GoalRuntimeState {
     pub(crate) fn new() -> Self {
         Self {
@@ -1191,7 +1196,7 @@ impl Session {
             tracing::warn!("goal continuation semaphore closed");
             return;
         };
-        let Some(items) = self.goal_continuation_items_if_active().await else {
+        let Some(candidate) = self.goal_continuation_candidate_if_active().await else {
             return;
         };
 
@@ -1203,9 +1208,47 @@ impl Session {
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&active_turn.turn_state)
         };
+        let goal_is_current = match self.state_db_for_thread_goals().await {
+            Ok(Some(state_db)) => match state_db.get_thread_goal(self.conversation_id).await {
+                Ok(Some(goal))
+                    if goal.goal_id == candidate.goal_id
+                        && goal.status == codex_state::ThreadGoalStatus::Active =>
+                {
+                    true
+                }
+                Ok(Some(_)) | Ok(None) => {
+                    tracing::debug!(
+                        "skipping active goal continuation because the goal changed before launch"
+                    );
+                    false
+                }
+                Err(err) => {
+                    tracing::warn!("failed to re-read thread goal before continuation: {err}");
+                    false
+                }
+            },
+            Ok(None) => {
+                tracing::debug!("skipping active goal continuation for ephemeral thread");
+                false
+            }
+            Err(err) => {
+                tracing::warn!("failed to open state db before goal continuation: {err}");
+                false
+            }
+        };
+        if !goal_is_current {
+            let mut active_turn_guard = self.active_turn.lock().await;
+            if let Some(active_turn) = active_turn_guard.as_ref()
+                && active_turn.tasks.is_empty()
+                && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+            {
+                *active_turn_guard = None;
+            }
+            return;
+        }
         {
             let mut turn_state = turn_state.lock().await;
-            for item in items {
+            for item in candidate.items {
                 turn_state.push_pending_input(item);
             }
         }
@@ -1221,7 +1264,9 @@ impl Session {
             .await;
     }
 
-    async fn goal_continuation_items_if_active(self: &Arc<Self>) -> Option<Vec<ResponseInputItem>> {
+    async fn goal_continuation_candidate_if_active(
+        self: &Arc<Self>,
+    ) -> Option<GoalContinuationCandidate> {
         if !self.enabled(Feature::Goals) {
             return None;
         }
@@ -1253,7 +1298,18 @@ impl Session {
             );
             return None;
         }
-        let goal = match self.get_thread_goal().await {
+        let state_db = match self.state_db_for_thread_goals().await {
+            Ok(Some(state_db)) => state_db,
+            Ok(None) => {
+                tracing::debug!("skipping active goal continuation for ephemeral thread");
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!("failed to open state db for goal continuation: {err}");
+                return None;
+            }
+        };
+        let goal = match state_db.get_thread_goal(self.conversation_id).await {
             Ok(Some(goal)) => goal,
             Ok(None) => {
                 tracing::debug!("skipping active goal continuation because no goal is set");
@@ -1264,7 +1320,7 @@ impl Session {
                 return None;
             }
         };
-        if goal.status != ThreadGoalStatus::Active {
+        if goal.status != codex_state::ThreadGoalStatus::Active {
             tracing::debug!(status = ?goal.status, "skipping inactive thread goal");
             return None;
         }
@@ -1275,32 +1331,17 @@ impl Session {
             tracing::debug!("skipping active goal continuation because pending work appeared");
             return None;
         }
-        let goal = match self.get_thread_goal().await {
-            Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => goal,
-            Ok(Some(goal)) => {
-                tracing::debug!(
-                    status = ?goal.status,
-                    "skipping thread goal that changed before continuation queueing"
-                );
-                return None;
-            }
-            Ok(None) => {
-                tracing::debug!(
-                    "skipping thread goal that disappeared before continuation queueing"
-                );
-                return None;
-            }
-            Err(err) => {
-                tracing::warn!("failed to re-read thread goal for continuation: {err}");
-                return None;
-            }
-        };
-        Some(vec![ResponseInputItem::Message {
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: continuation_prompt(&goal),
+        let goal_id = goal.goal_id.clone();
+        let goal = protocol_goal_from_state(goal);
+        Some(GoalContinuationCandidate {
+            goal_id,
+            items: vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: continuation_prompt(&goal),
+                }],
             }],
-        }])
+        })
     }
 }
 
