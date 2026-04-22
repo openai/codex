@@ -540,6 +540,7 @@ async fn test_list_conversations_latest_first() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -689,6 +690,7 @@ async fn test_pagination_cursor() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -756,6 +758,7 @@ async fn test_pagination_cursor() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -823,6 +826,7 @@ async fn test_pagination_cursor() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -877,6 +881,7 @@ async fn test_list_threads_scans_past_head_for_user_event() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -910,6 +915,7 @@ async fn test_get_thread_contents() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1000,6 +1006,7 @@ async fn test_base_instructions_missing_in_meta_defaults_to_null() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1043,6 +1050,7 @@ async fn test_base_instructions_present_in_meta_is_preserved() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1101,6 +1109,7 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await?;
@@ -1186,6 +1195,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         ThreadSortKey::UpdatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await?;
@@ -1247,6 +1257,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1315,6 +1326,7 @@ async fn test_timestamp_only_cursor_skips_same_second_filesystem_ties() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1363,6 +1375,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         ThreadSortKey::CreatedAt,
         INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1385,6 +1398,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         TEST_PROVIDER,
     )
     .await
@@ -1447,6 +1461,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(openai_filter.as_slice()),
+        /*cwd_filters*/ None,
         "openai",
     )
     .await?;
@@ -1467,6 +1482,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(beta_filter.as_slice()),
+        /*cwd_filters*/ None,
         "openai",
     )
     .await?;
@@ -1486,6 +1502,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         Some(unknown_filter.as_slice()),
+        /*cwd_filters*/ None,
         "openai",
     )
     .await?;
@@ -1498,6 +1515,7 @@ async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<(
         ThreadSortKey::CreatedAt,
         NO_SOURCE_FILTER,
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         "openai",
     )
     .await?;

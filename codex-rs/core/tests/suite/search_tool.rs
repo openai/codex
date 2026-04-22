@@ -502,6 +502,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let test = builder.build(&server).await?;
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Find the calendar create tool".to_string(),
                 text_elements: Vec::new(),
@@ -730,6 +731,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
                     "item": {
                         "type": "function_call",
                         "call_id": dynamic_call_id,
+                        "namespace": "codex_app",
                         "name": tool_name,
                         "arguments": tool_call_arguments,
                     }
@@ -754,6 +756,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         "additionalProperties": false,
     });
     let dynamic_tool = DynamicToolSpec {
+        namespace: Some("codex_app".to_string()),
         name: tool_name.to_string(),
         description: tool_description.to_string(),
         input_schema: input_schema.clone(),
@@ -776,6 +779,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "Use the automation tool".to_string(),
                 text_elements: Vec::new(),
@@ -793,6 +797,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         unreachable!("event guard guarantees DynamicToolCallRequest");
     };
     assert_eq!(request.call_id, dynamic_call_id);
+    assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, tool_name);
     assert_eq!(request.arguments, tool_args);
 
@@ -832,12 +837,17 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     assert_eq!(
         tools,
         vec![json!({
-            "type": "function",
-            "name": tool_name,
-            "description": tool_description,
-            "strict": false,
-            "defer_loading": true,
-            "parameters": input_schema,
+            "type": "namespace",
+            "name": "codex_app",
+            "description": "Tools in the codex_app namespace.",
+            "tools": [{
+                "type": "function",
+                "name": tool_name,
+                "description": tool_description,
+                "strict": false,
+                "defer_loading": true,
+                "parameters": input_schema,
+            }],
         })]
     );
 

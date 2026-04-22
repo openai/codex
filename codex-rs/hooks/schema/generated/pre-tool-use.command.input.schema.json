@@ -49,7 +49,6 @@
       "$ref": "#/definitions/PreToolUseToolInput"
     },
     "tool_name": {
-      "const": "Bash",
       "type": "string"
     },
     "tool_use_id": {

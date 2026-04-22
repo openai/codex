@@ -212,6 +212,9 @@ pub(super) async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
+        agent_turn_markdowns: Vec::new(),
+        visible_user_turn_count: 0,
+        copy_history_evicted_by_rollback: false,
         latest_proposed_plan_markdown: None,
         saw_copy_source_this_turn: false,
         running_commands: HashMap::new(),
@@ -955,7 +958,7 @@ pub(super) fn plugins_test_detail(
 ) -> PluginDetail {
     PluginDetail {
         marketplace_name: "ChatGPT Marketplace".to_string(),
-        marketplace_path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
         description: description.map(str::to_string),
         skills: skills
@@ -965,7 +968,9 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
+                path: Some(plugins_test_absolute_path(&format!(
+                    "skills/{name}/SKILL.md"
+                ))),
                 enabled: true,
             })
             .collect(),

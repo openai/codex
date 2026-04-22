@@ -1,4 +1,5 @@
 mod apply;
+mod baseline;
 mod branch;
 mod errors;
 mod ghost_commits;
@@ -12,6 +13,11 @@ pub use apply::apply_git_patch;
 pub use apply::extract_paths_from_patch;
 pub use apply::parse_git_apply_output;
 pub use apply::stage_paths;
+pub use baseline::GitBaselineChange;
+pub use baseline::GitBaselineChangeStatus;
+pub use baseline::GitBaselineDiff;
+pub use baseline::diff_since_latest_init;
+pub use baseline::reset_git_repository;
 pub use branch::merge_base_with_head;
 pub use codex_protocol::models::GhostCommit;
 pub use codex_protocol::protocol::GitSha;
