@@ -961,7 +961,10 @@ impl RmcpClient {
                                     .auth_header(access_token);
                             let http_client = build_http_client(&default_headers)?;
                             let transport = StreamableHttpClientTransport::with_client(
-                                StreamableHttpResponseClient::new(http_client, None),
+                                StreamableHttpResponseClient::new(
+                                    http_client,
+                                    /*auth_provider*/ None,
+                                ),
                                 http_config,
                             );
                             Ok(PendingTransport::StreamableHttp { transport })
@@ -1193,7 +1196,7 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpResponseClient::new(http_client, None),
+        StreamableHttpResponseClient::new(http_client, /*auth_provider*/ None),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
