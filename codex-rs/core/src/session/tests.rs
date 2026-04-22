@@ -68,6 +68,7 @@ use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
+use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
 use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
 use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
 use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
@@ -4817,7 +4818,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     assert!(
         developer_texts
             .iter()
-            .all(|text| !text.contains(THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE)),
+            .all(|text| !text.contains("Exceeded skills context budget")),
         "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
     );
     assert!(
@@ -4849,7 +4850,13 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     )
     .expect("skills should render");
 
-    assert!(rendered.emit_warning);
+    assert_eq!(
+        rendered.warning_message,
+        Some(
+            "Warning: Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+                .to_string()
+        )
+    );
     let snapshot = session_telemetry
         .snapshot_metrics()
         .expect("runtime metrics snapshot");
@@ -4859,6 +4866,62 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     );
     assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC), 0);
     assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 1);
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC),
+        4
+    );
+}
+
+#[test]
+fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_omitted_skills() {
+    let session_telemetry = test_session_telemetry_without_metadata();
+    let alpha = SkillMetadata {
+        name: "alpha-skill".to_string(),
+        description: "abcdef".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
+        scope: SkillScope::Repo,
+    };
+    let beta = SkillMetadata {
+        name: "beta-skill".to_string(),
+        description: "uvwxyz".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
+        scope: SkillScope::Repo,
+    };
+    let minimum_skill_line_cost = |skill: &SkillMetadata| {
+        let path = skill.path_to_skills_md.to_string_lossy().replace('\\', "/");
+        format!("- {}: (file: {})\n", skill.name, path)
+            .chars()
+            .count()
+    };
+    let minimum_budget = minimum_skill_line_cost(&alpha) + minimum_skill_line_cost(&beta);
+
+    let rendered = build_available_skills(
+        &[alpha, beta],
+        SkillMetadataBudget::Characters(minimum_budget + 6),
+        SkillRenderSideEffects::ThreadStart {
+            session_telemetry: &session_telemetry,
+        },
+    )
+    .expect("skills should render");
+
+    assert_eq!(rendered.report.omitted_count, 0);
+    assert_eq!(rendered.report.truncated_description_chars, 8);
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 0);
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC),
+        8
+    );
 }
 
 #[tokio::test]
@@ -4899,7 +4962,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+            if message == "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
     ));
 
     let _ = session.build_initial_context(&turn_context).await;
@@ -4910,7 +4973,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     assert!(matches!(
         warning_event.msg,
         EventMsg::Warning(WarningEvent { message })
-            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+            if message == "Warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
     ));
 }
 
