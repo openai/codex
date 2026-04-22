@@ -9,9 +9,12 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::Result;
 
 use crate::provider::ModelProvider;
+use crate::provider::ProviderAccountResult;
+use crate::provider::ProviderAccountState;
 use auth::resolve_provider_auth;
 use auth::resolve_region;
 use mantle::base_url;
@@ -35,6 +38,13 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     async fn auth(&self) -> Option<CodexAuth> {
         None
+    }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        Ok(ProviderAccountState {
+            account: Some(ProviderAccount::AmazonBedrock),
+            requires_openai_auth: false,
+        })
     }
 
     async fn api_provider(&self) -> Result<Provider> {

@@ -27,6 +27,14 @@ pub enum PlanType {
     Unknown,
 }
 
+/// Account state returned by a model provider before it is adapted to an app-facing wire type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderAccount {
+    ApiKey,
+    Chatgpt { email: String, plan_type: PlanType },
+    AmazonBedrock,
+}
+
 impl PlanType {
     pub fn is_team_like(self) -> bool {
         matches!(self, Self::Team | Self::SelfServeBusinessUsageBased)
