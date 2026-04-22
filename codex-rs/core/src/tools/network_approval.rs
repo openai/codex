@@ -425,11 +425,6 @@ impl NetworkApprovalService {
             }
         }
         let use_guardian = routes_approval_to_guardian(&turn_context);
-        let trigger = if use_guardian {
-            owner_call.as_ref().map(|call| call.trigger.clone())
-        } else {
-            None
-        };
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(
@@ -445,7 +440,7 @@ impl NetworkApprovalService {
                     host: request.host,
                     protocol,
                     port: key.port,
-                    trigger,
+                    trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
                 },
                 Some(policy_denial_message.clone()),
             )
