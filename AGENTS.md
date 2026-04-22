@@ -32,6 +32,10 @@ In the codex-rs folder where the rust code lives:
   you add `include_str!`, `include_bytes!`, `sqlx::migrate!`, or similar build-time file or
   directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test
   data) or Bazel may fail even when Cargo passes.
+- For build-heavy local Rust checks, prefer the equivalent Bazel target when it exists, because CI
+  already uses Bazel and the repo has remote caching configured. See `codex-rs/docs/bazel.md` for
+  daily-driver commands. Keep using Cargo when you need Cargo-specific behavior or no Bazel target
+  covers the change.
 - Do not create small helper methods that are referenced only once.
 - Avoid large modules:
   - Prefer adding new modules instead of growing existing ones.
