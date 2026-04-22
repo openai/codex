@@ -400,7 +400,7 @@ async fn review_uses_custom_review_model_from_config() {
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
-        cfg.review_model = Some("gpt-5.1".to_string());
+        cfg.review_model = Some("gpt-5.4".to_string());
     })
     .await;
 
@@ -433,7 +433,7 @@ async fn review_uses_custom_review_model_from_config() {
     let request = request_log.single_request();
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
-    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
+    assert_eq!(body["model"].as_str().unwrap(), "gpt-5.4");
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -721,6 +721,7 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
@@ -838,6 +839,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

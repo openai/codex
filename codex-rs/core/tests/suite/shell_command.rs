@@ -109,7 +109,7 @@ fn assert_shell_command_output(output: &str, expected: &str) -> Result<()> {
 async fn shell_command_works() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call";
     mount_shell_responses(
@@ -131,7 +131,7 @@ async fn shell_command_works() -> anyhow::Result<()> {
 async fn output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call-login-true";
     mount_shell_responses(&harness, call_id, "echo 'hello, world'", Some(true)).await;
@@ -147,7 +147,7 @@ async fn output_with_login() -> anyhow::Result<()> {
 async fn output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call-login-false";
     mount_shell_responses(&harness, call_id, "echo 'hello, world'", Some(false)).await;
@@ -163,7 +163,7 @@ async fn output_without_login() -> anyhow::Result<()> {
 async fn multi_line_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call-first-extra-login";
     mount_shell_responses(
@@ -186,7 +186,7 @@ async fn pipe_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call-second-extra-no-login";
     mount_shell_responses(
@@ -209,7 +209,7 @@ async fn pipe_output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_windows!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     let call_id = "shell-command-call-third-extra-login-false";
     mount_shell_responses(&harness, call_id, "echo 'hello, world' | cat", Some(false)).await;
@@ -225,7 +225,7 @@ async fn pipe_output_without_login() -> anyhow::Result<()> {
 async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let call_id = "shell-command-timeout";
     let command = if cfg!(windows) {
         "timeout /t 5"

@@ -1,6 +1,8 @@
+use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
+use crate::SortDirection;
 use crate::model::Phase2InputSelection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
@@ -101,7 +103,7 @@ WHERE thread_id = ?
     /// - excludes the current thread id
     /// - keeps only threads whose millisecond `updated_at` is in the age window
     /// - keeps only threads whose memory is stale compared to millisecond `updated_at`
-    /// - orders by `updated_at_ms DESC, id DESC` and applies `scan_limit`
+    /// - orders by `updated_at_ms DESC` and applies `scan_limit`
     ///
     /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
     /// with `source_updated_at = thread.updated_at.timestamp()` and returns up to
@@ -169,12 +171,16 @@ LEFT JOIN jobs
         );
         push_thread_filters(
             &mut builder,
-            /*archived_only*/ false,
-            allowed_sources,
-            /*model_providers*/ None,
-            /*anchor*/ None,
-            SortKey::UpdatedAt,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources,
+                model_providers: None,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
@@ -195,7 +201,12 @@ LEFT JOIN jobs
         builder.push(updated_at);
         builder.push(" AND ((COALESCE(jobs.last_success_watermark, -1) + 1) * 1000) <= ");
         builder.push(updated_at);
-        push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
+        push_thread_order_and_limit(
+            &mut builder,
+            SortKey::UpdatedAt,
+            SortDirection::Desc,
+            scan_limit,
+        );
 
         let items = builder
             .build()

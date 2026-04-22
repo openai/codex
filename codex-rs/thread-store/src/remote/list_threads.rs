@@ -30,8 +30,15 @@ pub(super) async fn list_threads(
         model_provider_filter: params
             .model_providers
             .map(|values| proto::ModelProviderFilter { values }),
+        cwd_filter: params.cwd_filters.map(|values| proto::CwdFilter {
+            values: values
+                .into_iter()
+                .map(|cwd| cwd.display().to_string())
+                .collect(),
+        }),
         archived: params.archived,
         search_term: params.search_term,
+        use_state_db_only: params.use_state_db_only,
     };
 
     let response = store
@@ -91,10 +98,17 @@ mod tests {
             );
             assert_eq!(request.archived, true);
             assert_eq!(request.search_term.as_deref(), Some("needle"));
+            assert!(request.use_state_db_only);
             assert_eq!(
                 request.model_provider_filter,
                 Some(proto::ModelProviderFilter {
                     values: vec!["openai".to_string()],
+                })
+            );
+            assert_eq!(
+                request.cwd_filter,
+                Some(proto::CwdFilter {
+                    values: vec!["/workspace".to_string()],
                 })
             );
             assert_eq!(request.allowed_sources.len(), 1);
@@ -161,10 +175,13 @@ mod tests {
                 page_size: 2,
                 cursor: Some("cursor-1".to_string()),
                 sort_key: ThreadSortKey::UpdatedAt,
+                sort_direction: crate::SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["openai".to_string()]),
+                cwd_filters: Some(vec![PathBuf::from("/workspace")]),
                 archived: true,
                 search_term: Some("needle".to_string()),
+                use_state_db_only: true,
             })
             .await
             .expect("list threads");

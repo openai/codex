@@ -109,7 +109,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(
         read.git_info,
@@ -421,7 +421,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read.git_info, None);
 

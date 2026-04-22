@@ -1,11 +1,12 @@
 ---
 source: tui/src/bottom_pane/pending_input_preview.rs
+assertion_line: 233
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 40, height: 4 },
     content: [
-        "• Queued follow-up messages             ",
+        "• Queued follow-up inputs               ",
         "  ↳ Hello, world!                       ",
         "  ↳ This is another message             ",
         "    ⌥ + ↑ edit last queued message      ",

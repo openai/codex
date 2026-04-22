@@ -13,10 +13,11 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
@@ -188,10 +189,10 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
     assert_eq!(
         args.additional_permissions,
         Some(PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![expected_write.abs()]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![expected_write.abs()]),
+            )),
             ..Default::default()
         })
     );
@@ -210,12 +211,14 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: HookToolName::bash(),
             command: "printf exec command".to_string(),
         })
     );
@@ -233,6 +236,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
             turn: turn.into(),
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),
             tool_name: codex_tools::ToolName::plain("write_stdin"),
@@ -266,6 +270,7 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
+            tool_name: HookToolName::bash(),
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
         })

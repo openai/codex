@@ -23,6 +23,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use codex_protocol::account::PlanType as AccountPlanType;
 use once_cell::sync::Lazy;
 
 /// Expected structure for $CODEX_HOME/auth.json.
@@ -46,12 +47,13 @@ pub struct AuthDotJson {
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct AgentIdentityAuthRecord {
-    pub workspace_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chatgpt_user_id: Option<String>,
     pub agent_runtime_id: String,
     pub agent_private_key: String,
-    pub registered_at: String,
+    pub account_id: String,
+    pub chatgpt_user_id: String,
+    pub email: String,
+    pub plan_type: AccountPlanType,
+    pub chatgpt_account_is_fedramp: bool,
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {

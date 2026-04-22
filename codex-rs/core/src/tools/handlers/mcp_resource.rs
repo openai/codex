@@ -17,9 +17,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -240,6 +240,10 @@ impl ToolHandler for McpResourceHandler {
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP resource listing reads through the session-owned manager guard"
+)]
 async fn handle_list_resources(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -344,6 +348,10 @@ async fn handle_list_resources(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP resource template listing reads through the session-owned manager guard"
+)]
 async fn handle_list_resource_templates(
     session: Arc<Session>,
     turn: Arc<TurnContext>,

@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -51,7 +52,7 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
 fn extract_image_url(item: &ResponseItem) -> Option<String> {
     match item {
         ResponseItem::Message { content, .. } => content.iter().find_map(|span| match span {
-            ContentItem::InputImage { image_url } => Some(image_url.clone()),
+            ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
             _ => None,
         }),
         _ => None,
@@ -110,6 +111,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![
                 UserInput::LocalImage {
                     path: abs_path.clone(),
@@ -150,7 +152,10 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             ContentItem::InputText {
                 text: codex_protocol::models::local_image_open_tag_text(/*label_number*/ 1),
             },
-            ContentItem::InputImage { image_url },
+            ContentItem::InputImage {
+                image_url,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),
             },
@@ -194,6 +199,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),
@@ -234,7 +240,10 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             ContentItem::InputText {
                 text: codex_protocol::models::image_open_tag_text(),
             },
-            ContentItem::InputImage { image_url },
+            ContentItem::InputImage {
+                image_url,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),
             },

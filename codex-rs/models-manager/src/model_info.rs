@@ -27,7 +27,13 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.supports_reasoning_summaries = true;
     }
     if let Some(context_window) = config.model_context_window {
-        model.context_window = Some(context_window);
+        model.context_window = Some(
+            model
+                .max_context_window
+                .map_or(context_window, |max_context_window| {
+                    context_window.min(max_context_window)
+                }),
+        );
     }
     if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
@@ -84,6 +90,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),

@@ -1,7 +1,7 @@
 use super::*;
-use crate::codex::make_session_and_context;
-use crate::codex::make_session_and_context_with_rx;
 use crate::config::ConfigBuilder;
+use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
@@ -12,6 +12,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathExt;
@@ -647,6 +648,35 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
                 "connector_id": "calendar",
             },
         }))
+    );
+}
+
+#[test]
+fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(
+            Some(serde_json::json!({
+                "source": "test-client",
+                "threadId": "stale-thread",
+            })),
+            "thread-live",
+        ),
+        Some(serde_json::json!({
+            "source": "test-client",
+            "threadId": "thread-live",
+        }))
+    );
+
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(/*meta*/ None, "thread-live"),
+        Some(serde_json::json!({
+            "threadId": "thread-live",
+        }))
+    );
+
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(Some(serde_json::json!("invalid-meta")), "thread-live"),
+        Some(serde_json::json!("invalid-meta"))
     );
 }
 
@@ -1390,7 +1420,10 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1466,7 +1499,10 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1920,7 +1956,10 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -14,7 +17,6 @@ use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -28,9 +30,12 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::context::ContextualUserFragment;
+use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -123,10 +128,17 @@ pub(crate) async fn run_pending_session_start_hooks(
     .await
 }
 
+/// Runs matching `PreToolUse` hooks before a tool executes.
+///
+/// `tool_name` is the canonical name serialized to hook stdin. Matcher aliases
+/// are internal compatibility names used only for selecting configured hook
+/// handlers.
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
     command: String,
 ) -> Option<String> {
     let request = PreToolUseRequest {
@@ -136,7 +148,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
+        matcher_aliases,
         tool_use_id,
         command,
     };
@@ -153,10 +166,52 @@ pub(crate) async fn run_pre_tool_use_hooks(
     if should_block { block_reason } else { None }
 }
 
+// PermissionRequest hooks share the same preview/start/completed event flow as
+// other hook types, but they return an optional decision instead of mutating
+// tool input or post-run state.
+pub(crate) async fn run_permission_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    run_id_suffix: &str,
+    payload: PermissionRequestPayload,
+) -> Option<PermissionRequestDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: payload.tool_name.name().to_string(),
+        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
+        run_id_suffix: run_id_suffix.to_string(),
+        command: payload.command,
+        description: payload.description,
+    };
+    let preview_runs = sess.hooks().preview_permission_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PermissionRequestOutcome {
+        hook_events,
+        decision,
+    } = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+
+    decision
+}
+
+/// Runs matching `PostToolUse` hooks after a tool has produced a successful output.
+///
+/// The `tool_name`, matcher aliases, `command`, and `tool_response` values are
+/// already adapted by the tool handler into the stable hook contract. Passing
+/// raw internal tool data here would leak implementation details into user hook
+/// matchers and hook logs.
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
     command: String,
     tool_response: Value,
 ) -> PostToolUseOutcome {
@@ -167,7 +222,8 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
+        matcher_aliases,
         tool_use_id,
         command,
         tool_response,
@@ -303,7 +359,8 @@ pub(crate) async fn record_additional_contexts(
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
     additional_contexts
         .into_iter()
-        .map(|additional_context| DeveloperInstructions::new(additional_context).into())
+        .map(HookAdditionalContext::new)
+        .map(ContextualUserFragment::into)
         .collect()
 }
 
@@ -390,6 +447,7 @@ fn hook_run_analytics_payload(
 fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
     let hook_name = match run.event_name {
         HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
@@ -445,7 +503,7 @@ mod tests {
     use super::additional_context_messages;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
-    use crate::codex::make_session_and_context;
+    use crate::session::tests::make_session_and_context;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;

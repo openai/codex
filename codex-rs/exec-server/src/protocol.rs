@@ -26,6 +26,10 @@ pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
 pub const FS_REMOVE_METHOD: &str = "fs/remove";
 pub const FS_COPY_METHOD: &str = "fs/copy";
+/// JSON-RPC request method for executor-side HTTP requests.
+pub const HTTP_REQUEST_METHOD: &str = "http/request";
+/// JSON-RPC notification method for streamed executor HTTP response bodies.
+pub const HTTP_REQUEST_BODY_DELTA_METHOD: &str = "http/request/bodyDelta";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -254,6 +258,87 @@ pub struct FsCopyParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsCopyResponse {}
 
+/// HTTP header represented in the executor protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpHeader {
+    /// Header name as it appears on the HTTP wire.
+    pub name: String,
+    /// Header value after UTF-8 conversion.
+    pub value: String,
+}
+
+/// Executor-side HTTP request envelope.
+///
+/// This intentionally stays transport-shaped rather than MCP-shaped so callers
+/// can use it for Streamable HTTP, OAuth discovery, and future executor-owned
+/// HTTP probes without introducing one protocol method per higher-level use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRequestParams {
+    /// HTTP method, for example `GET`, `POST`, or `DELETE`.
+    pub method: String,
+    /// Absolute `http://` or `https://` URL.
+    pub url: String,
+    /// Ordered request headers. Repeated header names are preserved.
+    #[serde(default)]
+    pub headers: Vec<HttpHeader>,
+    /// Optional request body bytes.
+    #[serde(default, rename = "bodyBase64")]
+    pub body: Option<ByteChunk>,
+    /// Request timeout in milliseconds.
+    ///
+    /// Omitted or `null` disables the timeout. A number applies that exact
+    /// millisecond deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
+    ///
+    /// The id must remain unique on a connection until the terminal body delta
+    /// arrives, even if the caller stops reading the stream earlier. Buffered
+    /// requests still send an id so callers can keep one consistent request
+    /// envelope shape.
+    pub request_id: String,
+    /// Return after response headers and stream the response body as deltas.
+    #[serde(default)]
+    pub stream_response: bool,
+}
+
+/// HTTP response envelope returned from an executor `http/request` call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRequestResponse {
+    /// Numeric HTTP response status code.
+    pub status: u16,
+    /// Ordered response headers. Repeated header names are preserved.
+    pub headers: Vec<HttpHeader>,
+    /// Buffered response body bytes. Empty when `streamResponse` is true.
+    #[serde(rename = "bodyBase64")]
+    pub body: ByteChunk,
+}
+
+/// Ordered response-body frame for `streamResponse` HTTP requests.
+///
+/// Headers are returned in the `http/request` response so the caller can choose
+/// a parser immediately; body bytes then arrive on this notification stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRequestBodyDeltaNotification {
+    /// Request id from the streamed `http/request` call.
+    pub request_id: String,
+    /// Monotonic one-based body frame sequence number.
+    pub seq: u64,
+    /// Response-body bytes carried by this frame.
+    #[serde(rename = "deltaBase64")]
+    pub delta: ByteChunk,
+    /// Marks response-body EOF. No later deltas are expected for this request.
+    #[serde(default)]
+    pub done: bool,
+    /// Terminal stream error. Set only on the final notification.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ExecOutputStream {
@@ -308,5 +393,51 @@ mod base64_bytes {
         BASE64_STANDARD
             .decode(encoded)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HttpRequestParams;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn http_request_timeout_treats_omitted_and_null_as_no_timeout() {
+        let omitted: HttpRequestParams = serde_json::from_value(serde_json::json!({
+            "method": "GET",
+            "url": "https://example.test",
+            "requestId": "req-omitted-timeout",
+        }))
+        .expect("omitted timeout should deserialize");
+        let null_timeout: HttpRequestParams = serde_json::from_value(serde_json::json!({
+            "method": "GET",
+            "url": "https://example.test",
+            "requestId": "req-null-timeout",
+            "timeoutMs": null,
+        }))
+        .expect("null timeout should deserialize");
+        let explicit_timeout: HttpRequestParams = serde_json::from_value(serde_json::json!({
+            "method": "GET",
+            "url": "https://example.test",
+            "requestId": "req-explicit-timeout",
+            "timeoutMs": 1234,
+        }))
+        .expect("numeric timeout should deserialize");
+
+        assert_eq!(
+            (omitted.request_id.as_str(), omitted.timeout_ms),
+            ("req-omitted-timeout", None)
+        );
+        assert_eq!(
+            (null_timeout.request_id.as_str(), null_timeout.timeout_ms),
+            ("req-null-timeout", None)
+        );
+        assert_eq!(
+            (
+                explicit_timeout.request_id.as_str(),
+                explicit_timeout.timeout_ms
+            ),
+            ("req-explicit-timeout", Some(1234))
+        );
     }
 }

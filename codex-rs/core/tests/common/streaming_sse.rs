@@ -601,7 +601,7 @@ data: {"type":"response.completed","response":{"id":"resp-1"}}
 
         let url = format!("{}/v1/responses", server.uri());
         let payload = serde_json::json!({
-            "model": "gpt-5.1",
+            "model": "gpt-5.4",
             "instructions": "test",
             "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
             "stream": true

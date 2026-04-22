@@ -239,7 +239,7 @@ pub(super) fn build_stage_one_input_message(
     rollout_contents: &str,
 ) -> anyhow::Result<String> {
     let rollout_token_limit = model_info
-        .context_window
+        .resolved_context_window()
         .and_then(|limit| (limit > 0).then_some(limit))
         .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
         .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))

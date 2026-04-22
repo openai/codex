@@ -1,10 +1,11 @@
 use super::*;
-use crate::codex::make_session_and_context;
-use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
+use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
@@ -22,7 +23,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
-fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
+fn set_danger_full_access(turn: &mut crate::session::turn_context::TurnContext) {
     turn.sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
@@ -253,7 +254,7 @@ fn summarize_tool_call_response_for_multimodal_function_output() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -277,7 +278,7 @@ fn summarize_tool_call_response_for_multimodal_function_output() {
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
+async fn emitted_image_content_item_preserves_explicit_non_original_detail() {
     let (_session, turn) = make_session_and_context().await;
     let content_item = emitted_image_content_item(
         &turn,
@@ -288,7 +289,7 @@ async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
         content_item,
         FunctionCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(ImageDetail::Low),
         }
     );
 }
@@ -314,7 +315,7 @@ async fn emitted_image_content_item_allows_explicit_original_detail_when_support
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_drops_explicit_original_detail_when_unsupported() {
+async fn emitted_image_content_item_defaults_to_high_for_unsupported_original_detail() {
     let (_session, turn) = make_session_and_context().await;
 
     let content_item = emitted_image_content_item(
@@ -327,7 +328,7 @@ async fn emitted_image_content_item_drops_explicit_original_detail_when_unsuppor
         content_item,
         FunctionCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }
     );
 }
@@ -356,7 +357,7 @@ fn summarize_tool_call_response_for_multimodal_custom_output() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -881,7 +882,7 @@ async fn js_repl_uncaught_exception_returns_exec_error_and_recovers() -> anyhow:
         return Ok(());
     }
 
-    let (session, turn) = crate::codex::make_session_and_context().await;
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
@@ -1213,7 +1214,7 @@ console.log(out.type);
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1268,7 +1269,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png" });
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1325,13 +1326,13 @@ await codex.emitImage(
                     image_url:
                         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                             .to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url:
                         "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
                             .to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]
             .as_slice()
@@ -1387,7 +1388,7 @@ console.log("cell-complete");
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1465,11 +1466,11 @@ console.log("helpers-ran");
         vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: data_url.to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: data_url.to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]
     );
@@ -1701,7 +1702,7 @@ await codex.emitImage("DATA:image/png;base64,AAA");
         result.content_items.as_slice(),
         [FunctionCallOutputContentItem::InputImage {
             image_url: "DATA:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }]
         .as_slice()
     );
@@ -1751,10 +1752,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
         )
         .await
         .expect_err("invalid detail should fail");
-    assert!(
-        err.to_string()
-            .contains("only supports detail \"original\"")
-    );
+    assert!(err.to_string().contains("expected detail to be one of"));
     assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
@@ -1804,7 +1802,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
             result.content_items.as_slice(),
             [FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1821,6 +1819,7 @@ async fn js_repl_emit_image_rejects_mixed_content() -> anyhow::Result<()> {
 
     let (session, turn, rx_event) =
         make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+            namespace: None,
             name: "inline_image".to_string(),
             description: "Returns inline text and image content.".to_string(),
             input_schema: serde_json::json!({
@@ -1920,6 +1919,7 @@ async fn js_repl_dynamic_tool_response_preserves_js_line_separator_text() -> any
     ] {
         let (session, turn, rx_event) =
             make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+                namespace: None,
                 name: tool_name.to_string(),
                 description: description.to_string(),
                 input_schema: serde_json::json!({
@@ -1995,6 +1995,7 @@ async fn js_repl_can_call_hidden_dynamic_tools() -> anyhow::Result<()> {
 
     let (session, turn, rx_event) =
         make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "hidden_dynamic_tool".to_string(),
             description: "A hidden dynamic tool.".to_string(),
             input_schema: serde_json::json!({
@@ -2014,7 +2015,7 @@ async fn js_repl_can_call_hidden_dynamic_tools() -> anyhow::Result<()> {
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
     let manager = turn.js_repl.manager().await?;
     let code = r#"
-const out = await codex.tool("hidden_dynamic_tool", { city: "Paris" });
+const out = await codex.tool("codex_app_hidden_dynamic_tool", { city: "Paris" });
 console.log(JSON.stringify(out));
 "#;
 
