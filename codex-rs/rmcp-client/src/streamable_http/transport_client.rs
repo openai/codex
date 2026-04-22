@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecutorHttpClient;
 use futures::stream::BoxStream;
 use reqwest::header::HeaderMap;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
@@ -32,7 +32,9 @@ pub(crate) enum StreamableHttpTransportClientError {
 #[derive(Clone)]
 pub(crate) enum StreamableHttpTransportMode {
     Local,
-    Remote { exec_client: ExecServerClient },
+    Remote {
+        exec_client: Arc<dyn ExecutorHttpClient>,
+    },
 }
 
 impl StreamableHttpTransportClient {

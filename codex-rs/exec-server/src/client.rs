@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
@@ -20,6 +22,7 @@ use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::ExecutorHttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -203,6 +206,44 @@ impl LazyRemoteExecServerClient {
             })
             .await
             .cloned()
+    }
+}
+
+impl ExecutorHttpClient for ExecServerClient {
+    fn http_request(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
+        async move { ExecServerClient::http_request(self, params).await }.boxed()
+    }
+
+    fn http_request_stream(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<
+        '_,
+        Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
+    > {
+        async move { ExecServerClient::http_request_stream(self, params).await }.boxed()
+    }
+}
+
+impl ExecutorHttpClient for LazyRemoteExecServerClient {
+    fn http_request(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
+        async move { self.get().await?.http_request(params).await }.boxed()
+    }
+
+    fn http_request_stream(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<
+        '_,
+        Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
+    > {
+        async move { self.get().await?.http_request_stream(params).await }.boxed()
     }
 }
 
