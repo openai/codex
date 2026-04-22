@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, get_args, get_origin
 
+SDK_PKG_NAME = "openai-codex"
+RUNTIME_PKG_NAME = "openai-codex-cli-bin"
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -45,16 +48,30 @@ def schema_root_dir() -> Path:
     return repo_root() / "codex-rs" / "app-server-protocol" / "schema" / "json"
 
 
-def _is_windows() -> bool:
-    return platform.system().lower().startswith("win")
+def _is_windows(system_name: str | None = None) -> bool:
+    return (system_name or platform.system()).lower().startswith("win")
 
 
-def runtime_binary_name() -> str:
-    return "codex.exe" if _is_windows() else "codex"
+def runtime_binary_name(system_name: str | None = None) -> str:
+    return "codex.exe" if _is_windows(system_name) else "codex"
+
+
+def runtime_file_names(system_name: str | None = None) -> tuple[str, ...]:
+    if _is_windows(system_name):
+        return (
+            "codex.exe",
+            "codex-command-runner.exe",
+            "codex-windows-sandbox-setup.exe",
+        )
+    return ("codex",)
+
+
+def staged_runtime_bin_dir(root: Path) -> Path:
+    return root / "src" / "codex_cli_bin" / "bin"
 
 
 def staged_runtime_bin_path(root: Path) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
+    return staged_runtime_bin_dir(root) / runtime_binary_name()
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -110,6 +127,39 @@ def _rewrite_project_version(pyproject_text: str, version: str) -> str:
     return updated
 
 
+def _rewrite_project_name(pyproject_text: str, name: str) -> str:
+    updated, count = re.subn(
+        r'^name = "[^"]+"$',
+        f'name = "{name}"',
+        pyproject_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite project name in pyproject.toml")
+    return updated
+
+
+def normalize_python_package_version(version: str) -> str:
+    stripped = version.strip()
+    if re.fullmatch(r"\d+\.\d+\.\d+(?:a\d+|b\d+|\.dev\d+)?", stripped):
+        return stripped
+
+    prerelease_match = re.fullmatch(
+        r"(\d+\.\d+\.\d+)-(alpha|beta)\.(\d+)",
+        stripped,
+    )
+    if prerelease_match is not None:
+        base, prerelease, number = prerelease_match.groups()
+        marker = "a" if prerelease == "alpha" else "b"
+        return f"{base}{marker}{number}"
+
+    raise RuntimeError(
+        "Unsupported Python package version. Expected x.y.z, x.y.z-alpha.n, "
+        f"x.y.z-beta.n, or an already-normalized PEP 440 version; got {version!r}."
+    )
+
+
 def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
     match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
     if match is None:
@@ -118,15 +168,46 @@ def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -
         )
 
     raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-    raw_items = [item for item in raw_items if "codex-cli-bin" not in item]
-    raw_items.append(f'"codex-cli-bin=={runtime_version}"')
+    raw_items = [
+        item
+        for item in raw_items
+        if "codex-cli-bin" not in item and RUNTIME_PKG_NAME not in item
+    ]
+    raw_items.append(f'"{RUNTIME_PKG_NAME}=={runtime_version}"')
     replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
     return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
+
+
+def _rewrite_sdk_init_version(init_text: str, sdk_version: str) -> str:
+    updated, count = re.subn(
+        r'^__version__ = "[^"]+"$',
+        f'__version__ = "{sdk_version}"',
+        init_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite SDK __version__")
+    return updated
+
+
+def _rewrite_sdk_client_version(client_text: str, sdk_version: str) -> str:
+    updated, count = re.subn(
+        r'client_version: str = "[^"]+"',
+        f'client_version: str = "{sdk_version}"',
+        client_text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite AppServerConfig.client_version")
+    return updated
 
 
 def stage_python_sdk_package(
     staging_dir: Path, sdk_version: str, runtime_version: str
 ) -> Path:
+    sdk_version = normalize_python_package_version(sdk_version)
+    runtime_version = normalize_python_package_version(runtime_version)
     _copy_package_tree(sdk_root(), staging_dir)
     sdk_bin_dir = staging_dir / "src" / "codex_app_server" / "bin"
     if sdk_bin_dir.exists():
@@ -134,30 +215,86 @@ def stage_python_sdk_package(
 
     pyproject_path = staging_dir / "pyproject.toml"
     pyproject_text = pyproject_path.read_text()
+    pyproject_text = _rewrite_project_name(pyproject_text, SDK_PKG_NAME)
     pyproject_text = _rewrite_project_version(pyproject_text, sdk_version)
     pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, runtime_version)
     pyproject_path.write_text(pyproject_text)
+
+    init_path = staging_dir / "src" / "codex_app_server" / "__init__.py"
+    init_path.write_text(_rewrite_sdk_init_version(init_path.read_text(), sdk_version))
+
+    client_path = staging_dir / "src" / "codex_app_server" / "client.py"
+    client_path.write_text(
+        _rewrite_sdk_client_version(client_path.read_text(), sdk_version)
+    )
     return staging_dir
 
 
 def stage_python_runtime_package(
-    staging_dir: Path, runtime_version: str, binary_path: Path
+    staging_dir: Path, runtime_version: str, runtime_bundle_dir: Path
 ) -> Path:
+    runtime_version = normalize_python_package_version(runtime_version)
     _copy_package_tree(python_runtime_root(), staging_dir)
 
     pyproject_path = staging_dir / "pyproject.toml"
-    pyproject_path.write_text(
-        _rewrite_project_version(pyproject_path.read_text(), runtime_version)
-    )
+    pyproject_text = _rewrite_project_name(pyproject_path.read_text(), RUNTIME_PKG_NAME)
+    pyproject_text = _rewrite_project_version(pyproject_text, runtime_version)
+    pyproject_path.write_text(pyproject_text)
 
-    out_bin = staged_runtime_bin_path(staging_dir)
-    out_bin.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary_path, out_bin)
-    if not _is_windows():
-        out_bin.chmod(
-            out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        )
+    out_bin_dir = staged_runtime_bin_dir(staging_dir)
+    out_bin_dir.mkdir(parents=True, exist_ok=True)
+    for runtime_file_name in runtime_file_names():
+        source = _find_runtime_bundle_file(runtime_bundle_dir, runtime_file_name)
+        out_path = out_bin_dir / runtime_file_name
+        shutil.copy2(source, out_path)
+        if not _is_windows():
+            out_path.chmod(
+                out_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
     return staging_dir
+
+
+def _find_runtime_bundle_file(runtime_bundle_dir: Path, destination_name: str) -> Path:
+    if not runtime_bundle_dir.is_dir():
+        raise RuntimeError(f"Runtime bundle directory not found: {runtime_bundle_dir}")
+
+    exact = runtime_bundle_dir / destination_name
+    if exact.is_file():
+        return exact
+
+    patterns = {
+        "codex": re.compile(r"^codex-(?!responses-api-proxy)[^.]+$"),
+        "codex.exe": re.compile(
+            r"^codex-(?!command-runner|windows-sandbox-setup|responses-api-proxy).+\.exe$"
+        ),
+        "codex-command-runner.exe": re.compile(r"^codex-command-runner-.+\.exe$"),
+        "codex-windows-sandbox-setup.exe": re.compile(
+            r"^codex-windows-sandbox-setup-.+\.exe$"
+        ),
+    }
+    pattern = patterns.get(destination_name)
+    candidates = (
+        []
+        if pattern is None
+        else sorted(
+            path
+            for path in runtime_bundle_dir.iterdir()
+            if path.is_file() and pattern.fullmatch(path.name)
+        )
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        candidate_names = ", ".join(path.name for path in candidates)
+        raise RuntimeError(
+            f"Runtime bundle has multiple candidates for {destination_name}: "
+            f"{candidate_names}"
+        )
+
+    raise RuntimeError(
+        f"Runtime bundle {runtime_bundle_dir} is missing required file "
+        f"{destination_name}"
+    )
 
 
 def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
@@ -928,7 +1065,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_sdk_parser.add_argument(
         "--runtime-version",
         required=True,
-        help="Pinned codex-cli-bin version for the staged SDK package",
+        help=f"Pinned {RUNTIME_PKG_NAME} version for the staged SDK package",
     )
     stage_sdk_parser.add_argument(
         "--sdk-version",
@@ -945,9 +1082,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for the staged runtime package",
     )
     stage_runtime_parser.add_argument(
-        "runtime_binary",
+        "runtime_bundle_dir",
         type=Path,
-        help="Path to the codex binary to package for this platform",
+        help="Directory containing the Codex runtime files to package for this platform",
     )
     stage_runtime_parser.add_argument(
         "--runtime-version",
@@ -984,7 +1121,7 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
         ops.stage_python_runtime_package(
             args.staging_dir,
             args.runtime_version,
-            args.runtime_binary.resolve(),
+            args.runtime_bundle_dir.resolve(),
         )
 
 
