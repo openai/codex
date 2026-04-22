@@ -51,7 +51,6 @@ use crate::server::session_registry::SessionRegistry;
 
 pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
-    notifications: RpcNotificationSender,
     server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
     session: StdMutex<Option<SessionHandle>>,
     body_streams: Mutex<HashMap<String, Option<JoinHandle<()>>>>,
@@ -63,13 +62,11 @@ pub(crate) struct ExecServerHandler {
 impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
-        notifications: RpcNotificationSender,
         server_outbound_tx: mpsc::Sender<RpcServerOutboundMessage>,
         runtime_paths: ExecServerRuntimePaths,
     ) -> Self {
         Self {
             session_registry,
-            notifications,
             server_outbound_tx,
             session: StdMutex::new(None),
             body_streams: Mutex::new(HashMap::new()),
@@ -112,7 +109,7 @@ impl ExecServerHandler {
 
         let session = match self
             .session_registry
-            .attach(params.resume_session_id.clone(), self.notifications.clone())
+            .attach(params.resume_session_id.clone(), self.notification_sender())
             .await
         {
             Ok(session) => session,
@@ -316,7 +313,7 @@ impl ExecServerHandler {
         let request_id = pending_stream.request_id.clone();
         let finished_request_id = request_id.clone();
         let handler = Arc::clone(self);
-        let notifications = self.notifications.clone();
+        let notifications = self.notification_sender();
         let task = tokio::spawn(async move {
             stream_executor_http_body(pending_stream, notifications).await;
             handler.release_http_body_stream(&finished_request_id).await;
@@ -343,6 +340,10 @@ impl ExecServerHandler {
         }
         body_streams.insert(request_id.to_string(), None);
         Ok(())
+    }
+
+    fn notification_sender(&self) -> RpcNotificationSender {
+        RpcNotificationSender::new(self.server_outbound_tx.clone())
     }
 }
 
