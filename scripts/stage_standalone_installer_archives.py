@@ -41,6 +41,16 @@ def parse_args() -> argparse.Namespace:
         default=REPO_ROOT / "dist" / "installer",
         help="Directory where standalone archives should be written.",
     )
+    parser.add_argument(
+        "--package",
+        dest="packages",
+        action="append",
+        choices=sorted(CODEX_PLATFORM_PACKAGES),
+        help=(
+            "Codex platform package to stage. May be provided multiple times. "
+            "Defaults to all platform packages."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -85,7 +95,7 @@ def write_archive(staging_dir: Path, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(output_path, "w:gz") as archive:
         for path in sorted(staging_dir.rglob("*")):
-            archive.add(path, arcname=path.relative_to(staging_dir))
+            archive.add(path, arcname=path.relative_to(staging_dir), recursive=False)
 
 
 def main() -> int:
@@ -94,7 +104,8 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for package in sorted(CODEX_PLATFORM_PACKAGES):
+    packages = args.packages or sorted(CODEX_PLATFORM_PACKAGES)
+    for package in sorted(set(packages)):
         package_config = CODEX_PLATFORM_PACKAGES[package]
         platform_tag = package_config["npm_tag"]
         target = package_config["target_triple"]

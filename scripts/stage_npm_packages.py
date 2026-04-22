@@ -143,18 +143,20 @@ def stage_standalone_installer_archives(
     release_version: str,
     vendor_src: Path,
     output_dir: Path,
+    packages: list[str],
 ) -> None:
-    run_command(
-        [
-            str(STAGE_STANDALONE_INSTALLER_ARCHIVES),
-            "--release-version",
-            release_version,
-            "--vendor-src",
-            str(vendor_src),
-            "--output-dir",
-            str(output_dir),
-        ]
-    )
+    cmd = [
+        str(STAGE_STANDALONE_INSTALLER_ARCHIVES),
+        "--release-version",
+        release_version,
+        "--vendor-src",
+        str(vendor_src),
+        "--output-dir",
+        str(output_dir),
+    ]
+    for package in packages:
+        cmd.extend(["--package", package])
+    run_command(cmd)
 
 
 def tarball_name_for_package(package: str, version: str) -> str:
@@ -226,6 +228,14 @@ def main() -> int:
                     "--standalone-output-dir requires staged native binaries, but no selected "
                     "package installed native components."
                 )
+            standalone_packages = [
+                package for package in packages if package in CODEX_PLATFORM_PACKAGES
+            ]
+            if not standalone_packages:
+                raise RuntimeError(
+                    "--standalone-output-dir requires at least one selected Codex platform "
+                    "package."
+                )
 
             standalone_output_dir = args.standalone_output_dir
             standalone_output_dir.mkdir(parents=True, exist_ok=True)
@@ -233,6 +243,7 @@ def main() -> int:
                 args.release_version,
                 vendor_src,
                 standalone_output_dir,
+                standalone_packages,
             )
             final_messages.append(
                 f"Staged standalone installer archives in {standalone_output_dir}"
