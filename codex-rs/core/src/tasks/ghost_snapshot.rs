@@ -78,7 +78,7 @@ impl SessionTask for GhostSnapshotTask {
             let cancelled = tokio::select! {
                 _ = cancellation_token.cancelled() => true,
                 _ = async {
-                    let repo_path = ctx_for_task.cwd.clone();
+                    let repo_path = ctx_for_task.cwd().clone();
                     let ghost_snapshot = ctx_for_task.ghost_snapshot.clone();
                     let ghost_snapshot_for_commit = ghost_snapshot.clone();
                     // Required to run in a dedicated blocking pool.

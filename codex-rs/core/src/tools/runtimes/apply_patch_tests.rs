@@ -15,6 +15,11 @@ use codex_sandboxing::SandboxType;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+fn local_environment() -> Arc<Environment> {
+    Arc::new(Environment::create_for_tests(/*exec_server_url*/ None).expect("local environment"))
+}
 
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
@@ -49,6 +54,9 @@ fn guardian_review_request_includes_patch_context() {
     let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
+        environment_id: None,
+        environment: local_environment(),
+        cwd: expected_cwd.clone(),
         action,
         file_paths: vec![path.clone()],
         changes: HashMap::from([(
@@ -91,6 +99,9 @@ fn file_system_sandbox_context_uses_active_attempt() {
         )),
     };
     let req = ApplyPatchRequest {
+        environment_id: None,
+        environment: local_environment(),
+        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -147,6 +158,9 @@ fn file_system_sandbox_context_omits_legacy_equivalent_policy() {
         .join("apply-patch-runtime-legacy-equivalent.txt")
         .abs();
     let req = ApplyPatchRequest {
+        environment_id: None,
+        environment: local_environment(),
+        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),
@@ -188,6 +202,9 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         .join("apply-patch-runtime-none.txt")
         .abs();
     let req = ApplyPatchRequest {
+        environment_id: None,
+        environment: local_environment(),
+        cwd: path.clone(),
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
         file_paths: vec![path.clone()],
         changes: HashMap::new(),

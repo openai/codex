@@ -1263,11 +1263,19 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        let environments = reconstructed_rollout
+            .reference_context_item
+            .as_ref()
+            .and_then(|context_item| context_item.environments.clone());
         self.replace_history(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        if let Some(environments) = environments {
+            let mut state = self.state.lock().await;
+            state.session_configuration.environments = Some(environments);
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
@@ -1923,7 +1931,7 @@ impl Session {
             turn_context,
             call_id,
             args,
-            turn_context.cwd.clone(),
+            turn_context.cwd().clone(),
             cancellation_token,
         )
         .await
@@ -2473,7 +2481,7 @@ impl Session {
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
-                    &turn_context.cwd,
+                    turn_context.cwd(),
                     turn_context
                         .features
                         .enabled(Feature::ExecPermissionApprovals),
@@ -2594,7 +2602,7 @@ impl Session {
             contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+                    directory: turn_context.cwd().to_string_lossy().into_owned(),
                 }
                 .render(),
             );

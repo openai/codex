@@ -65,6 +65,12 @@ pub(crate) struct ExecCommandArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct ToolEnvironmentArgs {
+    #[serde(default, alias = "environmentId")]
+    environment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
     // The model is trained on `session_id`.
     session_id: i32,
@@ -181,21 +187,43 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let Some(environment) = turn.environment.as_ref() else {
+        let Some(default_environment) = turn.environment_for_tool(/*environment_id*/ None) else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
-        let fs = environment.get_filesystem();
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.name.as_str() {
             "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
+                let selector: ToolEnvironmentArgs = parse_arguments(&arguments)?;
+                let requested_environment_id = if context.turn.tools_config.multi_environment_tools
+                {
+                    selector.environment_id.as_deref()
+                } else {
+                    None
+                };
+                let tool_environment = context
+                    .turn
+                    .environment_for_tool(requested_environment_id)
+                    .ok_or_else(|| {
+                        FunctionCallError::RespondToModel(match requested_environment_id {
+                            Some(environment_id) => {
+                                format!(
+                                    "environment `{environment_id}` is unavailable in this session"
+                                )
+                            }
+                            None => "unified exec is unavailable in this session".to_string(),
+                        })
+                    })?;
+                let fs = tool_environment.environment.get_filesystem();
+                let cwd = resolve_workdir_base_path(&arguments, &tool_environment.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let workdir = context.turn.resolve_path(args.workdir.clone());
+                let workdir = context
+                    .turn
+                    .resolve_path_for_environment(&tool_environment, args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
@@ -230,7 +258,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let requested_additional_permissions = additional_permissions.clone();
                 let effective_additional_permissions = apply_granted_turn_permissions(
                     context.session.as_ref(),
-                    context.turn.cwd.as_path(),
+                    context.turn.cwd().as_path(),
                     sandbox_permissions,
                     additional_permissions,
                 )
@@ -259,7 +287,11 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 
-                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
+                let workdir = workdir.map(|dir| {
+                    context
+                        .turn
+                        .resolve_path_for_environment(&tool_environment, Some(dir))
+                });
                 let cwd = workdir.clone().unwrap_or(cwd);
                 let normalized_additional_permissions = match implicit_granted_permissions(
                     sandbox_permissions,
@@ -290,6 +322,7 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     &cwd,
                     fs.as_ref(),
+                    tool_environment.clone(),
                     context.session.clone(),
                     context.turn.clone(),
                     Some(&tracker),
@@ -320,9 +353,11 @@ impl ToolHandler for UnifiedExecHandler {
                             command,
                             hook_command: args.cmd,
                             process_id,
+                            environment_id: tool_environment.environment_id.clone(),
+                            environment: tool_environment.environment,
                             yield_time_ms,
                             max_output_tokens,
-                            workdir,
+                            workdir: Some(cwd.clone()),
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions: effective_additional_permissions
@@ -363,6 +398,7 @@ impl ToolHandler for UnifiedExecHandler {
                 }
             }
             "write_stdin" => {
+                let _ = default_environment;
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
                     .write_stdin(WriteStdinRequest {

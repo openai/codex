@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+use std::process::Stdio;
 use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
@@ -12,6 +14,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::process::process_is_alive;
@@ -37,9 +40,74 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
+use tokio::process::Child;
+use tokio::process::Command;
 use tokio::time::Duration;
+use tokio::time::timeout;
 
 const UNIFIED_EXEC_LAGGED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
+const EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct ExecServerProcess {
+    _codex_home: TempDir,
+    child: Child,
+    websocket_url: String,
+}
+
+impl ExecServerProcess {
+    fn websocket_url(&self) -> &str {
+        &self.websocket_url
+    }
+}
+
+impl Drop for ExecServerProcess {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+async fn start_exec_server_process(codex_exe: &std::path::Path) -> Result<ExecServerProcess> {
+    let codex_home = TempDir::new()?;
+    let mut child = Command::new(codex_exe);
+    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+    child.stdin(Stdio::null());
+    child.stdout(Stdio::piped());
+    child.stderr(Stdio::inherit());
+    child.kill_on_drop(true);
+    child.env("CODEX_HOME", codex_home.path());
+    let mut child = child.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture exec-server stdout"))?;
+    let mut lines = BufReader::new(stdout).lines();
+
+    let websocket_url = timeout(EXEC_SERVER_START_TIMEOUT, async {
+        loop {
+            let line = lines
+                .next_line()
+                .await?
+                .ok_or_else(|| anyhow!("exec-server stdout closed before emitting listen URL"))?;
+            let listen_url = line.trim();
+            if listen_url.starts_with("ws://") {
+                return Ok::<String, anyhow::Error>(listen_url.to_string());
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        anyhow!("timed out waiting for exec-server listen URL on stdout after {EXEC_SERVER_START_TIMEOUT:?}")
+    })??;
+
+    Ok(ExecServerProcess {
+        _codex_home: codex_home,
+        child,
+        websocket_url,
+    })
+}
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -334,6 +402,222 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     assert_eq!(
         fs::read_to_string(harness.path("uexec_apply.txt"))?,
         "hello from unified exec\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_intercepts_apply_patch_for_selected_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let codex_exe = codex_utils_cargo_bin::cargo_bin("codex")
+        .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex-exec"))?;
+    let exec_server = start_exec_server_process(&codex_exe).await?;
+    let mut builder = test_codex()
+        .with_exec_server_url(exec_server.websocket_url())
+        .with_config(|config| {
+            config.include_apply_patch_tool = true;
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow unified exec");
+            config
+                .features
+                .enable(Feature::MultiEnvironmentTools)
+                .expect("test config should allow multi-environment tools");
+        });
+    let test = builder.build(&server).await?;
+    let selected_local_cwd = create_workspace_directory(&test, "selected-local-apply").await?;
+    let primary_remote_cwd = test.config.cwd.join("primary-remote-apply");
+    tokio::fs::create_dir_all(&primary_remote_cwd).await?;
+
+    let patch = "*** Begin Patch\n*** Add File: uexec_env_apply.txt\n+hello from selected env\n*** End Patch";
+    let command = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let call_id = "uexec-env-apply-patch";
+    let args = json!({
+        "cmd": command,
+        "environment_id": "local",
+        "yield_time_ms": 5_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let _request_log = mount_sse_sequence(&server, responses).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            environments: Some(vec![
+                TurnEnvironmentSelection {
+                    environment_id: "remote".to_string(),
+                    cwd: primary_remote_cwd,
+                },
+                TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: selected_local_cwd.clone().try_into()?,
+                },
+            ]),
+            items: vec![UserInput::Text {
+                text: "apply patch in the selected local environment".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let mut saw_patch_begin = false;
+    let mut patch_end = None;
+    let mut saw_exec_begin = false;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+            saw_patch_begin = true;
+            false
+        }
+        EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+            patch_end = Some(end.clone());
+            false
+        }
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+            saw_exec_begin = true;
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert!(
+        saw_patch_begin,
+        "environment-targeted apply_patch should still be intercepted"
+    );
+    assert!(
+        patch_end
+            .expect("expected environment-targeted apply_patch to emit PatchApplyEnd")
+            .success,
+        "environment-targeted apply_patch should succeed"
+    );
+    assert!(
+        !saw_exec_begin,
+        "environment-targeted apply_patch should not start a shell exec"
+    );
+
+    assert_eq!(
+        fs::read_to_string(selected_local_cwd.join("uexec_env_apply.txt"))?,
+        "hello from selected env\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_environment_id_targets_non_primary_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let codex_exe = codex_utils_cargo_bin::cargo_bin("codex")
+        .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex-exec"))?;
+    let exec_server = start_exec_server_process(&codex_exe).await?;
+    let mut builder = test_codex()
+        .with_exec_server_url(exec_server.websocket_url())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow unified exec");
+            config
+                .features
+                .enable(Feature::MultiEnvironmentTools)
+                .expect("test config should allow multi-environment tools");
+        });
+    let test = builder.build(&server).await?;
+    let selected_local_cwd = create_workspace_directory(&test, "selected-local").await?;
+    let primary_remote_cwd = test.config.cwd.join("primary-remote");
+    tokio::fs::create_dir_all(&primary_remote_cwd).await?;
+
+    let call_id = "uexec-env-local";
+    let args = json!({
+        "cmd": "pwd",
+        "environment_id": "local",
+        "yield_time_ms": 5_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    test.submit_turn_with_environments(
+        "print the selected local cwd",
+        Some(vec![
+            TurnEnvironmentSelection {
+                environment_id: "remote".to_string(),
+                cwd: primary_remote_cwd,
+            },
+            TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_local_cwd.clone().try_into()?,
+            },
+        ]),
+    )
+    .await?;
+
+    let bodies = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let request_text = serde_json::to_string(&bodies)?;
+    assert!(
+        request_text.contains("<environments>"),
+        "environment list should be visible to the model: {request_text}"
+    );
+    assert!(
+        request_text.contains("id=\\\"local\\\""),
+        "local environment id should be visible to the model: {request_text}"
+    );
+    assert!(
+        request_text.contains("\"environment_id\""),
+        "exec_command schema should expose environment_id when gated: {request_text}"
+    );
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing exec_command environment-id output");
+    assert_eq!(
+        output.output.trim(),
+        selected_local_cwd.display().to_string()
     );
 
     Ok(())

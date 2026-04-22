@@ -2684,6 +2684,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,
+        environments: None,
         truncation_policy: None,
     };
     let rollout = RolloutLine {

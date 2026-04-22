@@ -32,6 +32,7 @@ pub(crate) struct ApplyPatchRuntimeInvocation {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
+    cwd: &codex_utils_absolute_path::AbsolutePathBuf,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
@@ -40,7 +41,7 @@ pub(crate) async fn apply_patch(
         turn_context.approval_policy.value(),
         turn_context.sandbox_policy.get(),
         file_system_sandbox_policy,
-        &turn_context.cwd,
+        cwd,
         turn_context.windows_sandbox_level,
     ) {
         SafetyCheck::AutoApprove {

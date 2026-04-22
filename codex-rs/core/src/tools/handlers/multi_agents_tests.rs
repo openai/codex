@@ -1953,7 +1953,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         turn.config.permissions.sandbox_policy.get().clone(),
     );
     let expected_file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected_sandbox, &turn.cwd);
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected_sandbox, turn.cwd());
     let expected_network_sandbox_policy = NetworkSandboxPolicy::from(&expected_sandbox);
     turn.approval_policy
         .set(AskForApproval::OnRequest)
@@ -3486,14 +3486,14 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         ..ShellEnvironmentPolicy::default()
     };
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    turn.cwd = temp_dir.abs();
+    Arc::make_mut(&mut turn.config).cwd = temp_dir.abs();
     turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     let sandbox_policy = pick_allowed_sandbox_policy(
         &turn.config.permissions.sandbox_policy,
         turn.config.permissions.sandbox_policy.get().clone(),
     );
     let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &turn.cwd);
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, turn.cwd());
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
     turn.sandbox_policy
         .set(sandbox_policy)
@@ -3515,7 +3515,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    expected.cwd = turn.cwd.clone();
+    expected.cwd = turn.cwd().clone();
     expected
         .permissions
         .approval_policy
@@ -3569,7 +3569,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
-    expected.cwd = turn.cwd.clone();
+    expected.cwd = turn.cwd().clone();
     expected
         .permissions
         .approval_policy
