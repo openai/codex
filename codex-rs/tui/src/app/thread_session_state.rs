@@ -10,6 +10,7 @@ impl App {
         thread_id: ThreadId,
         thread: &Thread,
     ) -> ThreadSessionState {
+        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
         let mut session = self
             .primary_session_configured
             .clone()
@@ -23,7 +24,8 @@ impl App {
                 service_tier: self.chat_widget.current_service_tier(),
                 approval_policy: self.config.permissions.approval_policy.value(),
                 approvals_reviewer: self.config.approvals_reviewer,
-                sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                sandbox_policy,
+                permission_profile: None,
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
@@ -36,6 +38,7 @@ impl App {
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.cwd = thread.cwd.clone();
+        session.permission_profile = None;
         session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
         if let Some(model) =
