@@ -7,6 +7,7 @@ use codex_client::ByteStream;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -27,6 +28,8 @@ use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
+const OPENAI_MODEL_VERIFICATION_HEADER: &str = "openai-verification-recommendation";
+const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
@@ -71,6 +74,12 @@ pub fn spawn_response_stream(
         .get(OPENAI_MODEL_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    let model_verifications = stream_response
+        .headers
+        .get(OPENAI_MODEL_VERIFICATION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(parse_model_verifications)
+        .filter(|verifications| !verifications.is_empty());
     let reasoning_included = stream_response
         .headers
         .get(X_REASONING_INCLUDED_HEADER)
@@ -87,6 +96,11 @@ pub fn spawn_response_stream(
     tokio::spawn(async move {
         if let Some(model) = server_model {
             let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
+        }
+        if let Some(verifications) = model_verifications {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                .await;
         }
         for snapshot in rate_limit_snapshots {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -164,6 +178,8 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
+    #[serde(rename = "openai_verification_recommendation")]
+    openai_model_verification: Option<Value>,
     headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
@@ -200,6 +216,23 @@ impl ResponsesStreamEvent {
                 .and_then(header_openai_model_value_from_json),
         }
     }
+
+    pub fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
+        self.openai_model_verification
+            .as_ref()
+            .or_else(|| {
+                self.response
+                    .as_ref()
+                    .and_then(|response| response.get("openai_verification_recommendation"))
+            })
+            .or_else(|| {
+                self.headers
+                    .as_ref()
+                    .and_then(|headers| headers.get("openai_verification_recommendation"))
+            })
+            .map(json_value_as_model_verifications)
+            .filter(|verifications| !verifications.is_empty())
+    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -212,6 +245,34 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
             None
         }
     })
+}
+
+fn json_value_as_model_verifications(value: &Value) -> Vec<ModelVerification> {
+    match value {
+        Value::String(value) => parse_model_verifications(value),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(json_value_as_string)
+            .flat_map(|value| parse_model_verifications(&value))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_model_verifications(value: &str) -> Vec<ModelVerification> {
+    let mut verifications = Vec::new();
+    for verification in value
+        .split(',')
+        .filter_map(|verification| match verification.trim() {
+            TRUSTED_ACCESS_FOR_CYBER_VERIFICATION => Some(ModelVerification::TrustedAccessForCyber),
+            _ => None,
+        })
+    {
+        if !verifications.contains(&verification) {
+            verifications.push(verification);
+        }
+    }
+    verifications
 }
 
 fn json_value_as_string(value: &Value) -> Option<String> {
@@ -426,6 +487,14 @@ pub async fn process_sse(
                 return;
             }
             last_server_model = Some(model);
+        }
+        if let Some(verifications) = event.model_verifications()
+            && tx_event
+                .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                .await
+                .is_err()
+        {
+            return;
         }
 
         match process_responses_event(event) {
@@ -976,6 +1045,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_response_stream_emits_model_verification_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            OPENAI_MODEL_VERIFICATION_HEADER,
+            HeaderValue::from_static(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION),
+        );
+        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
+        let stream_response = StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes: Box::pin(bytes),
+        };
+
+        let mut stream = spawn_response_stream(
+            stream_response,
+            idle_timeout(),
+            /*telemetry*/ None,
+            /*turn_state*/ None,
+        );
+        let event = stream
+            .rx_event
+            .recv()
+            .await
+            .expect("expected model verification event")
+            .expect("expected ok event");
+
+        assert_matches!(
+            event,
+            ResponseEvent::ModelVerifications(verifications)
+                if verifications == vec![ModelVerification::TrustedAccessForCyber]
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_response_stream_parses_comma_delimited_model_verifications() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            OPENAI_MODEL_VERIFICATION_HEADER,
+            HeaderValue::from_static("trusted_access_for_cyber, unknown"),
+        );
+        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
+        let stream_response = StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes: Box::pin(bytes),
+        };
+
+        let mut stream = spawn_response_stream(
+            stream_response,
+            idle_timeout(),
+            /*telemetry*/ None,
+            /*turn_state*/ None,
+        );
+        let event = stream
+            .rx_event
+            .recv()
+            .await
+            .expect("expected model verification event")
+            .expect("expected ok event");
+
+        assert_matches!(
+            event,
+            ResponseEvent::ModelVerifications(verifications)
+                if verifications == vec![ModelVerification::TrustedAccessForCyber]
+        );
+    }
+
+    #[tokio::test]
+    async fn process_sse_ignores_unknown_model_verification_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            OPENAI_MODEL_VERIFICATION_HEADER,
+            HeaderValue::from_static("unknown_recommendation"),
+        );
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "resp-1" }
+        });
+        let sse = format!("event: response.completed\ndata: {completed}\n\n");
+        let bytes = stream::iter(vec![Ok(Bytes::from(sse))]);
+        let stream_response = StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes: Box::pin(bytes),
+        };
+
+        let mut stream = spawn_response_stream(
+            stream_response,
+            idle_timeout(),
+            /*telemetry*/ None,
+            /*turn_state*/ None,
+        );
+        let mut events = Vec::new();
+        while let Some(event) = stream.rx_event.recv().await {
+            events.push(event.expect("expected ok event"));
+        }
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ResponseEvent::ModelVerifications(_)))
+        );
+    }
+
+    #[tokio::test]
     async fn process_sse_ignores_response_model_field_in_payload() {
         let events = run_sse(vec![
             json!({
@@ -1042,6 +1216,36 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn process_sse_emits_model_verification_field() {
+        let events = run_sse(vec![
+            json!({
+                "type": "codex.response.metadata",
+                "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ModelVerifications(verifications)
+                if verifications == &vec![ModelVerification::TrustedAccessForCyber]
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None
+            } if response_id == "resp-1"
+        );
+    }
+
     #[test]
     fn responses_stream_event_response_model_reads_top_level_headers() {
         let ev: ResponsesStreamEvent = serde_json::from_value(json!({
@@ -1078,6 +1282,31 @@ mod tests {
             ev.response_model().as_deref(),
             Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
         );
+    }
+
+    #[test]
+    fn responses_stream_event_model_verification_reads_top_level_field() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.model_verifications(),
+            Some(vec![ModelVerification::TrustedAccessForCyber])
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_model_verification_ignores_unknown_field() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "openai_verification_recommendation": "unknown"
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(ev.model_verifications(), None);
     }
 
     #[test]

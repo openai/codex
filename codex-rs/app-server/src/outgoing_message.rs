@@ -660,6 +660,8 @@ mod tests {
     use codex_app_server_protocol::GuardianWarningNotification;
     use codex_app_server_protocol::ModelRerouteReason;
     use codex_app_server_protocol::ModelReroutedNotification;
+    use codex_app_server_protocol::ModelVerification;
+    use codex_app_server_protocol::ModelVerificationNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
     use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -855,6 +857,30 @@ mod tests {
                     "fromModel": "gpt-5.3-codex",
                     "toModel": "gpt-5.2",
                     "reason": "highRiskCyberActivity",
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_model_verification_notification_serialization() {
+        let notification = ServerNotification::ModelVerification(ModelVerificationNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            verifications: vec![ModelVerification::TrustedAccessForCyber],
+        });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!({
+                "method": "model/verification",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "verifications": ["trustedAccessForCyber"],
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

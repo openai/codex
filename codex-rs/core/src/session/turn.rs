@@ -365,6 +365,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut server_model_warning_emitted_for_turn = false;
+    let mut model_verification_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -456,6 +457,7 @@ pub(crate) async fn run_turn(
             &explicitly_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
+            &mut model_verification_emitted_for_turn,
             cancellation_token.child_token(),
         )
         .await
@@ -1023,6 +1025,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
+    model_verification_emitted_for_turn: &mut bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -1077,6 +1080,7 @@ async fn run_sampling_request(
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
+            model_verification_emitted_for_turn,
             &prompt,
             cancellation_token.child_token(),
         )
@@ -1490,6 +1494,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
+        | EventMsg::ModelVerification(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
@@ -1867,6 +1872,7 @@ async fn try_run_sampling_request(
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
+    model_verification_emitted_for_turn: &mut bool,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -2105,6 +2111,13 @@ async fn try_run_sampling_request(
                         .await
                 {
                     *server_model_warning_emitted_for_turn = true;
+                }
+            }
+            ResponseEvent::ModelVerifications(verifications) => {
+                if !*model_verification_emitted_for_turn {
+                    sess.warn_on_model_verification(&turn_context, verifications)
+                        .await;
+                    *model_verification_emitted_for_turn = true;
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {

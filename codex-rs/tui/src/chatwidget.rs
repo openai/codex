@@ -6568,7 +6568,7 @@ impl ChatWidget {
             ServerNotification::SkillsChanged(_) => {
                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
-            ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::ModelRerouted(_) | ServerNotification::ModelVerification(_) => {}
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
@@ -7073,7 +7073,7 @@ impl ChatWidget {
             EventMsg::Warning(WarningEvent { message })
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
-            EventMsg::ModelReroute(_) => {}
+            EventMsg::ModelReroute(_) | EventMsg::ModelVerification(_) => {}
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
