@@ -5,7 +5,8 @@
 - an HTTP proxy (default `127.0.0.1:3128`)
 - a SOCKS5 proxy (default `127.0.0.1:8081`, enabled by default)
 
-It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
+It enforces an allow/deny policy, a "limited" mode intended for read-only network access, and
+host-specific HTTPS MITM hooks for request matching and header injection.
 
 ## Quickstart
 
@@ -32,8 +33,9 @@ allow_upstream_proxy = true
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
-mode = "full" # default when unset; use "limited" for read-only mode
-# When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+mode = "full" # default when unset; hooks can still clamp specific HTTPS hosts
+# When true, HTTPS CONNECT can be terminated so limited-mode policy and host-specific MITM hooks
+# can inspect inner requests.
 mitm = false
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
@@ -60,6 +62,48 @@ dangerously_allow_all_unix_sockets = false
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 [permissions.workspace.network.unix_sockets]
 "/tmp/example.sock" = "allow"
+
+[[permissions.workspace.network.mitm_hooks]]
+host = "api.github.com"
+
+[permissions.workspace.network.mitm_hooks.match]
+methods = ["POST", "PUT"]
+path_prefixes = ["/repos/openai/"]
+
+[permissions.workspace.network.mitm_hooks.match.headers]
+"x-github-api-version" = ["2022-11-28"]
+
+[permissions.workspace.network.mitm_hooks.actions]
+strip_request_headers = ["authorization"]
+
+[[permissions.workspace.network.mitm_hooks.actions.inject_request_headers]]
+name = "authorization"
+secret_env_var = "CODEX_GITHUB_TOKEN"
+prefix = "Bearer "
+
+# `match.body` is reserved for a future release. Current hooks match only on
+# method/path/query/headers and can mutate outbound request headers.
+# `match.path_prefixes` accepts literal prefixes by default. Prefix path,
+# query, or header matchers with `pattern:` to opt into wildcard matching.
+# Use `literal:` when a literal value must start with a reserved prefix.
+# In paths, `*` and `?` do not match `/`; use `**` when crossing segments is intended.
+```
+
+Matcher syntax example:
+
+```toml
+[permissions.workspace.network.mitm_hooks.match]
+# Literal path prefixes are the default.
+path_prefixes = [
+  "/repos/openai/",
+  "pattern:/repos/*/codex/issues*",
+]
+
+[permissions.workspace.network.mitm_hooks.match.query]
+state = ["open", "pattern:triage*", "literal:pattern:*"]
+
+[permissions.workspace.network.mitm_hooks.match.headers]
+"x-github-api-version" = ["2022-11-28", "pattern:2022*preview"]
 ```
 
 ### 2) Run the proxy
@@ -92,12 +136,16 @@ When a request is blocked, the proxy responds with `403` and includes:
 - `x-proxy-error`: one of:
   - `blocked-by-allowlist`
   - `blocked-by-denylist`
+  - `blocked-by-mitm-hook`
   - `blocked-by-method-policy`
+  - `blocked-by-mitm-required`
   - `blocked-by-policy`
 
 In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
-MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
-limited mode.
+MITM to enforce limited-mode method policy; otherwise they are blocked. Separately, hosts covered
+by `mitm_hooks` are authoritative even when `mode = "full"`: hooks are evaluated in order, the
+first match wins, and if no hook matches the inner HTTPS request is denied with
+`blocked-by-mitm-hook`. SOCKS5 remains blocked in limited mode.
 
 Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
 through the same host allowlist/denylist checks.

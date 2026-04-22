@@ -3,6 +3,9 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::NetworkUnixSocketPermissions;
 use crate::mitm::MitmState;
+use crate::mitm_hook::MitmHookConfig;
+use crate::mitm_hook::compile_mitm_hooks;
+use crate::mitm_hook::validate_mitm_hook_config;
 use crate::policy::DomainPattern;
 use crate::policy::compile_allowlist_globset;
 use crate::policy::compile_denylist_globset;
@@ -52,6 +55,9 @@ pub struct PartialNetworkConfig {
     #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
+    pub mitm: Option<bool>,
+    #[serde(default)]
+    pub mitm_hooks: Option<Vec<MitmHookConfig>>,
 }
 
 pub fn build_config_state(
@@ -65,6 +71,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist_globset(&denied_domains)?;
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
+    let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(
             config.network.allow_upstream_proxy,
@@ -77,6 +84,7 @@ pub fn build_config_state(
         allow_set,
         deny_set,
         mitm,
+        mitm_hooks,
         constraints,
         blocked: std::collections::VecDeque::new(),
         blocked_total: 0,
@@ -114,6 +122,7 @@ pub fn validate_policy_against_constraints(
         .map(|entry| entry.to_ascii_lowercase())
         .collect();
     let config_allow_unix_sockets = config.network.allow_unix_sockets();
+    validate_mitm_hook_config(config).map_err(invalid_mitm_hook_configuration)?;
     validate_non_global_wildcard_domain_patterns("network.denied_domains", &config_denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
@@ -372,6 +381,14 @@ pub fn validate_policy_against_constraints(
     }
 
     Ok(())
+}
+
+fn invalid_mitm_hook_configuration(err: anyhow::Error) -> NetworkProxyConstraintError {
+    NetworkProxyConstraintError::InvalidValue {
+        field_name: "network.mitm_hooks",
+        candidate: err.to_string(),
+        allowed: "valid MITM hook configuration".to_string(),
+    }
 }
 
 fn validate_non_global_wildcard_domain_patterns(

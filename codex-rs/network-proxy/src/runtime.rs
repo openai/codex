@@ -3,6 +3,9 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
 use crate::mitm::MitmState;
+use crate::mitm_hook::HookEvaluation;
+use crate::mitm_hook::MitmHooksByHost;
+use crate::mitm_hook::evaluate_mitm_hooks;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -157,6 +160,7 @@ pub struct ConfigState {
     pub allow_set: GlobSet,
     pub deny_set: GlobSet,
     pub mitm: Option<Arc<MitmState>>,
+    pub mitm_hooks: MitmHooksByHost,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
     pub blocked_total: u64,
@@ -569,6 +573,22 @@ impl NetworkProxyState {
         Ok(guard.mitm.clone())
     }
 
+    pub(crate) async fn evaluate_mitm_hook_request(
+        &self,
+        host: &str,
+        req: &rama_http::Request,
+    ) -> Result<HookEvaluation> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(evaluate_mitm_hooks(&guard.mitm_hooks, host, req))
+    }
+
+    pub async fn host_has_mitm_hooks(&self, host: &str) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.mitm_hooks.contains_key(&normalize_host(host)))
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.update_domain_list(host, DomainListKind::Allow).await
     }
@@ -814,9 +834,23 @@ pub(crate) fn network_proxy_state_for_policy(
     mut network: crate::config::NetworkProxySettings,
 ) -> NetworkProxyState {
     network.enabled = true;
-    network.mode = NetworkMode::Full;
     let config = NetworkProxyConfig { network };
-    let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+    let state = ConfigState {
+        allow_set: crate::policy::compile_allowlist_globset(
+            &config.network.allowed_domains().unwrap_or_default(),
+        )
+        .unwrap(),
+        blocked: VecDeque::new(),
+        blocked_total: 0,
+        config: config.clone(),
+        constraints: NetworkProxyConstraints::default(),
+        deny_set: crate::policy::compile_denylist_globset(
+            &config.network.denied_domains().unwrap_or_default(),
+        )
+        .unwrap(),
+        mitm: None,
+        mitm_hooks: crate::mitm_hook::compile_mitm_hooks(&config).unwrap(),
+    };
 
     NetworkProxyState::with_reloader(state, Arc::new(NoopReloader))
 }
