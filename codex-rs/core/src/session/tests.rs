@@ -6509,7 +6509,12 @@ async fn external_budget_limited_goal_accounts_active_turn_until_turn_end() -> a
         },
     )
     .await;
-    sess.finish_thread_goal_turn(tc.as_ref(), true, 1).await;
+    sess.finish_thread_goal_turn(
+        tc.as_ref(),
+        /*turn_completed*/ true,
+        /*turn_tool_calls*/ 1,
+    )
+    .await;
 
     let goal = state_db
         .get_thread_goal(sess.conversation_id)
