@@ -295,9 +295,10 @@ pub struct HttpRequestParams {
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
-    /// arrives, even if the caller stops reading the stream earlier.
-    #[serde(default)]
-    pub request_id: Option<String>,
+    /// arrives, even if the caller stops reading the stream earlier. Buffered
+    /// requests still send an id so callers can keep one consistent request
+    /// envelope shape.
+    pub request_id: String,
     /// Return after response headers and stream the response body as deltas.
     #[serde(default)]
     pub stream_response: bool,

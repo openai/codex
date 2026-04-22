@@ -92,22 +92,15 @@ impl ExecutorHttpClient {
         params: HttpRequestParams,
     ) -> Result<(HttpRequestResponse, Option<ExecutorPendingHttpBodyStream>), JSONRPCErrorError>
     {
-        let request_id = if params.stream_response {
-            Some(params.request_id.clone().ok_or_else(|| {
-                invalid_params("http/request streamResponse requires requestId".to_string())
-            })?)
-        } else {
-            None
-        };
-        if let Some(request_id) = request_id.as_deref() {
-            self.reserve_http_body_stream(request_id).await?;
+        let stream_response = params.stream_response;
+        let request_id = params.request_id.clone();
+        if stream_response {
+            self.reserve_http_body_stream(&request_id).await?;
         }
 
         let result = run_executor_http_request(params).await;
-        if result.is_err()
-            && let Some(request_id) = request_id.as_deref()
-        {
-            self.release_http_body_stream(request_id).await;
+        if result.is_err() && stream_response {
+            self.release_http_body_stream(&request_id).await;
         }
         result
     }
@@ -250,7 +243,6 @@ impl ExecServerClient {
         mut params: HttpRequestParams,
     ) -> Result<HttpRequestResponse, ExecServerError> {
         params.stream_response = false;
-        params.request_id = None;
         self.call(HTTP_REQUEST_METHOD, &params).await
     }
 
@@ -265,7 +257,7 @@ impl ExecServerClient {
     ) -> Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError> {
         params.stream_response = true;
         let request_id = self.inner.next_http_body_stream_request_id();
-        params.request_id = Some(request_id.clone());
+        params.request_id = request_id.clone();
         let (tx, rx) = mpsc::channel(HTTP_BODY_DELTA_CHANNEL_CAPACITY);
         self.inner
             .insert_http_body_stream(request_id.clone(), tx)
@@ -463,13 +455,6 @@ async fn run_executor_http_request(
         }
     }
 
-    let request_id = if params.stream_response {
-        Some(params.request_id.clone().ok_or_else(|| {
-            invalid_params("http/request streamResponse requires requestId".to_string())
-        })?)
-    } else {
-        None
-    };
     let headers = build_executor_http_headers(params.headers)?;
     let client = match params.timeout_ms {
         None => reqwest::Client::builder(),
@@ -490,7 +475,7 @@ async fn run_executor_http_request(
     let status = response.status().as_u16();
     let headers = executor_response_headers(response.headers());
 
-    if let Some(request_id) = request_id {
+    if params.stream_response {
         return Ok((
             HttpRequestResponse {
                 status,
@@ -498,7 +483,7 @@ async fn run_executor_http_request(
                 body: Vec::new().into(),
             },
             Some(ExecutorPendingHttpBodyStream {
-                request_id,
+                request_id: params.request_id,
                 response,
             }),
         ));

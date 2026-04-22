@@ -52,8 +52,8 @@ async fn http_request_forces_buffered_request_params() -> Result<()> {
     // Phase 1: start a fake WebSocket exec-server so the test covers the
     // public client connection path without depending on the HTTP runner.
     let server = spawn_scripted_exec_server(|mut peer| async move {
-        // Phase 2: verify the buffered helper strips streaming-only fields
-        // before it sends the JSON-RPC call.
+        // Phase 2: verify the buffered helper forces buffered mode before it
+        // sends the JSON-RPC call.
         let (request_id, params) = peer.read_http_request().await?;
         assert_eq!(
             params,
@@ -63,7 +63,7 @@ async fn http_request_forces_buffered_request_params() -> Result<()> {
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: None,
+                request_id: "ignored-stream-id".to_string(),
                 stream_response: false,
             }
         );
@@ -91,7 +91,7 @@ async fn http_request_forces_buffered_request_params() -> Result<()> {
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("ignored-stream-id".to_string()),
+            request_id: "ignored-stream-id".to_string(),
             stream_response: true,
         }),
     )
@@ -131,7 +131,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 }],
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -186,7 +186,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-2".to_string()),
+                request_id: "http-2".to_string(),
                 stream_response: true,
             }
         );
@@ -215,7 +215,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             }],
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -253,7 +253,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -289,7 +289,7 @@ async fn http_response_body_stream_drops_queued_terminal_before_next_generated_i
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -322,7 +322,7 @@ async fn http_response_body_stream_drops_queued_terminal_before_next_generated_i
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-2".to_string()),
+                request_id: "http-2".to_string(),
                 stream_response: true,
             }
         );
@@ -348,7 +348,7 @@ async fn http_response_body_stream_drops_queued_terminal_before_next_generated_i
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -372,7 +372,7 @@ async fn http_response_body_stream_drops_queued_terminal_before_next_generated_i
         headers: Vec::new(),
         body: None,
         timeout_ms: None,
-        request_id: Some("caller-stream-id".to_string()),
+        request_id: "caller-stream-id".to_string(),
         stream_response: false,
     };
     let (reuse_response, _reuse_body_stream) =
@@ -411,7 +411,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_cancelled_request()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -430,7 +430,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_cancelled_request()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-2".to_string()),
+                request_id: "http-2".to_string(),
                 stream_response: true,
             }
         );
@@ -474,7 +474,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_cancelled_request()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("caller-stream-id".to_string()),
+                request_id: "caller-stream-id".to_string(),
                 stream_response: false,
             })
             .await;
@@ -495,7 +495,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_cancelled_request()
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -541,7 +541,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_drop() -> Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -580,7 +580,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_drop() -> Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-2".to_string()),
+                request_id: "http-2".to_string(),
                 stream_response: true,
             }
         );
@@ -615,7 +615,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_drop() -> Result<()
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -647,7 +647,7 @@ async fn http_response_body_stream_ignores_late_deltas_after_drop() -> Result<()
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -691,7 +691,7 @@ async fn http_response_body_stream_fails_when_transport_disconnects() -> Result<
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -717,7 +717,7 @@ async fn http_response_body_stream_fails_when_transport_disconnects() -> Result<
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -759,7 +759,7 @@ async fn http_response_body_stream_reports_disconnect_when_queue_is_full() -> Re
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -796,7 +796,7 @@ async fn http_response_body_stream_reports_disconnect_when_queue_is_full() -> Re
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )
@@ -852,7 +852,7 @@ async fn http_response_body_stream_reports_backpressure_truncation() -> Result<(
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("http-1".to_string()),
+                request_id: "http-1".to_string(),
                 stream_response: true,
             }
         );
@@ -894,7 +894,7 @@ async fn http_response_body_stream_reports_backpressure_truncation() -> Result<(
             headers: Vec::new(),
             body: None,
             timeout_ms: None,
-            request_id: Some("caller-stream-id".to_string()),
+            request_id: "caller-stream-id".to_string(),
             stream_response: false,
         }),
     )

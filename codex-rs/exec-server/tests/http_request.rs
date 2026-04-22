@@ -63,7 +63,7 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
                 }],
                 body: Some(b"request-body".to_vec().into()),
                 timeout_ms: Some(5_000),
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
         )
@@ -132,7 +132,7 @@ async fn exec_server_http_request_streams_response_body_notifications() -> anyho
                 }],
                 body: None,
                 timeout_ms: Some(5_000),
-                request_id: Some("stream-1".to_string()),
+                request_id: "stream-1".to_string(),
                 stream_response: true,
             })?,
         )
@@ -218,7 +218,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("stream-dup".to_string()),
+                request_id: "stream-dup".to_string(),
                 stream_response: true,
             })?,
         )
@@ -241,7 +241,7 @@ async fn exec_server_http_request_rejects_duplicate_stream_request_ids() -> anyh
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: Some("stream-dup".to_string()),
+                request_id: "stream-dup".to_string(),
                 stream_response: true,
             })?,
         )
@@ -295,7 +295,7 @@ async fn exec_server_http_request_honors_optional_timeout() -> anyhow::Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: None,
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
         )
@@ -320,7 +320,7 @@ async fn exec_server_http_request_honors_optional_timeout() -> anyhow::Result<()
                 headers: Vec::new(),
                 body: None,
                 timeout_ms: Some(10),
-                request_id: None,
+                request_id: "buffered-request".to_string(),
                 stream_response: false,
             })?,
         )
