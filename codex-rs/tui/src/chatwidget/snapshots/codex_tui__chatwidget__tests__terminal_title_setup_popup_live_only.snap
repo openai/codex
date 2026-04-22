@@ -7,14 +7,14 @@ expression: terminal_title_popup_snapshot(&mut chat)
 
   Type to search
   >
-› [x] project        Project name (falls back to current directory name)
-  [x] thread         Current thread title (omitted until available)
+› [x] project-name   Project name (falls back to current directory name)
+  [x] thread-title   Current thread title (omitted when unavailable)
   [x] git-branch     Current Git branch (omitted when unavailable)
   [x] task-progress  Latest task progress from update_plan (omitted until available)
   [ ] app-name       Codex app name
+  [ ] current-dir    Current working directory
   [ ] spinner        Animated task spinner (omitted while idle or when animations are off)
-  [ ] status         Compact session status text (Ready, Working, Thinking)
-  [ ] model          Current model name
+  [ ] run-state      Compact session run-state text (Ready, Working, Thinking)
 
   preview-live-root | Live preview thread | feature/live-preview-branch | Tasks 2/5
   Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

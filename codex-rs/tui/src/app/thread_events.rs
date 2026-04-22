@@ -264,3 +264,277 @@ impl ThreadEventChannel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::PathBufExt;
+    use crate::test_support::test_path_buf;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::HookCompletedNotification;
+    use codex_app_server_protocol::HookEventName as AppServerHookEventName;
+    use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
+    use codex_app_server_protocol::HookHandlerType as AppServerHookHandlerType;
+    use codex_app_server_protocol::HookOutputEntry as AppServerHookOutputEntry;
+    use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
+    use codex_app_server_protocol::HookRunStatus as AppServerHookRunStatus;
+    use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
+    use codex_app_server_protocol::HookScope as AppServerHookScope;
+    use codex_app_server_protocol::HookStartedNotification;
+    use codex_app_server_protocol::RequestId as AppServerRequestId;
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartedNotification;
+    use codex_config::types::ApprovalsReviewer;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
+        ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            fork_parent_title: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: cwd.abs(),
+            instruction_source_paths: Vec::new(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }
+    }
+
+    fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
+        Turn {
+            id: turn_id.to_string(),
+            items,
+            status,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }
+    }
+
+    fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: Turn {
+                started_at: Some(0),
+                ..test_turn(turn_id, TurnStatus::InProgress, Vec::new())
+            },
+        })
+    }
+
+    fn turn_completed_notification(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: TurnStatus,
+    ) -> ServerNotification {
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: Turn {
+                completed_at: Some(0),
+                duration_ms: Some(1),
+                ..test_turn(turn_id, status, Vec::new())
+            },
+        })
+    }
+
+    fn hook_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookStarted(HookStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: test_path_buf("/tmp/hooks.json").abs(),
+                source: codex_app_server_protocol::HookSource::User,
+                display_order: 0,
+                status: AppServerHookRunStatus::Running,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        })
+    }
+
+    fn hook_completed_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookCompleted(HookCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: test_path_buf("/tmp/hooks.json").abs(),
+                source: codex_app_server_protocol::HookSource::User,
+                display_order: 0,
+                status: AppServerHookRunStatus::Stopped,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: Some(11),
+                duration_ms: Some(10),
+                entries: vec![
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Warning,
+                        text: "go-workflow must start from PlanMode".to_string(),
+                    },
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Stop,
+                        text: "prompt blocked".to_string(),
+                    },
+                ],
+            },
+        })
+    }
+
+    fn exec_approval_request(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+        approval_id: Option<&str>,
+    ) -> ServerRequest {
+        ServerRequest::CommandExecutionRequestApproval {
+            request_id: AppServerRequestId::Integer(1),
+            params: CommandExecutionRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: item_id.to_string(),
+                approval_id: approval_id.map(str::to_string),
+                reason: Some("needs approval".to_string()),
+                network_approval_context: None,
+                command: Some("echo hello".to_string()),
+                cwd: Some(test_path_buf("/tmp/project").abs()),
+                command_actions: None,
+                additional_permissions: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: None,
+                available_decisions: None,
+            },
+        }
+    }
+
+    #[test]
+    fn thread_event_store_tracks_active_turn_lifecycle() {
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        assert_eq!(store.active_turn_id(), None);
+
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+        assert_eq!(store.active_turn_id(), Some("turn-1"));
+
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-2",
+            TurnStatus::Completed,
+        ));
+        assert_eq!(store.active_turn_id(), Some("turn-1"));
+
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-1",
+            TurnStatus::Interrupted,
+        ));
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
+    fn thread_event_store_restores_active_turn_from_snapshot_turns() {
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+        let turns = vec![
+            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
+            test_turn("turn-2", TurnStatus::InProgress, Vec::new()),
+        ];
+
+        let store =
+            ThreadEventStore::new_with_session(/*capacity*/ 8, session.clone(), turns.clone());
+        assert_eq!(store.active_turn_id(), Some("turn-2"));
+
+        let mut refreshed_store = ThreadEventStore::new(/*capacity*/ 8);
+        refreshed_store.set_session(session, turns);
+        assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
+    }
+
+    #[test]
+    fn thread_event_store_clear_active_turn_id_resets_cached_turn() {
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+
+        store.clear_active_turn_id();
+
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_resolved_request_state() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        store.push_request(exec_approval_request(
+            thread_id,
+            "turn-approval",
+            "call-approval",
+            /*approval_id*/ None,
+        ));
+        store.push_notification(ServerNotification::ServerRequestResolved(
+            codex_app_server_protocol::ServerRequestResolvedNotification {
+                request_id: AppServerRequestId::Integer(1),
+                thread_id: thread_id.to_string(),
+            },
+        ));
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        assert!(snapshot.events.is_empty());
+        assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_hook_notifications() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        store.push_notification(hook_started_notification(thread_id, "turn-hook"));
+        store.push_notification(hook_completed_notification(thread_id, "turn-hook"));
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        let hook_notifications = snapshot
+            .events
+            .into_iter()
+            .map(|event| match event {
+                ThreadBufferedEvent::Notification(notification) => {
+                    serde_json::to_value(notification).expect("hook notification should serialize")
+                }
+                other => panic!("expected buffered hook notification, saw: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hook_notifications,
+            vec![
+                serde_json::to_value(hook_started_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+                serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+            ]
+        );
+    }
+}

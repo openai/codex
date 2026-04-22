@@ -20,6 +20,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -73,6 +74,100 @@ fn ev_namespaced_function_call(
             "arguments": arguments,
         }
     })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("unified exec should enable for test");
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("js repl should enable for test");
+        config.include_apply_patch_tool = true;
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_environments("which tools are available?", Some(vec![]))
+        .await?;
+
+    let tools = tool_names(&response_mock.single_request().body_json());
+    assert!(
+        tools.contains(&"update_plan".to_string()),
+        "non-environment tool should remain available; got {tools:?}"
+    );
+    for environment_tool in [
+        "exec_command",
+        "write_stdin",
+        "js_repl",
+        "js_repl_reset",
+        "apply_patch",
+        "view_image",
+    ] {
+        assert!(
+            !tools.contains(&environment_tool.to_string()),
+            "{environment_tool} should be omitted for explicit empty turn environments; got {tools:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_environment_selection_keeps_environment_backed_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("unified exec should enable for test");
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_environments(
+        "which tools are available?",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: "local".to_string(),
+            cwd: test.config.cwd.clone(),
+        }]),
+    )
+    .await?;
+
+    let tools = tool_names(&response_mock.single_request().body_json());
+    assert!(
+        tools.contains(&"exec_command".to_string()),
+        "environment tool should remain available with selected local environment; got {tools:?}"
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
-use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -78,9 +77,7 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::from_environment(
-            parent_ctx.environment.as_deref(),
-        )),
+        environment_manager: Arc::clone(&parent_session.services.environment_manager),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -185,6 +182,7 @@ pub(crate) async fn run_codex_thread_one_shot(
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
+        environments: None,
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
@@ -741,8 +739,14 @@ async fn handle_request_permissions(
         reason: event.reason,
         permissions: event.permissions,
     };
-    let response_fut =
-        parent_session.request_permissions(parent_ctx, call_id.clone(), args, cancel_token.clone());
+    let cwd = event.cwd.unwrap_or_else(|| parent_ctx.cwd.clone());
+    let response_fut = parent_session.request_permissions_for_cwd(
+        parent_ctx,
+        call_id.clone(),
+        args,
+        cwd,
+        cancel_token.clone(),
+    );
     let response =
         await_request_permissions_with_cancel(response_fut, parent_session, &call_id, cancel_token)
             .await;

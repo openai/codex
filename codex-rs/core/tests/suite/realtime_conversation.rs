@@ -15,7 +15,6 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -26,11 +25,7 @@ use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
@@ -71,7 +66,6 @@ const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
 const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
     "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
-const WEBSOCKET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct RealtimeCallRequestCapture {
@@ -148,7 +142,7 @@ async fn wait_for_matching_websocket_request<F>(
 where
     F: Fn(&core_test_support::responses::WebSocketRequest) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + WEBSOCKET_REQUEST_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(request) = server
             .connections()
@@ -208,18 +202,16 @@ async fn seed_recent_thread(
     let db = test.codex.state_db().context("state db enabled")?;
     let thread_id = ThreadId::new();
     let updated_at = Utc::now();
-    let rollout_dir = test
+    let rollout_path = test
         .codex_home_path()
-        .join("sessions")
-        .join(updated_at.format("%Y/%m/%d").to_string());
-    fs::create_dir_all(&rollout_dir)?;
-    let rollout_path = rollout_dir.join(format!(
-        "rollout-{}-{thread_id}.jsonl",
-        updated_at.format("%Y-%m-%dT%H-%M-%S")
-    ));
+        .join(format!("rollout-{thread_id}.jsonl"));
+    // This helper seeds SQLite metadata directly. Local listing drops stale metadata rows whose
+    // rollout path no longer exists, so create the placeholder path that the test metadata points
+    // at without exercising rollout writing in this realtime-context test.
+    std::fs::write(&rollout_path, "")?;
     let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
-        rollout_path.clone(),
+        rollout_path,
         updated_at,
         SessionSource::Cli,
     );
@@ -229,45 +221,6 @@ async fn seed_recent_thread(
     let mut metadata = metadata_builder.build("test-provider");
     metadata.title = title.to_string();
     metadata.first_user_message = Some(first_user_message.to_string());
-
-    let timestamp = updated_at.to_rfc3339();
-    let session_meta = RolloutLine {
-        timestamp: timestamp.clone(),
-        item: RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                id: thread_id,
-                timestamp: timestamp.clone(),
-                cwd: metadata.cwd.clone(),
-                originator: "cli".to_string(),
-                cli_version: "0.0.0".to_string(),
-                source: SessionSource::Cli,
-                model_provider: Some("test-provider".to_string()),
-                ..Default::default()
-            },
-            git: Some(GitInfo {
-                commit_hash: None,
-                branch: metadata.git_branch.clone(),
-                repository_url: None,
-            }),
-        }),
-    };
-    let user_message = RolloutLine {
-        timestamp,
-        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: first_user_message.to_string(),
-            images: None,
-            local_images: Vec::new(),
-            text_elements: Vec::new(),
-        })),
-    };
-    fs::write(
-        &rollout_path,
-        format!(
-            "{}\n{}\n",
-            serde_json::to_string(&session_meta)?,
-            serde_json::to_string(&user_message)?
-        ),
-    )?;
     db.upsert_thread(&metadata).await?;
 
     Ok(())
@@ -1943,6 +1896,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     let prefixed_user_text = format!("[USER] {user_text}");
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.to_string(),
                 text_elements: Vec::new(),
@@ -2072,6 +2026,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     );
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.clone(),
                 text_elements: Vec::new(),
@@ -3230,6 +3185,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".to_string(),
                 text_elements: Vec::new(),

@@ -59,3 +59,38 @@ pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_return_shortcuts_match_esc_and_ctrl_c() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+    }
+}

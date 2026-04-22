@@ -1733,6 +1733,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     // first turn with workspace-write sandbox and first_cwd
     let first_turn = mcp
         .send_turn_start_request(TurnStartParams {
+            environments: None,
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
@@ -1773,6 +1774,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     // second turn with workspace-write and second_cwd, ensure exec begins in second_cwd
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
+            environments: None,
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),

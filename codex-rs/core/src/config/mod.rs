@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConstrainedWithSource;
+use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
@@ -50,7 +51,7 @@ use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
-pub use codex_features::Feature;
+use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::FeatureToml;
@@ -59,7 +60,6 @@ use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
-use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -108,7 +108,6 @@ mod network_proxy_spec;
 mod permissions;
 #[cfg(test)]
 mod schema;
-pub(crate) mod service;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
@@ -118,8 +117,6 @@ pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
-pub use service::ConfigService;
-pub use service::ConfigServiceError;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
@@ -637,16 +634,6 @@ impl AuthManagerConfig for Config {
     fn forced_chatgpt_workspace_id(&self) -> Option<String> {
         self.forced_chatgpt_workspace_id.clone()
     }
-
-    fn chatgpt_base_url(&self) -> Option<String> {
-        Some(self.chatgpt_base_url.clone())
-    }
-
-    fn background_agent_task_auth_mode(&self) -> BackgroundAgentTaskAuthMode {
-        BackgroundAgentTaskAuthMode::from_feature_enabled(
-            self.features.enabled(Feature::UseAgentIdentity),
-        )
-    }
 }
 
 #[derive(Clone)]
@@ -947,7 +934,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
     Ok(cfg)
 }
 
-pub(crate) fn deserialize_config_toml_with_base(
+pub fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
@@ -957,6 +944,15 @@ pub(crate) fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Validate user-visible feature settings against managed feature requirements.
+pub fn validate_feature_requirements_for_config_toml(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<()> {
+    managed_features::validate_explicit_feature_settings_in_config_toml(cfg, feature_requirements)?;
+    managed_features::validate_feature_requirements_in_config_toml(cfg, feature_requirements)
 }
 
 fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
