@@ -1386,6 +1386,70 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub glob_scan_max_depth: Option<NonZeroUsize>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
@@ -3128,6 +3192,8 @@ pub struct ThreadStartResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    #[serde(default)]
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3217,6 +3283,8 @@ pub struct ThreadResumeResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    #[serde(default)]
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3297,6 +3365,8 @@ pub struct ThreadForkResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    #[serde(default)]
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -7420,6 +7490,47 @@ mod tests {
     }
 
     #[test]
+    fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: CoreFileSystemAccessMode::None,
+            }],
+            glob_scan_max_depth: NonZeroUsize::new(2),
+        };
+
+        let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            PermissionProfileFileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                }],
+                glob_scan_max_depth: NonZeroUsize::new(2),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
+        serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
+            "entries": [],
+            "globScanMaxDepth": 0,
+        }))
+        .expect_err("zero glob scan depth should fail deserialization");
+    }
+
+    #[test]
     fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
         let read_only_path = if cfg!(windows) {
             r"C:\tmp\read-only"
@@ -9708,7 +9819,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_lifecycle_responses_default_missing_instruction_sources() {
+    fn thread_lifecycle_responses_default_missing_compat_fields() {
         let response = json!({
             "thread": {
                 "id": "thread-id",
@@ -9749,6 +9860,9 @@ mod tests {
         assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
         assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
         assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
+        assert_eq!(start.permission_profile, PermissionProfile::default());
+        assert_eq!(resume.permission_profile, PermissionProfile::default());
+        assert_eq!(fork.permission_profile, PermissionProfile::default());
     }
 
     #[test]

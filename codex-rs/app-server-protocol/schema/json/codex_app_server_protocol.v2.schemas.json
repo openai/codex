@@ -7651,6 +7651,53 @@
         }
       ]
     },
+    "PermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PermissionProfileFileSystemPermissions": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/FileSystemSandboxEntry"
+          },
+          "type": "array"
+        },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -11954,6 +12001,17 @@
         "modelProvider": {
           "type": "string"
         },
+        "permissionProfile": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "default": {
+            "fileSystem": null,
+            "network": null
+          }
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -13344,6 +13402,17 @@
         "modelProvider": {
           "type": "string"
         },
+        "permissionProfile": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "default": {
+            "fileSystem": null,
+            "network": null
+          }
+        },
         "reasoningEffort": {
           "anyOf": [
             {
@@ -13642,6 +13711,17 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "permissionProfile": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            }
+          ],
+          "default": {
+            "fileSystem": null,
+            "network": null
+          }
         },
         "reasoningEffort": {
           "anyOf": [
