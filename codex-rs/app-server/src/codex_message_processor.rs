@@ -49,6 +49,7 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecTerminateParams;
+use codex_app_server_protocol::CommandExecUnsandboxedParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
@@ -658,6 +659,29 @@ fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
     }
 }
 
+#[derive(Debug)]
+struct CommandExecRequestParams {
+    command: Vec<String>,
+    process_id: Option<String>,
+    tty: bool,
+    stream_stdin: bool,
+    stream_stdout_stderr: bool,
+    output_bytes_cap: Option<usize>,
+    disable_output_cap: bool,
+    disable_timeout: bool,
+    timeout_ms: Option<i64>,
+    cwd: Option<PathBuf>,
+    env_overrides: Option<HashMap<String, Option<String>>>,
+    size: Option<codex_app_server_protocol::CommandExecTerminalSize>,
+}
+
+enum CommandExecMode {
+    Sandboxed {
+        sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    },
+    Unsandboxed,
+}
+
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
@@ -1145,6 +1169,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::CommandExecUnsandboxed { request_id, params } => {
+                self.exec_unsandboxed_command(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::CommandExecWrite { request_id, params } => {
@@ -2045,20 +2073,6 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CommandExecParams,
     ) {
-        tracing::debug!("ExecOneOffCommand params: {params:?}");
-
-        let request = request_id.clone();
-
-        if params.command.is_empty() {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "command must not be empty".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request, error).await;
-            return;
-        }
-
         let CommandExecParams {
             command,
             process_id,
@@ -2074,11 +2088,110 @@ impl CodexMessageProcessor {
             size,
             sandbox_policy,
         } = params;
+        self.exec_command(
+            request_id,
+            CommandExecRequestParams {
+                command,
+                process_id,
+                tty,
+                stream_stdin,
+                stream_stdout_stderr,
+                output_bytes_cap,
+                disable_output_cap,
+                disable_timeout,
+                timeout_ms,
+                cwd,
+                env_overrides,
+                size,
+            },
+            CommandExecMode::Sandboxed { sandbox_policy },
+        )
+        .await;
+    }
+
+    async fn exec_unsandboxed_command(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecUnsandboxedParams,
+    ) {
+        let CommandExecUnsandboxedParams {
+            command,
+            process_id,
+            tty,
+            stream_stdin,
+            stream_stdout_stderr,
+            output_bytes_cap,
+            disable_output_cap,
+            disable_timeout,
+            timeout_ms,
+            cwd,
+            env: env_overrides,
+            size,
+        } = params;
+        self.exec_command(
+            request_id,
+            CommandExecRequestParams {
+                command,
+                process_id,
+                tty,
+                stream_stdin,
+                stream_stdout_stderr,
+                output_bytes_cap,
+                disable_output_cap,
+                disable_timeout,
+                timeout_ms,
+                cwd,
+                env_overrides,
+                size,
+            },
+            CommandExecMode::Unsandboxed,
+        )
+        .await;
+    }
+
+    async fn exec_command(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecRequestParams,
+        mode: CommandExecMode,
+    ) {
+        let method_name = match &mode {
+            CommandExecMode::Sandboxed { .. } => "command/exec",
+            CommandExecMode::Unsandboxed => "command/execUnsandboxed",
+        };
+        tracing::debug!("{method_name} params: {params:?}");
+
+        let request = request_id.clone();
+
+        if params.command.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "command must not be empty".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request, error).await;
+            return;
+        }
+
+        let CommandExecRequestParams {
+            command,
+            process_id,
+            tty,
+            stream_stdin,
+            stream_stdout_stderr,
+            output_bytes_cap,
+            disable_output_cap,
+            disable_timeout,
+            timeout_ms,
+            cwd,
+            env_overrides,
+            size,
+        } = params;
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
                 code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec size requires tty: true".to_string(),
+                message: format!("{method_name} size requires tty: true"),
                 data: None,
             };
             self.outgoing.send_error(request, error).await;
@@ -2088,8 +2201,9 @@ impl CodexMessageProcessor {
         if disable_output_cap && output_bytes_cap.is_some() {
             let error = JSONRPCErrorError {
                 code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec cannot set both outputBytesCap and disableOutputCap"
-                    .to_string(),
+                message: format!(
+                    "{method_name} cannot set both outputBytesCap and disableOutputCap"
+                ),
                 data: None,
             };
             self.outgoing.send_error(request, error).await;
@@ -2099,7 +2213,7 @@ impl CodexMessageProcessor {
         if disable_timeout && timeout_ms.is_some() {
             let error = JSONRPCErrorError {
                 code: INVALID_PARAMS_ERROR_CODE,
-                message: "command/exec cannot set both timeoutMs and disableTimeout".to_string(),
+                message: format!("{method_name} cannot set both timeoutMs and disableTimeout"),
                 data: None,
             };
             self.outgoing.send_error(request, error).await;
@@ -2130,7 +2244,7 @@ impl CodexMessageProcessor {
                     let error = JSONRPCErrorError {
                         code: INVALID_PARAMS_ERROR_CODE,
                         message: format!(
-                            "command/exec timeoutMs must be non-negative, got {timeout_ms}"
+                            "{method_name} timeoutMs must be non-negative, got {timeout_ms}"
                         ),
                         data: None,
                     };
@@ -2140,33 +2254,6 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
-        let managed_network_requirements_enabled =
-            self.config.managed_network_requirements_enabled();
-        let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec
-                .start_proxy(
-                    self.config.permissions.sandbox_policy.get(),
-                    /*policy_decider*/ None,
-                    /*blocked_request_observer*/ None,
-                    managed_network_requirements_enabled,
-                    NetworkProxyAuditMetadata::default(),
-                )
-                .await
-            {
-                Ok(started) => Some(started),
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to start managed network proxy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            },
-            None => None,
-        };
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let output_bytes_cap = if disable_output_cap {
             None
         } else {
@@ -2185,62 +2272,9 @@ impl CodexMessageProcessor {
         } else {
             ExecCapturePolicy::ShellTool
         };
-        let sandbox_cwd = self.config.cwd.clone();
-        let exec_params = ExecParams {
-            command,
-            cwd: cwd.clone(),
-            expiration,
-            capture_policy,
-            env,
-            network: started_network_proxy
-                .as_ref()
-                .map(codex_core::config::StartedNetworkProxy::proxy),
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop: self
-                .config
-                .permissions
-                .windows_sandbox_private_desktop,
-            justification: None,
-            arg0: None,
-        };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
-        let (
-            effective_policy,
-            effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
-                Ok(()) => {
-                    let file_system_sandbox_policy =
-                        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
-                    let network_sandbox_policy =
-                        codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
-                    (policy, file_system_sandbox_policy, network_sandbox_policy)
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid sandbox policy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            },
-            None => (
-                self.config.permissions.sandbox_policy.get().clone(),
-                self.config.permissions.file_system_sandbox_policy.clone(),
-                self.config.permissions.network_sandbox_policy,
-            ),
-        };
-
-        let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
-        let started_network_proxy_for_task = started_network_proxy;
-        let use_legacy_landlock = self.config.features.use_legacy_landlock();
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
             Some(Err(error)) => {
@@ -2250,43 +2284,146 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        match codex_core::exec::build_exec_request(
-            exec_params,
-            &effective_policy,
-            &effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
-            &sandbox_cwd,
-            &codex_linux_sandbox_exe,
-            use_legacy_landlock,
-        ) {
-            Ok(exec_request) => {
-                if let Err(error) = self
-                    .command_exec_manager
-                    .start(StartCommandExecParams {
-                        outgoing,
-                        request_id: request_for_task,
-                        process_id,
-                        exec_request,
-                        started_network_proxy: started_network_proxy_for_task,
-                        tty,
-                        stream_stdin,
-                        stream_stdout_stderr,
-                        output_bytes_cap,
-                        size,
-                    })
-                    .await
-                {
-                    self.outgoing.send_error(request, error).await;
+        let (exec_request, started_network_proxy) = match mode {
+            CommandExecMode::Sandboxed { sandbox_policy } => {
+                let managed_network_requirements_enabled =
+                    self.config.managed_network_requirements_enabled();
+                let started_network_proxy = match self.config.permissions.network.as_ref() {
+                    Some(spec) => match spec
+                        .start_proxy(
+                            self.config.permissions.sandbox_policy.get(),
+                            /*policy_decider*/ None,
+                            /*blocked_request_observer*/ None,
+                            managed_network_requirements_enabled,
+                            NetworkProxyAuditMetadata::default(),
+                        )
+                        .await
+                    {
+                        Ok(started) => Some(started),
+                        Err(err) => {
+                            let error = JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("failed to start managed network proxy: {err}"),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request, error).await;
+                            return;
+                        }
+                    },
+                    None => None,
+                };
+                let sandbox_cwd = self.config.cwd.clone();
+                let exec_params = ExecParams {
+                    command,
+                    cwd: cwd.clone(),
+                    expiration,
+                    capture_policy,
+                    env,
+                    network: started_network_proxy
+                        .as_ref()
+                        .map(codex_core::config::StartedNetworkProxy::proxy),
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    windows_sandbox_level: WindowsSandboxLevel::from_config(&self.config),
+                    windows_sandbox_private_desktop: self
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
+                    justification: None,
+                    arg0: None,
+                };
+
+                let requested_policy = sandbox_policy.map(|policy| policy.to_core());
+                let (
+                    effective_policy,
+                    effective_file_system_sandbox_policy,
+                    effective_network_sandbox_policy,
+                ) = match requested_policy {
+                    Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+                        Ok(()) => {
+                            let file_system_sandbox_policy =
+                                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                                    &policy,
+                                    &sandbox_cwd,
+                                );
+                            let network_sandbox_policy =
+                                codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
+                            (policy, file_system_sandbox_policy, network_sandbox_policy)
+                        }
+                        Err(err) => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: format!("invalid sandbox policy: {err}"),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request, error).await;
+                            return;
+                        }
+                    },
+                    None => (
+                        self.config.permissions.sandbox_policy.get().clone(),
+                        self.config.permissions.file_system_sandbox_policy.clone(),
+                        self.config.permissions.network_sandbox_policy,
+                    ),
+                };
+
+                match codex_core::exec::build_exec_request(
+                    exec_params,
+                    &effective_policy,
+                    &effective_file_system_sandbox_policy,
+                    effective_network_sandbox_policy,
+                    &sandbox_cwd,
+                    &self.arg0_paths.codex_linux_sandbox_exe,
+                    self.config.features.use_legacy_landlock(),
+                ) {
+                    Ok(exec_request) => (exec_request, started_network_proxy),
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("exec failed: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request, error).await;
+                        return;
+                    }
                 }
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("exec failed: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request, error).await;
-            }
+            CommandExecMode::Unsandboxed => (
+                codex_core::sandboxing::ExecRequest::new(
+                    command,
+                    cwd,
+                    env,
+                    /*network*/ None,
+                    expiration,
+                    capture_policy,
+                    codex_sandboxing::SandboxType::None,
+                    WindowsSandboxLevel::Disabled,
+                    /*windows_sandbox_private_desktop*/ false,
+                    codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    codex_protocol::permissions::FileSystemSandboxPolicy::unrestricted(),
+                    codex_protocol::permissions::NetworkSandboxPolicy::Enabled,
+                    /*arg0*/ None,
+                ),
+                None,
+            ),
+        };
+
+        if let Err(error) = self
+            .command_exec_manager
+            .start(StartCommandExecParams {
+                outgoing,
+                request_id: request_for_task,
+                process_id,
+                exec_request,
+                started_network_proxy,
+                tty,
+                stream_stdin,
+                stream_stdout_stderr,
+                output_bytes_cap,
+                size,
+            })
+            .await
+        {
+            self.outgoing.send_error(request, error).await;
         }
     }
 

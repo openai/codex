@@ -50,6 +50,7 @@ export type { CommandExecResponse } from "./CommandExecResponse";
 export type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
 export type { CommandExecTerminateParams } from "./CommandExecTerminateParams";
 export type { CommandExecTerminateResponse } from "./CommandExecTerminateResponse";
+export type { CommandExecUnsandboxedParams } from "./CommandExecUnsandboxedParams";
 export type { CommandExecWriteParams } from "./CommandExecWriteParams";
 export type { CommandExecWriteResponse } from "./CommandExecWriteResponse";
 export type { CommandExecutionApprovalDecision } from "./CommandExecutionApprovalDecision";
