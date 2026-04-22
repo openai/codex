@@ -101,18 +101,17 @@ impl CodexMessageProcessor {
             }
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
-                    let same_incomplete_goal = goal.as_ref().is_some_and(|goal| {
+                    if let Some(goal) = goal.as_ref().filter(|goal| {
                         goal.objective == objective
                             && goal.status != codex_state::ThreadGoalStatus::Complete
-                    });
-                    if same_incomplete_goal {
+                    }) {
                         state_db
                             .update_thread_goal(
                                 thread_id,
                                 codex_state::ThreadGoalUpdate {
                                     status,
                                     token_budget: params.token_budget,
-                                    expected_goal_id: None,
+                                    expected_goal_id: Some(goal.goal_id.clone()),
                                 },
                             )
                             .await
