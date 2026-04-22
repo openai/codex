@@ -696,6 +696,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             guardian_rejections: Mutex::new(HashMap::new()),
             guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
+            runtime_handle: tokio::runtime::Handle::current(),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),

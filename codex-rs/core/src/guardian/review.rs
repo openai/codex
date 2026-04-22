@@ -213,9 +213,13 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
         )
         .await;
 
+    let runtime_handle = session.services.runtime_handle.clone();
     let session = Arc::clone(session);
-    let _abort_task = tokio::spawn(async move {
-        session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let turn_id = turn_id.to_string();
+    let _abort_task = runtime_handle.spawn(async move {
+        session
+            .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted)
+            .await;
     });
 }
 
