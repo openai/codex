@@ -71,6 +71,8 @@ use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -953,6 +955,64 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
         payload[0]["event_params"]["runtime"]["runtime_arch"],
         "x86_64"
     );
+}
+
+#[tokio::test]
+async fn unrelated_client_requests_are_ignored_by_reducer() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(ClientRequest::ThreadArchive {
+                    request_id: RequestId::Integer(3),
+                    params: ThreadArchiveParams {
+                        thread_id: "thread-2".to_string(),
+                    },
+                }),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+            },
+            &mut events,
+        )
+        .await;
+
+    assert!(
+        events.is_empty(),
+        "unrelated requests must not create pending turn state"
+    );
+}
+
+#[tokio::test]
+async fn unrelated_client_responses_are_ignored_by_reducer() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(ClientResponse::ThreadArchive {
+                    request_id: RequestId::Integer(9),
+                    response: ThreadArchiveResponse {},
+                }),
+            },
+            &mut events,
+        )
+        .await;
+
+    assert!(events.is_empty());
 }
 
 #[tokio::test]

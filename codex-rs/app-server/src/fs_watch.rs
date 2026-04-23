@@ -234,7 +234,11 @@ mod tests {
         const OUTGOING_BUFFER: usize = 1;
         let (tx, _rx) = mpsc::channel(OUTGOING_BUFFER);
         FsWatchManager::new_with_file_watcher(
-            Arc::new(OutgoingMessageSender::new(tx)),
+            Arc::new(OutgoingMessageSender::new(
+                tx,
+                codex_analytics::AnalyticsEventsClient::disabled(),
+                /*general_analytics_enabled*/ false,
+            )),
             Arc::new(FileWatcher::noop()),
         )
     }

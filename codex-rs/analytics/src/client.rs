@@ -23,6 +23,7 @@ use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -121,6 +122,18 @@ impl AnalyticsEventsClient {
         Self {
             queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url),
             analytics_enabled,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        let (sender, _receiver) = mpsc::channel(1);
+        Self {
+            queue: AnalyticsEventsQueue {
+                sender,
+                app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+                plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+            },
+            analytics_enabled: Some(false),
         }
     }
 
@@ -278,6 +291,19 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Response {
             connection_id,
             response: Box::new(response),
+        });
+    }
+
+    pub fn track_response_payload(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: Box<ClientResponsePayload>,
+    ) {
+        self.record_fact(AnalyticsFact::ResponsePayload {
+            connection_id,
+            request_id,
+            response,
         });
     }
 

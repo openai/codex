@@ -18,6 +18,7 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -1857,11 +1858,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                             let response = InterruptConversationResponse {
                                 abort_reason: turn_aborted_event.reason.clone(),
                             };
-                            outgoing.send_response(rid, response).await;
+                            outgoing
+                                .send_response(
+                                    rid,
+                                    ClientResponsePayload::InterruptConversation(response),
+                                )
+                                .await;
                         }
                         ApiVersion::V2 => {
                             let response = TurnInterruptResponse {};
-                            outgoing.send_response(rid, response).await;
+                            outgoing
+                                .send_response(rid, ClientResponsePayload::TurnInterrupt(response))
+                                .await;
                         }
                     }
                 }
@@ -1951,7 +1959,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     }
                 };
 
-                outgoing.send_response(request_id, response).await;
+                outgoing
+                    .send_response(request_id, ClientResponsePayload::ThreadRollback(response))
+                    .await;
             }
         }
         EventMsg::ThreadNameUpdated(thread_name_event) => {
@@ -3399,7 +3409,11 @@ mod tests {
         let conversation_id = ThreadId::new();
         let thread_state = new_thread_state();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -3468,7 +3482,11 @@ mod tests {
         let conversation_id = ThreadId::new();
         let thread_state = new_thread_state();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -3558,7 +3576,11 @@ mod tests {
         let thread_state = new_thread_state();
         let thread_watch_manager = ThreadWatchManager::new();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4183,7 +4205,11 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete1".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4247,7 +4273,11 @@ mod tests {
         )
         .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4295,7 +4325,11 @@ mod tests {
         )
         .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4337,7 +4371,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4391,7 +4429,11 @@ mod tests {
         let conversation_id = ThreadId::new();
         let turn_id = "turn-123".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4480,7 +4522,11 @@ mod tests {
         let conversation_id = ThreadId::new();
         let turn_id = "turn-456".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4553,7 +4599,11 @@ mod tests {
         let thread_state = new_thread_state();
 
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4815,7 +4865,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_diff_emits_v2_notification() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4853,7 +4907,11 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,
             vec![ConnectionId(1)],
@@ -4879,7 +4937,11 @@ mod tests {
     #[tokio::test]
     async fn test_hook_prompt_raw_response_emits_item_completed() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+            /*general_analytics_enabled*/ false,
+        ));
         let conversation_id = ThreadId::new();
         let outgoing = ThreadScopedOutgoingMessageSender::new(
             outgoing,

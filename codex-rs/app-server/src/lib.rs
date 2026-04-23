@@ -67,6 +67,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod analytics;
 mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
@@ -666,12 +667,20 @@ pub async fn run_main_with_transport(
     });
 
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        let analytics_events_client =
+            crate::analytics::analytics_events_client_from_config(auth_manager.clone(), &config);
+        let general_analytics_enabled = config.features.enabled(Feature::GeneralAnalytics);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            analytics_events_client.clone(),
+            general_analytics_enabled,
+        ));
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
+            analytics_events_client,
             arg0_paths,
             config: Arc::new(config),
             config_manager,
