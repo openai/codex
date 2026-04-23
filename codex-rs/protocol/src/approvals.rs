@@ -1,8 +1,6 @@
 use crate::mcp::RequestId;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
-use crate::permissions::FileSystemSandboxPolicy;
-use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -16,18 +14,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
+/// Fully resolved permissions for rerunning an intercepted child process.
+///
+/// `permission_profile` is the canonical permission model. `sandbox_policy`
+/// remains as the legacy adapter for sandbox backends that still require it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Permissions {
+pub struct ResolvedPermissionProfile {
+    pub permission_profile: PermissionProfile,
     pub sandbox_policy: SandboxPolicy,
-    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
-    pub network_sandbox_policy: NetworkSandboxPolicy,
 }
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationPermissions {
-    PermissionProfile(PermissionProfile),
-    Permissions(Permissions),
+    /// Permissions to merge with the active turn permissions.
+    AdditionalPermissionProfile(PermissionProfile),
+    /// Fully resolved permissions that should replace the active turn permissions.
+    ResolvedPermissionProfile(ResolvedPermissionProfile),
 }
 
 /// Proposed execpolicy change to allow commands starting with this prefix.

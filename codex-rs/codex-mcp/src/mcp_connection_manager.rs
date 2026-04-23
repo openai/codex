@@ -42,6 +42,7 @@ use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -646,6 +647,8 @@ pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     pub sandbox_policy: SandboxPolicy,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
@@ -666,8 +669,8 @@ pub struct McpConnectionManager {
 /// servers should run for the current caller. Keep it explicit at manager
 /// construction time so status/snapshot paths and real sessions make the same
 /// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
-/// used only when an executor-backed stdio server omits `cwd` and the executor
-/// API still needs a concrete process working directory.
+/// used when a stdio server omits `cwd` and the launcher needs a concrete
+/// process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Arc<Environment>,
@@ -1573,7 +1576,9 @@ async fn make_rmcp_client(
                     runtime_environment.fallback_cwd(),
                 ))
             } else {
-                Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_environment.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
             };
 
             // `RmcpClient` always sees a launched MCP stdio server. The
@@ -1589,23 +1594,11 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            if remote_environment {
-                if !runtime_environment.environment().is_remote() {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server `{server_name}` requires a remote executor environment"
-                    )));
-                }
+            if remote_environment && !runtime_environment.environment().is_remote() {
                 return Err(StartupOutcomeError::from(anyhow!(
-                    // Remote HTTP needs the future low-level executor
-                    // `network/request` API so reqwest runs on the executor side.
-                    // Do not fall back to local HTTP here; the config explicitly
-                    // asked for remote placement.
-                    "remote streamable HTTP MCP server `{server_name}` is not implemented yet"
+                    "remote MCP server `{server_name}` requires a remote environment"
                 )));
             }
-
-            // Local streamable HTTP remains the existing reqwest path from
-            // the orchestrator process.
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
@@ -1618,6 +1611,7 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
+                runtime_environment.environment().get_http_client(),
             )
             .await
             .map_err(StartupOutcomeError::from)

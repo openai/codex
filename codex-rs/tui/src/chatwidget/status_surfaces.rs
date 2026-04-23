@@ -482,7 +482,7 @@ impl ChatWidget {
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
-                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
                     "Fast on".to_string()
                 } else {
                     "Fast off".to_string()
@@ -603,7 +603,7 @@ impl ChatWidget {
     fn model_with_reasoning_display_name(&self) -> String {
         let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
         let fast_label =
-            if self.should_show_fast_status(self.current_model(), self.config.service_tier) {
+            if self.should_show_fast_status(self.current_model(), self.current_service_tier()) {
                 " fast"
             } else {
                 ""

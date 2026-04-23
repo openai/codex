@@ -72,6 +72,7 @@ fn invocation(
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
+        source: crate::tools::context::ToolCallSource::Direct,
         payload,
     }
 }
@@ -2851,7 +2852,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
+async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -2896,46 +2897,25 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
         .expect("worker path");
 
     session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path.clone(),
+        worker_path,
         AgentPath::root(),
         Vec::new(),
         "already queued".to_string(),
         /*trigger_turn*/ false,
     ));
 
-    let wait_task = tokio::spawn({
-        let session = session.clone();
-        let turn = turn.clone();
-        async move {
-            WaitAgentHandlerV2
-                .handle(invocation(
-                    session,
-                    turn,
-                    "wait_agent",
-                    function_payload(json!({"timeout_ms": 1000})),
-                ))
-                .await
-        }
-    });
-    tokio::task::yield_now().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(
-        !wait_task.is_finished(),
-        "mail already queued before wait should not wake wait_agent"
-    );
-
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "new mail".to_string(),
-        /*trigger_turn*/ false,
-    ));
-
-    let output = wait_task
-        .await
-        .expect("wait task should join")
-        .expect("wait_agent should succeed");
+    let output = timeout(
+        Duration::from_millis(500),
+        WaitAgentHandlerV2.handle(invocation(
+            session,
+            turn,
+            "wait_agent",
+            function_payload(json!({"timeout_ms": 1000})),
+        )),
+    )
+    .await
+    .expect("already queued mail should complete wait_agent immediately")
+    .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
     let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
         serde_json::from_str(&content).expect("wait_agent result should be json");

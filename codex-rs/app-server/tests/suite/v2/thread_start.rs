@@ -803,6 +803,44 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
 }
 
 #[tokio::test]
+async fn thread_start_preserves_untrusted_project_trust() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let workspace = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    let workspace_key = workspace.path().display().to_string();
+    let mut config_toml =
+        std::fs::read_to_string(&config_path)?.parse::<toml_edit::DocumentMut>()?;
+    config_toml["projects"][workspace_key.as_str()]["trust_level"] = toml_edit::value("untrusted");
+    std::fs::write(&config_path, config_toml.to_string())?;
+    let config_before = std::fs::read_to_string(&config_path)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let config_after = std::fs::read_to_string(&config_path)?;
+    assert_eq!(config_after, config_before);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_skips_trust_write_when_project_is_already_trusted() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 

@@ -1,14 +1,14 @@
 use codex_config::types::PluginConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::plugins::MarketplaceAddRequest;
 use codex_core::plugins::PluginId;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginsManager;
-use codex_core::plugins::add_marketplace;
-use codex_core::plugins::is_local_marketplace_source;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
+use codex_core_plugins::marketplace_add::add_marketplace;
+use codex_core_plugins::marketplace_add::is_local_marketplace_source;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;

@@ -359,7 +359,7 @@ impl MessageProcessor {
         self: &Arc<Self>,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
-        transport: AppServerTransport,
+        transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
         let request_method = request.method.as_str();

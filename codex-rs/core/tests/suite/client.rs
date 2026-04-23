@@ -914,6 +914,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("responses stream to start");
@@ -1659,6 +1660,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
             summary: Some(
@@ -1780,6 +1782,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: session_configured.model,
             effort: None,
             summary: Some(ReasoningSummary::Concise),
@@ -2280,6 +2283,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
         .expect("responses stream to start");
