@@ -176,6 +176,9 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::BeginInitialHistoryReplayMeasurement => {
+                self.begin_initial_history_replay_measurement();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -183,11 +186,22 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                self.insert_history_cell_lines(
-                    tui,
-                    cell.as_ref(),
-                    tui.terminal.last_known_screen_size.width,
-                );
+                if self.initial_history_replay_metrics.is_some() {
+                    self.insert_history_cell_lines_with_initial_replay_measurement(
+                        tui,
+                        cell.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                } else {
+                    self.insert_history_cell_lines(
+                        tui,
+                        cell.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                }
+            }
+            AppEvent::EndInitialHistoryReplayMeasurement { replay_elapsed } => {
+                self.finish_initial_history_replay_measurement(replay_elapsed);
             }
             AppEvent::ConsolidateAgentMessage { source, cwd } => {
                 if !self.terminal_resize_reflow_enabled() {

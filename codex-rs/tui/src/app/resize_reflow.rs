@@ -19,6 +19,7 @@ use color_eyre::eyre::Result;
 use ratatui::text::Line;
 
 use super::App;
+use super::InitialHistoryReplayMetrics;
 use super::trailing_run_start;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
@@ -92,6 +93,93 @@ impl App {
 
     pub(super) fn terminal_resize_reflow_active(&self) -> bool {
         self.terminal_resize_reflow_enabled() && !self.transcript_reflow.is_runtime_disabled()
+    }
+
+    pub(super) fn begin_initial_history_replay_measurement(&mut self) {
+        if self.terminal_resize_reflow_active() && self.overlay.is_none() {
+            self.initial_history_replay_metrics = Some(Default::default());
+        }
+    }
+
+    pub(super) fn finish_initial_history_replay_measurement(&mut self, replay_elapsed: Duration) {
+        let Some(metrics) = &mut self.initial_history_replay_metrics else {
+            return;
+        };
+        metrics.replay_elapsed = Some(replay_elapsed);
+        metrics.replay_finished = true;
+    }
+
+    pub(super) fn insert_history_cell_lines_with_initial_replay_measurement(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: &dyn HistoryCell,
+        width: u16,
+    ) {
+        let render_started = Instant::now();
+        let display = self.display_lines_for_history_insert(cell, width);
+        let render_elapsed = render_started.elapsed();
+        let rendered_line_count = display.len();
+
+        if let Some(metrics) = &mut self.initial_history_replay_metrics {
+            metrics.cell_count += 1;
+            metrics.rendered_line_count += rendered_line_count;
+            metrics.render_elapsed += render_elapsed;
+        }
+
+        if display.is_empty() {
+            return;
+        }
+
+        let enqueue_started = Instant::now();
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
+        if let Some(metrics) = &mut self.initial_history_replay_metrics {
+            metrics.enqueue_elapsed += enqueue_started.elapsed();
+        }
+    }
+
+    pub(super) fn maybe_finish_initial_history_replay_measurement(
+        &mut self,
+        draw_stats: tui::ResizeReflowDrawStats,
+    ) {
+        let Some(metrics) = &mut self.initial_history_replay_metrics else {
+            return;
+        };
+        if draw_stats.flushed_history {
+            metrics.flush_elapsed += draw_stats.history_flush_elapsed;
+            metrics.flushed_line_count += draw_stats.history_flush_line_count;
+        }
+        if !metrics.replay_finished
+            || (metrics.rendered_line_count > 0
+                && metrics.flushed_line_count < metrics.rendered_line_count)
+        {
+            return;
+        }
+
+        let metrics = self
+            .initial_history_replay_metrics
+            .take()
+            .expect("metrics checked above");
+        self.show_initial_history_replay_measurement(metrics);
+    }
+
+    fn show_initial_history_replay_measurement(&mut self, metrics: InitialHistoryReplayMetrics) {
+        let replay_ms = metrics.replay_elapsed.unwrap_or_default().as_millis();
+        self.chat_widget.add_info_message(
+            format!(
+                "Initial transcript replay took {replay_ms}ms to queue, {}ms to render, {}ms to enqueue, and {}ms to flush ({} rows from {} cells; {} rows flushed).",
+                metrics.render_elapsed.as_millis(),
+                metrics.enqueue_elapsed.as_millis(),
+                metrics.flush_elapsed.as_millis(),
+                metrics.rendered_line_count,
+                metrics.cell_count,
+                metrics.flushed_line_count,
+            ),
+            /*hint*/ None,
+        );
     }
 
     fn schedule_resize_reflow(

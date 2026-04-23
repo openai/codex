@@ -354,7 +354,15 @@ pub(crate) enum AppEvent {
         result: Result<SkillsListResponse, String>,
     },
 
+    /// Begin measuring initial resume replay without changing the replay behavior.
+    BeginInitialHistoryReplayMeasurement,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Finish measuring initial resume replay after all replay events have been queued.
+    EndInitialHistoryReplayMeasurement {
+        replay_elapsed: std::time::Duration,
+    },
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
     /// the transcript with a single `AgentMarkdownCell` that stores the raw

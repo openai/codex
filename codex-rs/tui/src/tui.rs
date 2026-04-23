@@ -484,6 +484,9 @@ pub struct Tui {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ResizeReflowDrawStats {
+    pub(crate) history_flush_elapsed: Duration,
+    pub(crate) history_flush_line_count: usize,
+    pub(crate) flushed_history: bool,
     pub(crate) reflow_flush_elapsed: Duration,
     pub(crate) flushed_reflow_history: bool,
 }
@@ -933,11 +936,17 @@ impl Tui {
             let terminal = &mut self.terminal;
             let mut needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height, self.is_zellij)?;
-            needs_full_repaint |= Self::flush_pending_history_lines(
+            let history_flush_line_count = self.pending_history_lines.len();
+            let history_flush_start = Instant::now();
+            let flushed_history = Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+            stats.history_flush_elapsed = history_flush_start.elapsed();
+            stats.history_flush_line_count = history_flush_line_count;
+            stats.flushed_history = history_flush_line_count > 0;
+            needs_full_repaint |= flushed_history;
             let reflow_flush_start = Instant::now();
             let flushed_reflow_history = Self::flush_pending_reflow_history_lines(
                 terminal,

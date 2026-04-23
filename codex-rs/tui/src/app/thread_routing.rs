@@ -1029,8 +1029,21 @@ impl App {
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         self.chat_widget.handle_thread_session(session);
+        let should_measure_initial_replay =
+            self.terminal_resize_reflow_active() && !turns.is_empty();
+        let replay_started = should_measure_initial_replay.then(Instant::now);
+        if should_measure_initial_replay {
+            self.app_event_tx
+                .send(AppEvent::BeginInitialHistoryReplayMeasurement);
+        }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
+        if let Some(started) = replay_started {
+            self.app_event_tx
+                .send(AppEvent::EndInitialHistoryReplayMeasurement {
+                    replay_elapsed: started.elapsed(),
+                });
+        }
         let pending = std::mem::take(&mut self.pending_primary_events);
         for pending_event in pending {
             match pending_event {
