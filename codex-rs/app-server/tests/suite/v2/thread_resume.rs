@@ -307,7 +307,7 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
-            include_turns: Some(false),
+            exclude_turns: true,
             ..Default::default()
         })
         .await?;
@@ -378,7 +378,7 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
 }
 
 #[tokio::test]
-async fn thread_resume_emits_restored_token_usage_when_turns_are_excluded() -> Result<()> {
+async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -423,7 +423,7 @@ async fn thread_resume_emits_restored_token_usage_when_turns_are_excluded() -> R
     let second_resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id,
-            include_turns: Some(false),
+            exclude_turns: true,
             ..Default::default()
         })
         .await?;
@@ -442,15 +442,11 @@ async fn thread_resume_emits_restored_token_usage_when_turns_are_excluded() -> R
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
     )
-    .await??;
-    let parsed: ServerNotification = second_note.try_into()?;
-    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
-        panic!("expected thread/tokenUsage/updated notification");
-    };
-
-    assert_eq!(notification.thread_id, resumed_again.id);
-    assert_eq!(notification.turn_id, expected_turn_id);
-    assert_eq!(notification.token_usage.total.total_tokens, 150);
+    .await;
+    assert!(
+        second_note.is_err(),
+        "excludeTurns=true should not replay token usage"
+    );
 
     Ok(())
 }
@@ -1514,7 +1510,7 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
-            include_turns: Some(false),
+            exclude_turns: true,
             ..Default::default()
         })
         .await?;

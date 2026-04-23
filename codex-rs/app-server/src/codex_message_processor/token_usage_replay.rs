@@ -61,16 +61,12 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
 
 pub(super) async fn latest_token_usage_turn_id_for_thread_path(thread: &Thread) -> Option<String> {
     let rollout_path = thread.path.as_deref()?;
-    latest_token_usage_turn_id_from_rollout_path(
-        rollout_path,
-        (!thread.turns.is_empty()).then_some(thread.turns.as_slice()),
-    )
-    .await
+    latest_token_usage_turn_id_from_rollout_path(rollout_path, thread.turns.as_slice()).await
 }
 
 pub(super) async fn latest_token_usage_turn_id_from_rollout_path(
     rollout_path: &Path,
-    turns: Option<&[Turn]>,
+    turns: &[Turn],
 ) -> Option<String> {
     let rollout_items = read_rollout_items_from_rollout(rollout_path).await.ok()?;
     latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns)
@@ -87,7 +83,7 @@ struct TokenUsageTurnOwner {
 
 pub(super) fn latest_token_usage_turn_id_from_rollout_items(
     rollout_items: &[RolloutItem],
-    turns: Option<&[Turn]>,
+    turns: &[Turn],
 ) -> Option<String> {
     let mut builder = ThreadHistoryBuilder::new();
     let mut token_usage_turn_owner = None;
@@ -106,21 +102,14 @@ pub(super) fn latest_token_usage_turn_id_from_rollout_items(
     }
 
     let owner = token_usage_turn_owner?;
-    let rebuilt_turns;
-    let turns = if let Some(turns) = turns {
-        turns
-    } else {
-        rebuilt_turns = builder.finish();
-        rebuilt_turns.as_slice()
-    };
-
     if turns.iter().any(|turn| turn.id == owner.id) {
-        return Some(owner.id);
+        Some(owner.id)
+    } else {
+        owner
+            .position
+            .and_then(|position| turns.get(position))
+            .map(|turn| turn.id.clone())
     }
-    owner
-        .position
-        .and_then(|position| turns.get(position))
-        .map(|turn| turn.id.clone())
 }
 
 /// Chooses a fallback turn id that should own a replayed token usage update.
