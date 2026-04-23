@@ -409,7 +409,7 @@ impl OutgoingMessageSender {
                     self.analytics_events_client
                         .track_server_request(connection_id.0, entry.request.clone());
                 }
-                if let Ok(response) = entry.request.response_from_result(result.clone()) {
+                if let Ok(response) = entry.request.response_from_result(&result) {
                     self.analytics_events_client
                         .track_server_response(connection_id.0, response);
                 }
@@ -939,7 +939,7 @@ mod tests {
         };
 
         let response = request
-            .response_from_result(json!({
+            .response_from_result(&json!({
                 "decision": "acceptForSession",
             }))
             .expect("decode typed server response");

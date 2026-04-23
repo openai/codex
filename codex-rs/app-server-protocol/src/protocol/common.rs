@@ -689,12 +689,13 @@ macro_rules! server_request_definitions {
 
             pub fn response_from_result(
                 &self,
-                result: crate::Result,
+                result: &crate::Result,
             ) -> serde_json::Result<ServerResponse> {
                 match self {
                     $(
                         Self::$variant { request_id, .. } => {
-                            let response = serde_json::from_value::<$response>(result)?;
+                            let response =
+                                <$response as serde::Deserialize>::deserialize(result)?;
                             Ok(ServerResponse::$variant {
                                 request_id: request_id.clone(),
                                 response,
