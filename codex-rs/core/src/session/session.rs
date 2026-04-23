@@ -273,7 +273,7 @@ impl Session {
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
-        inherited_rollout_trace: RolloutTraceRecorder,
+        parent_rollout_thread_trace: ThreadTraceContext,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -449,18 +449,17 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value().to_string(),
                 sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
             };
-            let rollout_trace = if matches!(
+            let rollout_thread_trace = if matches!(
                 session_configuration.session_source,
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
             ) {
-                // Spawned child threads are part of their root rollout tree. If
-                // the parent had no trace recorder, do not create an orphan child
-                // bundle that looks like an independent rollout.
-                inherited_rollout_trace
+                // Spawned child threads are part of their root rollout tree. If the
+                // parent had no trace bundle, do not create an orphan child bundle
+                // that looks like an independent rollout.
+                parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
             } else {
-                RolloutTraceRecorder::create_root_or_disabled(conversation_id)
+                ThreadTraceContext::start_root_or_disabled(trace_metadata)
             };
-            rollout_trace.record_thread_started(trace_metadata);
 
             let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -739,7 +738,7 @@ impl Session {
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
                 hooks,
-                rollout_trace,
+                rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,

@@ -977,6 +977,9 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         msg: EventMsg::ShutdownComplete,
     };
     sess.send_event_raw(event).await;
+    sess.services
+        .rollout_thread_trace
+        .record_ended(codex_rollout_trace::RolloutStatus::Completed);
     true
 }
 

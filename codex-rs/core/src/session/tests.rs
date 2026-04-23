@@ -3150,7 +3150,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),
-        RolloutTraceRecorder::disabled(),
+        codex_rollout_trace::ThreadTraceContext::disabled(),
     )
     .await;
 
@@ -3272,7 +3272,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout_trace: RolloutTraceRecorder::disabled(),
+        rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3472,7 +3472,7 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),
-        RolloutTraceRecorder::disabled(),
+        codex_rollout_trace::ThreadTraceContext::disabled(),
     )
     .await?;
 
@@ -4588,7 +4588,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout_trace: RolloutTraceRecorder::disabled(),
+        rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,

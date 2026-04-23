@@ -41,6 +41,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -964,6 +965,9 @@ impl ThreadManagerState {
             }
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
+        let parent_rollout_thread_trace = self
+            .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -983,7 +987,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
+            parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
@@ -1028,6 +1032,36 @@ impl ThreadManagerState {
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
+    }
+
+    async fn parent_rollout_thread_trace_for_source(
+        &self,
+        session_source: &SessionSource,
+        initial_history: &InitialHistory,
+    ) -> codex_rollout_trace::ThreadTraceContext {
+        // A fresh v2 child belongs to the same rollout tree as its parent, so
+        // session startup derives its child trace from the parent's thread
+        // context. Resumed children already have a prior `ThreadStarted` event
+        // for this thread id; deriving a child trace during resume would write
+        // that start event again and make the bundle unreplayable.
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return codex_rollout_trace::ThreadTraceContext::disabled();
+        };
+        if matches!(initial_history, InitialHistory::Resumed(_)) {
+            return codex_rollout_trace::ThreadTraceContext::disabled();
+        }
+        // Parent lookup can fail if the parent was closed or released between
+        // spawn preparation and session construction. Tracing is diagnostic, so
+        // that race should not block child creation; the child simply starts
+        // without a parent rollout trace.
+        self.get_thread(*parent_thread_id)
+            .await
+            .ok()
+            .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
+            .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
     }
 }
 
