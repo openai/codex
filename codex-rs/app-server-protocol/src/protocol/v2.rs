@@ -323,7 +323,7 @@ pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
-    GuardianSubagent,
+    AutoReview,
 }
 
 impl JsonSchema for ApprovalsReviewer {
@@ -361,7 +361,7 @@ impl ApprovalsReviewer {
     pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
             ApprovalsReviewer::User => CoreApprovalsReviewer::User,
-            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview => CoreApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -370,7 +370,7 @@ impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
     fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
             CoreApprovalsReviewer::User => ApprovalsReviewer::User,
-            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
+            CoreApprovalsReviewer::AutoReview => ApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -7059,6 +7059,10 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    /// Review every subsequent command in this turn before normal sandboxed execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub strict_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7400,8 +7404,7 @@ mod tests {
             "\"user\""
         );
         assert_eq!(
-            serde_json::to_string(&ApprovalsReviewer::GuardianSubagent)
-                .expect("serialize reviewer"),
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
             "\"auto_review\""
         );
 
@@ -7412,7 +7415,7 @@ mod tests {
             let expected = if value == "user" {
                 ApprovalsReviewer::User
             } else {
-                ApprovalsReviewer::GuardianSubagent
+                ApprovalsReviewer::AutoReview
             };
             assert_eq!(expected, reviewer);
         }
@@ -7809,6 +7812,18 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
+        assert_eq!(response.strict_auto_review, None);
+    }
+
+    #[test]
+    fn permissions_request_approval_response_accepts_strict_auto_review() {
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {},
+            "strictAutoReview": true,
+        }))
+        .expect("response should deserialize");
+
+        assert_eq!(response.strict_auto_review, Some(true));
     }
 
     #[test]
@@ -8695,7 +8710,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -8797,7 +8812,7 @@ mod tests {
                     model: None,
                     model_provider: None,
                     approval_policy: None,
-                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,

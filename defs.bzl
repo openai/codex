@@ -18,11 +18,11 @@ PLATFORMS = [
 WINDOWS_RUSTC_LINK_FLAGS = select({
     "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
         "-C",
-        "link-arg=-Wl,--stack,8388608",
+        "link-arg=-Wl,--stack,8388608",  # 8 MiB
     ],
     "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
         "-C",
-        "link-arg=/STACK:8388608",
+        "link-arg=/STACK:8388608",  # 8 MiB
         "-C",
         "link-arg=/NODEFAULTLIB:libucrt.lib",
         "-C",
@@ -42,6 +42,13 @@ MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
     ],
     "//conditions:default": [],
 })
+
+RUST_LIBTEST_ENV = {
+    # Rust's libtest harness runs test bodies on std-spawned threads, whose
+    # default 2 MiB stack can be too small for large async test futures on
+    # Windows. Keep this aligned with the Windows test binary stack reserve.
+    "RUST_MIN_STACK": "8388608",  # 8 MiB
+}
 
 def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
@@ -187,7 +194,7 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
-    test_env = {
+    test_env = RUST_LIBTEST_ENV | {
         # The launcher resolves an absolute workspace root at runtime so
         # manifest-only platforms like macOS still point Insta at the real
         # `codex-rs` checkout.
@@ -359,7 +366,7 @@ def codex_rust_crate(
             # Important: do not merge `test_env` here. Its unit-test-only
             # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
             # execute from the repo root and can misplace integration snapshots.
-            env = cargo_env,
+            env = RUST_LIBTEST_ENV | cargo_env,
             tags = test_tags,
             **test_kwargs
         )

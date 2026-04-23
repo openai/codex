@@ -324,11 +324,12 @@ impl ToolHandler for ApplyPatchHandler {
         &self,
         call_id: &str,
         payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::apply_patch(),
+            tool_use_id: call_id.to_string(),
             command: apply_patch_payload_command(payload)?,
             tool_response,
         })

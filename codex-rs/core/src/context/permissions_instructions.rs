@@ -188,7 +188,7 @@ fn approval_text(
         ),
     };
 
-    if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+    if approvals_reviewer == ApprovalsReviewer::AutoReview
         && approval_policy != AskForApproval::Never
     {
         format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
