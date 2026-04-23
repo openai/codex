@@ -976,6 +976,7 @@ impl Session {
                 host_owned_codex_apps_enabled,
                 tool_plugin_provenance,
                 auth,
+                Some(sess.mcp_elicitation_reviewer()),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

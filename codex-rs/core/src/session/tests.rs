@@ -5620,7 +5620,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
 
     session
-        .refresh_mcp_servers_if_requested(&turn_context)
+        .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
     assert!(old_token.is_cancelled());

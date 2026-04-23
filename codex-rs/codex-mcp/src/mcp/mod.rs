@@ -265,6 +265,7 @@ pub async fn read_mcp_resource(
         host_owned_codex_apps_enabled,
         tool_plugin_provenance(config),
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 
@@ -332,6 +333,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         host_owned_codex_apps_enabled,
         tool_plugin_provenance,
         auth,
+        /*elicitation_reviewer*/ None,
     )
     .await;
 

@@ -203,8 +203,11 @@ fn elicitation_granular_policy_respects_never_and_config() {
 
 #[tokio::test]
 async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -233,8 +236,11 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
 
 #[tokio::test]
 async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fields() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, PermissionProfile::Disabled);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 

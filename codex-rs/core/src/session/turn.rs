@@ -240,6 +240,7 @@ pub(crate) async fn run_turn(
         turn_context.as_ref(),
         &cancellation_token,
         &mentioned_skills,
+        Some(sess.mcp_elicitation_reviewer()),
     )
     .await;
 

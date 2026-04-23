@@ -1124,6 +1124,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         /*host_owned_codex_apps_enabled*/ true,
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
+        /*elicitation_reviewer*/ None,
     )
     .await;
     *session.services.mcp_connection_manager.write().await = manager;
