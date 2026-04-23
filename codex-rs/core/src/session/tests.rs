@@ -2647,6 +2647,24 @@ fn get_service_tier_defaults_enterprise_accounts_to_fast() {
         ),
         Some(ServiceTier::Fast)
     );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Team),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::SelfServeBusinessUsageBased),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
 }
 
 #[test]
@@ -2668,7 +2686,7 @@ fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
         get_service_tier(
             /*configured_service_tier*/ None,
             /*fast_default_opt_out*/ false,
-            Some(AccountPlanType::Team),
+            Some(AccountPlanType::Pro),
             /*fast_mode_enabled*/ true,
         ),
         None
