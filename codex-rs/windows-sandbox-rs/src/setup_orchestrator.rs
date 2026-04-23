@@ -330,10 +330,18 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn should_grant_read_acl_to_exe_dir(exe_dir: &Path) -> bool {
+    let normalized = exe_dir.to_string_lossy().replace('/', "\\");
+    !normalized
+        .to_ascii_lowercase()
+        .contains("\\program files\\windowsapps\\")
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && should_grant_read_acl_to_exe_dir(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -808,6 +816,7 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::should_grant_read_acl_to_exe_dir;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
@@ -992,6 +1001,19 @@ mod tests {
         let roots = profile_read_roots(&missing_profile);
 
         assert_eq!(vec![missing_profile], roots);
+    }
+
+    #[test]
+    fn helper_read_roots_skip_windowsapps_install_dir() {
+        assert!(!should_grant_read_acl_to_exe_dir(
+            PathBuf::from(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__abc123\app\resources",
+            )
+            .as_path()
+        ));
+        assert!(should_grant_read_acl_to_exe_dir(
+            PathBuf::from(r"C:\Users\iceweasel\AppData\Local\Programs\Codex\resources",).as_path()
+        ));
     }
 
     #[test]
