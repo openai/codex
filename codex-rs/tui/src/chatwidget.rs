@@ -9094,7 +9094,7 @@ impl ChatWidget {
                             "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent."
                                 .to_string(),
                         ),
-                        is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
+                        is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
                                 current_approval,
                                 current_sandbox,
@@ -9104,7 +9104,7 @@ impl ChatWidget {
                             preset.approval,
                             preset.sandbox.clone(),
                             "Auto-review".to_string(),
-                            ApprovalsReviewer::GuardianSubagent,
+                            ApprovalsReviewer::AutoReview,
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason

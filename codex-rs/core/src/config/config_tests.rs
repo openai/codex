@@ -6565,6 +6565,32 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
 }
 
 #[tokio::test]
+async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                    entries: BTreeMap::from([
+                        ("in_app_browser".to_string(), false),
+                        ("browser_use".to_string(), false),
+                    ]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::InAppBrowser));
+    assert!(!config.features.enabled(Feature::BrowserUse));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -6715,10 +6741,7 @@ approvals_reviewer = "guardian_subagent"
         .build()
         .await?;
 
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     Ok(())
 }
 
@@ -6731,17 +6754,14 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     Ok(())
 }
 
@@ -6760,17 +6780,14 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert!(
         config.startup_warnings.iter().any(|warning| {
             warning
@@ -6800,17 +6817,14 @@ approvals_reviewer = "user"
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     Ok(())
 }
 
@@ -6831,7 +6845,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![
                     ApprovalsReviewer::User,
-                    ApprovalsReviewer::GuardianSubagent,
+                    ApprovalsReviewer::AutoReview,
                 ]),
                 ..Default::default()
             }))
@@ -6839,10 +6853,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
         .build()
         .await?;
 
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert!(
         config
             .startup_warnings

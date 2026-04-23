@@ -102,6 +102,11 @@ use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -307,24 +312,59 @@ impl From<CoreAskForApproval> for AskForApproval {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "v2/")]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(
+    type = r#""user" | "auto_review" | "guardian_subagent""#,
+    export_to = "v2/"
+)]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
+    #[serde(rename = "user")]
     User,
-    GuardianSubagent,
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    AutoReview,
+}
+
+impl JsonSchema for ApprovalsReviewer {
+    fn schema_name() -> String {
+        "ApprovalsReviewer".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        string_enum_schema_with_description(
+            &["user", "auto_review", "guardian_subagent"],
+            "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+        )
+    }
+}
+
+fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
+    let mut schema = SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        metadata: Some(Box::new(Metadata {
+            description: Some(description.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| JsonValue::String((*value).to_string()))
+            .collect(),
+    );
+    Schema::Object(schema)
 }
 
 impl ApprovalsReviewer {
     pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
             ApprovalsReviewer::User => CoreApprovalsReviewer::User,
-            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview => CoreApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -333,7 +373,7 @@ impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
     fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
             CoreApprovalsReviewer::User => ApprovalsReviewer::User,
-            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
+            CoreApprovalsReviewer::AutoReview => ApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -7365,6 +7405,30 @@ mod tests {
     }
 
     #[test]
+    fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+            "\"auto_review\""
+        );
+
+        for value in ["user", "auto_review", "guardian_subagent"] {
+            let json = format!("\"{value}\"");
+            let reviewer: ApprovalsReviewer =
+                serde_json::from_str(&json).expect("deserialize reviewer");
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::AutoReview
+            };
+            assert_eq!(expected, reviewer);
+        }
+    }
+
+    #[test]
     fn thread_list_params_accepts_single_cwd() {
         let params = serde_json::from_value::<ThreadListParams>(json!({
             "cwd": "/workspace",
@@ -8632,7 +8696,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -8734,7 +8798,7 @@ mod tests {
                     model: None,
                     model_provider: None,
                     approval_policy: None,
-                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
