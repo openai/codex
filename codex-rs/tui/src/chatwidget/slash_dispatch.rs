@@ -172,7 +172,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                let next_tier = if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
                     None
                 } else {
                     Some(ServiceTier::Fast)
@@ -527,12 +527,12 @@ impl ChatWidget {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
                     "off" => self.set_service_tier_selection(/*service_tier*/ None),
                     "status" => {
-                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
-                        {
-                            "on"
-                        } else {
-                            "off"
-                        };
+                        let status =
+                            if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
+                                "on"
+                            } else {
+                                "off"
+                            };
                         self.add_info_message(
                             format!("Fast mode is {status}."),
                             /*hint*/ None,

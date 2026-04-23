@@ -12,6 +12,8 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_hooks::Hooks;
+use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -74,6 +76,81 @@ fn prompt_options(
         allow_session_remember,
         allow_persistent_approval,
     }
+}
+
+fn install_mcp_permission_request_hook(
+    session: &mut Session,
+    turn_context: &TurnContext,
+    matcher: &str,
+    hook_output: &serde_json::Value,
+) -> std::path::PathBuf {
+    let script_path = turn_context
+        .config
+        .codex_home
+        .join("mcp_permission_request_hook.py");
+    let log_path = turn_context
+        .config
+        .codex_home
+        .join("mcp_permission_request_hook_log.jsonl");
+    let hook_output = hook_output.to_string();
+    std::fs::create_dir_all(&turn_context.config.codex_home)
+        .expect("create codex home for MCP permission hook");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+print({hook_output:?})
+"#,
+        log_path = log_path.display(),
+        hook_output = hook_output,
+    );
+
+    std::fs::write(&script_path, script).expect("write MCP permission hook script");
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let script_path_arg = if cfg!(windows) {
+        script_path.display().to_string()
+    } else {
+        format!(
+            "'{}'",
+            script_path.display().to_string().replace('\'', "'\\''")
+        )
+    };
+    std::fs::write(
+        turn_context.config.codex_home.join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "matcher": matcher,
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("{python} {script_path_arg}"),
+                        "timeout_sec": 5,
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .expect("write hooks.json");
+
+    session.services.hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
+        shell_args: if cfg!(windows) {
+            Vec::new()
+        } else {
+            vec!["-c".to_string()]
+        },
+        ..HooksConfig::default()
+    });
+
+    log_path.to_path_buf()
 }
 
 #[test]
@@ -1381,6 +1458,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-1",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1411,7 +1489,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1453,12 +1531,210 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-guardian",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Auto,
     )
     .await;
 
     assert_eq!(decision, None);
+}
+
+#[tokio::test]
+async fn permission_request_hook_allows_mcp_tool_call() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let log_path = install_mcp_permission_request_hook(
+        &mut session,
+        &turn_context,
+        "mcp__memory__.*",
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" }
+            }
+        }),
+    );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "memory".to_string(),
+        tool: "create_entities".to_string(),
+        arguments: Some(serde_json::json!({
+            "entities": [{
+                "name": "Ada",
+                "entityType": "person"
+            }]
+        })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            Some(false),
+            Some(true),
+            /*open_world*/ None,
+        )),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Create entities".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-mcp-hook",
+        &invocation,
+        "mcp__memory__create_entities",
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    let log = std::fs::read_to_string(log_path).expect("read MCP permission hook log");
+    let inputs = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs,
+        vec![serde_json::json!({
+            "session_id": session.conversation_id,
+            "turn_id": "turn_id",
+            "cwd": turn_context.cwd,
+            "transcript_path": null,
+            "model": turn_context.model_info.slug,
+            "permission_mode": "default",
+            "tool_name": "mcp__memory__create_entities",
+            "hook_event_name": "PermissionRequest",
+            "tool_input": {
+                "entities": [{
+                    "name": "Ada",
+                    "entityType": "person"
+                }]
+            }
+        })]
+    );
+}
+
+#[tokio::test]
+async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let log_path = install_mcp_permission_request_hook(
+        &mut session,
+        &turn_context,
+        "mcp__memory__.*",
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" }
+            }
+        }),
+    );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: "memory".to_string(),
+        tool: "create_entities".to_string(),
+        arguments: Some(serde_json::json!({ "entities": [] })),
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-mcp-hook-no-metadata",
+        &invocation,
+        "mcp__memory__create_entities",
+        /*metadata*/ None,
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    let log = std::fs::read_to_string(log_path).expect("read MCP permission hook log");
+    let inputs = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse hook input"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inputs,
+        vec![serde_json::json!({
+            "session_id": session.conversation_id,
+            "turn_id": "turn_id",
+            "cwd": turn_context.cwd,
+            "transcript_path": null,
+            "model": turn_context.model_info.slug,
+            "permission_mode": "default",
+            "tool_name": "mcp__memory__create_entities",
+            "hook_event_name": "PermissionRequest",
+            "tool_input": { "entities": [] }
+        })]
+    );
+}
+
+#[tokio::test]
+async fn permission_request_hook_runs_after_remembered_mcp_approval() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let log_path = install_mcp_permission_request_hook(
+        &mut session,
+        &turn_context,
+        "mcp__memory__.*",
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "deny",
+                    "message": "should be skipped"
+                }
+            }
+        }),
+    );
+    let invocation = McpInvocation {
+        server: "memory".to_string(),
+        tool: "create_entities".to_string(),
+        arguments: Some(serde_json::json!({ "entities": [] })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            Some(false),
+            Some(true),
+            /*open_world*/ None,
+        )),
+        connector_id: None,
+        connector_name: None,
+        connector_description: None,
+        tool_title: Some("Create entities".to_string()),
+        tool_description: None,
+        mcp_app_resource_uri: None,
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+    let remembered_key =
+        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
+            .expect("memory MCP tool should support session approval");
+    remember_mcp_tool_approval(&session, remembered_key).await;
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-mcp-remembered",
+        &invocation,
+        "mcp__memory__create_entities",
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(decision, Some(McpToolApprovalDecision::Accept));
+    assert!(
+        !log_path.exists(),
+        "remembered approval should skip PermissionRequest hooks"
+    );
 }
 
 #[tokio::test]
@@ -1490,7 +1766,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1528,6 +1804,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         &turn_context,
         "call-guardian-deny",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -1584,6 +1861,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &turn_context,
                 "call-prompt",
                 &invocation,
+                "mcp__test__tool",
                 Some(&metadata),
                 AppToolApproval::Prompt,
             )
@@ -1658,6 +1936,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &turn_context,
         "call-2",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1729,6 +2008,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &turn_context,
         "call-2-custom",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1800,6 +2080,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         &turn_context,
         "call-3",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -1884,6 +2165,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
             &turn_context,
             "call-2",
             &invocation,
+            "mcp__test__tool",
             Some(&metadata),
             approval_mode,
         )
@@ -1947,7 +2229,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1985,6 +2267,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         &turn_context,
         "call-3",
         &invocation,
+        "mcp__test__tool",
         Some(&metadata),
         AppToolApproval::Approve,
     )

@@ -131,6 +131,8 @@ jobs:
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
         run: cargo test
+        env:
+          RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
