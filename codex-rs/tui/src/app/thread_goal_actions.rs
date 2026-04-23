@@ -42,15 +42,19 @@ impl App {
         thread_id: ThreadId,
         status: ThreadGoalStatus,
     ) {
-        match app_server
+        let result = app_server
             .thread_goal_set(
                 thread_id,
                 /*objective*/ None,
                 Some(status),
                 /*token_budget*/ None,
             )
-            .await
-        {
+            .await;
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return;
+        }
+
+        match result {
             Ok(response) => self.chat_widget.add_info_message(
                 format!("Goal {}", goal_status_label(response.goal.status)),
                 Some(goal_usage_summary(&response.goal)),
@@ -66,7 +70,12 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) {
-        match app_server.thread_goal_clear(thread_id).await {
+        let result = app_server.thread_goal_clear(thread_id).await;
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return;
+        }
+
+        match result {
             Ok(response) => {
                 if response.cleared {
                     self.chat_widget
