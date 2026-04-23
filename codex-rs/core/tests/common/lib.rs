@@ -12,6 +12,7 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_loader::LoaderOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
@@ -166,6 +167,7 @@ pub fn fetch_dotslash_file(
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .harness_overrides(default_test_overrides())
         .build()
         .await

@@ -1763,6 +1763,7 @@ mod tests {
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .build()
             .await
     }
@@ -1774,7 +1775,7 @@ mod tests {
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
-            LoaderOverrides::default(),
+            LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -2126,7 +2127,7 @@ mod tests {
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
-            LoaderOverrides::default(),
+            LoaderOverrides::without_managed_config_for_tests(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
@@ -2322,6 +2323,7 @@ trust_level = "untrusted"
         let trusted_config = ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .harness_overrides(trusted_overrides.clone())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .build()
             .await?;
         assert_eq!(
@@ -2336,6 +2338,7 @@ trust_level = "untrusted"
         let untrusted_config = ConfigBuilder::default()
             .codex_home(codex_home)
             .harness_overrides(untrusted_overrides)
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .build()
             .await?;
         assert_eq!(

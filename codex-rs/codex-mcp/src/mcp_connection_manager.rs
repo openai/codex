@@ -277,6 +277,19 @@ enum CachedCodexAppsToolsLoad {
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
+#[derive(Debug, Clone)]
+pub struct ElicitationReviewRequest {
+    pub server_name: String,
+    pub request_id: RequestId,
+    pub elicitation: CreateElicitationRequestParams,
+}
+
+pub type ElicitationReviewer = Arc<
+    dyn Fn(ElicitationReviewRequest) -> BoxFuture<'static, Result<Option<ElicitationResponse>>>
+        + Send
+        + Sync,
+>;
+
 fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
     match approval_policy {
         AskForApproval::Never => true,
@@ -304,14 +317,20 @@ struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
     sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
+    reviewer: Option<ElicitationReviewer>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
+    fn new(
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+        reviewer: Option<ElicitationReviewer>,
+    ) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
+            reviewer,
         }
     }
 
@@ -334,12 +353,14 @@ impl ElicitationRequestManager {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
         let sandbox_policy = self.sandbox_policy.clone();
+        let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
             let sandbox_policy = sandbox_policy.clone();
+            let reviewer = reviewer.clone();
             async move {
                 let approval_policy = approval_policy
                     .lock()
@@ -365,6 +386,17 @@ impl ElicitationRequestManager {
                         content: None,
                         meta: None,
                     });
+                }
+
+                if let Some(reviewer) = reviewer.as_ref() {
+                    let request = ElicitationReviewRequest {
+                        server_name: server_name.clone(),
+                        request_id: id.clone(),
+                        elicitation: elicitation.clone(),
+                    };
+                    if let Some(response) = reviewer(request).await? {
+                        return Ok(response);
+                    }
                 }
 
                 let request = match elicitation {
@@ -713,6 +745,7 @@ impl McpConnectionManager {
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 sandbox_policy.get().clone(),
+                /*reviewer*/ None,
             ),
         }
     }
@@ -751,13 +784,17 @@ impl McpConnectionManager {
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
+        elicitation_reviewer: Option<ElicitationReviewer>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests =
-            ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_sandbox_policy,
+            elicitation_reviewer,
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth

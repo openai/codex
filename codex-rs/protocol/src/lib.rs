@@ -13,6 +13,7 @@ pub mod error;
 pub mod exec_output;
 pub mod items;
 pub mod mcp;
+pub mod mcp_approval_meta;
 pub mod memory_citation;
 pub mod message_history;
 pub mod models;

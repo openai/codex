@@ -8,6 +8,8 @@ use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -59,6 +61,16 @@ fn create_codex_apps_tools_cache_context(
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
         },
+    }
+}
+
+fn empty_form_elicitation(message: &str) -> CreateElicitationRequestParams {
+    CreateElicitationRequestParams::FormElicitationParams {
+        meta: None,
+        message: message.to_string(),
+        requested_schema: rmcp::model::ElicitationSchema::builder()
+            .build()
+            .expect("schema should build"),
     }
 }
 
@@ -180,8 +192,11 @@ fn elicitation_granular_policy_respects_never_and_config() {
 
 #[tokio::test]
 async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -209,9 +224,39 @@ async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
 }
 
 #[tokio::test]
+async fn full_access_auto_accepts_before_calling_elicitation_reviewer() {
+    let called = Arc::new(AtomicBool::new(false));
+    let reviewer_called = Arc::clone(&called);
+    let reviewer: ElicitationReviewer = Arc::new(move |_request| {
+        reviewer_called.store(true, Ordering::SeqCst);
+        Box::pin(async { Ok(None) })
+    });
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+        Some(reviewer),
+    );
+    let (tx_event, _rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("server".to_string(), tx_event);
+
+    let response = sender(
+        NumberOrString::Number(1),
+        empty_form_elicitation("Confirm?"),
+    )
+    .await
+    .expect("elicitation should auto accept");
+
+    assert_eq!(response.action, ElicitationAction::Accept);
+    assert!(!called.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -240,6 +285,87 @@ async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
             meta: None,
         }
     );
+}
+
+#[tokio::test]
+async fn elicitation_reviewer_can_resolve_without_emitting_event() {
+    let called = Arc::new(AtomicBool::new(false));
+    let reviewer_called = Arc::clone(&called);
+    let reviewer: ElicitationReviewer = Arc::new(move |request| {
+        assert_eq!(request.server_name, "server");
+        assert_eq!(request.request_id, NumberOrString::Number(7));
+        assert!(matches!(
+            request.elicitation,
+            CreateElicitationRequestParams::FormElicitationParams { .. }
+        ));
+        reviewer_called.store(true, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(Some(ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            }))
+        })
+    });
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_read_only_policy(),
+        Some(reviewer),
+    );
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("server".to_string(), tx_event);
+
+    let response = sender(
+        NumberOrString::Number(7),
+        empty_form_elicitation("Confirm?"),
+    )
+    .await
+    .expect("reviewer should resolve elicitation");
+
+    assert!(called.load(Ordering::SeqCst));
+    assert_eq!(response.action, ElicitationAction::Accept);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn elicitation_reviewer_none_preserves_event_flow() {
+    let reviewer: ElicitationReviewer = Arc::new(|_request| Box::pin(async { Ok(None) }));
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_read_only_policy(),
+        Some(reviewer),
+    );
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("server".to_string(), tx_event);
+
+    let handle = tokio::spawn(sender(
+        NumberOrString::Number(9),
+        empty_form_elicitation("Confirm?"),
+    ));
+    let event = rx_event.recv().await.expect("event should be emitted");
+    let EventMsg::ElicitationRequest(request) = event.msg else {
+        panic!("expected elicitation event");
+    };
+    assert_eq!(request.server_name, "server");
+    assert_eq!(request.id, ProtocolRequestId::Integer(9));
+
+    manager
+        .resolve(
+            "server".to_string(),
+            NumberOrString::Number(9),
+            ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            },
+        )
+        .await
+        .expect("should resolve pending elicitation");
+    let response = handle
+        .await
+        .expect("sender task should join")
+        .expect("sender should resolve");
+    assert_eq!(response.action, ElicitationAction::Accept);
 }
 
 #[test]

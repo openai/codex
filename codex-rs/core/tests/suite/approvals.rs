@@ -1660,16 +1660,38 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes() -> Result<()> {
+const APPROVAL_MATRIX_SHARDS: usize = 8;
+
+async fn approval_matrix_covers_shard(shard: usize) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for scenario in scenarios() {
+    for (index, scenario) in scenarios().into_iter().enumerate() {
+        if index % APPROVAL_MATRIX_SHARDS != shard {
+            continue;
+        }
         run_scenario(&scenario).await?;
     }
 
     Ok(())
 }
+
+macro_rules! approval_matrix_test {
+    ($name:ident, $shard:expr) => {
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn $name() -> Result<()> {
+            approval_matrix_covers_shard($shard).await
+        }
+    };
+}
+
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_0, 0);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_1, 1);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_2, 2);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_3, 3);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_4, 4);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_5, 5);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_6, 6);
+approval_matrix_test!(approval_matrix_covers_all_modes_shard_7, 7);
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     eprintln!("running approval scenario: {}", scenario.name);

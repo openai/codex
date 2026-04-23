@@ -141,6 +141,8 @@ pub async fn load_config_layers_state(
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
+    let system_config_path = overrides.system_config_path.clone();
+    let system_requirements_path = overrides.system_requirements_path.clone();
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -163,7 +165,8 @@ pub async fn load_config_layers_state(
     .await?;
 
     // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file()?;
+    let requirements_toml_file =
+        system_requirements_toml_file(system_requirements_path.as_deref())?;
     load_requirements_toml(
         fs,
         &mut config_requirements_toml,
@@ -210,7 +213,7 @@ pub async fn load_config_layers_state(
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
-    let system_config_toml_file = system_config_toml_file()?;
+    let system_config_toml_file = system_config_toml_file(system_config_path.as_deref())?;
     let system_layer =
         load_config_toml_for_required_layer(fs, &system_config_toml_file, |config_toml| {
             ConfigLayerEntry::new(
@@ -485,23 +488,37 @@ async fn load_requirements_toml(
 }
 
 #[cfg(unix)]
-fn system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
+fn default_system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(Path::new("/etc/codex/requirements.toml"))
 }
 
 #[cfg(windows)]
-fn system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
+fn default_system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
     windows_system_requirements_toml_file()
 }
 
+fn system_requirements_toml_file(override_path: Option<&Path>) -> io::Result<AbsolutePathBuf> {
+    match override_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path),
+        None => default_system_requirements_toml_file(),
+    }
+}
+
 #[cfg(unix)]
-fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+fn default_system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_CONFIG_TOML_FILE_UNIX))
 }
 
 #[cfg(windows)]
-fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+fn default_system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     windows_system_config_toml_file()
+}
+
+fn system_config_toml_file(override_path: Option<&Path>) -> io::Result<AbsolutePathBuf> {
+    match override_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path),
+        None => default_system_config_toml_file(),
+    }
 }
 
 #[cfg(windows)]
