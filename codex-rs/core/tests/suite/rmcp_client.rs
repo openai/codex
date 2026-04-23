@@ -22,6 +22,8 @@ use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
+use codex_exec_server::HttpRequestParams;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
