@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::Path;
 
 /// Resolves a program to its executable path on Unix systems.
 ///
@@ -19,7 +20,11 @@ use std::ffi::OsString;
 /// the kernel's shebang (`#!`) mechanism, so this function simply returns
 /// the program name unchanged.
 #[cfg(unix)]
-pub fn resolve(program: OsString, _env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
+pub fn resolve(
+    program: OsString,
+    _env: &HashMap<OsString, OsString>,
+    _cwd: &Path,
+) -> std::io::Result<OsString> {
     Ok(program)
 }
 
@@ -33,16 +38,16 @@ pub fn resolve(program: OsString, _env: &HashMap<OsString, OsString>) -> std::io
 /// This enables tools like `npx`, `pnpm`, and `yarn` to work correctly on Windows
 /// without requiring users to specify full paths or extensions in their configuration.
 #[cfg(windows)]
-pub fn resolve(program: OsString, env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
-    // Get current directory for relative path resolution
-    let cwd = std::env::current_dir()
-        .map_err(|e| std::io::Error::other(format!("Failed to get current directory: {e}")))?;
-
+pub fn resolve(
+    program: OsString,
+    env: &HashMap<OsString, OsString>,
+    cwd: &Path,
+) -> std::io::Result<OsString> {
     // Extract PATH from environment for search locations
     let search_path = env.get(std::ffi::OsStr::new("PATH"));
 
     // Attempt resolution via which crate
-    match which::which_in(&program, search_path, &cwd) {
+    match which::which_in(&program, search_path, cwd) {
         Ok(resolved) => {
             tracing::debug!("Resolved {program:?} to {resolved:?}");
             Ok(resolved.into_os_string())
@@ -119,7 +124,7 @@ mod tests {
         let program = OsString::from(&env.program_name);
 
         // Apply platform-specific resolution
-        let resolved = resolve(program, &env.mcp_env)?;
+        let resolved = resolve(program, &env.mcp_env, std::env::current_dir()?.as_path())?;
 
         // Verify resolved path executes successfully
         let mut cmd = Command::new(resolved);
