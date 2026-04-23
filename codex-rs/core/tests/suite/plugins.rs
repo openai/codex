@@ -18,6 +18,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
@@ -99,21 +100,20 @@ fn write_plugin_app_plugin(home: &TempDir) {
 async fn build_plugin_test_codex(
     server: &MockServer,
     codex_home: Arc<TempDir>,
-) -> Result<Arc<codex_core::CodexThread>> {
+) -> Result<TestCodex> {
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_auth(CodexAuth::from_api_key("Test API Key"));
     Ok(builder
         .build(server)
         .await
-        .expect("create new conversation")
-        .codex)
+        .expect("create new conversation"))
 }
 
 async fn build_analytics_plugin_test_codex(
     server: &MockServer,
     codex_home: Arc<TempDir>,
-) -> Result<Arc<codex_core::CodexThread>> {
+) -> Result<TestCodex> {
     let chatgpt_base_url = server.uri();
     let mut builder = test_codex()
         .with_home(codex_home)
@@ -125,15 +125,14 @@ async fn build_analytics_plugin_test_codex(
     Ok(builder
         .build(server)
         .await
-        .expect("create new conversation")
-        .codex)
+        .expect("create new conversation"))
 }
 
 async fn build_apps_enabled_plugin_test_codex(
     server: &MockServer,
     codex_home: Arc<TempDir>,
     chatgpt_base_url: String,
-) -> Result<Arc<codex_core::CodexThread>> {
+) -> Result<TestCodex> {
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -147,8 +146,7 @@ async fn build_apps_enabled_plugin_test_codex(
     Ok(builder
         .build(server)
         .await
-        .expect("create new conversation")
-        .codex)
+        .expect("create new conversation"))
 }
 
 fn tool_names(body: &serde_json::Value) -> Vec<String> {
@@ -183,12 +181,13 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_skill_plugin(codex_home.as_ref());
     write_plugin_app_plugin(codex_home.as_ref());
-    let codex = build_apps_enabled_plugin_test_codex(
+    let fixture = build_apps_enabled_plugin_test_codex(
         &server,
         Arc::clone(&codex_home),
         apps_server.chatgpt_base_url,
     )
     .await?;
+    let codex = Arc::clone(&fixture.codex);
 
     codex
         .submit(Op::UserInput {
@@ -263,9 +262,10 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
     write_plugin_app_plugin(codex_home.as_ref());
 
-    let codex =
+    let fixture =
         build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
             .await?;
+    let codex = Arc::clone(&fixture.codex);
 
     codex
         .submit(Op::UserInput {
@@ -346,7 +346,8 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     let codex_home = Arc::new(TempDir::new()?);
     write_plugin_skill_plugin(codex_home.as_ref());
-    let codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let fixture = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&fixture.codex);
 
     codex
         .submit(Op::UserInput {
@@ -413,32 +414,41 @@ async fn plugin_mcp_tools_are_listed() -> Result<()> {
     let codex_home = Arc::new(TempDir::new()?);
     let rmcp_test_server_bin = stdio_server_bin()?;
     write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
-    let codex = build_plugin_test_codex(&server, codex_home).await?;
+    let fixture = build_plugin_test_codex(&server, codex_home).await?;
+    let codex = Arc::clone(&fixture.codex);
 
-    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        codex.submit(Op::ListMcpTools).await?;
-        let list_event = wait_for_event_with_timeout(
-            &codex,
-            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
-            Duration::from_secs(10),
-        )
-        .await;
-        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
-            unreachable!("event guard guarantees McpListToolsResponse");
-        };
-        if tool_list.tools.contains_key("mcp__sample__echo")
-            && tool_list.tools.contains_key("mcp__sample__image")
-        {
-            break;
-        }
+    let startup_event = wait_for_event_with_timeout(
+        &codex,
+        |ev| matches!(ev, EventMsg::McpStartupComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
+    let EventMsg::McpStartupComplete(startup) = startup_event else {
+        unreachable!("event guard guarantees McpStartupComplete");
+    };
+    assert!(
+        startup.ready.iter().any(|server| server == "sample"),
+        "expected sample plugin MCP server to start; failed={:?}, cancelled={:?}",
+        startup.failed,
+        startup.cancelled,
+    );
 
-        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
-        if Instant::now() >= tools_ready_deadline {
-            panic!("timed out waiting for plugin MCP tools; discovered tools: {available_tools:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    codex.submit(Op::ListMcpTools).await?;
+    let list_event = wait_for_event_with_timeout(
+        &codex,
+        |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+    let EventMsg::McpListToolsResponse(tool_list) = list_event else {
+        unreachable!("event guard guarantees McpListToolsResponse");
+    };
+    assert!(
+        tool_list.tools.contains_key("mcp__sample__echo")
+            && tool_list.tools.contains_key("mcp__sample__image"),
+        "expected sample plugin MCP tools; discovered tools: {:?}",
+        tool_list.tools.keys().collect::<Vec<_>>()
+    );
 
     Ok(())
 }
