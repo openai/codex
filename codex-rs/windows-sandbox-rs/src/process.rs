@@ -4,26 +4,27 @@ use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
-use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::SetHandleInformation;
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::SetHandleInformation;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
-use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
+use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
@@ -53,6 +54,28 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     }
     w.push(0);
     w
+}
+
+fn log_create_process_as_user_failure(
+    err: i32,
+    cwd: &Path,
+    cmdline_str: &str,
+    env_block_len: usize,
+    si_flags: u32,
+    creation_flags: u32,
+    logs_base_dir: Option<&Path>,
+) {
+    let msg = format!(
+        "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+        err,
+        format_last_error(err),
+        cwd.display(),
+        cmdline_str,
+        env_block_len,
+        si_flags,
+        creation_flags,
+    );
+    logging::debug_log(&msg, logs_base_dir);
 }
 
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
@@ -85,115 +108,139 @@ pub unsafe fn create_process_as_user(
     use_private_desktop: bool,
 ) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
-    let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
-    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();
     match stdio {
         Some((stdin_h, stdout_h, stderr_h)) => {
-            let mut si: STARTUPINFOEXW = std::mem::zeroed();
-            si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-            // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
-            // if lpDesktop is not set when launching with a restricted token.
-            // Point explicitly at the interactive desktop or a private desktop.
-            si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-            si.StartupInfo.hStdInput = stdin_h;
-            si.StartupInfo.hStdOutput = stdout_h;
-            si.StartupInfo.hStdError = stderr_h;
-            let mut inherited_handles = vec![stdin_h, stdout_h];
-            if !inherited_handles.contains(&stderr_h) {
-                inherited_handles.push(stderr_h);
-            }
-            for &handle in &inherited_handles {
-                if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-                    return Err(anyhow!(
-                        "SetHandleInformation failed for stdio handle: {}",
-                        GetLastError()
-                    ));
+            let mut desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+            let mut retry_without_private_desktop = use_private_desktop;
+            loop {
+                let mut si: STARTUPINFOEXW = std::mem::zeroed();
+                si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+                // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
+                // if lpDesktop is not set when launching with a restricted token.
+                // Point explicitly at the interactive desktop or a private desktop.
+                si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
+                si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+                si.StartupInfo.hStdInput = stdin_h;
+                si.StartupInfo.hStdOutput = stdout_h;
+                si.StartupInfo.hStdError = stderr_h;
+                let mut inherited_handles = vec![stdin_h, stdout_h];
+                if !inherited_handles.contains(&stderr_h) {
+                    inherited_handles.push(stderr_h);
                 }
-            }
-            let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
-            attrs.set_handle_list(inherited_handles)?;
-            si.lpAttributeList = attrs.as_mut_ptr();
+                for &handle in &inherited_handles {
+                    if SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                        return Err(anyhow!(
+                            "SetHandleInformation failed for stdio handle: {}",
+                            GetLastError()
+                        ));
+                    }
+                }
+                let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+                attrs.set_handle_list(inherited_handles)?;
+                si.lpAttributeList = attrs.as_mut_ptr();
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
-            let ok = CreateProcessAsUserW(
-                h_token,
-                std::ptr::null(),
-                cmdline.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                creation_flags,
-                env_block.as_ptr() as *mut c_void,
-                cwd_wide.as_ptr(),
-                &si.StartupInfo,
-                &mut pi,
-            );
-            if ok == 0 {
+                let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+                let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+                let ok = CreateProcessAsUserW(
+                    h_token,
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si.StartupInfo,
+                    &mut pi,
+                );
+                if ok != 0 {
+                    return Ok(CreatedProcess {
+                        process_info: pi,
+                        startup_info: si.StartupInfo,
+                        _desktop: desktop,
+                    });
+                }
+
                 let err = GetLastError() as i32;
-                let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                log_create_process_as_user_failure(
                     err,
-                    format_last_error(err),
-                    cwd.display(),
-                    cmdline_str,
+                    cwd,
+                    &cmdline_str,
                     env_block_len,
                     si.StartupInfo.dwFlags,
                     creation_flags,
+                    logs_base_dir,
                 );
-                logging::debug_log(&msg, logs_base_dir);
+                if retry_without_private_desktop && err == ERROR_ACCESS_DENIED as i32 {
+                    logging::debug_log(
+                        "CreateProcessAsUserW hit ACCESS_DENIED on private desktop; retrying on Winsta0\\Default",
+                        logs_base_dir,
+                    );
+                    desktop = LaunchDesktop::prepare(false, logs_base_dir)?;
+                    retry_without_private_desktop = false;
+                    continue;
+                }
                 return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
-            Ok(CreatedProcess {
-                process_info: pi,
-                startup_info: si.StartupInfo,
-                _desktop: desktop,
-            })
         }
         None => {
-            let mut si: STARTUPINFOW = std::mem::zeroed();
-            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-            si.lpDesktop = desktop.startup_info_desktop();
-            ensure_inheritable_stdio(&mut si)?;
+            let mut desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+            let mut retry_without_private_desktop = use_private_desktop;
+            loop {
+                let mut si: STARTUPINFOW = std::mem::zeroed();
+                si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+                si.lpDesktop = desktop.startup_info_desktop();
+                ensure_inheritable_stdio(&mut si)?;
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT;
-            let ok = CreateProcessAsUserW(
-                h_token,
-                std::ptr::null(),
-                cmdline.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                creation_flags,
-                env_block.as_ptr() as *mut c_void,
-                cwd_wide.as_ptr(),
-                &si,
-                &mut pi,
-            );
-            if ok == 0 {
+                let creation_flags = CREATE_UNICODE_ENVIRONMENT;
+                let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+                let ok = CreateProcessAsUserW(
+                    h_token,
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si,
+                    &mut pi,
+                );
+                if ok != 0 {
+                    return Ok(CreatedProcess {
+                        process_info: pi,
+                        startup_info: si,
+                        _desktop: desktop,
+                    });
+                }
+
                 let err = GetLastError() as i32;
-                let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                log_create_process_as_user_failure(
                     err,
-                    format_last_error(err),
-                    cwd.display(),
-                    cmdline_str,
+                    cwd,
+                    &cmdline_str,
                     env_block_len,
                     si.dwFlags,
                     creation_flags,
+                    logs_base_dir,
                 );
-                logging::debug_log(&msg, logs_base_dir);
+                if retry_without_private_desktop && err == ERROR_ACCESS_DENIED as i32 {
+                    logging::debug_log(
+                        "CreateProcessAsUserW hit ACCESS_DENIED on private desktop; retrying on Winsta0\\Default",
+                        logs_base_dir,
+                    );
+                    desktop = LaunchDesktop::prepare(false, logs_base_dir)?;
+                    retry_without_private_desktop = false;
+                    continue;
+                }
                 return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
             }
-            Ok(CreatedProcess {
-                process_info: pi,
-                startup_info: si,
-                _desktop: desktop,
-            })
         }
     }
 }
