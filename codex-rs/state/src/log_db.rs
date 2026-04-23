@@ -21,7 +21,6 @@
 //! ```
 
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -86,7 +85,7 @@ pub trait LogBatchWriter: Send + 'static {
     fn write_batch<'a>(
         &'a mut self,
         entries: Vec<LogEntry>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    ) -> impl Future<Output = ()> + Send + 'a;
 }
 
 pub struct BufferedLogSink<W> {
@@ -148,10 +147,10 @@ impl LogBatchWriter for SqliteLogWriter {
     fn write_batch<'a>(
         &'a mut self,
         entries: Vec<LogEntry>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async move {
+    ) -> impl Future<Output = ()> + Send + 'a {
+        async move {
             let _ = self.state_db.insert_logs(entries.as_slice()).await;
-        })
+        }
     }
 }
 
@@ -541,10 +540,10 @@ mod tests {
         fn write_batch<'a>(
             &'a mut self,
             entries: Vec<LogEntry>,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-            Box::pin(async move {
+        ) -> impl Future<Output = ()> + Send + 'a {
+            async move {
                 self.batches().push(entries);
-            })
+            }
         }
     }
 
