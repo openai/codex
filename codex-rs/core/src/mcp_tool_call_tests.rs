@@ -27,6 +27,7 @@ use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tracing::Instrument;
@@ -111,6 +112,7 @@ print({hook_output:?})
     );
 
     std::fs::write(&script_path, script).expect("write MCP permission hook script");
+    let python = if cfg!(windows) { "python" } else { "python3" };
     std::fs::write(
         turn_context.config.codex_home.join("hooks.json"),
         serde_json::json!({
@@ -119,7 +121,8 @@ print({hook_output:?})
                     "matcher": matcher,
                     "hooks": [{
                         "type": "command",
-                        "command": format!("python3 {}", script_path.display()),
+                        "command": format!("{python} {}", quote_hook_script_path(&script_path)),
+                        "timeout_sec": 5,
                     }]
                 }]
             }
@@ -131,12 +134,25 @@ print({hook_output:?})
     session.services.hooks = Hooks::new(HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        shell_program: Some("/bin/sh".to_string()),
-        shell_args: vec!["-c".to_string()],
+        shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
+        shell_args: if cfg!(windows) {
+            Vec::new()
+        } else {
+            vec!["-c".to_string()]
+        },
         ..HooksConfig::default()
     });
 
     log_path.to_path_buf()
+}
+
+fn quote_hook_script_path(path: &Path) -> String {
+    let path = path.display().to_string();
+    if cfg!(windows) {
+        format!("\"{}\"", path.replace('"', "\\\""))
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
 }
 
 #[test]
