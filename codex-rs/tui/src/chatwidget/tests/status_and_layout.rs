@@ -1741,6 +1741,7 @@ async fn session_configured_clears_goal_status_footer() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
             history_log_id: 0,

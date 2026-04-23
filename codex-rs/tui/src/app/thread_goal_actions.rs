@@ -27,7 +27,7 @@ impl App {
 
         let Some(goal) = response.goal else {
             self.chat_widget.add_info_message(
-                "Usage: /goal <objective, optionally with a time or token budget>".to_string(),
+                "Usage: /goal <objective, optionally with a token budget>".to_string(),
                 Some("No goal is currently set.".to_string()),
             );
             return;

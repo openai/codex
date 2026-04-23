@@ -681,7 +681,7 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
 async fn goal_slash_command_records_original_command_in_history() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
-    let command = "/goal write a cat poem for 5 minutes";
+    let command = "/goal keep improving benchmark coverage with a 5K token budget";
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
@@ -693,6 +693,7 @@ async fn goal_slash_command_records_original_command_in_history() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -1008,6 +1009,7 @@ async fn rejected_goal_slash_command_retry_records_original_command_in_history()
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
