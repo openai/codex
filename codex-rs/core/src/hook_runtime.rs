@@ -282,6 +282,11 @@ pub(crate) async fn run_pre_compact_hooks(
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
 }
 
+pub(crate) struct PostCompactHookResult {
+    pub(crate) status: CompactionStatus,
+    pub(crate) error: Option<String>,
+}
+
 pub(crate) async fn run_post_compact_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -289,8 +294,7 @@ pub(crate) async fn run_post_compact_hooks(
     reason: CompactionReason,
     phase: CompactionPhase,
     implementation: CompactionImplementation,
-    status: CompactionStatus,
-    error: Option<String>,
+    result: PostCompactHookResult,
 ) {
     let request = codex_hooks::PostCompactRequest {
         session_id: sess.conversation_id,
@@ -303,8 +307,8 @@ pub(crate) async fn run_post_compact_hooks(
         reason: compaction_reason_label(reason).to_string(),
         phase: compaction_phase_label(phase).to_string(),
         implementation: compaction_implementation_label(implementation).to_string(),
-        status: compaction_status_label(status).to_string(),
-        error,
+        status: compaction_status_label(result.status).to_string(),
+        error: result.error,
     };
     let preview_runs = sess.hooks().preview_post_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

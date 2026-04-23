@@ -10,6 +10,7 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
+use crate::hook_runtime::PostCompactHookResult;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
@@ -113,8 +114,10 @@ async fn run_remote_compact_task_inner(
         reason,
         phase,
         CompactionImplementation::ResponsesCompact,
-        status,
-        error.clone(),
+        PostCompactHookResult {
+            status,
+            error: error.clone(),
+        },
     )
     .await;
     attempt.track(sess.as_ref(), status, error.clone()).await;

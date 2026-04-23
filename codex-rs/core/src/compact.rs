@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::hook_runtime::PostCompactHookResult;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 #[cfg(test)]
@@ -159,8 +160,10 @@ async fn run_compact_task_inner(
         reason,
         phase,
         CompactionImplementation::Responses,
-        status,
-        error.clone(),
+        PostCompactHookResult {
+            status,
+            error: error.clone(),
+        },
     )
     .await;
     attempt.track(sess.as_ref(), status, error).await;
