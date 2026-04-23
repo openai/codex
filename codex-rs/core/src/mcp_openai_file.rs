@@ -12,6 +12,7 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use codex_api::OpenAiFileUploadOptions;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
@@ -22,6 +23,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     turn_context: &TurnContext,
     arguments_value: Option<JsonValue>,
     openai_file_input_params: Option<&[String]>,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<Option<JsonValue>, String> {
     let Some(openai_file_input_params) = openai_file_input_params else {
         return Ok(arguments_value);
@@ -40,9 +42,14 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
+        let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            turn_context,
+            auth.as_ref(),
+            field_name,
+            value,
+            upload_options,
+        )
+        .await?
         else {
             continue;
         };
@@ -61,6 +68,7 @@ async fn rewrite_argument_value_for_openai_files(
     auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<Option<JsonValue>, String> {
     match value {
         JsonValue::String(path_or_file_ref) => {
@@ -70,6 +78,7 @@ async fn rewrite_argument_value_for_openai_files(
                 field_name,
                 /*index*/ None,
                 path_or_file_ref,
+                upload_options,
             )
             .await?;
             Ok(Some(rewritten))
@@ -86,6 +95,7 @@ async fn rewrite_argument_value_for_openai_files(
                     field_name,
                     Some(index),
                     path_or_file_ref,
+                    upload_options,
                 )
                 .await?;
                 rewritten_values.push(rewritten);
@@ -102,6 +112,7 @@ async fn build_uploaded_local_argument_value(
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<JsonValue, String> {
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
     let Some(auth) = auth else {
@@ -117,10 +128,12 @@ async fn build_uploaded_local_argument_value(
         account_id: token_data.account_id,
         is_fedramp_account: auth.is_fedramp_account(),
     };
+    let default_upload_options = OpenAiFileUploadOptions::default();
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         &upload_auth,
         &resolved_path,
+        upload_options.unwrap_or(&default_upload_options),
     )
     .await
     .map_err(|error| match index {
@@ -129,14 +142,31 @@ async fn build_uploaded_local_argument_value(
         }
         None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
     })?;
-    Ok(serde_json::json!({
-        "download_url": uploaded.download_url,
-        "file_id": uploaded.file_id,
-        "mime_type": uploaded.mime_type,
-        "file_name": uploaded.file_name,
-        "uri": uploaded.uri,
-        "file_size_bytes": uploaded.file_size_bytes,
-    }))
+    let mut uploaded_value = serde_json::Map::from_iter([
+        ("file_id".to_string(), serde_json::json!(uploaded.file_id)),
+        (
+            "file_name".to_string(),
+            serde_json::json!(uploaded.file_name),
+        ),
+        ("uri".to_string(), serde_json::json!(uploaded.uri)),
+        (
+            "file_size_bytes".to_string(),
+            serde_json::json!(uploaded.file_size_bytes),
+        ),
+    ]);
+    if let Some(download_url) = uploaded.download_url {
+        uploaded_value.insert("download_url".to_string(), serde_json::json!(download_url));
+    }
+    if let Some(mime_type) = uploaded.mime_type {
+        uploaded_value.insert("mime_type".to_string(), serde_json::json!(mime_type));
+    }
+    if let Some(library_file_id) = uploaded.library_file_id {
+        uploaded_value.insert(
+            "library_file_id".to_string(),
+            serde_json::json!(library_file_id),
+        );
+    }
+    Ok(JsonValue::Object(uploaded_value))
 }
 
 #[cfg(test)]
@@ -160,6 +190,7 @@ mod tests {
             &Arc::new(turn_context),
             arguments.clone(),
             /*openai_file_input_params*/ None,
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -231,6 +262,7 @@ mod tests {
             "file",
             /*index*/ None,
             "file_report.csv",
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should upload the local file");
@@ -310,6 +342,7 @@ mod tests {
             Some(&auth),
             "file",
             &serde_json::json!("file_report.csv"),
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -424,6 +457,7 @@ mod tests {
             Some(&auth),
             "files",
             &serde_json::json!(["one.csv", "two.csv"]),
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -464,6 +498,7 @@ mod tests {
                 "file": "/definitely/missing/file.csv",
             })),
             Some(&["file".to_string()]),
+            /*upload_options*/ None,
         )
         .await
         .expect_err("missing file should fail");

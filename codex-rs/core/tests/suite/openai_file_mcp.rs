@@ -96,7 +96,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     let apps_server = AppsTestServer::mount(&server).await?;
 
     Mock::given(method("POST"))
-        .and(path("/files"))
+        .and(path("/backend-api/files"))
         .and(header("chatgpt-account-id", "account_id"))
         .and(body_json(json!({
             "file_name": "report.txt",
@@ -118,7 +118,7 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/files/file_123/uploaded"))
+        .and(path("/backend-api/files/file_123/uploaded"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "status": "success",
             "download_url": format!("{}/download/file_123", server.uri()),

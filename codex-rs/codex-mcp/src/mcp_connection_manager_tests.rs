@@ -543,14 +543,25 @@ fn codex_apps_tools_cache_filters_disallowed_connectors() {
             "calendar",
             Some("Calendar"),
         ),
+        create_test_tool_with_connector(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "allowed_openai_library_tool",
+            "connector_openai_library",
+            Some("Library"),
+        ),
     ];
 
     write_cached_codex_apps_tools(&cache_context, &tools);
     let cached = read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
 
-    assert_eq!(cached.len(), 1);
+    assert_eq!(cached.len(), 2);
     assert_eq!(cached[0].callable_name, "allowed_tool");
     assert_eq!(cached[0].connector_id.as_deref(), Some("calendar"));
+    assert_eq!(cached[1].callable_name, "allowed_openai_library_tool");
+    assert_eq!(
+        cached[1].connector_id.as_deref(),
+        Some("connector_openai_library")
+    );
 }
 
 #[test]
