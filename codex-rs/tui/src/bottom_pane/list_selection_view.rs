@@ -426,6 +426,7 @@ impl ListSelectionView {
                         .position(|idx| *idx == actual_idx)
                 })
             })
+            .or_else(|| self.first_enabled_visible_idx())
             .or_else(|| (len > 0).then_some(0));
 
         let visible = Self::max_visible_rows(len);
@@ -441,6 +442,19 @@ impl ListSelectionView {
     }
 
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
+        let enabled_row_number_width = self
+            .filtered_indices
+            .iter()
+            .filter(|actual_idx| {
+                self.active_items()
+                    .get(**actual_idx)
+                    .is_some_and(Self::item_is_enabled)
+            })
+            .count()
+            .max(1)
+            .to_string()
+            .len();
+        let mut enabled_row_number = 0;
         self.filtered_indices
             .iter()
             .enumerate()
@@ -458,14 +472,15 @@ impl ListSelectionView {
                     };
                     let name_with_marker = format!("{name}{marker}");
                     let is_disabled = item.is_disabled || item.disabled_reason.is_some();
-                    let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
                         format!("{prefix} ")
                     } else if is_disabled {
-                        format!("{prefix} {}", " ".repeat(n.to_string().len() + 2))
+                        format!("{prefix} {}", " ".repeat(enabled_row_number_width + 2))
                     } else {
+                        enabled_row_number += 1;
+                        let n = enabled_row_number;
                         format!("{prefix} {n}. ")
                     };
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
@@ -524,24 +539,28 @@ impl ListSelectionView {
 
     fn select_first_enabled_row(&mut self) {
         let selected_visible_idx = self
-            .filtered_indices
-            .iter()
-            .position(|actual_idx| {
-                self.active_items()
-                    .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
-            })
+            .first_enabled_visible_idx()
             .or_else(|| (!self.filtered_indices.is_empty()).then_some(0));
         self.state.selected_idx = selected_visible_idx;
         self.state.scroll_top = 0;
     }
 
+    fn first_enabled_visible_idx(&self) -> Option<usize> {
+        self.filtered_indices.iter().position(|actual_idx| {
+            self.active_items()
+                .get(*actual_idx)
+                .is_some_and(Self::item_is_enabled)
+        })
+    }
+
+    fn item_is_enabled(item: &SelectionItem) -> bool {
+        item.disabled_reason.is_none() && !item.is_disabled
+    }
+
     fn selected_item_has_toggle(&self) -> bool {
         self.selected_actual_idx()
             .and_then(|actual_idx| self.active_items().get(actual_idx))
-            .is_some_and(|item| {
-                item.toggle.is_some() && item.disabled_reason.is_none() && !item.is_disabled
-            })
+            .is_some_and(|item| item.toggle.is_some() && Self::item_is_enabled(item))
     }
 
     fn selected_item_has_toggle_placeholder(&self) -> bool {
@@ -550,9 +569,21 @@ impl ListSelectionView {
             .is_some_and(|item| {
                 item.toggle.is_none()
                     && item.toggle_placeholder.is_some()
-                    && item.disabled_reason.is_none()
-                    && !item.is_disabled
+                    && Self::item_is_enabled(item)
             })
+    }
+
+    fn actual_idx_for_enabled_number(&self, number: usize) -> Option<usize> {
+        if number == 0 {
+            return None;
+        }
+
+        self.active_items()
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| Self::item_is_enabled(item))
+            .nth(number - 1)
+            .map(|(idx, _)| idx)
     }
 
     fn toggle_selected(&mut self) {
@@ -563,7 +594,7 @@ impl ListSelectionView {
         let Some(item) = self.active_items_mut().get_mut(actual_idx) else {
             return;
         };
-        if item.is_disabled || item.disabled_reason.is_some() {
+        if !Self::item_is_enabled(item) {
             return;
         }
         let Some(toggle) = item.toggle.as_mut() else {
@@ -845,8 +876,7 @@ impl BottomPaneView for ListSelectionView {
                 if let Some(idx) = self.items.iter().position(|item| {
                     item.display_shortcut
                         .is_some_and(|shortcut| shortcut.is_press(key_event))
-                        && item.disabled_reason.is_none()
-                        && !item.is_disabled
+                        && Self::item_is_enabled(item)
                 }) {
                     self.state.selected_idx = Some(idx);
                     self.accept();
@@ -855,12 +885,7 @@ impl BottomPaneView for ListSelectionView {
                 if let Some(idx) = c
                     .to_digit(10)
                     .map(|d| d as usize)
-                    .and_then(|d| d.checked_sub(1))
-                    && idx < self.active_items().len()
-                    && self
-                        .active_items()
-                        .get(idx)
-                        .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
+                    .and_then(|number| self.actual_idx_for_enabled_number(number))
                 {
                     self.state.selected_idx = Some(idx);
                     self.accept();
@@ -1837,6 +1862,62 @@ mod tests {
             rx.try_recv().is_err(),
             "moving down in a single-item list should not fire on_selection_changed",
         );
+    }
+
+    #[test]
+    fn disabled_rows_skip_default_selection_and_number_shortcuts() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "Unavailable".to_string(),
+                        description: Some("Not available right now.".to_string()),
+                        is_disabled: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Alpha".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Busy".to_string(),
+                        description: Some("Still disabled.".to_string()),
+                        disabled_reason: Some("Try again later.".to_string()),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Beta".to_string(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_eq!(view.selected_actual_idx(), Some(1));
+
+        let rendered = render_lines_with_width(&view, /*width*/ 60);
+        assert!(
+            rendered.contains("› 1. Alpha"),
+            "expected first enabled row to be selected and numbered 1, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("  2. Beta"),
+            "expected second enabled row to be numbered 2, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("1. Unavailable") && !rendered.contains("3. Beta"),
+            "expected disabled rows to be skipped by numbering, got:\n{rendered}"
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        assert_eq!(view.take_last_selected_index(), Some(3));
     }
 
     #[test]
