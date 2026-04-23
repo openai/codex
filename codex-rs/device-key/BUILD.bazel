@@ -22,6 +22,6 @@ objc_library(
         "LocalAuthentication",
         "Security",
     ],
-    target_compatible_with = ["@platforms//os:macos"],
+    tags = ["manual"],
     visibility = ["//visibility:private"],
 )
