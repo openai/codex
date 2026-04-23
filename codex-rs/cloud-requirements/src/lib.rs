@@ -50,8 +50,9 @@ const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC: &str = "codex.cloud_requirements.fetch_attempt";
 const CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC: &str = "codex.cloud_requirements.fetch_final";
 const CLOUD_REQUIREMENTS_LOAD_METRIC: &str = "codex.cloud_requirements.load";
-const CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE: &str = "failed to load your workspace-managed config";
-const CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE: &str = "Your workspace-managed config is invalid and could not be parsed. Please contact your workspace admin.";
+const CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE: &str =
+    "failed to load cloud requirements (workspace-managed policies)";
+const CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE: &str = "Cloud requirements (workspace-managed policies) are invalid and could not be parsed. Please contact your workspace admin.";
 const CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE: &str = "Your authentication session could not be refreshed automatically. Please log out and sign in again.";
 const CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY: &[u8] =
     b"codex-cloud-requirements-cache-v3-064f8542-75b4-494c-a294-97d3ce597271";
@@ -2083,10 +2084,7 @@ enabled = false
             .await
             .expect("cloud requirements task")
             .expect_err("cloud requirements retry exhaustion should fail closed");
-        assert_eq!(
-            err.to_string(),
-            "failed to load your workspace-managed config"
-        );
+        assert_eq!(err.to_string(), CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE);
         assert_eq!(err.code(), CloudRequirementsLoadErrorCode::RequestFailed);
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
