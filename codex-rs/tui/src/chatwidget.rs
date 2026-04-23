@@ -9782,6 +9782,14 @@ impl ChatWidget {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         self.config.permissions.sandbox_policy.set(policy)?;
+        let sandbox_policy = self.config.permissions.sandbox_policy.get();
+        self.config.permissions.file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                sandbox_policy,
+                &self.config.cwd,
+            );
+        self.config.permissions.network_sandbox_policy =
+            codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
         Ok(())
     }
 

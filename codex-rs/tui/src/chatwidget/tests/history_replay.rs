@@ -315,6 +315,18 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         expected_permission_profile
     );
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
+
+    let updated_sandbox = SandboxPolicy::new_workspace_write_policy();
+    chat.set_sandbox_policy(updated_sandbox.clone())
+        .expect("set sandbox policy");
+    assert_eq!(
+        chat.config_ref().permissions.permission_profile(),
+        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+            &updated_sandbox,
+            &expected_cwd
+        ),
+        "local sandbox changes should replace SessionConfigured profile-derived runtime permissions"
+    );
 }
 
 #[tokio::test]
