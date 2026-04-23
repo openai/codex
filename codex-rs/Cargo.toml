@@ -387,7 +387,7 @@ which = "8"
 whoami = "1.6.1"
 wildmatch = "2.6.1"
 winapi-util = "0.1.11"
-zip = "2.4.2"
+zip = "8.5.1"
 zstd = "0.13"
 
 wiremock = "0.6"
