@@ -1,4 +1,5 @@
 use crate::mcp::RequestId;
+use crate::models::AdditionalPermissionProfile;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
@@ -28,7 +29,7 @@ pub struct ResolvedPermissionProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationPermissions {
     /// Permissions to merge with the active turn permissions.
-    AdditionalPermissionProfile(PermissionProfile),
+    AdditionalPermissionProfile(AdditionalPermissionProfile),
     /// Fully resolved permissions that should replace the active turn permissions.
     ResolvedPermissionProfile(ResolvedPermissionProfile),
 }
@@ -249,7 +250,7 @@ pub struct ExecApprovalRequestEvent {
     /// Optional additional filesystem permissions requested for this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     /// Ordered list of decisions the client may present for this prompt.
     ///
     /// When absent, clients should derive the legacy default set from the
@@ -285,7 +286,7 @@ impl ExecApprovalRequestEvent {
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
-        additional_permissions: Option<&PermissionProfile>,
+        additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
