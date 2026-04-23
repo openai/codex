@@ -1,6 +1,7 @@
 //! Shortcut picker construction for `/keymap`.
 
 use codex_config::types::TuiKeymap;
+use crossterm::event::KeyCode;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -12,7 +13,9 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
 use crate::bottom_pane::SelectionViewParams;
+use crate::key_hint;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap::primary_binding;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 
@@ -243,7 +246,7 @@ fn build_keymap_picker_params_for_action(
     SelectionViewParams {
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
         header: Box::new(()),
-        footer_hint: Some(keymap_picker_hint_line()),
+        footer_hint: Some(keymap_picker_hint_line(runtime_keymap)),
         tabs,
         initial_tab_id: Some(KEYMAP_ALL_TAB_ID.to_string()),
         is_searchable: true,
@@ -380,17 +383,21 @@ fn action_count_line(count: usize) -> String {
     }
 }
 
-fn keymap_picker_hint_line() -> Line<'static> {
+fn keymap_picker_hint_line(runtime_keymap: &RuntimeKeymap) -> Line<'static> {
+    let accept = primary_binding(&runtime_keymap.list.accept)
+        .unwrap_or_else(|| key_hint::plain(KeyCode::Enter));
+    let cancel = primary_binding(&runtime_keymap.list.cancel)
+        .unwrap_or_else(|| key_hint::plain(KeyCode::Esc));
     Line::from(vec![
         "left/right".cyan(),
         " group · ".dim(),
-        "enter".cyan(),
+        accept.into(),
         " edit shortcut · ".dim(),
         "*".cyan(),
         " custom · ".dim(),
         "-".cyan(),
         " unbound · ".dim(),
-        "esc".cyan(),
+        cancel.into(),
         " close".dim(),
     ])
 }

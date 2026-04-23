@@ -76,6 +76,12 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    pub(crate) toggle_shortcuts_key: Option<KeyBinding>,
+    pub(crate) queue_key: Option<KeyBinding>,
+    pub(crate) insert_newline_key: Option<KeyBinding>,
+    pub(crate) external_editor_key: Option<KeyBinding>,
+    pub(crate) edit_previous_key: Option<KeyBinding>,
+    pub(crate) show_transcript_key: Option<KeyBinding>,
     pub(crate) reasoning_down_key: Option<KeyBinding>,
     pub(crate) reasoning_up_key: Option<KeyBinding>,
     /// Active thread label shown when the footer is rendering contextual information instead of an
@@ -276,21 +282,28 @@ struct LeftSideState {
 fn left_side_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     state: LeftSideState,
+    props: &FooterProps,
 ) -> Line<'static> {
     let mut line = Line::from("");
     match state.hint {
         SummaryHintKind::None => {}
         SummaryHintKind::Shortcuts => {
-            line.push_span(key_hint::plain(KeyCode::Char('?')));
-            line.push_span(" for shortcuts".dim());
+            if let Some(key) = props.toggle_shortcuts_key {
+                line.push_span(key);
+                line.push_span(" for shortcuts".dim());
+            }
         }
         SummaryHintKind::QueueMessage => {
-            line.push_span(key_hint::plain(KeyCode::Tab));
-            line.push_span(" to queue message".dim());
+            if let Some(key) = props.queue_key {
+                line.push_span(key);
+                line.push_span(" to queue message".dim());
+            }
         }
         SummaryHintKind::QueueShort => {
-            line.push_span(key_hint::plain(KeyCode::Tab));
-            line.push_span(" to queue".dim());
+            if let Some(key) = props.queue_key {
+                line.push_span(key);
+                line.push_span(" to queue".dim());
+            }
         }
     };
 
@@ -315,6 +328,7 @@ pub(crate) enum SummaryLeft {
 pub(crate) fn single_line_footer_layout(
     area: Rect,
     context_width: u16,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
@@ -331,7 +345,7 @@ pub(crate) fn single_line_footer_layout(
         hint: hint_kind,
         show_cycle_hint,
     };
-    let default_line = left_side_line(collaboration_mode_indicator, default_state);
+    let default_line = left_side_line(collaboration_mode_indicator, default_state, props);
     let default_width = default_line.width() as u16;
     if default_width > 0 && can_show_left_with_context(area, default_width, context_width) {
         return (SummaryLeft::Default, true);
@@ -341,7 +355,7 @@ pub(crate) fn single_line_footer_layout(
         if state == default_state {
             default_line.clone()
         } else {
-            left_side_line(collaboration_mode_indicator, state)
+            left_side_line(collaboration_mode_indicator, state, props)
         }
     };
     let state_width = |state: LeftSideState| -> u16 { state_line(state).width() as u16 };
@@ -450,7 +464,8 @@ pub(crate) fn single_line_footer_layout(
         // Compute the width without going through `state_line` so we do not
         // depend on `default_state` (which may still be a queue variant).
         let mode_only_width =
-            left_side_line(Some(collaboration_mode_indicator), mode_only_state).width() as u16;
+            left_side_line(Some(collaboration_mode_indicator), mode_only_state, props).width()
+                as u16;
         if !context_requires_cycle_hint
             && can_show_left_with_context(area, mode_only_width, context_width)
         {
@@ -458,6 +473,7 @@ pub(crate) fn single_line_footer_layout(
                 SummaryLeft::Custom(left_side_line(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
+                    props,
                 )),
                 true, // show_context
             );
@@ -467,6 +483,7 @@ pub(crate) fn single_line_footer_layout(
                 SummaryLeft::Custom(left_side_line(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
+                    props,
                 )),
                 false, // show_context
             );
@@ -616,7 +633,7 @@ fn footer_from_props_lines(
                 },
                 show_cycle_hint,
             };
-            vec![left_side_line(collaboration_mode_indicator, state)]
+            vec![left_side_line(collaboration_mode_indicator, state, props)]
         }
         FooterMode::ShortcutOverlay => {
             let state = ShortcutsState {
@@ -624,12 +641,20 @@ fn footer_from_props_lines(
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl: props.is_wsl,
                 collaboration_modes_enabled: props.collaboration_modes_enabled,
+                insert_newline_key: props.insert_newline_key,
+                queue_key: props.queue_key,
+                external_editor_key: props.external_editor_key,
+                edit_previous_key: props.edit_previous_key,
+                show_transcript_key: props.show_transcript_key,
                 reasoning_down_key: props.reasoning_down_key,
                 reasoning_up_key: props.reasoning_up_key,
             };
             shortcut_overlay_lines(state)
         }
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::EscHint => vec![esc_hint_line(
+            props.esc_backtrack_hint,
+            props.edit_previous_key,
+        )],
         FooterMode::ComposerHasDraft => {
             let state = LeftSideState {
                 hint: if show_queue_hint {
@@ -641,7 +666,7 @@ fn footer_from_props_lines(
                 },
                 show_cycle_hint,
             };
-            vec![left_side_line(collaboration_mode_indicator, state)]
+            vec![left_side_line(collaboration_mode_indicator, state, props)]
         }
     }
 }
@@ -743,6 +768,11 @@ struct ShortcutsState {
     esc_backtrack_hint: bool,
     is_wsl: bool,
     collaboration_modes_enabled: bool,
+    insert_newline_key: Option<KeyBinding>,
+    queue_key: Option<KeyBinding>,
+    external_editor_key: Option<KeyBinding>,
+    edit_previous_key: Option<KeyBinding>,
+    show_transcript_key: Option<KeyBinding>,
     reasoning_down_key: Option<KeyBinding>,
     reasoning_up_key: Option<KeyBinding>,
 }
@@ -751,15 +781,15 @@ fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
     Line::from(vec![key.into(), " again to quit".into()]).dim()
 }
 
-fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
-    let esc = key_hint::plain(KeyCode::Esc);
+fn esc_hint_line(esc_backtrack_hint: bool, key: Option<KeyBinding>) -> Line<'static> {
+    let key = key.unwrap_or_else(|| key_hint::plain(KeyCode::Esc));
     if esc_backtrack_hint {
-        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
+        Line::from(vec![key.into(), " again to edit previous message".into()]).dim()
     } else {
         Line::from(vec![
-            esc.into(),
+            key.into(),
             " ".into(),
-            esc.into(),
+            key.into(),
             " to edit previous message".into(),
         ])
         .dim()
@@ -957,8 +987,25 @@ impl ShortcutDescriptor {
     }
 
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
-        let binding = self.binding_for(state)?;
-        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        let key = match self.id {
+            ShortcutId::InsertNewline => state
+                .insert_newline_key
+                .or_else(|| self.binding_for(state).map(|binding| binding.key)),
+            ShortcutId::QueueMessageTab => state
+                .queue_key
+                .or_else(|| self.binding_for(state).map(|binding| binding.key)),
+            ShortcutId::ExternalEditor => state
+                .external_editor_key
+                .or_else(|| self.binding_for(state).map(|binding| binding.key)),
+            ShortcutId::EditPrevious => state
+                .edit_previous_key
+                .or_else(|| self.binding_for(state).map(|binding| binding.key)),
+            ShortcutId::ShowTranscript => state
+                .show_transcript_key
+                .or_else(|| self.binding_for(state).map(|binding| binding.key)),
+            _ => self.binding_for(state).map(|binding| binding.key),
+        }?;
+        let mut line = Line::from(vec![self.prefix.into(), key.into()]);
         match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
@@ -966,7 +1013,7 @@ impl ShortcutDescriptor {
                 } else {
                     line.extend(vec![
                         " ".into(),
-                        key_hint::plain(KeyCode::Esc).into(),
+                        key.into(),
                         " to edit previous message".into(),
                     ]);
                 }
@@ -1248,6 +1295,7 @@ mod tests {
                         let (summary_left, show_context) = single_line_footer_layout(
                             area,
                             right_width,
+                            props,
                             left_mode_indicator,
                             show_cycle_hint,
                             show_shortcuts_hint,
@@ -1366,6 +1414,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1384,6 +1438,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::shift(KeyCode::Enter)),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1402,6 +1462,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1420,6 +1486,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1438,6 +1510,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1456,6 +1534,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1474,6 +1558,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1492,6 +1582,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1512,6 +1608,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1532,6 +1634,12 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
                 status_line_enabled: false,
+                toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+                external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+                edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
                 reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
                 active_agent_label: None,
@@ -1548,6 +1656,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1577,6 +1691,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1599,6 +1719,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1616,6 +1742,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1633,6 +1765,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1650,6 +1788,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1673,6 +1817,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1696,6 +1846,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1722,6 +1878,12 @@ mod tests {
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1745,6 +1907,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
             status_line_enabled: false,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: Some("Robie [explorer]".to_string()),
@@ -1762,6 +1930,12 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: Some("Robie [explorer]".to_string()),
@@ -1785,6 +1959,12 @@ mod tests {
                     .to_string(),
             )),
             status_line_enabled: true,
+            toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            insert_newline_key: Some(key_hint::ctrl(KeyCode::Char('j'))),
+            external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
             active_agent_label: None,
@@ -1841,6 +2021,11 @@ mod tests {
                 esc_backtrack_hint: false,
                 is_wsl,
                 collaboration_modes_enabled: false,
+                insert_newline_key: None,
+                queue_key: None,
+                external_editor_key: None,
+                edit_previous_key: None,
+                show_transcript_key: None,
                 reasoning_down_key: None,
                 reasoning_up_key: None,
             })

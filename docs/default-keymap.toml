@@ -18,7 +18,7 @@
 
 [tui.keymap]
 # Preset alias for built-in defaults.
-# "latest" currently points to "v4".
+# "latest" currently points to "v5".
 preset = "latest"
 
 [tui.keymap.global]
@@ -149,9 +149,11 @@ cancel = ["esc"]
 # Approval modal actions.
 # Include ctrl+shift fallback for terminals that preserve SHIFT on Ctrl letter chords.
 open_fullscreen = ["ctrl-a", "ctrl-shift-a"]
+open_thread = ["o"]
 approve = ["y"]
 approve_for_session = ["a"]
 approve_for_prefix = ["p"]
+approve_with_strict_auto_review = ["r"]
 decline = ["esc", "n"]
 cancel = ["c"]
 

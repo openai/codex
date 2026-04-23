@@ -394,6 +394,9 @@ pub(crate) struct ChatComposer {
     queue_keys: Vec<KeyBinding>,
     toggle_shortcuts_keys: Vec<KeyBinding>,
     editor_keymap: EditorKeymap,
+    footer_toggle_shortcuts_key: Option<KeyBinding>,
+    footer_queue_key: Option<KeyBinding>,
+    footer_insert_newline_key: Option<KeyBinding>,
     footer_external_editor_key: Option<KeyBinding>,
     footer_edit_previous_key: Option<KeyBinding>,
     footer_show_transcript_key: Option<KeyBinding>,
@@ -553,6 +556,13 @@ impl ChatComposer {
                 key_hint::shift(KeyCode::Char('?')),
             ],
             editor_keymap: RuntimeKeymap::defaults().editor,
+            footer_toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            footer_queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            footer_insert_newline_key: Some(if use_shift_enter_hint {
+                key_hint::shift(KeyCode::Enter)
+            } else {
+                key_hint::ctrl(KeyCode::Char('j'))
+            }),
             footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
             footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
             footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
@@ -637,6 +647,15 @@ impl ChatComposer {
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
         self.editor_keymap = keymap.editor.clone();
         self.textarea.set_keymap_bindings(keymap);
+        self.footer_toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
+        self.footer_queue_key = primary_binding(&keymap.composer.queue);
+        let shift_enter = key_hint::shift(KeyCode::Enter);
+        self.footer_insert_newline_key =
+            if self.use_shift_enter_hint && keymap.editor.insert_newline.contains(&shift_enter) {
+                Some(shift_enter)
+            } else {
+                primary_binding(&keymap.editor.insert_newline)
+            };
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
         self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
         self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
@@ -3324,6 +3343,12 @@ impl ChatComposer {
             is_wsl,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            toggle_shortcuts_key: self.footer_toggle_shortcuts_key,
+            queue_key: self.footer_queue_key,
+            insert_newline_key: self.footer_insert_newline_key,
+            external_editor_key: self.footer_external_editor_key,
+            edit_previous_key: self.footer_edit_previous_key,
+            show_transcript_key: self.footer_show_transcript_key,
             reasoning_down_key: self.footer_reasoning_down_key,
             reasoning_up_key: self.footer_reasoning_up_key,
             active_agent_label: self.active_agent_label.clone(),
@@ -4146,6 +4171,7 @@ impl ChatComposer {
                                 Some(single_line_footer_layout(
                                     hint_rect,
                                     right_width,
+                                    &footer_props,
                                     left_mode_indicator,
                                     show_cycle_hint,
                                     show_shortcuts_hint,

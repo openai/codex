@@ -2,7 +2,7 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (93 selectable)
+tab: All (95 selectable)
 tab: Common (21 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (1) (1 selectable)
@@ -11,7 +11,7 @@ tab: Composer (3 selectable)
 tab: Editor (16 selectable)
 tab: Vim (34 selectable)
 tab: Navigation (17 selectable)
-tab: Approval (6 selectable)
+tab: Approval (8 selectable)
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default

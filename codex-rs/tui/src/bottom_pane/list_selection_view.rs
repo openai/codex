@@ -1417,6 +1417,7 @@ mod tests {
             /*current_name*/ None,
             Some(&codex_home),
             Some(94),
+            &crate::keymap::RuntimeKeymap::defaults().list,
         );
         let view = new_view(params, tx);
 
@@ -1430,6 +1431,7 @@ mod tests {
             /*current_name*/ None,
             /*codex_home*/ None,
             Some(120),
+            &crate::keymap::RuntimeKeymap::defaults().list,
         );
         assert!(
             params.preserve_side_content_bg,

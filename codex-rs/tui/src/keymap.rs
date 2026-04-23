@@ -33,7 +33,7 @@ use std::collections::HashMap;
 ///
 /// 1. Context-specific binding (`tui.keymap.<context>`).
 /// 2. `tui.keymap.global` for actions that support global fallback.
-/// 3. Built-in preset defaults (`latest` currently points to `v4`).
+/// 3. Built-in preset defaults (`latest` currently points to `v5`).
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
@@ -207,9 +207,11 @@ pub(crate) struct ListKeymap {
 #[derive(Clone, Debug)]
 pub(crate) struct ApprovalKeymap {
     pub(crate) open_fullscreen: Vec<KeyBinding>,
+    pub(crate) open_thread: Vec<KeyBinding>,
     pub(crate) approve: Vec<KeyBinding>,
     pub(crate) approve_for_session: Vec<KeyBinding>,
     pub(crate) approve_for_prefix: Vec<KeyBinding>,
+    pub(crate) approve_with_strict_auto_review: Vec<KeyBinding>,
     pub(crate) decline: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
@@ -489,9 +491,16 @@ impl RuntimeKeymap {
 
         let approval = ApprovalKeymap {
             open_fullscreen: resolve_local!(keymap, defaults, approval, open_fullscreen),
+            open_thread: resolve_local!(keymap, defaults, approval, open_thread),
             approve: resolve_local!(keymap, defaults, approval, approve),
             approve_for_session: resolve_local!(keymap, defaults, approval, approve_for_session),
             approve_for_prefix: resolve_local!(keymap, defaults, approval, approve_for_prefix),
+            approve_with_strict_auto_review: resolve_local!(
+                keymap,
+                defaults,
+                approval,
+                approve_with_strict_auto_review
+            ),
             decline: resolve_local!(keymap, defaults, approval, decline),
             cancel: resolve_local!(keymap, defaults, approval, cancel),
         };
@@ -527,7 +536,8 @@ impl RuntimeKeymap {
 
     fn defaults_for_preset(preset: TuiKeymapPreset) -> Self {
         match preset {
-            TuiKeymapPreset::Latest | TuiKeymapPreset::V4 => Self::defaults_v4(),
+            TuiKeymapPreset::Latest | TuiKeymapPreset::V5 => Self::defaults_v5(),
+            TuiKeymapPreset::V4 => Self::defaults_v4(),
             TuiKeymapPreset::V3 => Self::defaults_v3(),
             TuiKeymapPreset::V2 => Self::defaults_v2(),
             TuiKeymapPreset::V1 => Self::defaults_v1(),
@@ -703,9 +713,11 @@ impl RuntimeKeymap {
                         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
                     ))
                 ],
+                open_thread: default_bindings![],
                 approve: default_bindings![plain(KeyCode::Char('y'))],
                 approve_for_session: default_bindings![plain(KeyCode::Char('a'))],
                 approve_for_prefix: default_bindings![plain(KeyCode::Char('p'))],
+                approve_with_strict_auto_review: default_bindings![],
                 decline: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Char('n'))],
                 cancel: default_bindings![plain(KeyCode::Char('c'))],
             },
@@ -768,6 +780,18 @@ impl RuntimeKeymap {
         let mut defaults = Self::defaults_v3();
         defaults.chat.reasoning_down = default_bindings![alt(KeyCode::Char(','))];
         defaults.chat.reasoning_up = default_bindings![alt(KeyCode::Char('.'))];
+        defaults
+    }
+
+    /// Current keymap defaults for preset `v5`.
+    ///
+    /// This keeps earlier presets intact while moving approval-only shortcuts
+    /// into configurable keymap defaults.
+    fn defaults_v5() -> Self {
+        let mut defaults = Self::defaults_v4();
+        defaults.approval.open_thread = default_bindings![plain(KeyCode::Char('o'))];
+        defaults.approval.approve_with_strict_auto_review =
+            default_bindings![plain(KeyCode::Char('r'))];
         defaults
     }
 
@@ -990,6 +1014,7 @@ impl RuntimeKeymap {
             "approval",
             [
                 ("open_fullscreen", self.approval.open_fullscreen.as_slice()),
+                ("open_thread", self.approval.open_thread.as_slice()),
                 ("approve", self.approval.approve.as_slice()),
                 (
                     "approve_for_session",
@@ -998,6 +1023,10 @@ impl RuntimeKeymap {
                 (
                     "approve_for_prefix",
                     self.approval.approve_for_prefix.as_slice(),
+                ),
+                (
+                    "approve_with_strict_auto_review",
+                    self.approval.approve_with_strict_auto_review.as_slice(),
                 ),
                 ("decline", self.approval.decline.as_slice()),
                 ("cancel", self.approval.cancel.as_slice()),

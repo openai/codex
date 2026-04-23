@@ -2198,9 +2198,11 @@
               "approve": null,
               "approve_for_prefix": null,
               "approve_for_session": null,
+              "approve_with_strict_auto_review": null,
               "cancel": null,
               "decline": null,
-              "open_fullscreen": null
+              "open_fullscreen": null,
+              "open_thread": null
             },
             "chat": {
               "confirm_edit_previous_message": null,
@@ -2416,6 +2418,14 @@
           ],
           "description": "Approve for session when that option exists."
         },
+        "approve_with_strict_auto_review": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Grant permissions for this turn with strict auto review."
+        },
         "cancel": {
           "allOf": [
             {
@@ -2439,6 +2449,14 @@
             }
           ],
           "description": "Open the full-screen approval details view."
+        },
+        "open_thread": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the originating thread from an approval prompt."
         }
       },
       "type": "object"
@@ -2757,9 +2775,11 @@
             "approve": null,
             "approve_for_prefix": null,
             "approve_for_session": null,
+            "approve_with_strict_auto_review": null,
             "cancel": null,
             "decline": null,
-            "open_fullscreen": null
+            "open_fullscreen": null,
+            "open_thread": null
           }
         },
         "chat": {
@@ -2952,7 +2972,7 @@
       "description": "Versioned keymap defaults.",
       "oneOf": [
         {
-          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v4`.",
+          "description": "Pointer alias to the latest shipped preset.\n\nToday this resolves to `v5`.",
           "enum": [
             "latest"
           ],
@@ -2983,6 +3003,13 @@
           "description": "Current defaults with reasoning shortcuts exposed through keymap config.",
           "enum": [
             "v4"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Current defaults with approval thread and strict-review shortcuts exposed.",
+          "enum": [
+            "v5"
           ],
           "type": "string"
         }

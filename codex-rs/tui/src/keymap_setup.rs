@@ -34,6 +34,7 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -66,13 +67,8 @@ fn key_binding_span(binding: &str) -> ratatui::text::Span<'static> {
     }
 }
 
-fn keymap_action_menu_hint_line() -> Line<'static> {
-    Line::from(vec![
-        "enter".cyan(),
-        " select · ".dim(),
-        "esc".cyan(),
-        " back".dim(),
-    ])
+fn keymap_action_menu_hint_line(runtime_keymap: &RuntimeKeymap) -> Line<'static> {
+    standard_popup_hint_line_for_keymap(&runtime_keymap.list)
 }
 
 fn open_capture_action(
@@ -264,7 +260,7 @@ pub(crate) fn build_keymap_action_menu_params(
             "`tui.keymap.*`".cyan(),
             " override.".dim(),
         ])),
-        footer_hint: Some(keymap_action_menu_hint_line()),
+        footer_hint: Some(keymap_action_menu_hint_line(runtime_keymap)),
         items,
         col_width_mode: ColumnWidthMode::Fixed,
         ..Default::default()
@@ -315,7 +311,7 @@ pub(crate) fn build_keymap_replace_binding_menu_params(
     SelectionViewParams {
         view_id: Some(KEYMAP_REPLACE_BINDING_MENU_VIEW_ID),
         header: Box::new(header),
-        footer_hint: Some(keymap_action_menu_hint_line()),
+        footer_hint: Some(keymap_action_menu_hint_line(runtime_keymap)),
         items,
         col_width_mode: ColumnWidthMode::Fixed,
         ..Default::default()

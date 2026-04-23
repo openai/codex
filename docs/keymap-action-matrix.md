@@ -7,14 +7,14 @@ For runtime behavior, safety invariants, and testing guidance, see
 ## Preset behavior
 
 - `latest` is an alias to the newest shipped preset.
-- Today, `latest -> v4`.
+- Today, `latest -> v5`.
 - To keep stable behavior over time, pin `preset = "v1"`.
 
 ## Precedence
 
 1. `tui.keymap.<context>.<action>`
 2. `tui.keymap.global.<action>` (chat/composer fallback actions only)
-3. Preset default (`v4` today)
+3. Preset default (`v5` today)
 
 ## Default `v1` Compatibility Notes
 
@@ -116,9 +116,11 @@ For runtime behavior, safety invariants, and testing guidance, see
 ### `approval`
 
 - `open_fullscreen`: open full-screen approval details
+- `open_thread`: open the originating thread from an approval prompt
 - `approve`: approve primary request
 - `approve_for_session`: approve-for-session option
 - `approve_for_prefix`: approve-for-prefix option
+- `approve_with_strict_auto_review`: grant permissions for this turn with strict auto review
 - `decline`: decline request
 - `cancel`: cancel elicitation request
 - MCP elicitation safety rule: `Esc` is always treated as `cancel` (never

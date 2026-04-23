@@ -30,6 +30,7 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ApprovalKeymap;
 use crate::keymap::ListKeymap;
+use crate::keymap::primary_binding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -210,8 +211,13 @@ impl ApprovalOverlay {
     fn set_current(&mut self, request: ApprovalRequest) {
         self.current_complete = false;
         let header = build_header(&request);
-        let (options, params) =
-            Self::build_options(&request, header, &self.features, &self.approval_keymap);
+        let (options, params) = Self::build_options(
+            &request,
+            header,
+            &self.features,
+            &self.approval_keymap,
+            &self.list_keymap,
+        );
         self.current_request = Some(request);
         self.options = options;
         self.list =
@@ -223,6 +229,7 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
         _features: &Features,
         approval_keymap: &ApprovalKeymap,
+        list_keymap: &ListKeymap,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match request {
             ApprovalRequest::Exec {
@@ -278,7 +285,7 @@ impl ApprovalOverlay {
             .collect();
 
         let params = SelectionViewParams {
-            footer_hint: Some(approval_footer_hint(request)),
+            footer_hint: Some(approval_footer_hint(request, list_keymap, approval_keymap)),
             items,
             header,
             ..Default::default()
@@ -453,7 +460,7 @@ impl ApprovalOverlay {
         }
 
         if key_event.kind == KeyEventKind::Press
-            && matches!(key_event.code, KeyCode::Char('o'))
+            && self.approval_keymap.open_thread.is_pressed(*key_event)
             && let Some(request) = self.current_request.as_ref()
             && request.thread_label().is_some()
         {
@@ -560,20 +567,26 @@ impl Renderable for ApprovalOverlay {
     }
 }
 
-fn approval_footer_hint(request: &ApprovalRequest) -> Line<'static> {
+fn approval_footer_hint(
+    request: &ApprovalRequest,
+    list_keymap: &ListKeymap,
+    approval_keymap: &ApprovalKeymap,
+) -> Line<'static> {
+    let accept =
+        primary_binding(&list_keymap.accept).unwrap_or_else(|| key_hint::plain(KeyCode::Enter));
+    let cancel =
+        primary_binding(&list_keymap.cancel).unwrap_or_else(|| key_hint::plain(KeyCode::Esc));
     let mut spans = vec![
         "Press ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
+        accept.into(),
         " to confirm or ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
+        cancel.into(),
         " to cancel".into(),
     ];
-    if request.thread_label().is_some() {
-        spans.extend([
-            " or ".into(),
-            key_hint::plain(KeyCode::Char('o')).into(),
-            " to open thread".into(),
-        ]);
+    if request.thread_label().is_some()
+        && let Some(open_thread) = primary_binding(&approval_keymap.open_thread)
+    {
+        spans.extend([" or ".into(), open_thread.into(), " to open thread".into()]);
     }
     Line::from(spans)
 }
@@ -933,7 +946,7 @@ fn permissions_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
             decision: ApprovalDecision::Permissions(
                 PermissionsDecision::GrantForTurnWithStrictAutoReview,
             ),
-            shortcuts: vec![key_hint::plain(KeyCode::Char('r'))],
+            shortcuts: keymap.approve_with_strict_auto_review.clone(),
         },
         ApprovalOption {
             label: "Yes, grant these permissions for this session".to_string(),

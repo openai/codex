@@ -111,9 +111,11 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("list", "List", "accept", "Accept the current list selection."),
     action("list", "List", "cancel", "Cancel and close selection views."),
     action("approval", "Approval", "open_fullscreen", "Open approval details fullscreen."),
+    action("approval", "Approval", "open_thread", "Open the originating thread from an approval prompt."),
     action("approval", "Approval", "approve", "Approve the primary option."),
     action("approval", "Approval", "approve_for_session", "Approve for the session when available."),
     action("approval", "Approval", "approve_for_prefix", "Approve with an exec-policy prefix when available."),
+    action("approval", "Approval", "approve_with_strict_auto_review", "Grant permissions for this turn with strict auto review."),
     action("approval", "Approval", "decline", "Decline and provide corrective guidance."),
     action("approval", "Approval", "cancel", "Cancel an elicitation request."),
     action("onboarding", "Onboarding", "move_up", "Move onboarding selection up."),
@@ -227,9 +229,13 @@ pub(super) fn binding_slot<'a>(
         ("list", "accept") => Some(&mut keymap.list.accept),
         ("list", "cancel") => Some(&mut keymap.list.cancel),
         ("approval", "open_fullscreen") => Some(&mut keymap.approval.open_fullscreen),
+        ("approval", "open_thread") => Some(&mut keymap.approval.open_thread),
         ("approval", "approve") => Some(&mut keymap.approval.approve),
         ("approval", "approve_for_session") => Some(&mut keymap.approval.approve_for_session),
         ("approval", "approve_for_prefix") => Some(&mut keymap.approval.approve_for_prefix),
+        ("approval", "approve_with_strict_auto_review") => {
+            Some(&mut keymap.approval.approve_with_strict_auto_review)
+        }
         ("approval", "decline") => Some(&mut keymap.approval.decline),
         ("approval", "cancel") => Some(&mut keymap.approval.cancel),
         ("onboarding", "move_up") => Some(&mut keymap.onboarding.move_up),
@@ -331,9 +337,13 @@ pub(super) fn bindings_for_action<'a>(
         ("list", "accept") => Some(runtime_keymap.list.accept.as_slice()),
         ("list", "cancel") => Some(runtime_keymap.list.cancel.as_slice()),
         ("approval", "open_fullscreen") => Some(runtime_keymap.approval.open_fullscreen.as_slice()),
+        ("approval", "open_thread") => Some(runtime_keymap.approval.open_thread.as_slice()),
         ("approval", "approve") => Some(runtime_keymap.approval.approve.as_slice()),
         ("approval", "approve_for_session") => Some(runtime_keymap.approval.approve_for_session.as_slice()),
         ("approval", "approve_for_prefix") => Some(runtime_keymap.approval.approve_for_prefix.as_slice()),
+        ("approval", "approve_with_strict_auto_review") => {
+            Some(runtime_keymap.approval.approve_with_strict_auto_review.as_slice())
+        }
         ("approval", "decline") => Some(runtime_keymap.approval.decline.as_slice()),
         ("approval", "cancel") => Some(runtime_keymap.approval.cancel.as_slice()),
         ("onboarding", "move_up") => Some(runtime_keymap.onboarding.move_up.as_slice()),

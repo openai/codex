@@ -36,13 +36,14 @@ Precedence is applied in this order (highest first):
 
 ### Presets
 
-- `latest`: moving alias for the newest preset; today `latest -> v4`
-- `v4`: current defaults, exposing reasoning shortcuts (`alt-,` / `alt-.`) in the keymap
+- `latest`: moving alias for the newest preset; today `latest -> v5`
+- `v5`: current defaults, exposing approval thread-open and strict auto-review shortcuts in the keymap
+- `v4`: exposes reasoning shortcuts (`alt-,` / `alt-.`) in the keymap
 - `v3`: exposes `copy = "ctrl-o"` in the keymap
 - `v2`: restores `alt-d` as a `delete_forward_word` alias
 - `v1`: frozen initial configurable keymap defaults
 
-When defaults change in the future, a new version (for example `v4`) is added and
+When defaults change in the future, a new version (for example `v6`) is added and
 `latest` may move to it. Pin to `v1` if you want stable historical behavior.
 
 TODO(docs): mirror this preset migration note on developers.openai.com.
@@ -72,8 +73,8 @@ TODO(docs): mirror this preset migration note on developers.openai.com.
   `half_page_down`, `jump_top`, `jump_bottom`, `close`, `close_transcript`,
   `edit_previous_message`, `edit_next_message`, `confirm_edit_message`
 - `list`: `move_up`, `move_down`, `accept`, `cancel`
-- `approval`: `open_fullscreen`, `approve`, `approve_for_session`,
-  `approve_for_prefix`, `decline`, `cancel`
+- `approval`: `open_fullscreen`, `open_thread`, `approve`, `approve_for_session`,
+  `approve_for_prefix`, `approve_with_strict_auto_review`, `decline`, `cancel`
 - `onboarding`: `move_up`, `move_down`, `select_first`, `select_second`,
   `select_third`, `confirm`, `cancel`, `quit`, `toggle_animation`
 

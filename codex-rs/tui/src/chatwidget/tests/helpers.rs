@@ -213,6 +213,7 @@ pub(super) async fn make_chatwidget_manual(
         clipboard_lease: None,
         copy_last_response_binding: RuntimeKeymap::defaults().app.copy,
         chat_keymap: RuntimeKeymap::defaults().chat,
+        list_keymap: RuntimeKeymap::defaults().list,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,

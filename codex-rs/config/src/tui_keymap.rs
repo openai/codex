@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 pub enum TuiKeymapPreset {
     /// Pointer alias to the latest shipped preset.
     ///
-    /// Today this resolves to `v4`.
+    /// Today this resolves to `v5`.
     #[default]
     Latest,
     /// Frozen initial configurable keymap defaults.
@@ -40,6 +40,8 @@ pub enum TuiKeymapPreset {
     V3,
     /// Current defaults with reasoning shortcuts exposed through keymap config.
     V4,
+    /// Current defaults with approval thread and strict-review shortcuts exposed.
+    V5,
 }
 
 /// Normalized string representation of a keybinding (for example `ctrl-a`).
@@ -329,12 +331,16 @@ pub struct TuiListKeymap {
 pub struct TuiApprovalKeymap {
     /// Open the full-screen approval details view.
     pub open_fullscreen: Option<KeybindingsSpec>,
+    /// Open the originating thread from an approval prompt.
+    pub open_thread: Option<KeybindingsSpec>,
     /// Approve the primary option.
     pub approve: Option<KeybindingsSpec>,
     /// Approve for session when that option exists.
     pub approve_for_session: Option<KeybindingsSpec>,
     /// Approve with exec-policy prefix when that option exists.
     pub approve_for_prefix: Option<KeybindingsSpec>,
+    /// Grant permissions for this turn with strict auto review.
+    pub approve_with_strict_auto_review: Option<KeybindingsSpec>,
     /// Decline and provide corrective guidance.
     pub decline: Option<KeybindingsSpec>,
     /// Cancel an elicitation request.
