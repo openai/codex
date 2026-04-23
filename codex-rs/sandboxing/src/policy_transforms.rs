@@ -159,20 +159,21 @@ pub fn intersect_permission_profiles(
             let requested_policy =
                 FileSystemSandboxPolicy::restricted(requested_file_system.entries.clone());
             let requested_read_deny_matcher = ReadDenyMatcher::new(&requested_policy, cwd);
-            let accepted_entries: Vec<_> = granted_file_system
-                .entries
-                .iter()
-                .filter(|entry| {
-                    granted_file_system_entry_within_request(
-                        &requested_file_system,
-                        &requested_policy,
-                        requested_read_deny_matcher.as_ref(),
-                        entry,
-                        cwd,
-                    )
-                })
-                .map(|entry| materialize_cwd_dependent_entry(entry, cwd))
-                .collect();
+            let mut accepted_entries = Vec::new();
+            for entry in granted_file_system.entries.iter().filter(|entry| {
+                granted_file_system_entry_within_request(
+                    &requested_file_system,
+                    &requested_policy,
+                    requested_read_deny_matcher.as_ref(),
+                    entry,
+                    cwd,
+                )
+            }) {
+                let entry = materialize_cwd_dependent_entry(entry, cwd);
+                if !accepted_entries.contains(&entry) {
+                    accepted_entries.push(entry);
+                }
+            }
             let mut entries = accepted_entries.clone();
             let requested_retained_deny_entries = retain_constraining_deny_entries(
                 &requested_file_system.entries,
@@ -383,9 +384,15 @@ fn materialize_cwd_dependent_entry(
                 access: entry.access,
             })
             .unwrap_or_else(|| entry.clone()),
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GlobPattern { .. }
-        | FileSystemPath::Special { .. } => entry.clone(),
+        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            access: entry.access,
+        },
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
     }
 }
 

@@ -1,5 +1,6 @@
 use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -46,7 +47,7 @@ pub(super) async fn spawn_review_thread(
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_has_environment(parent_turn_context.environment.is_some())
+    .with_has_environment(parent_turn_context.tools_config.has_environment)
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -110,6 +111,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_summary,
         session_source,
         environment: parent_turn_context.environment.clone(),
+        environments: parent_turn_context.environments.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
@@ -139,6 +141,8 @@ pub(super) async fn spawn_review_thread(
         turn_metadata_state,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        server_model_warning_emitted: AtomicBool::new(false),
+        model_verification_emitted: AtomicBool::new(false),
     };
 
     // Seed the child task with the review prompt as the initial user message.

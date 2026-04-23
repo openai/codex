@@ -7,9 +7,96 @@ use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
+
+use crate::session::tests::make_session_and_context;
+use crate::tools::context::ToolInvocation;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
+use crate::turn_diff_tracker::TurnDiffTracker;
+
+fn sample_patch() -> &'static str {
+    r#"*** Begin Patch
+*** Add File: hello.txt
++hello
+*** End Patch"#
+}
+
+async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
+    let (session, turn) = make_session_and_context().await;
+    ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-apply-patch".to_string(),
+        tool_name: codex_tools::ToolName::plain("apply_patch"),
+        payload,
+    }
+}
+
+#[tokio::test]
+async fn pre_tool_use_payload_uses_json_patch_input() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Function {
+        arguments: json!({ "input": patch }).to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: json!({ "command": patch }),
+        })
+    );
+}
+
+#[tokio::test]
+async fn pre_tool_use_payload_uses_freeform_patch_input() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Custom {
+        input: patch.to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: json!({ "command": patch }),
+        })
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Custom {
+        input: patch.to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let output = ApplyPatchToolOutput::from_text("Success. Updated files.".to_string());
+    let handler = ApplyPatchHandler;
+
+    assert_eq!(
+        handler.post_tool_use_payload(&invocation, &output),
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_use_id: "call-apply-patch".to_string(),
+            tool_input: json!({ "command": patch }),
+            tool_response: json!("Success. Updated files."),
+        })
+    );
+}
 
 #[test]
 fn diff_consumer_does_not_stream_json_tool_call_arguments() {

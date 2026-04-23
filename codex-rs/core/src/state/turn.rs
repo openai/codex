@@ -106,6 +106,7 @@ pub(crate) struct TurnState {
     pending_input: Vec<ResponseInputItem>,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions: Option<PermissionProfile>,
+    strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -253,6 +254,14 @@ impl TurnState {
 
     pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
         self.granted_permissions.clone()
+    }
+
+    pub(crate) fn enable_strict_auto_review(&mut self) {
+        self.strict_auto_review_enabled = true;
+    }
+
+    pub(crate) fn strict_auto_review_enabled(&self) -> bool {
+        self.strict_auto_review_enabled
     }
 }
 

@@ -126,7 +126,7 @@ impl App {
             return;
         }
 
-        let guardian_approvals_preset = guardian_approvals_mode();
+        let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
         let scoped_segments = |key: &str| {
@@ -202,16 +202,12 @@ impl App {
                     // Persist the reviewer setting so future sessions keep the
                     // experiment's matching `/approvals` mode until the user
                     // changes it explicitly.
-                    feature_config.approvals_reviewer =
-                        guardian_approvals_preset.approvals_reviewer;
+                    feature_config.approvals_reviewer = auto_review_preset.approvals_reviewer;
                     feature_edits.push(ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
-                        value: guardian_approvals_preset
-                            .approvals_reviewer
-                            .to_string()
-                            .into(),
+                        value: auto_review_preset.approvals_reviewer.to_string().into(),
                     });
-                    if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
+                    if previous_approvals_reviewer != auto_review_preset.approvals_reviewer {
                         permissions_history_label = Some("Auto-review");
                     }
                 } else if !effective_enabled {
@@ -234,17 +230,17 @@ impl App {
                 // makes guardian review observable in the current thread.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
-                    guardian_approvals_preset.approval_policy,
+                    auto_review_preset.approval_policy,
                     "Failed to enable Auto-review",
-                    "failed to set guardian approvals approval policy on staged config",
+                    "failed to set auto-review approval policy on staged config",
                 ) {
                     continue;
                 }
                 if !self.try_set_sandbox_policy_on_config(
                     &mut feature_config,
-                    guardian_approvals_preset.sandbox_policy.clone(),
+                    auto_review_preset.sandbox_policy.clone(),
                     "Failed to enable Auto-review",
-                    "failed to set guardian approvals sandbox policy on staged config",
+                    "failed to set auto-review sandbox policy on staged config",
                 ) {
                     continue;
                 }
@@ -258,8 +254,8 @@ impl App {
                         value: "workspace-write".into(),
                     },
                 ]);
-                approval_policy_override = Some(guardian_approvals_preset.approval_policy);
-                sandbox_policy_override = Some(guardian_approvals_preset.sandbox_policy.clone());
+                approval_policy_override = Some(auto_review_preset.approval_policy);
+                sandbox_policy_override = Some(auto_review_preset.sandbox_policy.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -305,7 +301,7 @@ impl App {
         {
             tracing::error!(
                 error = %err,
-                "failed to set guardian approvals sandbox policy on chat config"
+                "failed to set auto-review sandbox policy on chat config"
             );
             self.chat_widget
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
@@ -315,6 +311,8 @@ impl App {
             || approvals_reviewer_override.is_some()
             || sandbox_policy_override.is_some()
         {
+            self.sync_active_thread_permission_settings_to_cached_session()
+                .await;
             // This uses `OverrideTurnContext` intentionally: toggling the
             // experiment should update the active thread's effective approval
             // settings immediately, just like a `/approvals` selection. Without
@@ -642,6 +640,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,

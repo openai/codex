@@ -170,6 +170,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     fixture
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),

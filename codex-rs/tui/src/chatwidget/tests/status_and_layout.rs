@@ -29,6 +29,45 @@ async fn token_count_none_resets_context_indicator() {
 }
 
 #[tokio::test]
+async fn core_cyber_policy_error_renders_dedicated_notice() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "cyber-policy".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "server fallback message".to_string(),
+            codex_error_info: Some(CodexErrorInfo::CyberPolicy),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
+    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(!rendered.contains("server fallback message"));
+}
+
+#[tokio::test]
+async fn core_model_verification_renders_warning() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "model-verification".into(),
+        msg: EventMsg::ModelVerification(ModelVerificationEvent {
+            verifications: vec![CoreModelVerification::TrustedAccessForCyber],
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("flagged for potentially high-risk cyber activity"));
+    assert!(rendered.contains("slower while additional verification"));
+    assert!(rendered.contains("https://chatgpt.com/cyber"));
+}
+
+#[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 
@@ -1315,6 +1354,7 @@ async fn status_line_branch_refreshes_after_turn_complete() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -1665,6 +1705,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -2610,6 +2651,7 @@ printf 'fenced within fenced\n'
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     for lines in drain_insert_history(&mut rx) {

@@ -35,6 +35,7 @@ use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -128,11 +129,17 @@ pub(crate) async fn run_pending_session_start_hooks(
     .await
 }
 
+/// Runs matching `PreToolUse` hooks before a tool executes.
+///
+/// `tool_name` is the canonical name serialized to hook stdin. Matcher aliases
+/// are internal compatibility names used only for selecting configured hook
+/// handlers.
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
-    command: String,
+    tool_name: &HookToolName,
+    tool_input: &Value,
 ) -> Option<String> {
     let request = PreToolUseRequest {
         session_id: sess.conversation_id,
@@ -141,9 +148,10 @@ pub(crate) async fn run_pre_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name: tool_name.name().to_string(),
+        matcher_aliases: tool_name.matcher_aliases().to_vec(),
         tool_use_id,
-        command,
+        tool_input: tool_input.clone(),
     };
     let preview_runs = sess.hooks().preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -155,7 +163,22 @@ pub(crate) async fn run_pre_tool_use_hooks(
     } = sess.hooks().run_pre_tool_use(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
-    if should_block { block_reason } else { None }
+    if should_block {
+        block_reason.map(|reason| {
+            if (tool_name.name() == "Bash" || tool_name.name() == "apply_patch")
+                && let Some(command) = tool_input.get("command").and_then(Value::as_str)
+            {
+                format!("Command blocked by PreToolUse hook: {reason}. Command: {command}")
+            } else {
+                format!(
+                    "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
+                    tool_name.name()
+                )
+            }
+        })
+    } else {
+        None
+    }
 }
 
 // PermissionRequest hooks share the same preview/start/completed event flow as
@@ -174,10 +197,10 @@ pub(crate) async fn run_permission_request_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: payload.tool_name,
+        tool_name: payload.tool_name.name().to_string(),
+        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
         run_id_suffix: run_id_suffix.to_string(),
-        command: payload.command,
-        description: payload.description,
+        tool_input: payload.tool_input,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -191,11 +214,19 @@ pub(crate) async fn run_permission_request_hooks(
     decision
 }
 
+/// Runs matching `PostToolUse` hooks after a tool has produced a successful output.
+///
+/// The `tool_name`, matcher aliases, `tool_input`, and `tool_response` values are
+/// already adapted by the tool handler into the stable hook contract. Passing
+/// raw internal tool data here would leak implementation details into user hook
+/// matchers and hook logs.
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     tool_use_id: String,
-    command: String,
+    tool_name: String,
+    matcher_aliases: Vec<String>,
+    tool_input: Value,
     tool_response: Value,
 ) -> PostToolUseOutcome {
     let request = PostToolUseRequest {
@@ -205,9 +236,10 @@ pub(crate) async fn run_post_tool_use_hooks(
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
-        tool_name: "Bash".to_string(),
+        tool_name,
+        matcher_aliases,
         tool_use_id,
-        command,
+        tool_input,
         tool_response,
     };
     let preview_runs = sess.hooks().preview_post_tool_use(&request);

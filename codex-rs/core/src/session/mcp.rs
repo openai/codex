@@ -229,7 +229,7 @@ impl Session {
             &mcp_servers,
             store_mode,
             auth_statuses,
-            &turn_context.config.permissions.approval_policy,
+            &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.sandbox_policy.get().clone(),
@@ -237,7 +237,7 @@ impl Session {
                 turn_context
                     .environment
                     .clone()
-                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
                 turn_context.cwd.to_path_buf(),
             ),
             config.codex_home.to_path_buf(),
