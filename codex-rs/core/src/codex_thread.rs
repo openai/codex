@@ -91,6 +91,14 @@ impl CodexThread {
         Ok(())
     }
 
+    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+            .await?;
+        Ok(())
+    }
+
     pub async fn prepare_external_goal_mutation(&self) {
         if let Err(err) = self
             .codex

@@ -265,8 +265,9 @@ impl Session {
     /// account usage and may inject budget steering, completion accounting
     /// suppresses that steering, external mutations account best-effort before
     /// changing state, interrupts pause active goals, resumes reactivate paused
-    /// goals, and no-tool continuation turns suppress the next automatic
-    /// continuation until user/tool/external activity resets it.
+    /// goals, explicit maybe-continue events start idle goal continuation turns,
+    /// and no-tool continuation turns suppress the next automatic continuation
+    /// until user/tool/external activity resets it.
     pub(crate) fn goal_runtime_apply<'a>(
         self: &'a Arc<Self>,
         event: GoalRuntimeEvent<'a>,
@@ -337,7 +338,6 @@ impl Session {
             }),
             GoalRuntimeEvent::ThreadResumed => Box::pin(async move {
                 self.activate_paused_thread_goal_after_resume().await?;
-                self.maybe_continue_goal_if_idle_runtime().await;
                 Ok(())
             }),
         }
