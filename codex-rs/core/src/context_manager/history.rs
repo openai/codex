@@ -118,9 +118,38 @@ impl ContextManager {
     /// include `InputModality::Image`, images are stripped from messages and tool
     /// outputs.
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.normalize_history(input_modalities);
+        self.prepare_for_prompt(input_modalities, CompactionExclusionPolicy::Keep);
         self.items
-            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+    }
+
+    /// Returns the history prepared for the remote compaction endpoint.
+    pub(crate) fn for_compaction_prompt(
+        mut self,
+        input_modalities: &[InputModality],
+    ) -> Vec<ResponseItem> {
+        self.prepare_for_prompt(input_modalities, CompactionExclusionPolicy::Drop);
+        self.items
+    }
+
+    fn prepare_for_prompt(
+        &mut self,
+        input_modalities: &[InputModality],
+        compaction_exclusion_policy: CompactionExclusionPolicy,
+    ) {
+        self.normalize_history(input_modalities);
+        self.items.retain(|item| {
+            !matches!(item, ResponseItem::GhostSnapshot { .. })
+                && !matches!(
+                    (compaction_exclusion_policy, item),
+                    (
+                        CompactionExclusionPolicy::Drop,
+                        ResponseItem::Message {
+                            exclude_from_compaction: true,
+                            ..
+                        }
+                    )
+                )
+        });
         for item in &mut self.items {
             if let ResponseItem::Message {
                 exclude_from_compaction,
@@ -130,7 +159,6 @@ impl ContextManager {
                 *exclude_from_compaction = false;
             }
         }
-        self.items
     }
 
     /// Returns raw items in the history.
@@ -463,6 +491,12 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+#[derive(Clone, Copy)]
+enum CompactionExclusionPolicy {
+    Keep,
+    Drop,
 }
 
 fn truncate_function_output_payload(

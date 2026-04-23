@@ -350,6 +350,26 @@ fn for_prompt_strips_compaction_exclusion_marker() {
 }
 
 #[test]
+fn for_compaction_prompt_drops_items_marked_excluded_from_compaction() {
+    let mut generated_warning = user_input_text_msg("generated warning");
+    let ResponseItem::Message {
+        exclude_from_compaction,
+        ..
+    } = &mut generated_warning
+    else {
+        panic!("expected message item");
+    };
+    *exclude_from_compaction = true;
+    let real_user_message = user_input_text_msg("keep me");
+    let history = create_history_with_items(vec![generated_warning, real_user_message.clone()]);
+
+    assert_eq!(
+        history.for_compaction_prompt(&default_input_modalities()),
+        vec![real_user_message]
+    );
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");
