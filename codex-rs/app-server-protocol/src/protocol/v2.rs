@@ -4097,6 +4097,31 @@ pub struct MarketplaceRemoveResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeParams {
+    #[ts(optional = nullable)]
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeResponse {
+    pub selected_marketplaces: Vec<String>,
+    pub upgraded_roots: Vec<AbsolutePathBuf>,
+    pub errors: Vec<MarketplaceUpgradeErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeErrorInfo {
+    pub marketplace_name: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
@@ -9781,6 +9806,36 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: None,
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<MarketplaceUpgradeParams>(json!({})).unwrap(),
+            MarketplaceUpgradeParams {
+                marketplace_name: None,
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: Some("debug".to_string()),
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": "debug",
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
         assert_eq!(
             serde_json::to_value(PluginMarketplaceEntry {
@@ -10022,6 +10077,37 @@ mod tests {
             json!({
                 "marketplaceName": "debug",
                 "installedRoot": null,
+            }),
+        );
+    }
+
+    #[test]
+    fn marketplace_upgrade_response_serializes_camel_case_fields() {
+        let upgraded_root = if cfg!(windows) {
+            r"C:\marketplaces\debug"
+        } else {
+            "/tmp/marketplaces/debug"
+        };
+        let upgraded_root = AbsolutePathBuf::try_from(PathBuf::from(upgraded_root)).unwrap();
+        let upgraded_root_json = upgraded_root.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeResponse {
+                selected_marketplaces: vec!["debug".to_string()],
+                upgraded_roots: vec![upgraded_root],
+                errors: vec![MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "broken".to_string(),
+                    message: "failed to clone".to_string(),
+                }],
+            })
+            .unwrap(),
+            json!({
+                "selectedMarketplaces": ["debug"],
+                "upgradedRoots": [upgraded_root_json],
+                "errors": [{
+                    "marketplaceName": "broken",
+                    "message": "failed to clone",
+                }],
             }),
         );
     }

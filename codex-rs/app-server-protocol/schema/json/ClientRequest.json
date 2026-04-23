@@ -1721,6 +1721,17 @@
       ],
       "type": "object"
     },
+    "MarketplaceUpgradeParams": {
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "McpResourceReadParams": {
       "properties": {
         "server": {
@@ -4894,6 +4905,30 @@
         "params"
       ],
       "title": "Marketplace/removeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "marketplace/upgrade"
+          ],
+          "title": "Marketplace/upgradeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/MarketplaceUpgradeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Marketplace/upgradeRequest",
       "type": "object"
     },
     {
