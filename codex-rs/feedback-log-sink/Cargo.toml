@@ -1,0 +1,26 @@
+[package]
+name = "codex-feedback-log-sink"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_feedback_log_sink"
+path = "src/lib.rs"
+
+[[example]]
+name = "generate-proto"
+path = "examples/generate-proto.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-state = { workspace = true }
+prost = "0.14.3"
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tonic-prost-build = { version = "=0.14.3", default-features = false, features = ["transport"] }

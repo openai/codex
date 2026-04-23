@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package codex.feedback_log_sink.v1;
+
+service FeedbackLogSink {
+  rpc AppendLogBatch(AppendLogBatchRequest) returns (AppendLogBatchResponse);
+}
+
+message AppendLogBatchRequest {
+  repeated FeedbackLogEntry entries = 1;
+  string source_process_uuid = 2;
+}
+
+message AppendLogBatchResponse {}
+
+message FeedbackLogEntry {
+  int64 ts = 1;
+  int64 ts_nanos = 2;
+  string level = 3;
+  string target = 4;
+  optional string message = 5;
+  optional string feedback_log_body = 6;
+  optional string thread_id = 7;
+  optional string process_uuid = 8;
+  optional string module_path = 9;
+  optional string file = 10;
+  optional int64 line = 11;
+}
