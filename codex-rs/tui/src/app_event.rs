@@ -169,6 +169,11 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(Op),
 
+    /// Approve one retry of a recent auto-review denial selected in the TUI.
+    ApproveRecentAutoReviewDenial {
+        id: String,
+    },
+
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.

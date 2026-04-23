@@ -212,6 +212,7 @@ pub(super) async fn make_chatwidget_manual(
         plan_stream_controller: None,
         clipboard_lease: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+        recent_auto_review_denials: RecentAutoReviewDenials::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
         agent_turn_markdowns: Vec::new(),

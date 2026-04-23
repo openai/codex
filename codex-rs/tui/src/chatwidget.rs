@@ -313,6 +313,8 @@ use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::auto_review_denials;
+use crate::auto_review_denials::RecentAutoReviewDenials;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
@@ -896,6 +898,7 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    recent_auto_review_denials: RecentAutoReviewDenials,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
     // Semantic status used for terminal-title status rendering.
@@ -3835,6 +3838,7 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
+        self.recent_auto_review_denials.push(ev.clone());
         let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 command,
@@ -5245,6 +5249,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            recent_auto_review_denials: RecentAutoReviewDenials::default(),
             active_hook_cell: None,
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
@@ -9181,6 +9186,70 @@ impl ChatWidget {
             header: Box::new(()),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_auto_review_denials_popup(&mut self) {
+        if self.recent_auto_review_denials.is_empty() {
+            self.add_info_message(
+                "No recent auto-review denials in this thread.".to_string(),
+                Some("Denials are recorded after auto-review rejects an action.".to_string()),
+            );
+            return;
+        }
+
+        let items = self
+            .recent_auto_review_denials
+            .entries()
+            .map(|event| {
+                let id = event.id.clone();
+                let summary = auto_review_denials::action_summary(&event.action);
+                let detail = auto_review_denials::action_detail(&event.action);
+                let rationale = event
+                    .rationale
+                    .as_deref()
+                    .unwrap_or("Auto-review did not include a rationale.");
+                SelectionItem {
+                    name: summary.clone(),
+                    description: Some(rationale.to_string()),
+                    selected_description: Some(format!("{detail}\n\nRationale: {rationale}")),
+                    search_value: Some(format!("{summary} {detail} {rationale}")),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ApproveRecentAutoReviewDenial { id: id.clone() });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Auto-review Denials".to_string()),
+            subtitle: Some("Select one denied action to approve for one retry.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Search denied actions".to_string()),
+            col_width_mode: ColumnWidthMode::AutoAllRows,
+            ..Default::default()
+        });
+        self.request_redraw();
+    }
+
+    pub(crate) fn approve_recent_auto_review_denial(&mut self, id: String) {
+        let Some(event) = self.recent_auto_review_denials.take(&id) else {
+            self.add_error_message("That auto-review denial is no longer available.".to_string());
+            return;
+        };
+
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::ApproveGuardianDeniedAction { event }));
+        self.add_info_message(
+            "Approval recorded for one retry of the selected auto-review denial.".to_string(),
+            Some(
+                "The model will see the approval context; the retry still goes through auto-review."
+                    .to_string(),
+            ),
+        );
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {

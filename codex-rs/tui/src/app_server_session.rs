@@ -743,7 +743,7 @@ impl AppServerSession {
                 params: ThreadApproveGuardianDeniedActionParams {
                     thread_id: thread_id.to_string(),
                     event: serde_json::to_value(event)
-                        .wrap_err("failed to serialize Guardian denial event")?,
+                        .wrap_err("failed to serialize auto-review denial event")?,
                 },
             })
             .await
