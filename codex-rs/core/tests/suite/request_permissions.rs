@@ -197,6 +197,7 @@ async fn submit_turn(
             approval_policy,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
