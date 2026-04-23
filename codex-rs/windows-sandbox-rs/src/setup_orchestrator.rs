@@ -330,6 +330,16 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn path_read_roots() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .filter(|entry| entry.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
@@ -340,6 +350,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
+    roots.extend(path_read_roots());
     roots
 }
 
@@ -1007,6 +1018,40 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn gather_read_roots_includes_absolute_path_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let path_dir = tmp.path().join("tools");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&path_dir).expect("create PATH dir");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        };
+        let original_path = std::env::var_os("PATH");
+        let mut test_path = std::ffi::OsString::from(&path_dir);
+        test_path.push(";");
+        test_path.push("not-absolute");
+
+        unsafe {
+            std::env::set_var("PATH", &test_path);
+        }
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        match original_path {
+            Some(path) => unsafe { std::env::set_var("PATH", path) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+
+        let expected_path_dir = dunce::canonicalize(&path_dir).expect("canonical PATH dir");
+        assert!(roots.contains(&expected_path_dir));
+        assert!(!roots.iter().any(|path| path.ends_with("not-absolute")));
     }
 
     #[test]
