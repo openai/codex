@@ -163,7 +163,7 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
 
     let debug_root = expected_installed_root(codex_home.path(), "debug")?;
     let tools_root = expected_installed_root(codex_home.path(), "tools")?;
-    let response = send_marketplace_upgrade(&mut mcp, None).await?;
+    let response = send_marketplace_upgrade(&mut mcp, /*marketplace_name*/ None).await?;
 
     assert_eq!(
         response,
