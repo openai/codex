@@ -804,6 +804,7 @@ where
             let empty = RequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             };
             parent_session
                 .notify_request_permissions_response(call_id, empty.clone())
@@ -813,6 +814,7 @@ where
         response = fut => response.unwrap_or_else(|| RequestPermissionsResponse {
             permissions: Default::default(),
             scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
         }),
     }
 }

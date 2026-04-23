@@ -3352,6 +3352,7 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
                     ..RequestPermissionProfile::default()
                 },
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             },
         )
         .await;
@@ -3381,6 +3382,7 @@ async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
             &codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: requested_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             },
             Some(&originating_turn_state),
         )
@@ -3392,6 +3394,67 @@ async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
     );
     assert_eq!(current_turn_state.lock().await.granted_permissions(), None);
     assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
+async fn enable_strict_auto_review_for_turn_uses_originating_turn() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let originating_active_turn = ActiveTurn::default();
+    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
+    *session.active_turn.lock().await = Some(originating_active_turn);
+
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(codex_protocol::models::NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    session
+        .record_granted_request_permissions_for_turn(
+            &codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: requested_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: true,
+            },
+            Some(&originating_turn_state),
+        )
+        .await;
+
+    assert!(
+        originating_turn_state
+            .lock()
+            .await
+            .strict_auto_review_enabled()
+    );
+}
+
+#[test]
+fn strict_auto_review_session_scope_grants_no_permissions() {
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(codex_protocol::models::NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+
+    let response = Session::normalize_request_permissions_response(
+        requested_permissions.clone(),
+        codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: requested_permissions,
+            scope: PermissionGrantScope::Session,
+            strict_auto_review: true,
+        },
+        std::path::Path::new("/tmp"),
+    );
+
+    assert_eq!(
+        response,
+        codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: RequestPermissionProfile::default(),
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        }
+    );
 }
 
 #[tokio::test]
@@ -3421,6 +3484,7 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
             ..RequestPermissionProfile::default()
         },
         scope: PermissionGrantScope::Turn,
+        strict_auto_review: false,
     };
 
     let handle = tokio::spawn({
@@ -3536,6 +3600,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: request.permissions,
                 scope: PermissionGrantScope::Session,
+                strict_auto_review: false,
             },
         )
         .await;
@@ -3550,6 +3615,7 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
     let expected_response = codex_protocol::request_permissions::RequestPermissionsResponse {
         permissions: expected_permissions.clone(),
         scope: PermissionGrantScope::Session,
+        strict_auto_review: false,
     };
 
     let response = tokio::time::timeout(StdDuration::from_secs(1), handle)
@@ -3606,6 +3672,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: RequestPermissionProfile::default(),
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             }
         )
     );

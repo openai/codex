@@ -7112,6 +7112,10 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    /// Review every subsequent command in this turn before normal sandboxed execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub strict_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7861,6 +7865,18 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
+        assert_eq!(response.strict_auto_review, None);
+    }
+
+    #[test]
+    fn permissions_request_approval_response_accepts_strict_auto_review() {
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {},
+            "strictAutoReview": true,
+        }))
+        .expect("response should deserialize");
+
+        assert_eq!(response.strict_auto_review, Some(true));
     }
 
     #[test]

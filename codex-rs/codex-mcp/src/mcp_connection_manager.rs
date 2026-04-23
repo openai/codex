@@ -666,8 +666,8 @@ pub struct McpConnectionManager {
 /// servers should run for the current caller. Keep it explicit at manager
 /// construction time so status/snapshot paths and real sessions make the same
 /// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
-/// used only when an executor-backed stdio server omits `cwd` and the executor
-/// API still needs a concrete process working directory.
+/// used when a stdio server omits `cwd` and the launcher needs a concrete
+/// process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Arc<Environment>,
@@ -1573,7 +1573,9 @@ async fn make_rmcp_client(
                     runtime_environment.fallback_cwd(),
                 ))
             } else {
-                Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_environment.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
             };
 
             // `RmcpClient` always sees a launched MCP stdio server. The
