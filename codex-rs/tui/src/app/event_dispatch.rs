@@ -1029,14 +1029,24 @@ impl App {
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
                 let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
+                self.config.service_tier = service_tier;
+                let mut edits = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_service_tier(service_tier)
-                    .apply()
-                    .await
-                {
+                    .set_service_tier(service_tier);
+                if service_tier.is_none() {
+                    self.config.notices.fast_default_opt_out = Some(true);
+                    edits = edits.set_fast_default_opt_out(/*opted_out*/ true);
+                }
+                match edits.apply().await {
                     Ok(()) => {
-                        let status = if service_tier.is_some() { "on" } else { "off" };
+                        let status = if matches!(
+                            service_tier,
+                            Some(codex_protocol::config_types::ServiceTier::Fast)
+                        ) {
+                            "on"
+                        } else {
+                            "off"
+                        };
                         let mut message = format!("Fast mode set to {status}");
                         if let Some(profile) = profile {
                             message.push_str(" for ");

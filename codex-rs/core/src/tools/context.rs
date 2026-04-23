@@ -370,7 +370,7 @@ pub struct ExecCommandToolOutput {
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
-    pub session_command: Option<Vec<String>>,
+    pub hook_command: Option<String>,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -394,7 +394,7 @@ impl ToolOutput for ExecCommandToolOutput {
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        if self.process_id.is_some() || self.session_command.is_none() {
+        if self.process_id.is_some() || self.hook_command.is_none() {
             return None;
         }
 

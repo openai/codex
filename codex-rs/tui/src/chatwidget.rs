@@ -776,6 +776,8 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
+    /// Runtime value resolved by core. `config.service_tier` remains the explicit user choice.
+    effective_service_tier: Option<ServiceTier>,
     /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
@@ -1395,6 +1397,7 @@ fn thread_session_state_to_legacy_event(
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
         sandbox_policy: session.sandbox_policy,
+        permission_profile: session.permission_profile,
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
         history_log_id: session.history_log_id,
@@ -2119,6 +2122,7 @@ impl ChatWidget {
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.to_path_buf());
         self.config.cwd = event.cwd.clone();
+        self.effective_service_tier = event.service_tier;
         if let Err(err) = self
             .config
             .permissions
@@ -5105,6 +5109,7 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
+        let effective_service_tier = config.service_tier;
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -5123,6 +5128,7 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            effective_service_tier,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
@@ -5941,7 +5947,11 @@ impl ChatWidget {
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
-        let service_tier = Some(self.config.service_tier);
+        let service_tier = match self.config.service_tier {
+            Some(service_tier) => Some(Some(service_tier)),
+            None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
+            None => None,
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
@@ -6570,6 +6580,9 @@ impl ChatWidget {
             }
             ServerNotification::ModelRerouted(_) => {}
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
+            ServerNotification::GuardianWarning(notification) => {
+                self.on_warning(notification.message)
+            }
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(DeprecationNoticeEvent {
                     summary: notification.summary,
@@ -7067,7 +7080,8 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
-            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::Warning(WarningEvent { message })
+            | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
@@ -9038,7 +9052,7 @@ impl ChatWidget {
                             "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent."
                                 .to_string(),
                         ),
-                        is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
+                        is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
                                 current_approval,
                                 current_sandbox,
@@ -9048,7 +9062,7 @@ impl ChatWidget {
                             preset.approval,
                             preset.sandbox.clone(),
                             "Auto-review".to_string(),
-                            ApprovalsReviewer::GuardianSubagent,
+                            ApprovalsReviewer::AutoReview,
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
@@ -9845,10 +9859,19 @@ impl ChatWidget {
     /// Set Fast mode in the widget's config copy.
     pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
         self.config.service_tier = service_tier;
+        self.effective_service_tier = service_tier;
     }
 
     pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
+        self.effective_service_tier
+    }
+
+    pub(crate) fn configured_service_tier(&self) -> Option<ServiceTier> {
         self.config.service_tier
+    }
+
+    pub(crate) fn fast_default_opt_out(&self) -> Option<bool> {
+        self.config.notices.fast_default_opt_out
     }
 
     pub(crate) fn status_account_display(&self) -> Option<&StatusAccountDisplay> {
@@ -9927,6 +9950,9 @@ impl ChatWidget {
     }
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
+        if service_tier.is_none() {
+            self.config.notices.fast_default_opt_out = Some(true);
+        }
         self.set_service_tier(service_tier);
         self.app_event_tx.send(AppEvent::CodexOp(
             AppCommand::override_turn_context(

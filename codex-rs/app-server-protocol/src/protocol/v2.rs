@@ -101,6 +101,11 @@ use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::InstanceType;
+use schemars::schema::Metadata;
+use schemars::schema::Schema;
+use schemars::schema::SchemaObject;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -304,24 +309,59 @@ impl From<CoreAskForApproval> for AskForApproval {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "v2/")]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(
+    type = r#""user" | "auto_review" | "guardian_subagent""#,
+    export_to = "v2/"
+)]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// ARC escalations. Defaults to `user`. `auto_review` uses a carefully
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
+    #[serde(rename = "user")]
     User,
-    GuardianSubagent,
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    AutoReview,
+}
+
+impl JsonSchema for ApprovalsReviewer {
+    fn schema_name() -> String {
+        "ApprovalsReviewer".to_string()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        string_enum_schema_with_description(
+            &["user", "auto_review", "guardian_subagent"],
+            "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+        )
+    }
+}
+
+fn string_enum_schema_with_description(values: &[&str], description: &str) -> Schema {
+    let mut schema = SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        metadata: Some(Box::new(Metadata {
+            description: Some(description.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    schema.enum_values = Some(
+        values
+            .iter()
+            .map(|value| JsonValue::String((*value).to_string()))
+            .collect(),
+    );
+    Schema::Object(schema)
 }
 
 impl ApprovalsReviewer {
     pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
             ApprovalsReviewer::User => CoreApprovalsReviewer::User,
-            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview => CoreApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -330,7 +370,7 @@ impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
     fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
             CoreApprovalsReviewer::User => ApprovalsReviewer::User,
-            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
+            CoreApprovalsReviewer::AutoReview => ApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -901,9 +941,69 @@ pub struct ConfigRequirements {
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
+    #[experimental("configRequirements/read.hooks")]
+    pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ManagedHooksRequirements {
+    pub managed_dir: Option<PathBuf>,
+    pub windows_managed_dir: Option<PathBuf>,
+    #[serde(rename = "PreToolUse")]
+    #[ts(rename = "PreToolUse")]
+    pub pre_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PermissionRequest")]
+    #[ts(rename = "PermissionRequest")]
+    pub permission_request: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostToolUse")]
+    #[ts(rename = "PostToolUse")]
+    pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SessionStart")]
+    #[ts(rename = "SessionStart")]
+    pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "UserPromptSubmit")]
+    #[ts(rename = "UserPromptSubmit")]
+    pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "Stop")]
+    #[ts(rename = "Stop")]
+    pub stop: Vec<ConfiguredHookMatcherGroup>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfiguredHookMatcherGroup {
+    pub matcher: Option<String>,
+    pub hooks: Vec<ConfiguredHookHandler>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ConfiguredHookHandler {
+    #[serde(rename = "command")]
+    #[ts(rename = "command")]
+    Command {
+        command: String,
+        #[serde(rename = "timeoutSec")]
+        #[ts(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        r#async: bool,
+        #[serde(rename = "statusMessage")]
+        #[ts(rename = "statusMessage")]
+        status_message: Option<String>,
+    },
+    #[serde(rename = "prompt")]
+    #[ts(rename = "prompt")]
+    Prompt {},
+    #[serde(rename = "agent")]
+    #[ts(rename = "agent")]
+    Agent {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3147,6 +3247,10 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for this thread. Cannot be combined with
+    /// `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -3280,6 +3384,10 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the resumed thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -3368,6 +3476,10 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the forked thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -4816,6 +4928,10 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the full permissions profile for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -6996,6 +7112,10 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    /// Review every subsequent command in this turn before normal sandboxed execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub strict_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7250,6 +7370,16 @@ pub struct WarningNotification {
     pub message: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianWarningNotification {
+    /// Thread target for the guardian warning.
+    pub thread_id: String,
+    /// Concise guardian warning message for the user.
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -7318,6 +7448,30 @@ mod tests {
 
     fn test_absolute_path() -> AbsolutePathBuf {
         absolute_path("readable")
+    }
+
+    #[test]
+    fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+            "\"auto_review\""
+        );
+
+        for value in ["user", "auto_review", "guardian_subagent"] {
+            let json = format!("\"{value}\"");
+            let reviewer: ApprovalsReviewer =
+                serde_json::from_str(&json).expect("deserialize reviewer");
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::AutoReview
+            };
+            assert_eq!(expected, reviewer);
+        }
     }
 
     #[test]
@@ -7711,6 +7865,18 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
+        assert_eq!(response.strict_auto_review, None);
+    }
+
+    #[test]
+    fn permissions_request_approval_response_accepts_strict_auto_review() {
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {},
+            "strictAutoReview": true,
+        }))
+        .expect("response should deserialize");
+
+        assert_eq!(response.strict_auto_review, Some(true));
     }
 
     #[test]
@@ -8588,7 +8754,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -8690,7 +8856,7 @@ mod tests {
                     model: None,
                     model_provider: None,
                     approval_policy: None,
-                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
@@ -8731,6 +8897,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 enforce_residency: None,
                 network: None,
             });
@@ -9997,6 +10164,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             model: None,
             service_tier: None,
             effort: None,
