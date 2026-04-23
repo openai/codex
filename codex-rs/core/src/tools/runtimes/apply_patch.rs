@@ -204,8 +204,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     ) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload {
             tool_name: HookToolName::apply_patch(),
-            command: req.action.patch.clone(),
-            description: None,
+            tool_input: serde_json::json!({ "command": req.action.patch }),
         })
     }
 }

@@ -1948,6 +1948,13 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        if features.enabled(Feature::MultiAgentV2) && agent_max_threads_from_config.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when multi_agent_v2 is enabled",
+            ));
+        }
         let agent_max_threads = cfg
             .agents
             .as_ref()

@@ -132,6 +132,7 @@ impl ToolOutput for CallToolResult {
 #[derive(Clone, Debug)]
 pub struct McpToolOutput {
     pub result: CallToolResult,
+    pub tool_input: JsonValue,
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
 }
@@ -161,6 +162,10 @@ impl ToolOutput for McpToolOutput {
         serde_json::to_value(&self.result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
+    }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        serde_json::to_value(&self.result).ok()
     }
 }
 

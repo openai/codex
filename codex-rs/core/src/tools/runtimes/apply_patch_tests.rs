@@ -105,8 +105,10 @@ fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         payload.tool_name.matcher_aliases(),
         &["Write".to_string(), "Edit".to_string()]
     );
-    assert_eq!(payload.command, expected_patch);
-    assert_eq!(payload.description, None);
+    assert_eq!(
+        payload.tool_input,
+        serde_json::json!({ "command": expected_patch })
+    );
 }
 
 #[test]

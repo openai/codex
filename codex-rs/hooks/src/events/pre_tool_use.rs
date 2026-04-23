@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::Value;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -28,7 +29,7 @@ pub struct PreToolUseRequest {
     pub tool_name: String,
     pub matcher_aliases: Vec<String>,
     pub tool_use_id: String,
-    pub command: String,
+    pub tool_input: Value,
 }
 
 #[derive(Debug)]
@@ -124,7 +125,8 @@ pub(crate) async fn run(
 ///
 /// Handler selection may include internal matcher aliases, but hook stdin keeps
 /// the canonical `tool_name` so audit logs and downstream policy decisions stay
-/// stable.
+/// stable. Shell-like tools pass `{ "command": ... }` as `tool_input`; MCP
+/// tools pass their resolved JSON arguments.
 fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json::Error> {
     serde_json::to_string(&PreToolUseCommandInput {
         session_id: request.session_id.to_string(),
@@ -135,9 +137,7 @@ fn command_input_json(request: &PreToolUseRequest) -> Result<String, serde_json:
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
         tool_name: request.tool_name.clone(),
-        tool_input: crate::schema::PreToolUseToolInput {
-            command: request.command.clone(),
-        },
+        tool_input: request.tool_input.clone(),
         tool_use_id: request.tool_use_id.clone(),
     })
 }
@@ -568,7 +568,7 @@ mod tests {
             tool_name: "Bash".to_string(),
             matcher_aliases: Vec::new(),
             tool_use_id: tool_use_id.to_string(),
-            command: "echo hello".to_string(),
+            tool_input: serde_json::json!({ "command": "echo hello" }),
         }
     }
 }

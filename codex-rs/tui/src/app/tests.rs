@@ -1678,7 +1678,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
+    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
     Ok(())
@@ -1838,7 +1838,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
+    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -1972,7 +1972,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     );
     assert_eq!(
         profile_config.get("approvals_reviewer"),
-        Some(&TomlValue::String("auto_review".to_string()))
+        Some(&TomlValue::String("guardian_subagent".to_string()))
     );
     Ok(())
 }

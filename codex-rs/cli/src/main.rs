@@ -176,6 +176,7 @@ enum Subcommand {
 }
 
 #[derive(Debug, Parser)]
+#[command(bin_name = "codex plugin")]
 struct PluginCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
@@ -1771,6 +1772,30 @@ mod tests {
 
         let cli = MultitoolCli::try_parse_from(["codex", "responses"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Responses(_))));
+    }
+
+    fn help_from_args(args: &[&str]) -> String {
+        let err = MultitoolCli::try_parse_from(args).expect_err("help should short-circuit");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+        err.to_string()
+    }
+
+    #[test]
+    fn plugin_marketplace_help_uses_plugin_namespace() {
+        let help = help_from_args(&["codex", "plugin", "marketplace", "--help"]);
+        assert!(
+            help.contains("Usage: codex plugin marketplace [OPTIONS] <COMMAND>"),
+            "{help}"
+        );
+
+        for (subcommand, usage) in [
+            ("add", "Usage: codex plugin marketplace add"),
+            ("upgrade", "Usage: codex plugin marketplace upgrade"),
+            ("remove", "Usage: codex plugin marketplace remove"),
+        ] {
+            let help = help_from_args(&["codex", "plugin", "marketplace", subcommand, "--help"]);
+            assert!(help.contains(usage), "{help}");
+        }
     }
 
     #[test]
