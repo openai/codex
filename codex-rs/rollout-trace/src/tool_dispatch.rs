@@ -7,7 +7,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::models::SearchToolCallParams;
@@ -90,7 +90,7 @@ pub enum ToolDispatchPayload {
         timeout_ms: Option<u64>,
         sandbox_permissions: Option<SandboxPermissions>,
         prefix_rule: Option<Vec<String>>,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
         justification: Option<String>,
     },
     Mcp {

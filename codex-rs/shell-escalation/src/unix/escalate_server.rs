@@ -378,8 +378,8 @@ async fn handle_escalate_session_with_policy(
 mod tests {
     use super::*;
     use codex_protocol::approvals::EscalationPermissions;
+    use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
     use codex_protocol::models::NetworkPermissions;
-    use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;

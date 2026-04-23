@@ -37,7 +37,9 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -51,6 +53,7 @@ use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMod
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy as CoreNetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -1355,7 +1358,7 @@ pub struct AdditionalNetworkPermissions {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PermissionProfileNetworkPermissions {
-    pub enabled: Option<bool>,
+    pub enabled: bool,
 }
 
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
@@ -1374,18 +1377,20 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     }
 }
 
-impl From<CoreNetworkPermissions> for PermissionProfileNetworkPermissions {
-    fn from(value: CoreNetworkPermissions) -> Self {
+impl From<CoreNetworkSandboxPolicy> for PermissionProfileNetworkPermissions {
+    fn from(value: CoreNetworkSandboxPolicy) -> Self {
         Self {
-            enabled: value.enabled,
+            enabled: value.is_enabled(),
         }
     }
 }
 
-impl From<PermissionProfileNetworkPermissions> for CoreNetworkPermissions {
+impl From<PermissionProfileNetworkPermissions> for CoreNetworkSandboxPolicy {
     fn from(value: PermissionProfileNetworkPermissions) -> Self {
-        Self {
-            enabled: value.enabled,
+        if value.enabled {
+            Self::Enabled
+        } else {
+            Self::Restricted
         }
     }
 }
@@ -1533,65 +1538,111 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub struct PermissionProfileFileSystemPermissions {
-    pub entries: Vec<FileSystemSandboxEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub glob_scan_max_depth: Option<NonZeroUsize>,
+pub enum PermissionProfileFileSystemPermissions {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Restricted {
+        entries: Vec<FileSystemSandboxEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        glob_scan_max_depth: Option<NonZeroUsize>,
+    },
+    Unrestricted,
 }
 
-impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
-    fn from(value: CoreFileSystemPermissions) -> Self {
-        Self {
-            entries: value
-                .entries
-                .into_iter()
-                .map(FileSystemSandboxEntry::from)
-                .collect(),
-            glob_scan_max_depth: value.glob_scan_max_depth,
+impl From<CoreManagedFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreManagedFileSystemPermissions) -> Self {
+        match value {
+            CoreManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::from)
+                    .collect(),
+                glob_scan_max_depth: glob_scan_max_depth.and_then(NonZeroUsize::new),
+            },
+            CoreManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
         }
     }
 }
 
-impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+impl From<PermissionProfileFileSystemPermissions> for CoreManagedFileSystemPermissions {
     fn from(value: PermissionProfileFileSystemPermissions) -> Self {
-        Self {
-            entries: value
-                .entries
-                .into_iter()
-                .map(CoreFileSystemSandboxEntry::from)
-                .collect(),
-            glob_scan_max_depth: value.glob_scan_max_depth,
+        match value {
+            PermissionProfileFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(CoreFileSystemSandboxEntry::from)
+                    .collect(),
+                glob_scan_max_depth: glob_scan_max_depth.map(usize::from),
+            },
+            PermissionProfileFileSystemPermissions::Unrestricted => Self::Unrestricted,
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub struct PermissionProfile {
-    pub network: Option<PermissionProfileNetworkPermissions>,
-    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+pub enum PermissionProfile {
+    /// Codex owns sandbox construction for this profile.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Managed {
+        network: PermissionProfileNetworkPermissions,
+        file_system: PermissionProfileFileSystemPermissions,
+    },
+    /// Do not apply an outer sandbox.
+    Disabled,
+    /// Filesystem isolation is enforced by an external caller.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    External {
+        network: PermissionProfileNetworkPermissions,
+    },
 }
 
 impl From<CorePermissionProfile> for PermissionProfile {
     fn from(value: CorePermissionProfile) -> Self {
-        Self {
-            network: value.network.map(PermissionProfileNetworkPermissions::from),
-            file_system: value
-                .file_system
-                .map(PermissionProfileFileSystemPermissions::from),
+        match value {
+            CorePermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                network: network.into(),
+                file_system: file_system.into(),
+            },
+            CorePermissionProfile::Disabled => Self::Disabled,
+            CorePermissionProfile::External { network } => Self::External {
+                network: network.into(),
+            },
         }
     }
 }
 
 impl From<PermissionProfile> for CorePermissionProfile {
     fn from(value: PermissionProfile) -> Self {
-        Self {
-            network: value.network.map(CoreNetworkPermissions::from),
-            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.into(),
+                network: network.into(),
+            },
+            PermissionProfile::Disabled => Self::Disabled,
+            PermissionProfile::External { network } => Self::External {
+                network: network.into(),
+            },
         }
     }
 }
@@ -1600,12 +1651,13 @@ impl From<PermissionProfile> for CorePermissionProfile {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
+    /// Partial overlay used for per-command permission requests.
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl From<CorePermissionProfile> for AdditionalPermissionProfile {
-    fn from(value: CorePermissionProfile) -> Self {
+impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
+    fn from(value: CoreAdditionalPermissionProfile) -> Self {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
@@ -1613,7 +1665,7 @@ impl From<CorePermissionProfile> for AdditionalPermissionProfile {
     }
 }
 
-impl From<AdditionalPermissionProfile> for CorePermissionProfile {
+impl From<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
     fn from(value: AdditionalPermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
@@ -1634,7 +1686,7 @@ pub struct GrantedPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl From<GrantedPermissionProfile> for CorePermissionProfile {
+impl From<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
     fn from(value: GrantedPermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
@@ -3355,9 +3407,7 @@ pub struct ThreadStartResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3461,9 +3511,7 @@ pub struct ThreadResumeResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3558,9 +3606,7 @@ pub struct ThreadForkResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -7868,21 +7914,21 @@ mod tests {
 
     #[test]
     fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
-        let core_permissions = CoreFileSystemPermissions {
+        let core_permissions = CoreManagedFileSystemPermissions::Restricted {
             entries: vec![CoreFileSystemSandboxEntry {
                 path: CoreFileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
                 access: CoreFileSystemAccessMode::None,
             }],
-            glob_scan_max_depth: NonZeroUsize::new(2),
+            glob_scan_max_depth: Some(2),
         };
 
         let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
 
         assert_eq!(
             permissions,
-            PermissionProfileFileSystemPermissions {
+            PermissionProfileFileSystemPermissions::Restricted {
                 entries: vec![FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/*.env".to_string(),
@@ -7893,7 +7939,7 @@ mod tests {
             }
         );
         assert_eq!(
-            CoreFileSystemPermissions::from(permissions),
+            CoreManagedFileSystemPermissions::from(permissions),
             core_permissions
         );
     }
@@ -7901,6 +7947,7 @@ mod tests {
     #[test]
     fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
         serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
+            "type": "restricted",
             "entries": [],
             "globScanMaxDepth": 0,
         }))
@@ -7954,8 +8001,8 @@ mod tests {
         );
 
         assert_eq!(
-            CorePermissionProfile::from(response.permissions),
-            CorePermissionProfile {
+            CoreAdditionalPermissionProfile::from(response.permissions),
+            CoreAdditionalPermissionProfile {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),

@@ -39,8 +39,8 @@ use codex_apply_patch::Hunk;
 use codex_apply_patch::parse_patch_streaming;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
@@ -215,7 +215,7 @@ fn write_permissions_for_paths(
     file_paths: &[AbsolutePathBuf],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
-) -> Option<PermissionProfile> {
+) -> Option<AdditionalPermissionProfile> {
     let write_paths = file_paths
         .iter()
         .map(|path| {
@@ -232,7 +232,7 @@ fn write_permissions_for_paths(
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
 
-    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
+    let permissions = (!write_paths.is_empty()).then_some(AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
             Some(write_paths),
