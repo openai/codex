@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-observability"
+version.workspace = true
+
+[lib]
+doctest = true
+name = "codex_observability"
+path = "src/lib.rs"
+
+[dependencies]
+codex-observability-derive = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

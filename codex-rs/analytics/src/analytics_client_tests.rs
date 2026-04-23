@@ -52,6 +52,7 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
 use crate::facts::TurnTokenUsageFact;
+use crate::observation_reducer::AnalyticsObservationReducer;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
@@ -71,6 +72,7 @@ use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -215,6 +217,27 @@ fn sample_thread_resume_response_with_source(
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
             permission_profile: Some(sample_permission_profile()),
+            reasoning_effort: None,
+        },
+    }
+}
+
+fn sample_thread_fork_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+    let mut thread = sample_thread(thread_id, ephemeral);
+    thread.forked_from_id = Some("parent-thread".to_string());
+
+    ClientResponse::ThreadFork {
+        request_id: RequestId::Integer(3),
+        response: ThreadForkResponse {
+            thread,
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: test_path_buf("/tmp").abs(),
+            instruction_sources: Vec::new(),
+            approval_policy: AppServerAskForApproval::OnFailure,
+            approvals_reviewer: AppServerApprovalsReviewer::User,
+            sandbox: AppServerSandboxPolicy::DangerFullAccess,
             reasoning_effort: None,
         },
     }
@@ -454,25 +477,24 @@ async fn ingest_rejected_turn_steer(
 }
 
 async fn ingest_initialize(reducer: &mut AnalyticsReducer, out: &mut Vec<TrackEventRequest>) {
-    reducer
-        .ingest(
-            AnalyticsFact::Initialize {
-                connection_id: 7,
-                params: InitializeParams {
-                    client_info: ClientInfo {
-                        name: "codex-tui".to_string(),
-                        title: None,
-                        version: "1.0.0".to_string(),
-                    },
-                    capabilities: None,
-                },
-                product_client_id: "codex-tui".to_string(),
-                runtime: sample_runtime_metadata(),
-                rpc_transport: AppServerRpcTransport::Stdio,
+    reducer.ingest(sample_initialize_fact(), out).await;
+}
+
+fn sample_initialize_fact() -> AnalyticsFact {
+    AnalyticsFact::Initialize {
+        connection_id: 7,
+        params: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-tui".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
             },
-            out,
-        )
-        .await;
+            capabilities: None,
+        },
+        product_client_id: "codex-tui".to_string(),
+        runtime: sample_runtime_metadata(),
+        rpc_transport: AppServerRpcTransport::Stdio,
+    }
 }
 
 async fn ingest_turn_prerequisites(
@@ -1702,6 +1724,438 @@ async fn reducer_ingests_app_and_plugin_facts() {
 }
 
 #[tokio::test]
+async fn app_used_observation_matches_legacy_analytics_fact() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+    let observation = codex_observability::events::AppUsed {
+        model_slug: "gpt-5",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        connector_id: Some("drive"),
+        app_name: Some("Drive"),
+        invocation_type: Some(codex_observability::events::InvocationType::Implicit),
+    };
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(AppUsedInput {
+                tracking: TrackEventsContext {
+                    model_slug: "gpt-5".to_string(),
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                },
+                app: AppInvocation {
+                    connector_id: Some("drive".to_string()),
+                    app_name: Some("Drive".to_string()),
+                    invocation_type: Some(InvocationType::Implicit),
+                },
+            })),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_app_used(observation, &mut observation_events)
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn feature_observations_match_legacy_analytics_facts() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let connector_ids = vec!["calendar".to_string(), "drive".to_string()];
+    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(SkillInvokedInput {
+                tracking: tracking.clone(),
+                invocations: vec![SkillInvocation {
+                    skill_name: "doc".to_string(),
+                    skill_scope: codex_protocol::protocol::SkillScope::User,
+                    skill_path: skill_path.clone(),
+                    invocation_type: InvocationType::Explicit,
+                }],
+            })),
+            &mut legacy_events,
+        )
+        .await;
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(AppMentionedInput {
+                tracking: tracking.clone(),
+                mentions: vec![AppInvocation {
+                    connector_id: Some("calendar".to_string()),
+                    app_name: Some("Calendar".to_string()),
+                    invocation_type: Some(InvocationType::Explicit),
+                }],
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(HookRunInput {
+                tracking: tracking.clone(),
+                hook: HookRunFact {
+                    event_name: HookEventName::PostToolUse,
+                    hook_source: HookSource::Unknown,
+                    status: HookRunStatus::Failed,
+                },
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(PluginUsedInput {
+                tracking: tracking.clone(),
+                plugin: sample_plugin_metadata(),
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginStateChanged(
+                PluginStateChangedInput {
+                    plugin: sample_plugin_metadata(),
+                    state: PluginState::Disabled,
+                },
+            )),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_skill_invoked(
+            codex_observability::events::SkillInvoked {
+                model_slug: "gpt-5",
+                thread_id: "thread-1",
+                turn_id: "turn-1",
+                skill_name: "doc",
+                skill_scope: codex_observability::events::SkillScope::User,
+                skill_path: skill_path.as_path(),
+                invocation_type: codex_observability::events::InvocationType::Explicit,
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_app_mentioned(
+            codex_observability::events::AppMentioned {
+                model_slug: "gpt-5",
+                thread_id: "thread-1",
+                turn_id: "turn-1",
+                connector_id: Some("calendar"),
+                app_name: Some("Calendar"),
+                invocation_type: Some(codex_observability::events::InvocationType::Explicit),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer.ingest_hook_run_completed(
+        codex_observability::events::HookRunCompleted {
+            model_slug: "gpt-5",
+            thread_id: "thread-1",
+            turn_id: "turn-1",
+            hook_name: "PostToolUse",
+            hook_source: "unknown",
+            status: codex_observability::events::HookRunStatus::Failed,
+        },
+        &mut observation_events,
+    );
+    observation_reducer.ingest_plugin_used(
+        codex_observability::events::PluginUsed {
+            model_slug: "gpt-5",
+            thread_id: "thread-1",
+            turn_id: "turn-1",
+            plugin_id: "sample@test",
+            plugin_name: "sample",
+            marketplace_name: "test",
+            has_skills: Some(true),
+            mcp_server_count: Some(2),
+            connector_ids: Some(connector_ids.as_slice()),
+        },
+        &mut observation_events,
+    );
+    observation_reducer.ingest_plugin_state_changed(
+        codex_observability::events::PluginStateChanged {
+            plugin_id: "sample@test",
+            plugin_name: "sample",
+            marketplace_name: "test",
+            has_skills: Some(true),
+            mcp_server_count: Some(2),
+            connector_ids: Some(connector_ids.as_slice()),
+            state: codex_observability::events::PluginState::Disabled,
+        },
+        &mut observation_events,
+    );
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn thread_started_observation_matches_legacy_responses() {
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_start_response("thread-observed", /*ephemeral*/ false, "gpt-5"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-observed",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::New,
+            model: "gpt-5",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_resume_response("thread-resumed", /*ephemeral*/ true, "gpt-5.1"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-resumed",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Resumed,
+            model: "gpt-5.1",
+            ephemeral: true,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_fork_response("thread-forked", /*ephemeral*/ false, "gpt-5.2"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-forked",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Forked,
+            model: "gpt-5.2",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_resume_response_with_source(
+            "thread-subagent",
+            /*ephemeral*/ false,
+            "gpt-5",
+            AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+        ),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-subagent",
+            source: codex_observability::events::ThreadSource::Subagent(
+                codex_observability::events::ThreadSubagentKind::ThreadSpawn,
+            ),
+            parent_thread_id: Some("22222222-2222-2222-2222-222222222222"),
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Resumed,
+            model: "gpt-5",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+}
+
+async fn assert_thread_started_observation_matches_legacy_response(
+    legacy_response: ClientResponse,
+    observation: codex_observability::events::ThreadStarted<'_>,
+) {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(legacy_response),
+            },
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer.ingest_thread_started(7, observation, &mut observation_events);
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn turn_observations_match_legacy_sources() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut legacy_reducer,
+        &mut legacy_events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ true,
+    )
+    .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+                product_client_id: "codex-tui".to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    // Keep not-yet-migrated request/thread context identical on both sides.
+    // This test swaps started/ended turn facts, including resolved config and
+    // token accounting, to observations while comparing the final payload.
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_turn_started(
+            codex_observability::events::TurnStarted {
+                thread_id: "thread-2",
+                turn_id: "turn-2",
+                config: codex_observability::events::TurnConfig {
+                    num_input_images: 1,
+                    submission_type: None,
+                    ephemeral: false,
+                    model: "gpt-5",
+                    model_provider: "openai",
+                    sandbox_mode: codex_observability::events::SandboxMode::ReadOnly,
+                    sandbox_network_access: true,
+                    reasoning_effort: None,
+                    reasoning_summary: None,
+                    service_tier: None,
+                    approval_policy: codex_observability::events::ApprovalPolicy::OnRequest,
+                    approval_reviewer:
+                        codex_observability::events::ApprovalReviewer::GuardianSubagent,
+                    collaboration_mode: codex_observability::events::CollaborationMode::Plan,
+                    personality: None,
+                    is_first_turn: true,
+                },
+                started_at: 455,
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_turn_ended(
+            codex_observability::events::TurnEnded {
+                thread_id: "thread-2",
+                turn_id: "turn-2",
+                status: codex_observability::events::TurnStatus::Completed,
+                token_usage: Some(codex_observability::events::TurnTokenUsage {
+                    input_tokens: 123,
+                    cached_input_tokens: 45,
+                    output_tokens: 140,
+                    reasoning_output_tokens: 13,
+                    total_tokens: 321,
+                }),
+                ended_at: 456,
+                duration_ms: 1234,
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
 async fn reducer_ingests_plugin_state_changed_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
@@ -1915,6 +2369,409 @@ async fn accepted_turn_steer_emits_expected_event() {
     assert_eq!(payload["event_params"]["subagent_source"], json!(null));
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert!(payload["event_params"].get("product_client_id").is_none());
+}
+
+#[tokio::test]
+async fn turn_steer_observations_match_legacy_sources() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                request: Box::new(sample_turn_steer_request(
+                    "thread-2", "turn-2", /*request_id*/ 4,
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    let accepted_created_at = legacy_event_created_at(&legacy_events[0]);
+    observation_reducer.ingest_turn_steer(
+        7,
+        codex_observability::events::TurnSteer {
+            thread_id: "thread-2",
+            expected_turn_id: "turn-2",
+            accepted_turn_id: Some("turn-2"),
+            num_input_images: 1,
+            result: codex_observability::events::TurnSteerResult::Accepted,
+            rejection_reason: None,
+            created_at: accepted_created_at,
+        },
+        &mut observation_events,
+    );
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                request: Box::new(sample_turn_steer_request(
+                    "thread-2", "turn-2", /*request_id*/ 5,
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::ErrorResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                error: no_active_turn_steer_error(),
+                error_type: Some(no_active_turn_steer_error_type()),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    let rejected_created_at = legacy_event_created_at(&legacy_events[1]);
+    observation_reducer.ingest_turn_steer(
+        7,
+        codex_observability::events::TurnSteer {
+            thread_id: "thread-2",
+            expected_turn_id: "turn-2",
+            accepted_turn_id: None,
+            num_input_images: 1,
+            result: codex_observability::events::TurnSteerResult::Rejected,
+            rejection_reason: Some(
+                codex_observability::events::TurnSteerRejectionReason::NoActiveTurn,
+            ),
+            created_at: rejected_created_at,
+        },
+        &mut observation_events,
+    );
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn compaction_ended_observation_matches_legacy_fact() {
+    use codex_observability::events as observation_events;
+
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response_with_source(
+                    "thread-1",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                    AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response_with_source(
+                    "thread-1",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                    AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-compact".to_string(),
+                    trigger: CompactionTrigger::Manual,
+                    reason: CompactionReason::UserRequested,
+                    implementation: CompactionImplementation::Responses,
+                    phase: CompactionPhase::StandaloneTurn,
+                    strategy: CompactionStrategy::Memento,
+                    status: CompactionStatus::Failed,
+                    error: Some("context limit exceeded".to_string()),
+                    active_context_tokens_before: 131_000,
+                    active_context_tokens_after: 131_000,
+                    started_at: 100,
+                    completed_at: 101,
+                    duration_ms: Some(1200),
+                },
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_compaction_ended(
+            observation_events::CompactionEnded {
+                thread_id: "thread-1",
+                turn_id: "turn-compact",
+                trigger: observation_events::CompactionTrigger::Manual,
+                reason: observation_events::CompactionReason::UserRequested,
+                implementation: observation_events::CompactionImplementation::Responses,
+                phase: observation_events::CompactionPhase::StandaloneTurn,
+                strategy: observation_events::CompactionStrategy::Memento,
+                status: observation_events::CompactionStatus::Failed {
+                    error: Some("context limit exceeded"),
+                },
+                active_context_tokens_before: 131_000,
+                active_context_tokens_after: 131_000,
+                started_at: 100,
+                ended_at: 101,
+                duration_ms: Some(1200),
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn review_completed_observation_matches_legacy_guardian_fact() {
+    use crate::events as analytics_events;
+    use codex_observability::events as observation_events;
+
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-guardian",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-guardian",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
+                analytics_events::GuardianReviewEventParams {
+                    thread_id: "thread-guardian".to_string(),
+                    turn_id: "turn-guardian".to_string(),
+                    review_id: "review-1".to_string(),
+                    target_item_id: "item-1".to_string(),
+                    retry_reason: Some("parse_retry".to_string()),
+                    approval_request_source:
+                        analytics_events::GuardianApprovalRequestSource::DelegatedSubagent,
+                    reviewed_action: analytics_events::GuardianReviewedAction::McpToolCall {
+                        server: "drive".to_string(),
+                        tool_name: "search".to_string(),
+                        connector_id: Some("drive-connector".to_string()),
+                        connector_name: Some("Drive".to_string()),
+                        tool_title: Some("Search Drive".to_string()),
+                    },
+                    reviewed_action_truncated: false,
+                    decision: analytics_events::GuardianReviewDecision::Aborted,
+                    terminal_status: analytics_events::GuardianReviewTerminalStatus::FailedClosed,
+                    failure_reason: Some(analytics_events::GuardianReviewFailureReason::ParseError),
+                    risk_level: Some(analytics_events::GuardianReviewRiskLevel::High),
+                    user_authorization: Some(
+                        analytics_events::GuardianReviewUserAuthorization::Medium,
+                    ),
+                    outcome: Some(analytics_events::GuardianReviewOutcome::Deny),
+                    rationale: Some("review could not parse final policy".to_string()),
+                    guardian_thread_id: Some("guardian-thread-1".to_string()),
+                    guardian_session_kind: Some(
+                        analytics_events::GuardianReviewSessionKind::TrunkNew,
+                    ),
+                    guardian_model: Some("gpt-5".to_string()),
+                    guardian_reasoning_effort: Some("medium".to_string()),
+                    had_prior_review_context: Some(true),
+                    review_timeout_ms: 30_000,
+                    tool_call_count: 2,
+                    time_to_first_token_ms: Some(100),
+                    completion_latency_ms: Some(1500),
+                    started_at: 100,
+                    completed_at: Some(102),
+                    input_tokens: Some(123),
+                    cached_input_tokens: Some(45),
+                    output_tokens: Some(140),
+                    reasoning_output_tokens: Some(13),
+                    total_tokens: Some(321),
+                },
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_review_completed(
+            observation_events::ReviewCompleted {
+                thread_id: "thread-guardian",
+                turn_id: "turn-guardian",
+                review_id: "review-1",
+                target_item_id: "item-1",
+                retry_reason: Some("parse_retry"),
+                request_source: observation_events::ReviewRequestSource::DelegatedSubagent,
+                reviewed_action: observation_events::ReviewedAction::McpToolCall {
+                    server: "drive",
+                    tool_name: "search",
+                    connector_id: Some("drive-connector"),
+                    connector_name: Some("Drive"),
+                    tool_title: Some("Search Drive"),
+                },
+                reviewed_action_truncated: false,
+                response: observation_events::ReviewResponse::Guardian(
+                    observation_events::GuardianReviewResponse {
+                        decision: observation_events::ReviewDecision::Aborted,
+                        terminal_status: observation_events::ReviewTerminalStatus::FailedClosed {
+                            failure_reason: Some(
+                                observation_events::ReviewFailureReason::ParseError,
+                            ),
+                        },
+                        risk_level: Some(observation_events::ReviewRiskLevel::High),
+                        user_authorization: Some(
+                            observation_events::ReviewUserAuthorization::Medium,
+                        ),
+                        outcome: Some(observation_events::ReviewOutcome::Deny),
+                        rationale: Some("review could not parse final policy"),
+                        session: Some(observation_events::GuardianReviewSession {
+                            guardian_thread_id: "guardian-thread-1",
+                            session_kind: observation_events::GuardianReviewSessionKind::TrunkNew,
+                            model: "gpt-5",
+                            reasoning_effort: Some("medium"),
+                            had_prior_review_context: true,
+                        }),
+                        review_timeout_ms: 30_000,
+                        tool_call_count: 2,
+                        time_to_first_token_ms: Some(100),
+                        completion_latency_ms: Some(1500),
+                        token_usage: Some(observation_events::TurnTokenUsage {
+                            input_tokens: 123,
+                            cached_input_tokens: 45,
+                            output_tokens: 140,
+                            reasoning_output_tokens: 13,
+                            total_tokens: 321,
+                        }),
+                    },
+                ),
+                started_at: 100,
+                ended_at: 102,
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+fn legacy_event_created_at(event: &TrackEventRequest) -> i64 {
+    serde_json::to_value(event)
+        .expect("serialize event")
+        .pointer("/event_params/created_at")
+        .and_then(serde_json::Value::as_i64)
+        .expect("created_at")
 }
 
 #[tokio::test]

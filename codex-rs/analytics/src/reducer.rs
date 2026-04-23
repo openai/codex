@@ -58,6 +58,7 @@ use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_login::default_client::originator;
+use codex_observability::events as observation_events;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -89,6 +90,18 @@ struct ThreadMetadataState {
     initialization_mode: ThreadInitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
+}
+
+struct ThreadInitializedInput {
+    connection_id: u64,
+    thread_id: String,
+    thread_source: Option<&'static str>,
+    initialization_mode: ThreadInitializationMode,
+    subagent_source: Option<String>,
+    parent_thread_id: Option<String>,
+    model: String,
+    ephemeral: bool,
+    created_at: u64,
 }
 
 impl ThreadMetadataState {
@@ -670,11 +683,150 @@ impl AnalyticsReducer {
     ) {
         let thread_source: SessionSource = thread.source.into();
         let thread_id = thread.id;
+        let thread_metadata =
+            ThreadMetadataState::from_thread_metadata(&thread_source, initialization_mode);
+        self.emit_thread_initialized_event(
+            ThreadInitializedInput {
+                connection_id,
+                thread_id,
+                thread_source: thread_metadata.thread_source,
+                initialization_mode: thread_metadata.initialization_mode,
+                subagent_source: thread_metadata.subagent_source,
+                parent_thread_id: thread_metadata.parent_thread_id,
+                model,
+                ephemeral: thread.ephemeral,
+                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+            },
+            out,
+        );
+    }
+
+    pub(crate) fn ingest_observed_thread_started(
+        &mut self,
+        connection_id: u64,
+        observation: observation_events::ThreadStarted<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let (thread_source, subagent_source) = match observation.source {
+            observation_events::ThreadSource::User => (Some("user"), None),
+            observation_events::ThreadSource::Subagent(kind) => (
+                Some("subagent"),
+                Some(match kind {
+                    observation_events::ThreadSubagentKind::Review => "review".to_string(),
+                    observation_events::ThreadSubagentKind::Compact => "compact".to_string(),
+                    observation_events::ThreadSubagentKind::ThreadSpawn => {
+                        "thread_spawn".to_string()
+                    }
+                    observation_events::ThreadSubagentKind::MemoryConsolidation => {
+                        "memory_consolidation".to_string()
+                    }
+                    observation_events::ThreadSubagentKind::Other(source) => source.to_string(),
+                }),
+            ),
+            observation_events::ThreadSource::AppServer
+            | observation_events::ThreadSource::Custom(_)
+            | observation_events::ThreadSource::Unknown => (None, None),
+        };
+        let initialization_mode = match observation.initialization_mode {
+            observation_events::ThreadInitializationMode::New => ThreadInitializationMode::New,
+            observation_events::ThreadInitializationMode::Forked => {
+                ThreadInitializationMode::Forked
+            }
+            observation_events::ThreadInitializationMode::Resumed => {
+                ThreadInitializationMode::Resumed
+            }
+        };
+
+        let input = ThreadInitializedInput {
+            connection_id,
+            thread_id: observation.thread_id.to_string(),
+            thread_source,
+            initialization_mode,
+            subagent_source,
+            parent_thread_id: observation.parent_thread_id.map(str::to_string),
+            model: observation.model.to_string(),
+            ephemeral: observation.ephemeral,
+            created_at: u64::try_from(observation.created_at).unwrap_or_default(),
+        };
+        self.emit_thread_initialized_event(input, out);
+    }
+
+    pub(crate) fn ingest_observed_turn_steer(
+        &mut self,
+        connection_id: u64,
+        observation: observation_events::TurnSteer<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if let Some(accepted_turn_id) = observation.accepted_turn_id
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
+
+        self.emit_turn_steer_event(
+            connection_id,
+            PendingTurnSteerState {
+                thread_id: observation.thread_id.to_string(),
+                expected_turn_id: observation.expected_turn_id.to_string(),
+                num_input_images: observation.num_input_images,
+                created_at: u64::try_from(observation.created_at).unwrap_or_default(),
+            },
+            observation.accepted_turn_id.map(str::to_string),
+            match observation.result {
+                observation_events::TurnSteerResult::Accepted => TurnSteerResult::Accepted,
+                observation_events::TurnSteerResult::Rejected => TurnSteerResult::Rejected,
+            },
+            observation
+                .rejection_reason
+                .map(|rejection_reason| match rejection_reason {
+                    observation_events::TurnSteerRejectionReason::NoActiveTurn => {
+                        TurnSteerRejectionReason::NoActiveTurn
+                    }
+                    observation_events::TurnSteerRejectionReason::ExpectedTurnMismatch => {
+                        TurnSteerRejectionReason::ExpectedTurnMismatch
+                    }
+                    observation_events::TurnSteerRejectionReason::NonSteerableReview => {
+                        TurnSteerRejectionReason::NonSteerableReview
+                    }
+                    observation_events::TurnSteerRejectionReason::NonSteerableCompact => {
+                        TurnSteerRejectionReason::NonSteerableCompact
+                    }
+                    observation_events::TurnSteerRejectionReason::EmptyInput => {
+                        TurnSteerRejectionReason::EmptyInput
+                    }
+                    observation_events::TurnSteerRejectionReason::InputTooLarge => {
+                        TurnSteerRejectionReason::InputTooLarge
+                    }
+                }),
+            out,
+        );
+    }
+
+    fn emit_thread_initialized_event(
+        &mut self,
+        input: ThreadInitializedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let ThreadInitializedInput {
+            connection_id,
+            thread_id,
+            thread_source,
+            initialization_mode,
+            subagent_source,
+            parent_thread_id,
+            model,
+            ephemeral,
+            created_at,
+        } = input;
+        let thread_metadata = ThreadMetadataState {
+            thread_source,
+            initialization_mode,
+            subagent_source,
+            parent_thread_id,
+        };
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        let thread_metadata =
-            ThreadMetadataState::from_thread_metadata(&thread_source, initialization_mode);
         self.thread_connections
             .insert(thread_id.clone(), connection_id);
         self.thread_metadata
@@ -687,12 +839,12 @@ impl AnalyticsReducer {
                     app_server_client: connection_state.app_server_client.clone(),
                     runtime: connection_state.runtime.clone(),
                     model,
-                    ephemeral: thread.ephemeral,
+                    ephemeral,
                     thread_source: thread_metadata.thread_source,
-                    initialization_mode,
+                    initialization_mode: thread_metadata.initialization_mode,
                     subagent_source: thread_metadata.subagent_source,
                     parent_thread_id: thread_metadata.parent_thread_id,
-                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    created_at,
                 },
             },
         ));

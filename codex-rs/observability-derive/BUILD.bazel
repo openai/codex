@@ -1,0 +1,7 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "observability-derive",
+    crate_name = "codex_observability_derive",
+    proc_macro = True,
+)

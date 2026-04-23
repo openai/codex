@@ -1773,6 +1773,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-git-utils",
  "codex-login",
+ "codex-observability",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -2989,6 +2990,25 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "codex-observability"
+version = "0.0.0"
+dependencies = [
+ "codex-observability-derive",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codex-observability-derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
