@@ -1411,7 +1411,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1490,7 +1490,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         .expect("test setup should allow updating approval policy");
     let mut config = (*turn_context.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
@@ -1947,7 +1947,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let config = Arc::new(config);
     let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),

@@ -1577,6 +1577,7 @@ impl Config {
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
+            managed_hooks: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,

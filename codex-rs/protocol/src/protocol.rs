@@ -3002,6 +3002,8 @@ pub struct TurnContextItem {
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3024,6 +3026,24 @@ pub struct TurnContextItem {
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,
+}
+
+impl TurnContextItem {
+    pub fn permission_profile(&self) -> PermissionProfile {
+        self.permission_profile.clone().unwrap_or_else(|| {
+            let file_system_sandbox_policy =
+                self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                        &self.sandbox_policy,
+                        &self.cwd,
+                    )
+                });
+            PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&self.sandbox_policy),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -3652,8 +3672,16 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// How to sandbox commands executed in the system
+    /// Legacy sandbox projection for commands executed in the system.
+    ///
+    /// Consumers should prefer `permission_profile` when it is present. This
+    /// field remains available as a compatibility fallback for older emitters
+    /// and sessions that only expose legacy sandbox state.
     pub sandbox_policy: SandboxPolicy,
+
+    /// Canonical effective permissions for commands executed in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -5162,6 +5190,7 @@ mod tests {
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
@@ -5228,6 +5257,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,

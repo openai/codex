@@ -794,6 +794,14 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
+        let permission_profile = if matches!(
+            session_configuration.file_system_sandbox_policy.kind,
+            FileSystemSandboxKind::ExternalSandbox
+        ) {
+            None
+        } else {
+            Some(session_configuration.permission_profile())
+        };
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -806,6 +814,7 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value(),
                 approvals_reviewer: session_configuration.approvals_reviewer,
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+                permission_profile,
                 cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,

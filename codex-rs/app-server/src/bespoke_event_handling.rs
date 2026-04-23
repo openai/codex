@@ -961,6 +961,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let empty = CoreRequestPermissionsResponse {
                     permissions: Default::default(),
                     scope: CorePermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionsResponse {
@@ -2669,6 +2670,7 @@ fn request_permissions_response_from_client_result(
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
             });
         }
         Err(err) => {
@@ -2676,6 +2678,7 @@ fn request_permissions_response_from_client_result(
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
             });
         }
     };
@@ -2686,8 +2689,23 @@ fn request_permissions_response_from_client_result(
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
                 scope: codex_app_server_protocol::PermissionGrantScope::Turn,
+                strict_auto_review: None,
             }
         });
+    let strict_auto_review = response.strict_auto_review.unwrap_or(false);
+    if strict_auto_review
+        && matches!(
+            response.scope,
+            codex_app_server_protocol::PermissionGrantScope::Session
+        )
+    {
+        error!("strict auto review is only supported for turn-scoped permission grants");
+        return Some(CoreRequestPermissionsResponse {
+            permissions: Default::default(),
+            scope: CorePermissionGrantScope::Turn,
+            strict_auto_review: false,
+        });
+    }
     let granted_permissions: CorePermissionProfile = response.permissions.into();
     let permissions = if granted_permissions.is_empty() {
         CoreRequestPermissionProfile::default()
@@ -2697,6 +2715,7 @@ fn request_permissions_response_from_client_result(
     Some(CoreRequestPermissionsResponse {
         permissions,
         scope: response.scope.to_core(),
+        strict_auto_review,
     })
 }
 
@@ -3858,6 +3877,7 @@ mod tests {
                 CoreRequestPermissionsResponse {
                     permissions: expected_permissions,
                     scope: CorePermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 }
             );
         }
@@ -3880,8 +3900,61 @@ mod tests {
             CoreRequestPermissionsResponse {
                 permissions: CoreRequestPermissionProfile::default(),
                 scope: CorePermissionGrantScope::Session,
+                strict_auto_review: false,
             }
         );
+    }
+
+    #[test]
+    fn request_permissions_response_rejects_session_scoped_strict_auto_review() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "strictAutoReview": true,
+                "permissions": {
+                    "network": {
+                        "enabled": true,
+                    },
+                },
+            }))),
+            std::env::current_dir().expect("current dir").as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CoreRequestPermissionProfile::default(),
+                scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
+            }
+        );
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_turn_scoped_strict_auto_review() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile {
+                network: Some(codex_protocol::models::NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..Default::default()
+            },
+            Ok(Ok(serde_json::json!({
+                "strictAutoReview": true,
+                "permissions": {
+                    "network": {
+                        "enabled": true,
+                    },
+                },
+            }))),
+            std::env::current_dir().expect("current dir").as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(response.scope, CorePermissionGrantScope::Turn);
+        assert!(response.strict_auto_review);
     }
 
     #[test]

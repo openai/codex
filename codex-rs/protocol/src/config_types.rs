@@ -89,7 +89,7 @@ pub enum ApprovalsReviewer {
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
     #[strum(serialize = "auto_review")]
-    GuardianSubagent,
+    AutoReview,
 }
 
 impl JsonSchema for ApprovalsReviewer {
@@ -608,8 +608,7 @@ mod tests {
             "\"user\""
         );
         assert_eq!(
-            serde_json::to_string(&ApprovalsReviewer::GuardianSubagent)
-                .expect("serialize reviewer"),
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
             "\"auto_review\""
         );
 
@@ -620,7 +619,7 @@ mod tests {
             let expected = if value == "user" {
                 ApprovalsReviewer::User
             } else {
-                ApprovalsReviewer::GuardianSubagent
+                ApprovalsReviewer::AutoReview
             };
             assert_eq!(expected, reviewer);
         }

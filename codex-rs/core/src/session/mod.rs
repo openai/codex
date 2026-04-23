@@ -94,6 +94,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
@@ -1893,6 +1894,7 @@ impl Session {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 });
             }
             AskForApproval::Granular(granular_config)
@@ -1901,6 +1903,7 @@ impl Session {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 });
             }
             AskForApproval::OnFailure
@@ -1944,11 +1947,13 @@ impl Session {
                     RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     }
                 }
                 ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
                     permissions: requested_permissions.clone(),
                     scope: PermissionGrantScope::Session,
+                    strict_auto_review: false,
                 },
                 ReviewDecision::NetworkPolicyAmendment {
                     network_policy_amendment,
@@ -1956,16 +1961,19 @@ impl Session {
                     NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     },
                     NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     },
                 },
                 ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
                     RequestPermissionsResponse {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     }
                 }
             };
@@ -2137,6 +2145,14 @@ impl Session {
         response: RequestPermissionsResponse,
         cwd: &Path,
     ) -> RequestPermissionsResponse {
+        if response.strict_auto_review && matches!(response.scope, PermissionGrantScope::Session) {
+            return RequestPermissionsResponse {
+                permissions: RequestPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            };
+        }
+
         if response.permissions.is_empty() {
             return response;
         }
@@ -2149,6 +2165,7 @@ impl Session {
             )
             .into(),
             scope: response.scope,
+            strict_auto_review: response.strict_auto_review,
         }
     }
 
@@ -2164,7 +2181,11 @@ impl Session {
             PermissionGrantScope::Turn => {
                 if let Some(turn_state) = originating_turn_state {
                     let mut ts = turn_state.lock().await;
-                    ts.record_granted_permissions(response.permissions.clone().into());
+                    let permissions: PermissionProfile = response.permissions.clone().into();
+                    ts.record_granted_permissions(permissions);
+                    if response.strict_auto_review {
+                        ts.enable_strict_auto_review();
+                    }
                 }
             }
             PermissionGrantScope::Session => {
@@ -2183,6 +2204,19 @@ impl Session {
         let active = active.as_ref()?;
         let ts = active.turn_state.lock().await;
         ts.granted_permissions()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
+    pub(crate) async fn strict_auto_review_enabled_for_turn(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        let Some(active) = active.as_ref() else {
+            return false;
+        };
+        let ts = active.turn_state.lock().await;
+        ts.strict_auto_review_enabled()
     }
 
     pub(crate) async fn granted_session_permissions(&self) -> Option<PermissionProfile> {

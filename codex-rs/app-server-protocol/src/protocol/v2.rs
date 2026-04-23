@@ -323,7 +323,7 @@ pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
-    GuardianSubagent,
+    AutoReview,
 }
 
 impl JsonSchema for ApprovalsReviewer {
@@ -361,7 +361,7 @@ impl ApprovalsReviewer {
     pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
             ApprovalsReviewer::User => CoreApprovalsReviewer::User,
-            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview => CoreApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -370,7 +370,7 @@ impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
     fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
             CoreApprovalsReviewer::User => ApprovalsReviewer::User,
-            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
+            CoreApprovalsReviewer::AutoReview => ApprovalsReviewer::AutoReview,
         }
     }
 }
@@ -941,9 +941,69 @@ pub struct ConfigRequirements {
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
+    #[experimental("configRequirements/read.hooks")]
+    pub hooks: Option<ManagedHooksRequirements>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ManagedHooksRequirements {
+    pub managed_dir: Option<PathBuf>,
+    pub windows_managed_dir: Option<PathBuf>,
+    #[serde(rename = "PreToolUse")]
+    #[ts(rename = "PreToolUse")]
+    pub pre_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PermissionRequest")]
+    #[ts(rename = "PermissionRequest")]
+    pub permission_request: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostToolUse")]
+    #[ts(rename = "PostToolUse")]
+    pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SessionStart")]
+    #[ts(rename = "SessionStart")]
+    pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "UserPromptSubmit")]
+    #[ts(rename = "UserPromptSubmit")]
+    pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "Stop")]
+    #[ts(rename = "Stop")]
+    pub stop: Vec<ConfiguredHookMatcherGroup>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfiguredHookMatcherGroup {
+    pub matcher: Option<String>,
+    pub hooks: Vec<ConfiguredHookHandler>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ConfiguredHookHandler {
+    #[serde(rename = "command")]
+    #[ts(rename = "command")]
+    Command {
+        command: String,
+        #[serde(rename = "timeoutSec")]
+        #[ts(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        r#async: bool,
+        #[serde(rename = "statusMessage")]
+        #[ts(rename = "statusMessage")]
+        status_message: Option<String>,
+    },
+    #[serde(rename = "prompt")]
+    #[ts(rename = "prompt")]
+    Prompt {},
+    #[serde(rename = "agent")]
+    #[ts(rename = "agent")]
+    Agent {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7052,6 +7112,10 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    /// Review every subsequent command in this turn before normal sandboxed execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub strict_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7393,8 +7457,7 @@ mod tests {
             "\"user\""
         );
         assert_eq!(
-            serde_json::to_string(&ApprovalsReviewer::GuardianSubagent)
-                .expect("serialize reviewer"),
+            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
             "\"auto_review\""
         );
 
@@ -7405,7 +7468,7 @@ mod tests {
             let expected = if value == "user" {
                 ApprovalsReviewer::User
             } else {
-                ApprovalsReviewer::GuardianSubagent
+                ApprovalsReviewer::AutoReview
             };
             assert_eq!(expected, reviewer);
         }
@@ -7802,6 +7865,18 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
+        assert_eq!(response.strict_auto_review, None);
+    }
+
+    #[test]
+    fn permissions_request_approval_response_accepts_strict_auto_review() {
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {},
+            "strictAutoReview": true,
+        }))
+        .expect("response should deserialize");
+
+        assert_eq!(response.strict_auto_review, Some(true));
     }
 
     #[test]
@@ -8679,7 +8754,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -8781,7 +8856,7 @@ mod tests {
                     model: None,
                     model_provider: None,
                     approval_policy: None,
-                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
@@ -8822,6 +8897,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 enforce_residency: None,
                 network: None,
             });
