@@ -5237,6 +5237,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             experimental_thread_store_endpoint: None,
+            experimental_thread_config_endpoint: None,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5433,6 +5434,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5583,6 +5585,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5718,6 +5721,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -7236,6 +7240,35 @@ experimental_realtime_start_instructions = "start instructions from config"
     assert_eq!(
         config.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_thread_config_endpoint_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_thread_config_endpoint = "http://127.0.0.1:8061"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
     );
     Ok(())
 }

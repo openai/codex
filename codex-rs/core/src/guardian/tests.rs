@@ -1052,7 +1052,23 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
             risk_level: GuardianRiskLevel::Low,
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Allow,
-            rationale: "Guardian returned a low-risk allow decision.".to_string(),
+            rationale: "Auto-review returned a low-risk allow decision.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
+    let parsed =
+        parse_guardian_assessment(Some(r#"{"outcome":"deny"}"#)).expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
+            rationale: "Auto-review returned a deny decision without a rationale.".to_string(),
         }
     );
 }

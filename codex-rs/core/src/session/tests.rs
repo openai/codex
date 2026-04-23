@@ -4039,6 +4039,7 @@ async fn user_turn_updates_approvals_reviewer() {
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
@@ -6875,6 +6876,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -6954,6 +6956,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",

@@ -2,6 +2,7 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::NoopThreadConfigLoader;
+use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -108,6 +109,13 @@ enum LogFormat {
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
+
+fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoader> {
+    match config.experimental_thread_config_endpoint.as_deref() {
+        Some(endpoint) => Arc::new(RemoteThreadConfigLoader::new(endpoint)),
+        None => Arc::new(NoopThreadConfigLoader),
+    }
+}
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -384,14 +392,13 @@ pub async fn run_main_with_transport(
         )
     })?;
     let codex_home = find_codex_home()?;
-    let thread_config_loader: Arc<dyn ThreadConfigLoader> = Arc::new(NoopThreadConfigLoader);
     let config_manager = ConfigManager::new(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
         loader_overrides,
         Default::default(),
         arg0_paths.clone(),
-        thread_config_loader.clone(),
+        Arc::new(NoopThreadConfigLoader),
     );
     match config_manager
         .load_latest_config(/*fallback_cwd*/ None)
@@ -415,6 +422,9 @@ pub async fn run_main_with_transport(
                 }
             }
 
+            let discovered_thread_config_loader = configured_thread_config_loader(&config);
+            config_manager
+                .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
             let auth_manager =
                 AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
             config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);

@@ -37,6 +37,7 @@ async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-apply-patch".to_string(),
         tool_name: codex_tools::ToolName::plain("apply_patch"),
+        source: crate::tools::context::ToolCallSource::Direct,
         payload,
     }
 }

@@ -9,6 +9,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_exec_server::EnvironmentManager;
@@ -341,6 +342,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -476,6 +478,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "strict-shell-call".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": command,
@@ -521,6 +524,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -639,6 +643,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": [
