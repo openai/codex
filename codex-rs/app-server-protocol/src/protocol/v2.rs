@@ -7782,6 +7782,45 @@ mod tests {
     }
 
     #[test]
+    fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
+        let read_only_path = absolute_path("read-only");
+        let read_write_path = absolute_path("read-write");
+        let core_permissions = CoreFileSystemPermissions::from_read_write_roots(
+            Some(vec![read_only_path.clone()]),
+            Some(vec![read_write_path.clone()]),
+        );
+
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            AdditionalFileSystemPermissions {
+                read: Some(vec![read_only_path.clone()]),
+                write: Some(vec![read_write_path.clone()]),
+                glob_scan_max_depth: None,
+                entries: Some(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_only_path,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_write_path,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
     fn additional_file_system_permissions_rejects_zero_glob_scan_depth() {
         serde_json::from_value::<AdditionalFileSystemPermissions>(json!({
             "read": null,
