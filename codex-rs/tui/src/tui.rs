@@ -833,7 +833,7 @@ impl Tui {
         crate::insert_history::insert_history_lines_with_mode(
             terminal,
             pending_reflow_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::FullScreenReplay,
+            crate::insert_history::InsertHistoryMode::FullScreenReplayPrefill,
         )?;
         pending_reflow_history_lines.clear();
         Ok(true)
