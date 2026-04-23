@@ -5298,6 +5298,7 @@
             ]
           },
           "read": {
+            "description": "This will be removed in favor of `entries`.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
@@ -5307,6 +5308,7 @@
             ]
           },
           "write": {
+            "description": "This will be removed in favor of `entries`.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
