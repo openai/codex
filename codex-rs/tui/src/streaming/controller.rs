@@ -5,6 +5,7 @@ use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -14,7 +15,6 @@ use super::StreamState;
 /// commit animation across streams.
 pub(crate) struct StreamController {
     state: StreamState,
-    finishing_after_drain: bool,
     header_emitted: bool,
 }
 
@@ -23,15 +23,16 @@ impl StreamController {
     ///
     /// The controller snapshots the path into stream state so later commit ticks and finalization
     /// render against the same session cwd that was active when streaming started.
+    #[cfg(test)]
     pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
             state: StreamState::new(width, cwd),
-            finishing_after_drain: false,
             header_emitted: false,
         }
     }
 
     /// Push a delta; if it contains a newline, commit completed lines and start animation.
+    #[cfg(test)]
     pub(crate) fn push(&mut self, delta: &str) -> bool {
         let state = &mut self.state;
         if !delta.is_empty() {
@@ -49,6 +50,7 @@ impl StreamController {
     }
 
     /// Finalize the active stream. Drain and emit now.
+    #[cfg(test)]
     pub(crate) fn finalize(&mut self) -> Option<Box<dyn HistoryCell>> {
         // Finalize collector first.
         let remaining = {
@@ -68,7 +70,6 @@ impl StreamController {
 
         // Cleanup
         self.state.clear();
-        self.finishing_after_drain = false;
         self.emit(out_lines)
     }
 
@@ -109,6 +110,43 @@ impl StreamController {
             self.header_emitted = true;
             !header_emitted
         })))
+    }
+}
+
+/// Controller that keeps assistant streaming output source-backed while it is live.
+pub(crate) struct SourceBackedStreamController {
+    markdown: String,
+    cwd: PathBuf,
+}
+
+impl SourceBackedStreamController {
+    pub(crate) fn new(cwd: &Path) -> Self {
+        Self {
+            markdown: String::new(),
+            cwd: cwd.to_path_buf(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, delta: &str) {
+        self.markdown.push_str(delta);
+    }
+
+    pub(crate) fn set_markdown(&mut self, markdown: String) {
+        self.markdown = markdown;
+    }
+
+    pub(crate) fn active_cell(&self) -> history_cell::AgentMarkdownCell {
+        history_cell::AgentMarkdownCell::new(self.markdown.clone(), self.cwd.as_path())
+    }
+
+    pub(crate) fn finalize(self) -> Option<Box<dyn HistoryCell>> {
+        if self.markdown.trim().is_empty() {
+            return None;
+        }
+        Some(Box::new(history_cell::AgentMarkdownCell::new(
+            self.markdown,
+            self.cwd.as_path(),
+        )))
     }
 }
 

@@ -2666,6 +2666,56 @@ printf 'fenced within fenced\n'
 }
 
 #[tokio::test]
+async fn assistant_delta_updates_source_backed_active_cell_without_history_insert() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "delta-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "This is a long streamed paragraph that should reflow from markdown source while it is still active.".to_string(),
+        }),
+    });
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "streaming deltas should render through the active cell until completion"
+    );
+    let narrow = chat
+        .active_cell_transcript_lines(/*width*/ 28)
+        .expect("active stream should have transcript lines");
+    let wide = chat
+        .active_cell_transcript_lines(/*width*/ 100)
+        .expect("active stream should have transcript lines");
+    assert!(
+        narrow.len() > wide.len(),
+        "active stream should re-render from source at the requested width"
+    );
+}
+
+#[tokio::test]
+async fn completed_assistant_item_replaces_streamed_draft_before_history_flush() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "delta-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "draft text".to_string(),
+        }),
+    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-1",
+        "final **markdown** text",
+        /*phase*/ None,
+    );
+
+    let rendered = lines_to_single_string(&drain_insert_history(&mut rx).concat());
+    assert!(rendered.contains("final markdown text"));
+    assert!(!rendered.contains("draft text"));
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+}
+
+#[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

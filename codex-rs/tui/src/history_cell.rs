@@ -486,6 +486,51 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AgentMarkdownCell {
+    markdown: String,
+    cwd: PathBuf,
+}
+
+impl AgentMarkdownCell {
+    pub(crate) fn new(markdown: String, cwd: &Path) -> Self {
+        Self {
+            markdown,
+            cwd: cwd.to_path_buf(),
+        }
+    }
+
+    fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.markdown.is_empty() {
+            return Vec::new();
+        }
+        const AGENT_MARKDOWN_INDENT_WIDTH: usize = 2;
+        let mut lines = Vec::new();
+        append_markdown(
+            &self.markdown,
+            Some(
+                (width as usize)
+                    .saturating_sub(AGENT_MARKDOWN_INDENT_WIDTH)
+                    .max(1),
+            ),
+            Some(self.cwd.as_path()),
+            &mut lines,
+        );
+        adaptive_wrap_lines(
+            &lines,
+            RtOptions::new(width as usize)
+                .initial_indent("• ".dim().into())
+                .subsequent_indent("  ".into()),
+        )
+    }
+}
+
+impl HistoryCell for AgentMarkdownCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines(width)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
