@@ -1773,7 +1773,7 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 }
 
 #[tokio::test]
-async fn active_goal_without_follow_up_sends_agent_turn_complete_notification() {
+async fn active_goal_without_follow_up_suppresses_agent_turn_complete_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.handle_server_notification(
@@ -1801,10 +1801,7 @@ async fn active_goal_without_follow_up_sends_agent_turn_complete_notification() 
         msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
     });
 
-    assert_matches!(
-        chat.pending_notification,
-        Some(Notification::AgentTurnComplete { ref response }) if response == "Still working"
-    );
+    assert_matches!(chat.pending_notification, None);
 }
 
 #[tokio::test]
