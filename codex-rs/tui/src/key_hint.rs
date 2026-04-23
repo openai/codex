@@ -33,13 +33,42 @@ impl KeyBinding {
     }
 
     pub fn is_press(&self, event: KeyEvent) -> bool {
-        self.key == event.code
-            && self.modifiers == event.modifiers
+        normalize_shifted_ascii_char(self.key, self.modifiers)
+            == normalize_shifted_ascii_char(event.code, event.modifiers)
             && (event.kind == KeyEventKind::Press || event.kind == KeyEventKind::Repeat)
     }
 
     pub(crate) const fn parts(&self) -> (KeyCode, KeyModifiers) {
         (self.key, self.modifiers)
+    }
+}
+
+fn normalize_shifted_ascii_char(
+    key: KeyCode,
+    mut modifiers: KeyModifiers,
+) -> (KeyCode, KeyModifiers) {
+    let KeyCode::Char(ch) = key else {
+        return (key, modifiers);
+    };
+    if modifiers.is_empty()
+        && let Some(ctrl_char) = c0_control_char_to_ctrl_char(ch)
+    {
+        return (KeyCode::Char(ctrl_char), KeyModifiers::CONTROL | modifiers);
+    }
+    if ch.is_ascii_uppercase() {
+        modifiers.insert(KeyModifiers::SHIFT);
+        return (KeyCode::Char(ch.to_ascii_lowercase()), modifiers);
+    }
+    (key, modifiers)
+}
+
+fn c0_control_char_to_ctrl_char(ch: char) -> Option<char> {
+    match ch {
+        '\u{0002}' => Some('b'),
+        '\u{0006}' => Some('f'),
+        '\u{000e}' => Some('n'),
+        '\u{0010}' => Some('p'),
+        _ => None,
     }
 }
 
@@ -168,6 +197,22 @@ mod tests {
         assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)));
         assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)));
         assert!(!bindings.is_pressed(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn shifted_letter_binding_matches_uppercase_char_events() {
+        let binding = shift(KeyCode::Char('a'));
+
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)));
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn ctrl_letter_binding_matches_c0_control_char_events() {
+        let binding = ctrl(KeyCode::Char('p'));
+
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE)));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::ALT)));
     }
 
     #[test]

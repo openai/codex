@@ -339,45 +339,6 @@ impl TextArea {
     }
 
     pub fn input_with_keymap(&mut self, event: KeyEvent, keymap: &EditorKeymap) {
-        match event {
-            // Some terminals (or configurations) send Control key chords as
-            // C0 control characters without reporting the CONTROL modifier.
-            // Keep these as compatibility fallbacks.
-            KeyEvent {
-                code: KeyCode::Char('\u{0002}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^B */ => {
-                self.move_cursor_left();
-                return;
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0006}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^F */ => {
-                self.move_cursor_right();
-                return;
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^P */ => {
-                self.move_cursor_up();
-                return;
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } /* ^N */ => {
-                self.move_cursor_down();
-                return;
-            }
-            _ => {}
-        }
-
         if keymap.insert_newline.is_pressed(event) {
             self.insert_str("\n");
             return;
@@ -482,6 +443,9 @@ impl TextArea {
         {
             // Insert plain characters (and Shift-modified). Do not insert when ALT is held,
             // because many terminals map Option/Meta combos to ALT+<char>.
+            if c.is_ascii_control() {
+                return;
+            }
             self.insert_str(&c.to_string());
             return;
         }
@@ -1869,6 +1833,37 @@ mod tests {
 
         // ^F (U+0006) should move right
         t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
+    fn c0_control_chars_respect_unbound_editor_movement() {
+        let mut t = ta_with("a\nb");
+        t.set_cursor(/*pos*/ 2);
+        let mut keymap = RuntimeKeymap::defaults().editor;
+        keymap.move_up.clear();
+
+        t.input_with_keymap(
+            KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE),
+            &keymap,
+        );
+
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
+    fn c0_control_chars_respect_remapped_editor_movement() {
+        let mut t = ta_with("a\nb");
+        t.set_cursor(/*pos*/ 0);
+        let mut keymap = RuntimeKeymap::defaults().editor;
+        keymap.move_up.clear();
+        keymap.move_down = vec![crate::key_hint::ctrl(KeyCode::Char('p'))];
+
+        t.input_with_keymap(
+            KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE),
+            &keymap,
+        );
+
         assert_eq!(t.cursor(), 2);
     }
 
