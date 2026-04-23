@@ -87,4 +87,5 @@ if ([string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
 }
 
 $stablePath = $stablePathEntries -join ';'
+Write-Host "Derived CODEX_BAZEL_WINDOWS_PATH: $stablePath"
 "CODEX_BAZEL_WINDOWS_PATH=$stablePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
