@@ -24,8 +24,6 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
@@ -101,19 +99,14 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     },
     ExternalClear,
     ThreadResumed,
-    #[cfg(test)]
-    ContinuationTurnStarted {
-        turn_id: String,
-    },
 }
 
 pub(crate) struct GoalRuntimeState {
     pub(crate) state_db: Mutex<Option<StateDbHandle>>,
     pub(crate) budget_limit_reported_goal_id: Mutex<Option<String>>,
-    turn_accounting_lock: Semaphore,
-    turn_accounting: Mutex<HashMap<String, GoalTurnAccountingSnapshot>>,
-    continuation_turn_ids: Mutex<HashSet<String>>,
-    pub(crate) wall_clock_accounting: GoalWallClockAccountingState,
+    accounting_lock: Semaphore,
+    accounting: Mutex<GoalAccountingSnapshot>,
+    continuation_turn_id: Mutex<Option<String>>,
     pub(crate) continuation_lock: Semaphore,
     pub(crate) continuation_suppressed: AtomicBool,
 }
@@ -128,10 +121,9 @@ impl GoalRuntimeState {
         Self {
             state_db: Mutex::new(None),
             budget_limit_reported_goal_id: Mutex::new(None),
-            turn_accounting_lock: Semaphore::new(/*permits*/ 1),
-            turn_accounting: Mutex::new(HashMap::new()),
-            continuation_turn_ids: Mutex::new(HashSet::new()),
-            wall_clock_accounting: GoalWallClockAccountingState::new(),
+            accounting_lock: Semaphore::new(/*permits*/ 1),
+            accounting: Mutex::new(GoalAccountingSnapshot::new()),
+            continuation_turn_id: Mutex::new(None),
             continuation_lock: Semaphore::new(/*permits*/ 1),
             continuation_suppressed: AtomicBool::new(false),
         }
@@ -139,23 +131,40 @@ impl GoalRuntimeState {
 }
 
 #[derive(Debug)]
+struct GoalAccountingSnapshot {
+    turn: Option<GoalTurnAccountingSnapshot>,
+    wall_clock: GoalWallClockAccountingSnapshot,
+}
+
+#[derive(Debug)]
 struct GoalTurnAccountingSnapshot {
+    turn_id: String,
     last_accounted_token_usage: TokenUsage,
     active_goal_id: Option<String>,
 }
 
 impl GoalRuntimeState {
-    async fn turn_accounting_permit(&self) -> anyhow::Result<SemaphorePermit<'_>> {
-        self.turn_accounting_lock
+    async fn accounting_permit(&self) -> anyhow::Result<SemaphorePermit<'_>> {
+        self.accounting_lock
             .acquire()
             .await
-            .context("goal turn accounting semaphore closed")
+            .context("goal accounting semaphore closed")
+    }
+}
+
+impl GoalAccountingSnapshot {
+    fn new() -> Self {
+        Self {
+            turn: None,
+            wall_clock: GoalWallClockAccountingSnapshot::new(),
+        }
     }
 }
 
 impl GoalTurnAccountingSnapshot {
-    fn new(token_usage: TokenUsage) -> Self {
+    fn new(turn_id: impl Into<String>, token_usage: TokenUsage) -> Self {
         Self {
+            turn_id: turn_id.into(),
             last_accounted_token_usage: token_usage,
             active_goal_id: None,
         }
@@ -203,41 +212,19 @@ impl GoalTurnAccountingSnapshot {
 }
 
 #[derive(Debug)]
-pub(crate) struct GoalWallClockAccountingState {
-    accounting_lock: Semaphore,
-    inner: Mutex<GoalWallClockAccountingSnapshot>,
-}
-
-#[derive(Debug)]
 struct GoalWallClockAccountingSnapshot {
     last_accounted_at: Instant,
     active_goal_id: Option<String>,
 }
 
-impl GoalWallClockAccountingState {
-    pub(crate) fn new() -> Self {
+impl GoalWallClockAccountingSnapshot {
+    fn new() -> Self {
         Self {
-            accounting_lock: Semaphore::new(/*permits*/ 1),
-            inner: Mutex::new(GoalWallClockAccountingSnapshot {
-                last_accounted_at: Instant::now(),
-                active_goal_id: None,
-            }),
+            last_accounted_at: Instant::now(),
+            active_goal_id: None,
         }
     }
 
-    async fn lock(&self) -> tokio::sync::MutexGuard<'_, GoalWallClockAccountingSnapshot> {
-        self.inner.lock().await
-    }
-
-    async fn accounting_permit(&self) -> anyhow::Result<SemaphorePermit<'_>> {
-        self.accounting_lock
-            .acquire()
-            .await
-            .context("goal wall-clock accounting semaphore closed")
-    }
-}
-
-impl GoalWallClockAccountingSnapshot {
     fn time_delta_since_last_accounting(&self) -> i64 {
         let last = self.last_accounted_at;
         i64::try_from(last.elapsed().as_secs()).unwrap_or(i64::MAX)
@@ -351,12 +338,6 @@ impl Session {
             GoalRuntimeEvent::ThreadResumed => Box::pin(async move {
                 self.activate_paused_thread_goal_after_resume().await?;
                 self.maybe_continue_goal_if_idle_runtime().await;
-                Ok(())
-            }),
-            #[cfg(test)]
-            GoalRuntimeEvent::ContinuationTurnStarted { turn_id } => Box::pin(async move {
-                self.mark_thread_goal_continuation_turn_started(turn_id)
-                    .await;
                 Ok(())
             }),
         }
@@ -481,9 +462,9 @@ impl Session {
                     .is_some_and(|status| status != codex_state::ThreadGoalStatus::Active));
         if newly_active_goal {
             let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-            self.mark_active_goal_accounting_for_turns(
+            self.mark_active_goal_accounting(
                 goal_id,
-                [turn_context.sub_id.clone()],
+                Some(turn_context.sub_id.clone()),
                 current_token_usage,
             )
             .await;
@@ -548,19 +529,12 @@ impl Session {
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
 
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-        {
-            let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-            let turn_accounting = turn_accounting
-                .entry(turn_context.sub_id.clone())
-                .or_insert_with(|| GoalTurnAccountingSnapshot::new(current_token_usage.clone()));
-            turn_accounting.reset_baseline(current_token_usage);
-            turn_accounting.mark_active_goal(goal_id.clone());
-        }
-        self.goal_runtime
-            .wall_clock_accounting
-            .lock()
-            .await
-            .mark_active_goal(goal_id);
+        self.mark_active_goal_accounting(
+            goal_id,
+            Some(turn_context.sub_id.clone()),
+            current_token_usage,
+        )
+        .await;
 
         self.send_event(
             turn_context,
@@ -591,24 +565,25 @@ impl Session {
                             Ok(Some(goal))
                                 if goal.status == codex_state::ThreadGoalStatus::Active =>
                             {
-                                let turn_ids = self
-                                    .active_turn_contexts()
+                                let turn_id = self
+                                    .active_turn_context()
                                     .await
-                                    .into_iter()
                                     .map(|turn_context| turn_context.sub_id.clone());
                                 let current_token_usage =
                                     self.total_token_usage().await.unwrap_or_default();
-                                self.mark_active_goal_accounting_for_turns(
+                                self.mark_active_goal_accounting(
                                     goal.goal_id,
-                                    turn_ids,
+                                    turn_id,
                                     current_token_usage,
                                 )
                                 .await;
                             }
                             Ok(Some(_)) | Ok(None) => {}
-                            Err(err) => tracing::warn!(
-                                "failed to read active goal after external set: {err}"
-                            ),
+                            Err(err) => {
+                                tracing::warn!(
+                                    "failed to read active goal after external set: {err}"
+                                );
+                            }
                         }
                     }
                     Err(err) => {
@@ -619,7 +594,7 @@ impl Session {
                 self.maybe_continue_goal_if_idle_runtime().await;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
-                if self.active_turn_contexts().await.is_empty() {
+                if self.active_turn_context().await.is_none() {
                     self.clear_stopped_thread_goal_runtime_state().await;
                 }
             }
@@ -632,75 +607,52 @@ impl Session {
     async fn clear_stopped_thread_goal_runtime_state(&self) {
         self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-        {
-            let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-            for turn_accounting in turn_accounting.values_mut() {
-                turn_accounting.clear_active_goal();
-            }
+        let mut accounting = self.goal_runtime.accounting.lock().await;
+        if let Some(turn) = accounting.turn.as_mut() {
+            turn.clear_active_goal();
         }
-        self.goal_runtime
-            .wall_clock_accounting
-            .lock()
-            .await
-            .clear_active_goal();
+        accounting.wall_clock.clear_active_goal();
     }
 
     async fn clear_active_goal_accounting(&self, turn_context: &TurnContext) {
-        if let Some(turn_accounting) = self
-            .goal_runtime
-            .turn_accounting
-            .lock()
-            .await
-            .get_mut(&turn_context.sub_id)
+        let mut accounting = self.goal_runtime.accounting.lock().await;
+        if let Some(turn) = accounting.turn.as_mut()
+            && turn.turn_id == turn_context.sub_id
         {
-            turn_accounting.clear_active_goal();
+            turn.clear_active_goal();
         }
-        self.goal_runtime
-            .wall_clock_accounting
-            .lock()
-            .await
-            .clear_active_goal();
+        accounting.wall_clock.clear_active_goal();
     }
 
-    async fn mark_active_goal_accounting_for_turns(
+    async fn mark_active_goal_accounting(
         &self,
         goal_id: String,
-        turn_ids: impl IntoIterator<Item = String>,
+        turn_id: Option<String>,
         token_usage: TokenUsage,
     ) {
-        {
-            let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-            for turn_id in turn_ids {
-                let turn_accounting = turn_accounting
-                    .entry(turn_id)
-                    .or_insert_with(|| GoalTurnAccountingSnapshot::new(token_usage.clone()));
-                turn_accounting.reset_baseline(token_usage.clone());
-                turn_accounting.mark_active_goal(goal_id.clone());
+        let mut accounting = self.goal_runtime.accounting.lock().await;
+        if let Some(turn_id) = turn_id {
+            match accounting.turn.as_mut() {
+                Some(turn) if turn.turn_id == turn_id => {
+                    turn.reset_baseline(token_usage);
+                    turn.mark_active_goal(goal_id.clone());
+                }
+                _ => {
+                    let mut turn = GoalTurnAccountingSnapshot::new(turn_id, token_usage);
+                    turn.mark_active_goal(goal_id.clone());
+                    accounting.turn = Some(turn);
+                }
             }
         }
-        self.goal_runtime
-            .wall_clock_accounting
-            .lock()
-            .await
-            .mark_active_goal(goal_id);
+        accounting.wall_clock.mark_active_goal(goal_id);
     }
 
     async fn active_turn_context(&self) -> Option<Arc<TurnContext>> {
-        self.active_turn_contexts().await.into_iter().next()
-    }
-
-    async fn active_turn_contexts(&self) -> Vec<Arc<TurnContext>> {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
-            .map(|active_turn| {
-                active_turn
-                    .tasks
-                    .values()
-                    .map(|task| Arc::clone(&task.turn_context))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .and_then(|active_turn| active_turn.tasks.values().next())
+            .map(|task| Arc::clone(&task.turn_context))
     }
 
     async fn mark_thread_goal_turn_started(
@@ -708,19 +660,20 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: TokenUsage,
     ) {
-        if !self
+        if self
             .goal_runtime
-            .continuation_turn_ids
+            .continuation_turn_id
             .lock()
             .await
-            .contains(&turn_context.sub_id)
+            .as_ref()
+            .is_none_or(|turn_id| turn_id != &turn_context.sub_id)
         {
             self.reset_thread_goal_continuation_suppression();
         }
-        self.goal_runtime.turn_accounting.lock().await.insert(
+        self.goal_runtime.accounting.lock().await.turn = Some(GoalTurnAccountingSnapshot::new(
             turn_context.sub_id.clone(),
-            GoalTurnAccountingSnapshot::new(token_usage),
-        );
+            token_usage,
+        ));
 
         if !self.enabled(Feature::Goals) {
             return;
@@ -745,24 +698,20 @@ impl Session {
                         | codex_state::ThreadGoalStatus::BudgetLimited
                 ) =>
             {
-                self.goal_runtime
-                    .turn_accounting
-                    .lock()
-                    .await
-                    .entry(turn_context.sub_id.clone())
-                    .or_insert_with(|| GoalTurnAccountingSnapshot::new(TokenUsage::default()))
-                    .mark_active_goal(goal.goal_id.clone());
-                self.goal_runtime
-                    .wall_clock_accounting
-                    .lock()
-                    .await
-                    .mark_active_goal(goal.goal_id);
+                let mut accounting = self.goal_runtime.accounting.lock().await;
+                if let Some(turn) = accounting.turn.as_mut()
+                    && turn.turn_id == turn_context.sub_id
+                {
+                    turn.mark_active_goal(goal.goal_id.clone());
+                }
+                accounting.wall_clock.mark_active_goal(goal.goal_id);
             }
             Ok(Some(_)) | Ok(None) => {
                 self.goal_runtime
-                    .wall_clock_accounting
+                    .accounting
                     .lock()
                     .await
+                    .wall_clock
                     .clear_active_goal();
             }
             Err(err) => {
@@ -778,19 +727,17 @@ impl Session {
     }
 
     async fn mark_thread_goal_continuation_turn_started(&self, turn_id: String) {
-        self.goal_runtime
-            .continuation_turn_ids
-            .lock()
-            .await
-            .insert(turn_id);
+        *self.goal_runtime.continuation_turn_id.lock().await = Some(turn_id);
     }
 
     async fn take_thread_goal_continuation_turn(&self, turn_id: &str) -> bool {
-        self.goal_runtime
-            .continuation_turn_ids
-            .lock()
-            .await
-            .remove(turn_id)
+        let mut continuation_turn_id = self.goal_runtime.continuation_turn_id.lock().await;
+        if continuation_turn_id.as_deref() == Some(turn_id) {
+            *continuation_turn_id = None;
+            true
+        } else {
+            false
+        }
     }
 
     async fn finish_thread_goal_turn(
@@ -817,11 +764,14 @@ impl Session {
                 .store(true, Ordering::SeqCst);
         }
         if turn_completed {
-            self.goal_runtime
-                .turn_accounting
-                .lock()
-                .await
-                .remove(&turn_context.sub_id);
+            let mut accounting = self.goal_runtime.accounting.lock().await;
+            if accounting
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.turn_id == turn_context.sub_id)
+            {
+                accounting.turn = None;
+            }
         }
     }
 
@@ -839,11 +789,14 @@ impl Session {
             {
                 tracing::warn!("failed to account thread goal progress after abort: {err}");
             }
-            self.goal_runtime
-                .turn_accounting
-                .lock()
-                .await
-                .remove(&turn_context.sub_id);
+            let mut accounting = self.goal_runtime.accounting.lock().await;
+            if accounting
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.turn_id == turn_context.sub_id)
+            {
+                accounting.turn = None;
+            }
         }
 
         if reason == TurnAbortReason::Interrupted
@@ -867,32 +820,25 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        let _turn_accounting_permit = self.goal_runtime.turn_accounting_permit().await?;
-        let _wall_clock_accounting_permit = self
-            .goal_runtime
-            .wall_clock_accounting
-            .accounting_permit()
-            .await?;
+        let _accounting_permit = self.goal_runtime.accounting_permit().await?;
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-        let (token_delta, expected_goal_id) = {
-            let turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-            let Some(turn_accounting) = turn_accounting.get(&turn_context.sub_id) else {
+        let (token_delta, expected_goal_id, time_delta_seconds) = {
+            let accounting = self.goal_runtime.accounting.lock().await;
+            let Some(turn) = accounting
+                .turn
+                .as_ref()
+                .filter(|turn| turn.turn_id == turn_context.sub_id)
+            else {
                 return Ok(());
             };
-            if !turn_accounting.active_this_turn() {
+            if !turn.active_this_turn() {
                 return Ok(());
             }
             (
-                turn_accounting.token_delta_since_last_accounting(&current_token_usage),
-                turn_accounting.active_goal_id(),
+                turn.token_delta_since_last_accounting(&current_token_usage),
+                turn.active_goal_id(),
+                accounting.wall_clock.time_delta_since_last_accounting(),
             )
-        };
-        let time_delta_seconds = {
-            self.goal_runtime
-                .wall_clock_accounting
-                .lock()
-                .await
-                .time_delta_since_last_accounting()
         };
         if time_delta_seconds == 0 && token_delta <= 0 {
             return Ok(());
@@ -923,20 +869,20 @@ impl Session {
                     | codex_state::ThreadGoalStatus::Complete => true,
                 };
                 {
-                    let mut turn_accounting = self.goal_runtime.turn_accounting.lock().await;
-                    if let Some(turn_accounting) = turn_accounting.get_mut(&turn_context.sub_id) {
-                        turn_accounting.mark_accounted(current_token_usage);
+                    let mut accounting = self.goal_runtime.accounting.lock().await;
+                    if let Some(turn) = accounting
+                        .turn
+                        .as_mut()
+                        .filter(|turn| turn.turn_id == turn_context.sub_id)
+                    {
+                        turn.mark_accounted(current_token_usage);
                         if clear_active_goal {
-                            turn_accounting.clear_active_goal();
+                            turn.clear_active_goal();
                         }
                     }
-                }
-                {
-                    let mut wall_clock_accounting =
-                        self.goal_runtime.wall_clock_accounting.lock().await;
-                    wall_clock_accounting.mark_accounted();
+                    accounting.wall_clock.mark_accounted();
                     if clear_active_goal {
-                        wall_clock_accounting.clear_active_goal();
+                        accounting.wall_clock.clear_active_goal();
                     }
                 }
                 goal
@@ -998,16 +944,12 @@ impl Session {
         state_db: &StateDbHandle,
         mode: codex_state::ThreadGoalAccountingMode,
     ) -> anyhow::Result<Option<ThreadGoal>> {
-        let _accounting_permit = self
-            .goal_runtime
-            .wall_clock_accounting
-            .accounting_permit()
-            .await?;
+        let _accounting_permit = self.goal_runtime.accounting_permit().await?;
         let (time_delta_seconds, expected_goal_id) = {
-            let wall_clock_accounting = self.goal_runtime.wall_clock_accounting.lock().await;
+            let accounting = self.goal_runtime.accounting.lock().await;
             (
-                wall_clock_accounting.time_delta_since_last_accounting(),
-                wall_clock_accounting.active_goal_id(),
+                accounting.wall_clock.time_delta_since_last_accounting(),
+                accounting.wall_clock.active_goal_id(),
             )
         };
         if time_delta_seconds == 0 {
@@ -1026,19 +968,19 @@ impl Session {
         {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
                 self.goal_runtime
-                    .wall_clock_accounting
+                    .accounting
                     .lock()
                     .await
+                    .wall_clock
                     .mark_accounted();
                 let goal = protocol_goal_from_state(goal);
                 Ok(Some(goal))
             }
             codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
                 {
-                    let mut wall_clock_accounting =
-                        self.goal_runtime.wall_clock_accounting.lock().await;
-                    wall_clock_accounting.reset_baseline();
-                    wall_clock_accounting.clear_active_goal();
+                    let mut accounting = self.goal_runtime.accounting.lock().await;
+                    accounting.wall_clock.reset_baseline();
+                    accounting.wall_clock.clear_active_goal();
                 }
                 if let Some(goal) = goal {
                     let goal = protocol_goal_from_state(goal);
@@ -1086,9 +1028,10 @@ impl Session {
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         self.goal_runtime
-            .wall_clock_accounting
+            .accounting
             .lock()
             .await
+            .wall_clock
             .clear_active_goal();
         self.send_event_raw(Event {
             id: event_id,
@@ -1125,9 +1068,10 @@ impl Session {
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
             self.goal_runtime
-                .wall_clock_accounting
+                .accounting
                 .lock()
                 .await
+                .wall_clock
                 .clear_active_goal();
             return Ok(false);
         };
@@ -1136,15 +1080,17 @@ impl Session {
             let is_active = goal.status == codex_state::ThreadGoalStatus::Active;
             if is_active {
                 self.goal_runtime
-                    .wall_clock_accounting
+                    .accounting
                     .lock()
                     .await
+                    .wall_clock
                     .mark_active_goal(goal_id);
             } else {
                 self.goal_runtime
-                    .wall_clock_accounting
+                    .accounting
                     .lock()
                     .await
+                    .wall_clock
                     .clear_active_goal();
             }
             return Ok(false);
@@ -1163,9 +1109,10 @@ impl Session {
         else {
             *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
             self.goal_runtime
-                .wall_clock_accounting
+                .accounting
                 .lock()
                 .await
+                .wall_clock
                 .clear_active_goal();
             return Ok(false);
         };
@@ -1174,9 +1121,10 @@ impl Session {
         self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
         self.goal_runtime
-            .wall_clock_accounting
+            .accounting
             .lock()
             .await
+            .wall_clock
             .mark_active_goal(goal_id);
         self.send_event_raw(Event {
             id: uuid::Uuid::new_v4().to_string(),
