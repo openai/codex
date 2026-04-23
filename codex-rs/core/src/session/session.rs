@@ -1,6 +1,5 @@
 use super::*;
 use crate::config::ConstraintError;
-use tokio::sync::OnceCell;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -361,7 +360,7 @@ impl Session {
             {
                 local_store.state_db().await
             } else {
-                state_db::init(&config).await
+                None
             }
         }
         .instrument(info_span!(
@@ -720,10 +719,6 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            let live_thread_cell = OnceCell::new();
-            if let Some(live_thread) = live_thread_init.as_ref() {
-                let _ = live_thread_cell.set(live_thread.clone());
-            }
             let services = SessionServices {
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
@@ -764,7 +759,7 @@ impl Session {
                 network_proxy,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
-                live_thread: live_thread_cell,
+                live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),

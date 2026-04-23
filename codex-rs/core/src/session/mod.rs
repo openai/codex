@@ -1036,7 +1036,7 @@ impl Session {
     }
 
     pub(crate) fn live_thread(&self) -> Option<&LiveThread> {
-        self.services.live_thread.get()
+        self.services.live_thread.as_ref()
     }
 
     /// Flush rollout writes and return the final durability-barrier result.
