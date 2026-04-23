@@ -3526,6 +3526,11 @@ pub struct ThreadForkParams {
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// When true, return only thread metadata and live fork state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after forking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_turns: bool,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/fork.persistFullHistory")]
