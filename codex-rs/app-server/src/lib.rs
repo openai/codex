@@ -556,12 +556,8 @@ pub async fn run_main_with_transport(
             .await?;
         }
         AppServerTransport::UnixSocket { socket_path } => {
-            let control_socket_path = match socket_path {
-                Some(socket_path) => socket_path.clone(),
-                None => app_server_control_socket_path(&config.codex_home)?,
-            };
             let accept_handle = start_control_socket_acceptor(
-                control_socket_path,
+                socket_path.clone(),
                 transport_event_tx.clone(),
                 transport_shutdown_token.clone(),
             )

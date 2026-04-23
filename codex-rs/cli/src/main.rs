@@ -1750,6 +1750,12 @@ mod tests {
         app_server
     }
 
+    fn default_app_server_socket_path() -> AbsolutePathBuf {
+        let codex_home = find_codex_home().expect("codex home");
+        codex_app_server::app_server_control_socket_path(&codex_home)
+            .expect("default app-server socket path")
+    }
+
     #[test]
     fn debug_prompt_input_parses_prompt_and_images() {
         let cli = MultitoolCli::try_parse_from([
@@ -2231,7 +2237,9 @@ mod tests {
             app_server_from_args(["codex", "app-server", "--listen", "unix://"].as_ref());
         assert_eq!(
             app_server.listen,
-            codex_app_server::AppServerTransport::UnixSocket { socket_path: None }
+            codex_app_server::AppServerTransport::UnixSocket {
+                socket_path: default_app_server_socket_path()
+            }
         );
     }
 
@@ -2243,10 +2251,8 @@ mod tests {
         assert_eq!(
             app_server.listen,
             codex_app_server::AppServerTransport::UnixSocket {
-                socket_path: Some(
-                    AbsolutePathBuf::from_absolute_path("/tmp/codex.sock")
-                        .expect("absolute path should parse")
-                )
+                socket_path: AbsolutePathBuf::from_absolute_path("/tmp/codex.sock")
+                    .expect("absolute path should parse")
             }
         );
     }

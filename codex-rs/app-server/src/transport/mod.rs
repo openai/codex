@@ -10,6 +10,7 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use codex_core::config::find_codex_home;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -34,6 +35,8 @@ pub(crate) const CHANNEL_CAPACITY: usize = 128;
 mod remote_control;
 mod stdio;
 mod unix_socket;
+#[cfg(test)]
+mod unix_socket_tests;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
@@ -56,12 +59,8 @@ pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<Abso
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
     Stdio,
-    UnixSocket {
-        socket_path: Option<AbsolutePathBuf>,
-    },
-    WebSocket {
-        bind_address: SocketAddr,
-    },
+    UnixSocket { socket_path: AbsolutePathBuf },
+    WebSocket { bind_address: SocketAddr },
     Off,
 }
 
@@ -106,16 +105,25 @@ impl AppServerTransport {
 
         if let Some(raw_socket_path) = listen_url.strip_prefix("unix://") {
             let socket_path = if raw_socket_path.is_empty() {
-                None
+                let codex_home = find_codex_home().map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: format!("failed to resolve CODEX_HOME: {err}"),
+                    }
+                })?;
+                app_server_control_socket_path(&codex_home).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
             } else {
-                Some(
-                    AbsolutePathBuf::relative_to_current_dir(raw_socket_path).map_err(|err| {
-                        AppServerTransportParseError::InvalidUnixSocketPath {
-                            listen_url: listen_url.to_string(),
-                            message: err.to_string(),
-                        }
-                    })?,
-                )
+                AbsolutePathBuf::relative_to_current_dir(raw_socket_path).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
             };
             return Ok(Self::UnixSocket { socket_path });
         }
@@ -476,37 +484,6 @@ mod tests {
         assert_eq!(
             AppServerTransport::from_listen_url("off"),
             Ok(AppServerTransport::Off)
-        );
-    }
-
-    #[test]
-    fn listen_unix_socket_parses_as_unix_socket_transport() {
-        assert_eq!(
-            AppServerTransport::from_listen_url("unix://"),
-            Ok(AppServerTransport::UnixSocket { socket_path: None })
-        );
-    }
-
-    #[test]
-    fn listen_unix_socket_accepts_absolute_custom_path() {
-        assert_eq!(
-            AppServerTransport::from_listen_url("unix:///tmp/codex.sock"),
-            Ok(AppServerTransport::UnixSocket {
-                socket_path: Some(absolute_path("/tmp/codex.sock"))
-            })
-        );
-    }
-
-    #[test]
-    fn listen_unix_socket_accepts_relative_custom_path() {
-        assert_eq!(
-            AppServerTransport::from_listen_url("unix://codex.sock"),
-            Ok(AppServerTransport::UnixSocket {
-                socket_path: Some(
-                    AbsolutePathBuf::relative_to_current_dir("codex.sock")
-                        .expect("relative path should resolve")
-                )
-            })
         );
     }
 
