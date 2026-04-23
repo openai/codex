@@ -348,6 +348,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windows_store_package_path(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -355,6 +356,10 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn is_windows_store_package_path(path: &Path) -> bool {
+    canonical_path_key(path).contains("/program files/windowsapps/")
 }
 
 fn gather_legacy_full_read_roots(
@@ -1287,6 +1292,16 @@ mod tests {
         let roots = super::filter_sensitive_write_roots(roots, &codex_home);
 
         assert_eq!(vec![documents], roots);
+    }
+
+    #[test]
+    fn windows_store_package_paths_are_excluded_from_helper_read_roots() {
+        assert!(super::is_windows_store_package_path(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__abc123\app\resources"
+        )));
+        assert!(!super::is_windows_store_package_path(Path::new(
+            r"C:\Users\example\.codex\.sandbox-bin"
+        )));
     }
 
     #[test]
