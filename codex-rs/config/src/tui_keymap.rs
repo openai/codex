@@ -85,6 +85,7 @@ impl KeybindingsSpec {
 
 /// Global keybindings. These are used when a context does not define an override.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiGlobalKeymap {
     /// Open the transcript overlay.
@@ -107,6 +108,7 @@ pub struct TuiGlobalKeymap {
 
 /// Chat context keybindings. These override corresponding `global` actions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiChatKeymap {
     /// In an empty composer, begin or advance "edit previous message" flow.
@@ -117,6 +119,7 @@ pub struct TuiChatKeymap {
 
 /// Composer context keybindings. These override corresponding `global` actions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiComposerKeymap {
     /// Submit the current composer draft.
@@ -129,6 +132,7 @@ pub struct TuiComposerKeymap {
 
 /// Editor context keybindings for text editing inside text areas.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiEditorKeymap {
     /// Insert a newline in the editor.
@@ -167,6 +171,7 @@ pub struct TuiEditorKeymap {
 
 /// Pager context keybindings for transcript and static overlays.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiPagerKeymap {
     /// Scroll up by one row.
@@ -199,6 +204,7 @@ pub struct TuiPagerKeymap {
 
 /// List selection context keybindings for popup-style selectable lists.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiListKeymap {
     /// Move list selection up.
@@ -213,16 +219,21 @@ pub struct TuiListKeymap {
 
 /// Approval overlay keybindings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiApprovalKeymap {
     /// Open the full-screen approval details view.
     pub open_fullscreen: Option<KeybindingsSpec>,
+    /// Open the thread that requested approval when shown from another thread.
+    pub open_thread: Option<KeybindingsSpec>,
     /// Approve the primary option.
     pub approve: Option<KeybindingsSpec>,
     /// Approve for session when that option exists.
     pub approve_for_session: Option<KeybindingsSpec>,
     /// Approve with exec-policy prefix when that option exists.
     pub approve_for_prefix: Option<KeybindingsSpec>,
+    /// Deny without providing follow-up guidance.
+    pub deny: Option<KeybindingsSpec>,
     /// Decline and provide corrective guidance.
     pub decline: Option<KeybindingsSpec>,
     /// Cancel an elicitation request.
@@ -419,6 +430,20 @@ mod tests {
         assert!(
             result.is_err(),
             "expected error for action at keymap root, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn misspelled_action_under_context_is_rejected() {
+        let toml_input = r#"
+            [global]
+            open_transcrip = "ctrl-x"
+        "#;
+        let err = toml::from_str::<TuiKeymap>(toml_input)
+            .expect_err("expected unknown action under context");
+        assert!(
+            err.to_string().contains("open_transcrip"),
+            "expected error to mention misspelled field, got: {err}"
         );
     }
 

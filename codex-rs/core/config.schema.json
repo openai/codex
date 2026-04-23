@@ -2197,7 +2197,9 @@
               "approve_for_session": null,
               "cancel": null,
               "decline": null,
-              "open_fullscreen": null
+              "deny": null,
+              "open_fullscreen": null,
+              "open_thread": null
             },
             "chat": {
               "confirm_edit_previous_message": null,
@@ -2369,6 +2371,14 @@
           ],
           "description": "Decline and provide corrective guidance."
         },
+        "deny": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Deny without providing follow-up guidance."
+        },
         "open_fullscreen": {
           "allOf": [
             {
@@ -2376,6 +2386,14 @@
             }
           ],
           "description": "Open the full-screen approval details view."
+        },
+        "open_thread": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the thread that requested approval when shown from another thread."
         }
       },
       "type": "object"
@@ -2656,7 +2674,9 @@
             "approve_for_session": null,
             "cancel": null,
             "decline": null,
-            "open_fullscreen": null
+            "deny": null,
+            "open_fullscreen": null,
+            "open_thread": null
           }
         },
         "chat": {

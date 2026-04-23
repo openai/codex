@@ -154,6 +154,7 @@ use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
+use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
@@ -397,6 +398,9 @@ pub(crate) struct ChatComposer {
     footer_external_editor_key: Option<KeyBinding>,
     footer_edit_previous_key: Option<KeyBinding>,
     footer_show_transcript_key: Option<KeyBinding>,
+    footer_insert_newline_key: Option<KeyBinding>,
+    footer_queue_key: Option<KeyBinding>,
+    footer_toggle_shortcuts_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -483,6 +487,8 @@ impl ChatComposer {
         config: ChatComposerConfig,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
+        let default_keymap = RuntimeKeymap::defaults();
+        let default_editor_keymap = default_keymap.editor.clone();
 
         let mut this = Self {
             textarea: TextArea::new(),
@@ -550,10 +556,16 @@ impl ChatComposer {
                 key_hint::plain(KeyCode::Char('?')),
                 key_hint::shift(KeyCode::Char('?')),
             ],
-            editor_keymap: RuntimeKeymap::defaults().editor,
+            editor_keymap: default_editor_keymap,
             footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
             footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
             footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            footer_insert_newline_key: footer_insert_newline_key(
+                &default_keymap.editor.insert_newline,
+                use_shift_enter_hint,
+            ),
+            footer_queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            footer_toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -642,6 +654,10 @@ impl ChatComposer {
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
         self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
         self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
+        self.footer_insert_newline_key =
+            footer_insert_newline_key(&keymap.editor.insert_newline, self.use_shift_enter_hint);
+        self.footer_queue_key = primary_binding(&keymap.composer.queue);
+        self.footer_toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -3235,6 +3251,14 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            key_hints: FooterKeyHints {
+                toggle_shortcuts: self.footer_toggle_shortcuts_key,
+                queue: self.footer_queue_key,
+                insert_newline: self.footer_insert_newline_key,
+                external_editor: self.footer_external_editor_key,
+                edit_previous: self.footer_edit_previous_key,
+                show_transcript: self.footer_show_transcript_key,
+            },
             active_agent_label: self.active_agent_label.clone(),
         }
     }
@@ -3794,6 +3818,23 @@ impl ChatComposer {
     }
 }
 
+fn footer_insert_newline_key(
+    bindings: &[KeyBinding],
+    enhanced_keys_supported: bool,
+) -> Option<KeyBinding> {
+    let shift_enter = key_hint::shift(KeyCode::Enter);
+    if enhanced_keys_supported && bindings.contains(&shift_enter) {
+        return Some(shift_enter);
+    }
+
+    let plain_enter = key_hint::plain(KeyCode::Enter);
+    bindings
+        .iter()
+        .copied()
+        .find(|binding| *binding != plain_enter)
+        .or_else(|| bindings.first().copied())
+}
+
 #[cfg(not(target_os = "linux"))]
 impl ChatComposer {
     pub fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
@@ -4059,6 +4100,7 @@ impl ChatComposer {
                                     show_cycle_hint,
                                     show_shortcuts_hint,
                                     show_queue_hint,
+                                    footer_props.key_hints,
                                 ))
                             }
                             FooterMode::EscHint

@@ -135,9 +135,11 @@ pub(crate) struct ListKeymap {
 #[derive(Clone, Debug)]
 pub(crate) struct ApprovalKeymap {
     pub(crate) open_fullscreen: Vec<KeyBinding>,
+    pub(crate) open_thread: Vec<KeyBinding>,
     pub(crate) approve: Vec<KeyBinding>,
     pub(crate) approve_for_session: Vec<KeyBinding>,
     pub(crate) approve_for_prefix: Vec<KeyBinding>,
+    pub(crate) deny: Vec<KeyBinding>,
     pub(crate) decline: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
 }
@@ -348,9 +350,11 @@ impl RuntimeKeymap {
 
         let approval = ApprovalKeymap {
             open_fullscreen: resolve_local!(keymap, defaults, approval, open_fullscreen),
+            open_thread: resolve_local!(keymap, defaults, approval, open_thread),
             approve: resolve_local!(keymap, defaults, approval, approve),
             approve_for_session: resolve_local!(keymap, defaults, approval, approve_for_session),
             approve_for_prefix: resolve_local!(keymap, defaults, approval, approve_for_prefix),
+            deny: resolve_local!(keymap, defaults, approval, deny),
             decline: resolve_local!(keymap, defaults, approval, decline),
             cancel: resolve_local!(keymap, defaults, approval, cancel),
         };
@@ -429,7 +433,10 @@ impl RuntimeKeymap {
                         KeyModifiers::CONTROL | KeyModifiers::ALT,
                     ))
                 ],
-                delete_forward_word: default_bindings![alt(KeyCode::Delete)],
+                delete_forward_word: default_bindings![
+                    alt(KeyCode::Delete),
+                    alt(KeyCode::Char('d'))
+                ],
                 kill_line_start: default_bindings![ctrl(KeyCode::Char('u'))],
                 kill_line_end: default_bindings![ctrl(KeyCode::Char('k'))],
                 yank: default_bindings![ctrl(KeyCode::Char('y'))],
@@ -479,9 +486,11 @@ impl RuntimeKeymap {
                         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
                     ))
                 ],
+                open_thread: default_bindings![plain(KeyCode::Char('o'))],
                 approve: default_bindings![plain(KeyCode::Char('y'))],
                 approve_for_session: default_bindings![plain(KeyCode::Char('a'))],
                 approve_for_prefix: default_bindings![plain(KeyCode::Char('p'))],
+                deny: default_bindings![plain(KeyCode::Char('d'))],
                 decline: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Char('n'))],
                 cancel: default_bindings![plain(KeyCode::Char('c'))],
             },
@@ -536,6 +545,41 @@ impl RuntimeKeymap {
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
                 ),
+            ],
+        )?;
+
+        validate_no_shadow(
+            "app",
+            [
+                ("open_transcript", self.app.open_transcript.as_slice()),
+                (
+                    "open_external_editor",
+                    self.app.open_external_editor.as_slice(),
+                ),
+                ("copy", self.app.copy.as_slice()),
+            ],
+            [
+                ("list.move_up", self.list.move_up.as_slice()),
+                ("list.move_down", self.list.move_down.as_slice()),
+                ("list.accept", self.list.accept.as_slice()),
+                ("list.cancel", self.list.cancel.as_slice()),
+                (
+                    "approval.open_fullscreen",
+                    self.approval.open_fullscreen.as_slice(),
+                ),
+                ("approval.open_thread", self.approval.open_thread.as_slice()),
+                ("approval.approve", self.approval.approve.as_slice()),
+                (
+                    "approval.approve_for_session",
+                    self.approval.approve_for_session.as_slice(),
+                ),
+                (
+                    "approval.approve_for_prefix",
+                    self.approval.approve_for_prefix.as_slice(),
+                ),
+                ("approval.deny", self.approval.deny.as_slice()),
+                ("approval.decline", self.approval.decline.as_slice()),
+                ("approval.cancel", self.approval.cancel.as_slice()),
             ],
         )?;
 
@@ -606,6 +650,7 @@ impl RuntimeKeymap {
             "approval",
             [
                 ("open_fullscreen", self.approval.open_fullscreen.as_slice()),
+                ("open_thread", self.approval.open_thread.as_slice()),
                 ("approve", self.approval.approve.as_slice()),
                 (
                     "approve_for_session",
@@ -615,10 +660,56 @@ impl RuntimeKeymap {
                     "approve_for_prefix",
                     self.approval.approve_for_prefix.as_slice(),
                 ),
+                ("deny", self.approval.deny.as_slice()),
                 ("decline", self.approval.decline.as_slice()),
                 ("cancel", self.approval.cancel.as_slice()),
             ],
         )?;
+
+        let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
+        for (action, bindings) in [
+            ("list.move_up", self.list.move_up.as_slice()),
+            ("list.move_down", self.list.move_down.as_slice()),
+            ("list.accept", self.list.accept.as_slice()),
+            ("list.cancel", self.list.cancel.as_slice()),
+            (
+                "approval.open_fullscreen",
+                self.approval.open_fullscreen.as_slice(),
+            ),
+            ("approval.open_thread", self.approval.open_thread.as_slice()),
+            ("approval.approve", self.approval.approve.as_slice()),
+            (
+                "approval.approve_for_session",
+                self.approval.approve_for_session.as_slice(),
+            ),
+            (
+                "approval.approve_for_prefix",
+                self.approval.approve_for_prefix.as_slice(),
+            ),
+            ("approval.deny", self.approval.deny.as_slice()),
+            ("approval.decline", self.approval.decline.as_slice()),
+            ("approval.cancel", self.approval.cancel.as_slice()),
+        ] {
+            for binding in bindings {
+                let key = binding.parts();
+                if let Some(previous) = seen.insert(key, action) {
+                    // Approval overlays intentionally reserve Esc as a stable
+                    // cancellation path even though decline options may also
+                    // display it in contexts where that is safe.
+                    if previous == "list.cancel"
+                        && action == "approval.decline"
+                        && key == (KeyCode::Esc, KeyModifiers::NONE)
+                    {
+                        continue;
+                    }
+                    return Err(format!(
+                        "Ambiguous approval overlay keymap bindings: `{previous}` and `{action}` use the same key. \
+Set unique keys in `~/.codex/config.toml` and retry.\n\
+See the Codex keymap documentation for supported actions and examples."
+                    ));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -639,6 +730,32 @@ fn validate_unique<const N: usize>(
             if let Some(previous) = seen.insert(key, action) {
                 return Err(format!(
                     "Ambiguous `tui.keymap.{context}` bindings: `{previous}` and `{action}` use the same key. \
+Set unique keys in `~/.codex/config.toml` and retry.\n\
+See the Codex keymap documentation for supported actions and examples."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_no_shadow<const N: usize, const M: usize>(
+    context: &str,
+    primary: [(&'static str, &[KeyBinding]); N],
+    shadowed: [(&'static str, &[KeyBinding]); M],
+) -> Result<(), String> {
+    let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();
+    for (action, bindings) in primary {
+        for binding in bindings {
+            seen.insert(binding.parts(), action);
+        }
+    }
+    for (action, bindings) in shadowed {
+        for binding in bindings {
+            let key = binding.parts();
+            if let Some(previous) = seen.get(&key) {
+                return Err(format!(
+                    "Ambiguous `tui.keymap.{context}` bindings: `{previous}` shadows `{action}` with the same key. \
 Set unique keys in `~/.codex/config.toml` and retry.\n\
 See the Codex keymap documentation for supported actions and examples."
                 ));
@@ -834,6 +951,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_shadowing_approval_binding_in_app_scope() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.open_transcript = Some(one("y"));
+
+        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
+        assert!(err.contains("approval.approve"));
+        assert!(err.contains("open_transcript"));
+    }
+
+    #[test]
+    fn rejects_shadowing_list_binding_in_app_scope() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.copy = Some(one("down"));
+
+        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected shadowing conflict");
+        assert!(err.contains("list.move_down"));
+        assert!(err.contains("copy"));
+    }
+
+    #[test]
     fn supports_string_or_array_bindings() {
         let mut keymap = TuiKeymap::default();
         keymap.composer.submit = Some(KeybindingsSpec::Many(vec![
@@ -967,6 +1104,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_conflicting_approval_deny_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.approval.approve = Some(one("y"));
+        keymap.approval.deny = Some(one("y"));
+
+        expect_conflict(&keymap, "approve", "deny");
+    }
+
+    #[test]
+    fn rejects_conflicting_approval_overlay_accept_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.accept = Some(one("y"));
+
+        expect_conflict(&keymap, "list.accept", "approval.approve");
+    }
+
+    #[test]
+    fn rejects_conflicting_approval_overlay_cancel_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.list.cancel = Some(one("c"));
+
+        expect_conflict(&keymap, "list.cancel", "approval.cancel");
+    }
+
+    #[test]
     fn parses_function_keys_and_rejects_out_of_range_function_keys() {
         assert_eq!(
             parse_keybinding("f1").map(|binding| binding.parts()),
@@ -1024,6 +1186,17 @@ mod tests {
                 .editor
                 .insert_newline
                 .contains(&key_hint::shift(KeyCode::Enter))
+        );
+    }
+
+    #[test]
+    fn default_editor_delete_forward_word_includes_alt_d() {
+        let runtime = RuntimeKeymap::defaults();
+        assert!(
+            runtime
+                .editor
+                .delete_forward_word
+                .contains(&key_hint::alt(KeyCode::Char('d')))
         );
     }
 

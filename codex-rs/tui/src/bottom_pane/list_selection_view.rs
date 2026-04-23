@@ -757,41 +757,20 @@ impl BottomPaneView for ListSelectionView {
         let is_plain_text_char = matches!(
             key_event,
             KeyEvent {
-                code: KeyCode::Char(_),
+                code: KeyCode::Char(ch),
                 modifiers,
                 ..
-            } if !modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT)
+            } if !ch.is_ascii_control()
+                && !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT)
         );
         let allow_plain_char_navigation = !self.is_searchable || !is_plain_text_char;
-        let c0_ctrl_p = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-        );
-        let c0_ctrl_n = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-        );
 
         match key_event {
-            // Some terminals (or configurations) send Control key chords as
-            // C0 control characters without reporting the CONTROL modifier.
-            // Handle fallbacks for Ctrl-P/N here so navigation works everywhere.
-            _ if c0_ctrl_p
-                || (allow_plain_char_navigation && self.keymap.move_up.is_pressed(key_event)) =>
-            {
+            _ if allow_plain_char_navigation && self.keymap.move_up.is_pressed(key_event) => {
                 self.move_up()
             }
-            _ if c0_ctrl_n
-                || (allow_plain_char_navigation && self.keymap.move_down.is_pressed(key_event)) =>
-            {
+            _ if allow_plain_char_navigation && self.keymap.move_down.is_pressed(key_event) => {
                 self.move_down()
             }
             KeyEvent {
@@ -828,6 +807,11 @@ impl BottomPaneView for ListSelectionView {
             _ if self.keymap.cancel.is_pressed(key_event) => {
                 self.on_ctrl_c();
             }
+            _ if self.keymap.accept.is_pressed(key_event) => self.accept(),
+            KeyEvent {
+                code: KeyCode::Char(c),
+                ..
+            } if c.is_ascii_control() => {}
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -871,7 +855,6 @@ impl BottomPaneView for ListSelectionView {
                     self.accept();
                 }
             }
-            _ if self.keymap.accept.is_pressed(key_event) => self.accept(),
             _ => {}
         }
     }
@@ -902,6 +885,10 @@ impl BottomPaneView for ListSelectionView {
 
     fn active_tab_id(&self) -> Option<&str> {
         ListSelectionView::active_tab_id(self)
+    }
+
+    fn prefer_esc_to_handle_key_event(&self) -> bool {
+        true
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
@@ -1205,6 +1192,8 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
     use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -1853,6 +1842,100 @@ mod tests {
             rx.try_recv().is_err(),
             "moving down in a single-item list should not fire on_selection_changed",
         );
+    }
+
+    #[test]
+    fn c0_ctrl_p_respects_unbound_list_move_up() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.move_up.clear();
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "First".to_string(),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Second".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                initial_selected_idx: Some(1),
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
+
+        assert_eq!(view.selected_actual_idx(), Some(1));
+        assert_eq!(view.search_query, "");
+    }
+
+    #[test]
+    fn c0_ctrl_n_respects_unbound_list_move_down() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.move_down.clear();
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "First".to_string(),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Second".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{000e}'), KeyModifiers::NONE));
+
+        assert_eq!(view.selected_actual_idx(), Some(0));
+        assert_eq!(view.search_query, "");
+    }
+
+    #[test]
+    fn c0_ctrl_p_respects_remapped_list_move_down() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.move_up.clear();
+        keymap.move_down = vec![crate::key_hint::ctrl(KeyCode::Char('p'))];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "First".to_string(),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Second".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
+
+        assert_eq!(view.selected_actual_idx(), Some(1));
     }
 
     #[test]

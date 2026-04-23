@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   How was this?
@@ -11,3 +11,5 @@ expression: popup
   4. safety check  Benign usage blocked due to safety checks or refusals.
   5. other         Slowness, feature suggestion, UX feedback, or anything
                    else.
+
+  Press enter to confirm or esc to go back

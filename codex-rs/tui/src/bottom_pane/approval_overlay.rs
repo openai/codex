@@ -22,6 +22,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
+use crate::bottom_pane::popup_consts::accept_cancel_hint_line;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
@@ -30,6 +31,7 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ApprovalKeymap;
 use crate::keymap::ListKeymap;
+use crate::keymap::primary_binding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -211,8 +213,13 @@ impl ApprovalOverlay {
     fn set_current(&mut self, request: ApprovalRequest) {
         self.current_complete = false;
         let header = build_header(&request);
-        let (options, params) =
-            Self::build_options(&request, header, &self.features, &self.approval_keymap);
+        let (options, params) = Self::build_options(
+            &request,
+            header,
+            &self.features,
+            &self.approval_keymap,
+            &self.list_keymap,
+        );
         self.current_request = Some(request);
         self.options = options;
         self.list =
@@ -224,6 +231,7 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
         _features: &Features,
         approval_keymap: &ApprovalKeymap,
+        list_keymap: &ListKeymap,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match request {
             ApprovalRequest::Exec {
@@ -279,7 +287,7 @@ impl ApprovalOverlay {
             .collect();
 
         let params = SelectionViewParams {
-            footer_hint: Some(approval_footer_hint(request)),
+            footer_hint: Some(approval_footer_hint(request, approval_keymap, list_keymap)),
             items,
             header,
             ..Default::default()
@@ -439,57 +447,9 @@ impl ApprovalOverlay {
         }
     }
 
-    /// Apply approval-specific shortcuts before delegating to list navigation.
-    ///
-    /// `open_fullscreen` is handled here because it is orthogonal to list item
-    /// selection and should work regardless of current highlighted row.
-    fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
-        if key_event.kind == KeyEventKind::Press
-            && self.approval_keymap.open_fullscreen.is_pressed(*key_event)
-            && let Some(request) = self.current_request.as_ref()
-        {
-            self.app_event_tx
-                .send(AppEvent::FullScreenApprovalRequest(request.clone()));
-            return true;
-        }
-
-        if key_event.kind == KeyEventKind::Press
-            && matches!(key_event.code, KeyCode::Char('o'))
-            && let Some(request) = self.current_request.as_ref()
-            && request.thread_label().is_some()
-        {
-            self.app_event_tx
-                .send(AppEvent::SelectAgentThread(request.thread_id()));
-            return true;
-        }
-
-        if let Some(idx) = self
-            .options
-            .iter()
-            .position(|opt| opt.shortcuts.iter().any(|s| s.is_press(*key_event)))
-        {
-            self.apply_selection(idx);
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl BottomPaneView for ApprovalOverlay {
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.try_handle_shortcut(&key_event) {
-            return;
-        }
-        self.list.handle_key_event(key_event);
-        if let Some(idx) = self.list.take_last_selected_index() {
-            self.apply_selection(idx);
-        }
-    }
-
-    fn on_ctrl_c(&mut self) -> CancellationEvent {
+    fn cancel_current_request(&mut self) {
         if self.done {
-            return CancellationEvent::Handled;
+            return;
         }
         if !self.current_complete
             && let Some(request) = self.current_request.as_ref()
@@ -527,6 +487,63 @@ impl BottomPaneView for ApprovalOverlay {
         }
         self.queue.clear();
         self.done = true;
+    }
+
+    /// Apply approval-specific shortcuts before delegating to list navigation.
+    ///
+    /// `open_fullscreen` is handled here because it is orthogonal to list item
+    /// selection and should work regardless of current highlighted row.
+    fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+        if key_event.kind == KeyEventKind::Press
+            && self.approval_keymap.open_fullscreen.is_pressed(*key_event)
+            && let Some(request) = self.current_request.as_ref()
+        {
+            self.app_event_tx
+                .send(AppEvent::FullScreenApprovalRequest(request.clone()));
+            return true;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self.approval_keymap.open_thread.is_pressed(*key_event)
+            && let Some(request) = self.current_request.as_ref()
+            && request.thread_label().is_some()
+        {
+            self.app_event_tx
+                .send(AppEvent::SelectAgentThread(request.thread_id()));
+            return true;
+        }
+
+        if self.list_keymap.cancel.is_pressed(*key_event) {
+            self.cancel_current_request();
+            return true;
+        }
+
+        if let Some(idx) = self
+            .options
+            .iter()
+            .position(|opt| opt.shortcuts.iter().any(|s| s.is_press(*key_event)))
+        {
+            self.apply_selection(idx);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl BottomPaneView for ApprovalOverlay {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self.try_handle_shortcut(&key_event) {
+            return;
+        }
+        self.list.handle_key_event(key_event);
+        if let Some(idx) = self.list.take_last_selected_index() {
+            self.apply_selection(idx);
+        }
+    }
+
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
+        self.cancel_current_request();
         CancellationEvent::Handled
     }
 
@@ -561,20 +578,27 @@ impl Renderable for ApprovalOverlay {
     }
 }
 
-fn approval_footer_hint(request: &ApprovalRequest) -> Line<'static> {
-    let mut spans = vec![
-        "Press ".into(),
-        key_hint::plain(KeyCode::Enter).into(),
-        " to confirm or ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " to cancel".into(),
-    ];
-    if request.thread_label().is_some() {
-        spans.extend([
-            " or ".into(),
-            key_hint::plain(KeyCode::Char('o')).into(),
-            " to open thread".into(),
-        ]);
+fn approval_footer_hint(
+    request: &ApprovalRequest,
+    approval_keymap: &ApprovalKeymap,
+    list_keymap: &ListKeymap,
+) -> Line<'static> {
+    let mut spans = accept_cancel_hint_line(
+        primary_binding(&list_keymap.accept),
+        "to confirm",
+        primary_binding(&list_keymap.cancel),
+        "to cancel",
+    )
+    .spans;
+    if request.thread_label().is_some()
+        && let Some(open_thread) = primary_binding(&approval_keymap.open_thread)
+    {
+        if !spans.is_empty() {
+            spans.push(" or ".into());
+        } else {
+            spans.push("Press ".into());
+        }
+        spans.extend([open_thread.into(), " to open thread".into()]);
     }
     Line::from(spans)
 }
@@ -783,7 +807,7 @@ fn exec_options(
                     ),
                     NetworkPolicyRuleAction::Deny => (
                         "No, and block this host in the future".to_string(),
-                        Vec::new(),
+                        keymap.deny.clone(),
                     ),
                 };
                 Some(ApprovalOption {
@@ -797,7 +821,7 @@ fn exec_options(
             ReviewDecision::Denied => Some(ApprovalOption {
                 label: "No, continue without running it".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Denied),
-                shortcuts: Vec::new(),
+                shortcuts: keymap.deny.clone(),
             }),
             ReviewDecision::TimedOut => None,
             ReviewDecision::Abort => Some(ApprovalOption {
@@ -1123,6 +1147,68 @@ mod tests {
     }
 
     #[test]
+    fn configured_list_cancel_aborts_exec_approval() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.list.cancel = vec![key_hint::plain(KeyCode::Char('q'))];
+        let mut view = make_overlay_with_keymap(
+            make_exec_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(view.is_complete());
+        let mut decision = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::ExecApproval { decision: d, .. },
+                ..
+            } = ev
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ReviewDecision::Abort));
+    }
+
+    #[test]
+    fn configured_list_cancel_cancels_mcp_elicitation() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.list.cancel = vec![key_hint::plain(KeyCode::Char('q'))];
+        let mut view = make_overlay_with_keymap(
+            make_elicitation_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(view.is_complete());
+        let mut decision = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::ResolveElicitation { decision: d, .. },
+                ..
+            } = ev
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ElicitationAction::Cancel));
+    }
+
+    #[test]
     fn shortcut_triggers_selection() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -1138,6 +1224,98 @@ mod tests {
             }
         }
         assert!(saw_op, "expected approval decision to emit an op");
+    }
+
+    #[test]
+    fn deny_shortcut_submits_denied_exec_decision() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = make_overlay(
+            ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
+                id: "test".to_string(),
+                command: vec!["echo".to_string(), "hi".to_string()],
+                reason: None,
+                available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Denied],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        let mut saw_denied = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::ExecApproval { decision, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(decision, ReviewDecision::Denied);
+                saw_denied = true;
+                break;
+            }
+        }
+        assert!(saw_denied, "expected deny shortcut to emit denied decision");
+    }
+
+    #[test]
+    fn network_deny_shortcut_submits_policy_deny_decision() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let amendment = NetworkPolicyAmendment {
+            host: "example.com".to_string(),
+            action: NetworkPolicyRuleAction::Deny,
+        };
+        let mut view = make_overlay(
+            ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
+                id: "test".to_string(),
+                command: vec!["curl".to_string(), "https://example.com".to_string()],
+                reason: None,
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: amendment.clone(),
+                    },
+                ],
+                network_approval_context: Some(NetworkApprovalContext {
+                    host: "example.com".to_string(),
+                    protocol: NetworkApprovalProtocol::Https,
+                }),
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        let mut saw_deny = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::ExecApproval { decision, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(
+                    decision,
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: amendment
+                    }
+                );
+                saw_deny = true;
+                break;
+            }
+        }
+        assert!(
+            saw_deny,
+            "expected deny shortcut to emit network policy deny decision"
+        );
     }
 
     #[test]
@@ -1188,6 +1366,44 @@ mod tests {
             matches!(event, AppEvent::SelectAgentThread(id) if id == thread_id),
             true
         );
+    }
+
+    #[test]
+    fn configured_open_thread_shortcut_opens_source_thread() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let thread_id = ThreadId::new();
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.approval.open_thread = vec![key_hint::plain(KeyCode::Char('x'))];
+        let mut view = make_overlay_with_keymap(
+            ApprovalRequest::Exec {
+                thread_id,
+                thread_label: Some("Robie [explorer]".to_string()),
+                id: "test".to_string(),
+                command: vec!["echo".to_string(), "hi".to_string()],
+                reason: None,
+                available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('o'),
+            /*modifiers*/ KeyModifiers::NONE,
+        ));
+        assert!(rx.try_recv().is_err());
+
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('x'),
+            /*modifiers*/ KeyModifiers::NONE,
+        ));
+        let event = rx.try_recv().expect("expected select-agent-thread event");
+        assert!(matches!(event, AppEvent::SelectAgentThread(id) if id == thread_id));
     }
 
     #[test]

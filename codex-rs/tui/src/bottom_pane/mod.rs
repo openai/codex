@@ -857,7 +857,11 @@ impl BottomPane {
     }
 
     /// Show a generic list selection view with the provided items.
-    pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
+    pub(crate) fn show_selection_view(
+        &mut self,
+        mut params: list_selection_view::SelectionViewParams,
+    ) {
+        self.apply_standard_popup_hint(&mut params);
         let view = list_selection_view::ListSelectionView::new(
             params,
             self.app_event_tx.clone(),
@@ -866,11 +870,19 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
+        if params.footer_hint.is_none()
+            || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
+        {
+            params.footer_hint = Some(self.standard_popup_hint_line());
+        }
+    }
+
     /// Replace the active selection view when it matches `view_id`.
     pub(crate) fn replace_selection_view_if_active(
         &mut self,
         view_id: &'static str,
-        params: list_selection_view::SelectionViewParams,
+        mut params: list_selection_view::SelectionViewParams,
     ) -> bool {
         let is_match = self
             .view_stack
@@ -881,6 +893,7 @@ impl BottomPane {
         }
 
         self.view_stack.pop();
+        self.apply_standard_popup_hint(&mut params);
         let view = list_selection_view::ListSelectionView::new(
             params,
             self.app_event_tx.clone(),
@@ -888,6 +901,10 @@ impl BottomPane {
         );
         self.push_view(Box::new(view));
         true
+    }
+
+    pub(crate) fn standard_popup_hint_line(&self) -> Line<'static> {
+        popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
     pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
@@ -2186,6 +2203,37 @@ mod tests {
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
+    }
+
+    #[test]
+    fn selection_view_esc_respects_remapped_list_cancel() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.list.cancel = vec![crate::key_hint::plain(KeyCode::Char('q'))];
+        pane.set_keymap_bindings(&keymap);
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("Agents".to_string()),
+            items: vec![SelectionItem {
+                name: "Main".to_string(),
+                ..Default::default()
+            }],
+            on_cancel: Some(Box::new(|tx: &_| {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            })),
+            ..Default::default()
+        });
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(pane.active_view().is_some());
+        assert!(rx.try_recv().is_err());
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(pane.no_modal_or_popup_active());
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::OpenApprovalsPopup)));
     }
 
     #[test]

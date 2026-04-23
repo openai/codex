@@ -8,5 +8,3 @@ expression: terminal.backend()
 "  ctrl + g to edit in external editor        esc esc to edit previous message   "
 "  ctrl + r search history                    ctrl + c to exit                   "
 "  shift + tab to change mode                 ctrl + t to view transcript        "
-"                                                                                "
-"  [tui.keymap] customize shortcuts in ~/.codex/config.toml                      "

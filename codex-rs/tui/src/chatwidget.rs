@@ -8605,7 +8605,7 @@ impl ChatWidget {
             "Access legacy models by running codex -m <model_name> or in your config.toml",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             header,
             ..Default::default()
@@ -10662,7 +10662,7 @@ impl ChatWidget {
         SelectionViewParams {
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
-            footer_hint: Some(Self::connectors_popup_hint_line()),
+            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
@@ -10690,14 +10690,6 @@ impl ChatWidget {
             CONNECTORS_SELECTION_VIEW_ID,
             self.connectors_popup_params(connectors, selected_connector_id),
         );
-    }
-
-    fn connectors_popup_hint_line() -> Line<'static> {
-        Line::from(vec![
-            "Press ".into(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to close.".into(),
-        ])
     }
 
     fn connector_brief_description(connector: &AppInfo) -> String {
