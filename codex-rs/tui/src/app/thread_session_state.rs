@@ -3,7 +3,6 @@ use crate::app_server_session::ThreadSessionState;
 use crate::read_session_model;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::SandboxPolicy;
 
 impl App {
     pub(super) async fn sync_active_thread_permission_settings_to_cached_session(&mut self) {
@@ -14,17 +13,12 @@ impl App {
         let approval_policy = self.config.permissions.approval_policy.value();
         let approvals_reviewer = self.config.approvals_reviewer;
         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
-        let permission_profile = if matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. })
-        {
-            None
-        } else {
-            Some(
-                self.chat_widget
-                    .config_ref()
-                    .permissions
-                    .permission_profile(),
-            )
-        };
+        let permission_profile = Some(
+            self.chat_widget
+                .config_ref()
+                .permissions
+                .permission_profile(),
+        );
         let update_session = |session: &mut ThreadSessionState| {
             session.approval_policy = approval_policy;
             session.approvals_reviewer = approvals_reviewer;

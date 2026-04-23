@@ -314,7 +314,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -2361,24 +2360,8 @@ impl CodexMessageProcessor {
         file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
         configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
     ) {
-        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-            file_system_sandbox_policy.glob_scan_max_depth =
-                configured_file_system_sandbox_policy.glob_scan_max_depth;
-        }
-
-        for deny_entry in configured_file_system_sandbox_policy
-            .entries
-            .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
-        {
-            if !file_system_sandbox_policy
-                .entries
-                .iter()
-                .any(|entry| entry == deny_entry)
-            {
-                file_system_sandbox_policy.entries.push(deny_entry.clone());
-            }
-        }
+        file_system_sandbox_policy
+            .preserve_deny_read_restrictions_from(configured_file_system_sandbox_policy);
     }
 
     async fn command_exec_write(
@@ -2800,10 +2783,8 @@ impl CodexMessageProcessor {
                     /*has_in_progress_turn*/ false,
                 );
 
-                let permission_profile = thread_response_permission_profile(
-                    &config_snapshot.sandbox_policy,
-                    config_snapshot.permission_profile,
-                );
+                let permission_profile =
+                    thread_response_permission_profile(config_snapshot.permission_profile);
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -4608,7 +4589,6 @@ impl CodexMessageProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let permission_profile = thread_response_permission_profile(
-                    &session_configured.sandbox_policy,
                     codex_thread.config_snapshot().await.permission_profile,
                 );
 
@@ -5279,7 +5259,6 @@ impl CodexMessageProcessor {
             /*has_in_progress_turn*/ false,
         );
         let permission_profile = thread_response_permission_profile(
-            &session_configured.sandbox_policy,
             forked_thread.config_snapshot().await.permission_profile,
         );
 
@@ -8794,8 +8773,7 @@ async fn handle_pending_thread_resume_request(
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let permission_profile =
-        thread_response_permission_profile(&sandbox_policy, permission_profile);
+    let permission_profile = thread_response_permission_profile(permission_profile);
 
     let response = ThreadResumeResponse {
         thread,
@@ -9925,17 +9903,9 @@ fn with_thread_spawn_agent_metadata(
 }
 
 fn thread_response_permission_profile(
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     permission_profile: codex_protocol::models::PermissionProfile,
 ) -> Option<codex_app_server_protocol::PermissionProfile> {
-    match sandbox_policy {
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-        | codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
-            Some(permission_profile.into())
-        }
-        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
-    }
+    Some(permission_profile.into())
 }
 
 fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) -> bool {
@@ -10252,6 +10222,7 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;
@@ -10457,25 +10428,28 @@ mod tests {
     }
 
     #[test]
-    fn thread_response_permission_profile_omits_external_sandbox() {
+    fn thread_response_permission_profile_preserves_enforcement() {
         let cwd = test_path_buf("/tmp").abs();
-        let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::DangerFullAccess,
-            cwd.as_path(),
-        );
-
-        assert_eq!(
-            thread_response_permission_profile(
+        let full_access_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::DangerFullAccess,
+                cwd.as_path(),
+            );
+        let external_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
                 &SandboxPolicy::ExternalSandbox {
                     network_access: codex_protocol::protocol::NetworkAccess::Restricted,
                 },
-                profile.clone(),
-            ),
-            None
+                cwd.as_path(),
+            );
+
+        assert_eq!(
+            thread_response_permission_profile(external_profile.clone()),
+            Some(external_profile.into())
         );
         assert_eq!(
-            thread_response_permission_profile(&SandboxPolicy::DangerFullAccess, profile.clone()),
-            Some(profile.into())
+            thread_response_permission_profile(full_access_profile.clone()),
+            Some(full_access_profile.into())
         );
     }
 

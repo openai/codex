@@ -30,7 +30,9 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -311,7 +313,7 @@ struct CoreShellActionProvider {
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
-    prompt_permissions: Option<PermissionProfile>,
+    prompt_permissions: Option<AdditionalPermissionProfile>,
     stopwatch: Stopwatch,
 }
 
@@ -361,7 +363,7 @@ impl CoreShellActionProvider {
         sandbox_policy: &SandboxPolicy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy,
         network_sandbox_policy: NetworkSandboxPolicy,
-        additional_permissions: Option<&PermissionProfile>,
+        additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> EscalationExecution {
         match sandbox_permissions {
             SandboxPermissions::UseDefault => EscalationExecution::TurnDefault,
@@ -373,10 +375,14 @@ impl CoreShellActionProvider {
                     EscalationExecution::Permissions(
                         EscalationPermissions::ResolvedPermissionProfile(
                             ResolvedPermissionProfile {
-                                permission_profile: PermissionProfile::from_runtime_permissions(
-                                    file_system_sandbox_policy,
-                                    network_sandbox_policy,
-                                ),
+                                permission_profile:
+                                    PermissionProfile::from_runtime_permissions_with_enforcement(
+                                        SandboxEnforcement::from_legacy_sandbox_policy(
+                                            sandbox_policy,
+                                        ),
+                                        file_system_sandbox_policy,
+                                        network_sandbox_policy,
+                                    ),
                                 sandbox_policy: sandbox_policy.clone(),
                             },
                         ),
@@ -392,7 +398,7 @@ impl CoreShellActionProvider {
         argv: &[String],
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.clone();
@@ -491,7 +497,7 @@ impl CoreShellActionProvider {
         program: &AbsolutePathBuf,
         argv: &[String],
         workdir: &AbsolutePathBuf,
-        prompt_permissions: Option<PermissionProfile>,
+        prompt_permissions: Option<AdditionalPermissionProfile>,
         escalation_execution: EscalationExecution,
         decision_source: DecisionSource,
     ) -> anyhow::Result<EscalationDecision> {
@@ -757,7 +763,7 @@ struct PrepareSandboxedExecParams<'a> {
     sandbox_policy: &'a SandboxPolicy,
     file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
 #[async_trait::async_trait]

@@ -39,6 +39,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PermissionProfile;
 use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
@@ -779,9 +780,9 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            permission_profile: Some(PermissionProfile {
-                network: None,
-                file_system: Some(PermissionProfileFileSystemPermissions {
+            permission_profile: Some(PermissionProfile::Managed {
+                network: PermissionProfileNetworkPermissions { enabled: false },
+                file_system: PermissionProfileFileSystemPermissions::Restricted {
                     entries: vec![FileSystemSandboxEntry {
                         path: FileSystemPath::Path {
                             path: unsupported_write_root,
@@ -789,7 +790,7 @@ async fn turn_start_rejects_invalid_permission_profile_before_starting_turn() ->
                         access: FileSystemAccessMode::Write,
                     }],
                     glob_scan_max_depth: None,
-                }),
+                },
             }),
             ..Default::default()
         })
