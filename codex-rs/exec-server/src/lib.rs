@@ -21,6 +21,7 @@ mod server;
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client::http_client::HttpResponseBodyStream;
+pub use client::http_client::ReqwestHttpClient;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::HttpClient;
 pub use client_api::RemoteExecServerConnectArgs;

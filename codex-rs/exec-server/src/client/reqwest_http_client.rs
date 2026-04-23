@@ -33,7 +33,7 @@ use crate::rpc::invalid_params;
 /// `HttpClient` implementation that performs the actual HTTP request with
 /// `reqwest`.
 #[derive(Clone, Default)]
-pub(crate) struct ReqwestHttpClient;
+pub struct ReqwestHttpClient;
 
 /// Streaming response state held between the initial HTTP response and
 /// downstream body-delta forwarding.
