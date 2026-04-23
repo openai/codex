@@ -1273,7 +1273,9 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
+    /// This will be removed in favor of `entries`.
     pub read: Option<Vec<AbsolutePathBuf>>,
+    /// This will be removed in favor of `entries`.
     pub write: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1286,11 +1288,26 @@ pub struct AdditionalFileSystemPermissions {
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
         if let Some((read, write)) = value.legacy_read_write_roots() {
+            let mut entries = Vec::with_capacity(
+                read.as_ref().map_or(0, Vec::len) + write.as_ref().map_or(0, Vec::len),
+            );
+            if let Some(paths) = read.as_ref() {
+                entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: path.clone() },
+                    access: FileSystemAccessMode::Read,
+                }));
+            }
+            if let Some(paths) = write.as_ref() {
+                entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: path.clone() },
+                    access: FileSystemAccessMode::Write,
+                }));
+            }
             Self {
                 read,
                 write,
                 glob_scan_max_depth: None,
-                entries: None,
+                entries: Some(entries),
             }
         } else {
             Self {
@@ -7754,6 +7771,45 @@ mod tests {
                             pattern: "**/*.env".to_string(),
                         },
                         access: FileSystemAccessMode::None,
+                    },
+                ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
+        let read_only_path = absolute_path("read-only");
+        let read_write_path = absolute_path("read-write");
+        let core_permissions = CoreFileSystemPermissions::from_read_write_roots(
+            Some(vec![read_only_path.clone()]),
+            Some(vec![read_write_path.clone()]),
+        );
+
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            AdditionalFileSystemPermissions {
+                read: Some(vec![read_only_path.clone()]),
+                write: Some(vec![read_write_path.clone()]),
+                glob_scan_max_depth: None,
+                entries: Some(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_only_path,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_write_path,
+                        },
+                        access: FileSystemAccessMode::Write,
                     },
                 ]),
             }
