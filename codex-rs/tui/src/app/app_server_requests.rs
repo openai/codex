@@ -183,6 +183,7 @@ impl PendingAppServerRequests {
                                 response.permissions.clone(),
                             ),
                             scope: response.scope.into(),
+                            strict_auto_review: response.strict_auto_review.then_some(true),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -543,6 +544,7 @@ mod tests {
                         )),
                     },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
+                    strict_auto_review: false,
                 },
             })
             .expect("permissions response should serialize")
@@ -564,6 +566,7 @@ mod tests {
                     }),
                 },
                 scope: PermissionGrantScope::Session,
+                strict_auto_review: None,
             }
         );
 
