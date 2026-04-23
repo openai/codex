@@ -92,11 +92,9 @@ async fn submission_includes_configured_permission_profile() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let expected_permission_profile = PermissionProfile {
-        network: Some(NetworkPermissions {
-            enabled: Some(false),
-        }),
-        file_system: Some(FileSystemPermissions {
+    let expected_permission_profile = PermissionProfile::Managed {
+        network: codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+        file_system: codex_protocol::models::ManagedFileSystemPermissions::Restricted {
             entries: vec![
                 codex_protocol::permissions::FileSystemSandboxEntry {
                     path: codex_protocol::permissions::FileSystemPath::Special {
@@ -112,7 +110,7 @@ async fn submission_includes_configured_permission_profile() {
                 },
             ],
             glob_scan_max_depth: None,
-        }),
+        },
     };
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,

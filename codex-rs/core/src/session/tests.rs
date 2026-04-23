@@ -1471,7 +1471,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_configured_omits_permission_profile_for_external_sandbox() -> anyhow::Result<()> {
+async fn session_configured_reports_permission_profile_for_external_sandbox() -> anyhow::Result<()>
+{
     let server = start_mock_server().await;
     let sandbox_policy = SandboxPolicy::ExternalSandbox {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,
@@ -1489,10 +1490,15 @@ async fn session_configured_omits_permission_profile_for_external_sandbox() -> a
         test.session_configured.sandbox_policy,
         expected_sandbox_policy
     );
+    let expected_permission_profile =
+        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+            &expected_sandbox_policy,
+            test.session_configured.cwd.as_path(),
+        );
     assert_eq!(
-        test.session_configured.permission_profile, None,
-        "ExternalSandbox is enforced outside the PermissionProfile model, so SessionConfigured must \
-         not expose a lossy root-write profile"
+        test.session_configured.permission_profile,
+        Some(expected_permission_profile),
+        "ExternalSandbox is represented explicitly instead of as a lossy root-write profile"
     );
     Ok(())
 }
