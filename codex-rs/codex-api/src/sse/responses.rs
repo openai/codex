@@ -228,7 +228,23 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
 }
 
 fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
-    let verifications = json_value_as_model_verifications(value);
+    let verifications = value
+        .as_array()
+        .map(|items| {
+            let mut verifications = Vec::new();
+            for verification in items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(parse_model_verification)
+            {
+                if !verifications.contains(&verification) {
+                    verifications.push(verification);
+                }
+            }
+            verifications
+        })
+        .unwrap_or_default();
+
     if verifications.is_empty() {
         None
     } else {
@@ -236,32 +252,11 @@ fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerific
     }
 }
 
-fn json_value_as_model_verifications(value: &Value) -> Vec<ModelVerification> {
+fn parse_model_verification(value: &str) -> Option<ModelVerification> {
     match value {
-        Value::String(value) => parse_model_verifications(value),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(json_value_as_string)
-            .flat_map(|value| parse_model_verifications(&value))
-            .collect(),
-        _ => Vec::new(),
+        TRUSTED_ACCESS_FOR_CYBER_VERIFICATION => Some(ModelVerification::TrustedAccessForCyber),
+        _ => None,
     }
-}
-
-fn parse_model_verifications(value: &str) -> Vec<ModelVerification> {
-    let mut verifications = Vec::new();
-    for verification in value
-        .split(',')
-        .filter_map(|verification| match verification.trim() {
-            TRUSTED_ACCESS_FOR_CYBER_VERIFICATION => Some(ModelVerification::TrustedAccessForCyber),
-            _ => None,
-        })
-    {
-        if !verifications.contains(&verification) {
-            verifications.push(verification);
-        }
-    }
-    verifications
 }
 
 fn json_value_as_string(value: &Value) -> Option<String> {
@@ -1290,7 +1285,21 @@ mod tests {
         let event = json!({
             "type": "response.metadata",
             "metadata": {
-                "openai_verification_recommendation": "unknown"
+                "openai_verification_recommendation": ["unknown"]
+            }
+        });
+        let event: ResponsesStreamEvent =
+            serde_json::from_value(event).expect("expected event to deserialize");
+
+        assert_eq!(event.model_verifications(), None);
+    }
+
+    #[test]
+    fn responses_stream_event_model_verification_ignores_non_array_field() {
+        let event = json!({
+            "type": "response.metadata",
+            "metadata": {
+                "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
             }
         });
         let event: ResponsesStreamEvent =
