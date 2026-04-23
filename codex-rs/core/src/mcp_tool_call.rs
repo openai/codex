@@ -12,8 +12,6 @@ use tracing::error;
 
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -30,6 +28,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -478,6 +478,8 @@ async fn execute_mcp_tool_call(
     )
     .await?;
     let request_meta =
+        with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let request_meta =
         augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
             .await
             .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
@@ -494,6 +496,10 @@ async fn execute_mcp_tool_call(
     )
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP sandbox metadata reads through the session-owned manager guard"
+)]
 async fn augment_mcp_tool_request_meta_with_sandbox_state(
     sess: &Session,
     turn_context: &TurnContext,
@@ -541,11 +547,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
-    {
+    if !turn_context.config.memories.disable_on_external_context {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(
@@ -660,6 +662,7 @@ pub(crate) struct McpToolApprovalMetadata {
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -676,9 +679,14 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|value| {
             HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
-        .and_then(|servers| servers.get(server).cloned())
-        .and_then(|server| server.tools.get(tool_name).cloned())
-        .and_then(|tool| tool.approval_mode)
+        .and_then(|servers| {
+            let server_config = servers.get(server)?;
+            server_config
+                .tools
+                .get(tool_name)
+                .and_then(|tool| tool.approval_mode)
+                .or(server_config.default_tools_approval_mode)
+        })
         .unwrap_or_default()
 }
 
@@ -707,6 +715,30 @@ fn build_mcp_tool_call_request_meta(
     }
 
     (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
+}
+
+fn with_mcp_tool_call_thread_id_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+) -> Option<serde_json::Value> {
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1066,6 +1098,10 @@ fn mcp_tool_approval_callsite_mode(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP approval metadata reads through the session-owned manager guard"
+)]
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1148,6 +1184,10 @@ fn get_mcp_app_resource_uri(
     })
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "MCP app metadata reads through the session-owned manager guard"
+)]
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,

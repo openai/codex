@@ -418,22 +418,23 @@ async fn fail_session_post_when_armed(
         return next.run(request).await;
     }
 
-    let mut armed_failure = state.armed_failure.lock().await;
-    if let Some(failure) = armed_failure.as_mut()
-        && failure.remaining > 0
     {
-        failure.remaining -= 1;
-        let status = failure.status;
-        if failure.remaining == 0 {
-            *armed_failure = None;
+        let mut armed_failure = state.armed_failure.lock().await;
+        if let Some(failure) = armed_failure.as_mut()
+            && failure.remaining > 0
+        {
+            failure.remaining -= 1;
+            let status = failure.status;
+            if failure.remaining == 0 {
+                *armed_failure = None;
+            }
+            let mut response = Response::new(Body::from(format!(
+                "forced session failure with status {status}"
+            )));
+            *response.status_mut() = status;
+            return response;
         }
-        let mut response = Response::new(Body::from(format!(
-            "forced session failure with status {status}"
-        )));
-        *response.status_mut() = status;
-        return response;
     }
 
-    drop(armed_failure);
     next.run(request).await
 }

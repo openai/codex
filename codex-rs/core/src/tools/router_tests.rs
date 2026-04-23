@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::codex::make_session_and_context;
 use crate::function_tool::FunctionCallError;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::models::ResponseItem;
 use codex_tools::ToolName;
+use tokio_util::sync::CancellationToken;
 
 use super::ToolCall;
 use super::ToolCallSource;
@@ -14,6 +15,10 @@ use super::ToolRouter;
 use super::ToolRouterParams;
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -52,6 +57,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -68,6 +74,10 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
     let (session, mut turn) = make_session_and_context().await;
     turn.tools_config.js_repl_tools_only = true;
@@ -106,6 +116,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::JsRepl,
@@ -155,6 +166,7 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         .dispatch_tool_call_with_code_mode_result(
             session,
             turn,
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
@@ -171,6 +183,10 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
     let (session, turn) = make_session_and_context().await;
     let mcp_tools = session

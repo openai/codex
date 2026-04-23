@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::Path;
 
 /// Resolves a program to its executable path on Unix systems.
 ///
@@ -19,7 +20,11 @@ use std::ffi::OsString;
 /// the kernel's shebang (`#!`) mechanism, so this function simply returns
 /// the program name unchanged.
 #[cfg(unix)]
-pub fn resolve(program: OsString, _env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
+pub fn resolve(
+    program: OsString,
+    _env: &HashMap<OsString, OsString>,
+    _cwd: &Path,
+) -> std::io::Result<OsString> {
     Ok(program)
 }
 
@@ -33,16 +38,16 @@ pub fn resolve(program: OsString, _env: &HashMap<OsString, OsString>) -> std::io
 /// This enables tools like `npx`, `pnpm`, and `yarn` to work correctly on Windows
 /// without requiring users to specify full paths or extensions in their configuration.
 #[cfg(windows)]
-pub fn resolve(program: OsString, env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
-    // Get current directory for relative path resolution
-    let cwd = std::env::current_dir()
-        .map_err(|e| std::io::Error::other(format!("Failed to get current directory: {e}")))?;
-
+pub fn resolve(
+    program: OsString,
+    env: &HashMap<OsString, OsString>,
+    cwd: &Path,
+) -> std::io::Result<OsString> {
     // Extract PATH from environment for search locations
     let search_path = env.get(std::ffi::OsStr::new("PATH"));
 
     // Attempt resolution via which crate
-    match which::which_in(&program, search_path, &cwd) {
+    match which::which_in(&program, search_path, cwd) {
         Ok(resolved) => {
             tracing::debug!("Resolved {program:?} to {resolved:?}");
             Ok(resolved.into_os_string())
@@ -70,7 +75,7 @@ mod tests {
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.program_name);
+        let mut cmd = Command::new(&env.executable_path);
         cmd.envs(&env.mcp_env);
 
         let output = cmd.output().await;
@@ -119,7 +124,7 @@ mod tests {
         let program = OsString::from(&env.program_name);
 
         // Apply platform-specific resolution
-        let resolved = resolve(program, &env.mcp_env)?;
+        let resolved = resolve(program, &env.mcp_env, std::env::current_dir()?.as_path())?;
 
         // Verify resolved path executes successfully
         let mut cmd = Command::new(resolved);
@@ -138,6 +143,8 @@ mod tests {
         // Held to prevent the temporary directory from being deleted.
         _temp_dir: TempDir,
         program_name: String,
+        #[cfg(unix)]
+        executable_path: std::path::PathBuf,
         mcp_env: HashMap<OsString, OsString>,
     }
 
@@ -157,9 +164,11 @@ mod tests {
             #[cfg(windows)]
             extra_env.insert(OsString::from("PATHEXT"), Self::ensure_cmd_extension());
 
-            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[]);
+            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[])?;
 
             Ok(Self {
+                #[cfg(unix)]
+                executable_path: Self::executable_path(dir_path),
                 _temp_dir: temp_dir,
                 program_name: Self::TEST_PROGRAM.to_string(),
                 mcp_env,
@@ -182,6 +191,11 @@ mod tests {
             }
 
             Ok(())
+        }
+
+        #[cfg(unix)]
+        fn executable_path(dir: &Path) -> std::path::PathBuf {
+            dir.join(Self::TEST_PROGRAM)
         }
 
         #[cfg(unix)]

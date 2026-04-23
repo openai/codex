@@ -155,31 +155,31 @@ mod tests {
         let codex_home = TempDir::new().expect("create temp codex home");
         let memory_root = codex_home.path().join("memories");
         let extensions_root = memory_extensions_root(&memory_root);
-        let telepathy_resources = extensions_root.join("telepathy/resources");
-        tokio::fs::create_dir_all(&telepathy_resources)
+        let chronicle_resources = extensions_root.join("chronicle/resources");
+        tokio::fs::create_dir_all(&chronicle_resources)
             .await
-            .expect("create telepathy resources");
+            .expect("create chronicle resources");
         tokio::fs::write(
-            extensions_root.join("telepathy/instructions.md"),
+            extensions_root.join("chronicle/instructions.md"),
             "instructions",
         )
         .await
-        .expect("write telepathy instructions");
+        .expect("write chronicle instructions");
 
         let now = DateTime::from_naive_utc_and_offset(
             NaiveDateTime::parse_from_str("2026-04-14T12-00-00", FILENAME_TS_FORMAT)
                 .expect("parse now"),
             Utc,
         );
-        let old_file = telepathy_resources.join("2026-04-06T11-59-59-abcd-10min-old.md");
+        let old_file = chronicle_resources.join("2026-04-06T11-59-59-abcd-10min-old.md");
         let exact_cutoff_file =
-            telepathy_resources.join("2026-04-07T12-00-00-abcd-10min-cutoff.md");
-        let recent_file = telepathy_resources.join("2026-04-08T12-00-00-abcd-10min-recent.md");
-        let invalid_file = telepathy_resources.join("not-a-timestamp.md");
+            chronicle_resources.join("2026-04-07T12-00-00-abcd-10min-cutoff.md");
+        let recent_file = chronicle_resources.join("2026-04-08T12-00-00-abcd-10min-recent.md");
+        let invalid_file = chronicle_resources.join("not-a-timestamp.md");
         for file in [&old_file, &exact_cutoff_file, &recent_file, &invalid_file] {
             tokio::fs::write(file, "resource")
                 .await
-                .expect("write telepathy resource");
+                .expect("write chronicle resource");
         }
 
         let ignored_resources = extensions_root.join("ignored/resources");
@@ -200,11 +200,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 RemovedExtensionResource {
-                    extension: "telepathy".to_string(),
+                    extension: "chronicle".to_string(),
                     resource_path: "resources/2026-04-06T11-59-59-abcd-10min-old.md".to_string(),
                 },
                 RemovedExtensionResource {
-                    extension: "telepathy".to_string(),
+                    extension: "chronicle".to_string(),
                     resource_path: "resources/2026-04-07T12-00-00-abcd-10min-cutoff.md".to_string(),
                 },
             ]

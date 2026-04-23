@@ -1,13 +1,16 @@
-use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
 use chrono::Utc;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
 use codex_thread_store::ListThreadsParams;
+use codex_thread_store::SortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadSortKey;
 use codex_thread_store::ThreadStore;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use dirs::home_dir;
@@ -108,9 +111,10 @@ pub(crate) async fn build_realtime_startup_context(
         parts.push(section);
     }
 
-    let context = format_startup_context_blob(&parts.join("\n\n"), budget_tokens);
+    let context = format_startup_context_blob(&parts.join("\n\n"));
     debug!(
         approx_tokens = approx_token_count(&context),
+        requested_budget_tokens = budget_tokens,
         bytes = context.len(),
         has_current_thread_section,
         has_recent_work_section,
@@ -129,10 +133,13 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
             page_size: MAX_RECENT_THREADS,
             cursor: None,
             sort_key: ThreadSortKey::UpdatedAt,
+            sort_direction: SortDirection::Desc,
             allowed_sources: Vec::new(),
             model_providers: None,
+            cwd_filters: None,
             archived: false,
             search_term: None,
+            use_state_db_only: false,
         })
         .await
     {
@@ -144,18 +151,26 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
     }
 }
 
-async fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Option<String> {
+async fn build_recent_work_section(
+    cwd: &AbsolutePathBuf,
+    recent_threads: &[StoredThread],
+) -> Option<String> {
     let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
-        let group = resolve_root_git_project_for_trust(&entry.cwd)
-            .await
-            .unwrap_or_else(|| entry.cwd.clone());
+        let group = match AbsolutePathBuf::from_absolute_path(entry.cwd.as_path()) {
+            Ok(entry_cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &entry_cwd)
+                .await
+                .map(AbsolutePathBuf::into_path_buf)
+                .unwrap_or_else(|| entry.cwd.clone()),
+            Err(_) => entry.cwd.clone(),
+        };
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group = resolve_root_git_project_for_trust(cwd)
+    let current_group = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
         .await
-        .unwrap_or_else(|| cwd.to_path_buf());
+        .map(AbsolutePathBuf::into_path_buf)
+        .unwrap_or_else(|| cwd.clone().into_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
         let left_latest = left_entries
@@ -308,18 +323,19 @@ pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: 
 }
 
 async fn build_workspace_section_with_user_root(
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
     user_root: Option<PathBuf>,
 ) -> Option<String> {
-    let git_root = resolve_root_git_project_for_trust(cwd).await;
-    let cwd_tree = render_tree(cwd);
+    let cwd_path = cwd.as_path();
+    let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd).await;
+    let cwd_tree = render_tree(cwd_path);
     let git_root_tree = git_root
         .as_ref()
-        .filter(|git_root| git_root.as_path() != cwd)
-        .and_then(|git_root| render_tree(git_root));
+        .filter(|git_root| git_root.as_path() != cwd_path)
+        .and_then(|git_root| render_tree(git_root.as_path()));
     let user_root_tree = user_root
         .as_ref()
-        .filter(|user_root| user_root.as_path() != cwd)
+        .filter(|user_root| user_root.as_path() != cwd_path)
         .filter(|user_root| {
             git_root
                 .as_ref()
@@ -332,8 +348,8 @@ async fn build_workspace_section_with_user_root(
     }
 
     let mut lines = vec![
-        format!("Current working directory: {}", cwd.display()),
-        format!("Working directory name: {}", file_name_string(cwd)),
+        format!("Current working directory: {}", cwd_path.display()),
+        format!("Working directory name: {}", file_name_string(cwd_path)),
     ];
 
     if let Some(git_root) = &git_root {
@@ -440,31 +456,22 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
         return None;
     }
 
-    Some(format!(
-        "## {title}\n{}",
-        truncate_text(body, TruncationPolicy::Tokens(budget_tokens))
-    ))
+    let heading = format!("## {title}\n");
+    let body_budget = budget_tokens.saturating_sub(approx_token_count(&heading));
+    if body_budget == 0 {
+        return None;
+    }
+
+    let body = truncate_realtime_text_to_token_budget(body, body_budget);
+    if body.is_empty() {
+        return None;
+    }
+
+    Some(format!("{heading}{body}"))
 }
 
-fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
-    let wrapper = format!("{STARTUP_CONTEXT_OPEN_TAG}\n\n{STARTUP_CONTEXT_CLOSE_TAG}");
-    let mut body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
-
-    loop {
-        let body = truncate_text(body, TruncationPolicy::Tokens(body_budget));
-        let wrapped = format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}");
-        let wrapped_tokens = approx_token_count(&wrapped);
-        if wrapped_tokens <= budget_tokens || body_budget == 0 {
-            return wrapped;
-        }
-
-        let excess_tokens = wrapped_tokens.saturating_sub(budget_tokens);
-        let next_budget = body_budget.saturating_sub(excess_tokens.max(1));
-        if next_budget == body_budget {
-            return wrapped;
-        }
-        body_budget = next_budget;
-    }
+fn format_startup_context_blob(body: &str) -> String {
+    format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}")
 }
 
 async fn format_thread_group(
@@ -473,14 +480,19 @@ async fn format_thread_group(
     entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
-    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path())
-        .await
-        .is_some()
-    {
-        format!("### Git repo: {}", group.display())
-    } else {
-        format!("### Directory: {}", group.display())
-    };
+    let group_label =
+        if let Ok(latest_cwd) = AbsolutePathBuf::from_absolute_path(latest.cwd.as_path()) {
+            if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &latest_cwd)
+                .await
+                .is_some()
+            {
+                format!("### Git repo: {}", group.display())
+            } else {
+                format!("### Directory: {}", group.display())
+            }
+        } else {
+            format!("### Directory: {}", group.display())
+        };
     let mut lines = vec![
         group_label,
         format!("Recent sessions: {}", entries.len()),

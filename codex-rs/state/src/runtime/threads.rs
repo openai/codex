@@ -1,4 +1,5 @@
 use super::*;
+use crate::SortDirection;
 use codex_protocol::protocol::SessionSource;
 use std::sync::atomic::Ordering;
 
@@ -55,7 +56,7 @@ WHERE threads.id = ?
     ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
         let rows = sqlx::query(
             r#"
-SELECT name, description, input_schema, defer_loading
+SELECT namespace, name, description, input_schema, defer_loading
 FROM thread_dynamic_tools
 WHERE thread_id = ?
 ORDER BY position ASC
@@ -72,6 +73,7 @@ ORDER BY position ASC
             let input_schema: String = row.try_get("input_schema")?;
             let input_schema = serde_json::from_str::<Value>(input_schema.as_str())?;
             tools.push(DynamicToolSpec {
+                namespace: row.try_get("namespace")?,
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 input_schema,
@@ -141,6 +143,17 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         status: crate::DirectionalThreadSpawnEdgeStatus,
     ) -> anyhow::Result<Vec<ThreadId>> {
         self.list_thread_spawn_descendants_matching(root_thread_id, Some(status))
+            .await
+    }
+
+    /// List all spawned descendants of `root_thread_id`.
+    ///
+    /// Descendants are returned breadth-first by depth, then by thread id for stable ordering.
+    pub async fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        self.list_thread_spawn_descendants_matching(root_thread_id, /*status*/ None)
             .await
     }
 
@@ -342,12 +355,16 @@ ON CONFLICT(child_thread_id) DO NOTHING
         builder.push(" FROM threads");
         push_thread_filters(
             &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            /*anchor*/ None,
-            crate::SortKey::UpdatedAt,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only,
+                allowed_sources,
+                model_providers,
+                cwd_filters: None,
+                anchor: None,
+                sort_key: crate::SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND threads.title = ");
         builder.push_bind(title);
@@ -355,7 +372,12 @@ ON CONFLICT(child_thread_id) DO NOTHING
             builder.push(" AND threads.cwd = ");
             builder.push_bind(cwd.display().to_string());
         }
-        push_thread_order_and_limit(&mut builder, crate::SortKey::UpdatedAt, /*limit*/ 1);
+        push_thread_order_and_limit(
+            &mut builder,
+            crate::SortKey::UpdatedAt,
+            SortDirection::Desc,
+            /*limit*/ 1,
+        );
 
         let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
         row.map(|row| ThreadRow::try_from_row(&row).and_then(crate::ThreadMetadata::try_from))
@@ -363,32 +385,20 @@ ON CONFLICT(child_thread_id) DO NOTHING
     }
 
     /// List threads using the underlying database.
-    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         &self,
         page_size: usize,
-        anchor: Option<&crate::Anchor>,
-        sort_key: crate::SortKey,
-        allowed_sources: &[String],
-        model_providers: Option<&[String]>,
-        archived_only: bool,
-        search_term: Option<&str>,
+        filters: ThreadFilterOptions<'_>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
+        let sort_key = filters.sort_key;
+        let sort_direction = filters.sort_direction;
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_thread_select_columns(&mut builder);
         builder.push(" FROM threads");
-        push_thread_filters(
-            &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            anchor,
-            sort_key,
-            search_term,
-        );
-        push_thread_order_and_limit(&mut builder, sort_key, limit);
+        push_thread_filters(&mut builder, filters);
+        push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -424,14 +434,18 @@ ON CONFLICT(child_thread_id) DO NOTHING
         let mut builder = QueryBuilder::<Sqlite>::new("SELECT threads.id FROM threads");
         push_thread_filters(
             &mut builder,
-            archived_only,
-            allowed_sources,
-            model_providers,
-            anchor,
-            sort_key,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only,
+                allowed_sources,
+                model_providers,
+                cwd_filters: None,
+                anchor,
+                sort_key,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
-        push_thread_order_and_limit(&mut builder, sort_key, limit);
+        push_thread_order_and_limit(&mut builder, sort_key, SortDirection::Desc, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
@@ -767,16 +781,18 @@ ON CONFLICT(id) DO UPDATE SET
 INSERT INTO thread_dynamic_tools (
     thread_id,
     position,
+    namespace,
     name,
     description,
     input_schema,
     defer_loading
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
             .bind(thread_id.as_str())
             .bind(position)
+            .bind(tool.namespace.as_deref())
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
@@ -983,15 +999,32 @@ fn thread_spawn_parent_thread_id_from_source_str(source: &str) -> Option<ThreadI
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ThreadFilterOptions<'a> {
+    pub archived_only: bool,
+    pub allowed_sources: &'a [String],
+    pub model_providers: Option<&'a [String]>,
+    pub cwd_filters: Option<&'a [PathBuf]>,
+    pub anchor: Option<&'a crate::Anchor>,
+    pub sort_key: SortKey,
+    pub sort_direction: SortDirection,
+    pub search_term: Option<&'a str>,
+}
+
 pub(super) fn push_thread_filters<'a>(
     builder: &mut QueryBuilder<'a, Sqlite>,
-    archived_only: bool,
-    allowed_sources: &'a [String],
-    model_providers: Option<&'a [String]>,
-    anchor: Option<&crate::Anchor>,
-    sort_key: SortKey,
-    search_term: Option<&'a str>,
+    options: ThreadFilterOptions<'a>,
 ) {
+    let ThreadFilterOptions {
+        archived_only,
+        allowed_sources,
+        model_providers,
+        cwd_filters,
+        anchor,
+        sort_key,
+        sort_direction,
+        search_term,
+    } = options;
     builder.push(" WHERE 1 = 1");
     if archived_only {
         builder.push(" AND threads.archived = 1");
@@ -1017,6 +1050,20 @@ pub(super) fn push_thread_filters<'a>(
         }
         separated.push_unseparated(")");
     }
+    match cwd_filters {
+        Some([]) => {
+            builder.push(" AND 1 = 0");
+        }
+        Some(cwd_filters) => {
+            builder.push(" AND threads.cwd IN (");
+            let mut separated = builder.separated(", ");
+            for cwd in cwd_filters {
+                separated.push_bind(cwd.display().to_string());
+            }
+            separated.push_unseparated(")");
+        }
+        None => {}
+    }
     if let Some(search_term) = search_term {
         builder.push(" AND instr(threads.title, ");
         builder.push_bind(search_term);
@@ -1028,32 +1075,38 @@ pub(super) fn push_thread_filters<'a>(
             SortKey::CreatedAt => "threads.created_at_ms",
             SortKey::UpdatedAt => "threads.updated_at_ms",
         };
+        let operator = match sort_direction {
+            SortDirection::Asc => ">",
+            SortDirection::Desc => "<",
+        };
         builder.push(" AND (");
         builder.push(column);
-        builder.push(" < ");
+        builder.push(" ");
+        builder.push(operator);
+        builder.push(" ");
         builder.push_bind(anchor_ts);
-        builder.push(" OR (");
-        builder.push(column);
-        builder.push(" = ");
-        builder.push_bind(anchor_ts);
-        builder.push(" AND id < ");
-        builder.push_bind(anchor.id.to_string());
-        builder.push("))");
+        builder.push(")");
     }
 }
 
 pub(super) fn push_thread_order_and_limit(
     builder: &mut QueryBuilder<'_, Sqlite>,
     sort_key: SortKey,
+    sort_direction: SortDirection,
     limit: usize,
 ) {
     let order_column = match sort_key {
         SortKey::CreatedAt => "threads.created_at_ms",
         SortKey::UpdatedAt => "threads.updated_at_ms",
     };
+    let order_direction = match sort_direction {
+        SortDirection::Asc => "ASC",
+        SortDirection::Desc => "DESC",
+    };
     builder.push(" ORDER BY ");
     builder.push(order_column);
-    builder.push(" DESC, id DESC");
+    builder.push(" ");
+    builder.push(order_direction);
     builder.push(" LIMIT ");
     builder.push_bind(limit as i64);
 }
@@ -1061,6 +1114,7 @@ pub(super) fn push_thread_order_and_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Anchor;
     use crate::DirectionalThreadSpawnEdgeStatus;
     use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
@@ -1108,6 +1162,161 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn list_threads_updated_after_returns_oldest_changes_first() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let older_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let middle_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+        let newer_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000003").expect("valid thread id");
+        let older_updated_at =
+            DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("valid older timestamp");
+        let newer_updated_at =
+            DateTime::<Utc>::from_timestamp(1_700_000_200, 0).expect("valid newer timestamp");
+
+        for (thread_id, updated_at) in [
+            (older_id, older_updated_at),
+            (newer_id, newer_updated_at),
+            (middle_id, newer_updated_at),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.updated_at = updated_at;
+            metadata.first_user_message = Some("hello".to_string());
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let anchor = Anchor {
+            ts: older_updated_at,
+        };
+        let model_providers = ["test-provider".to_string()];
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: Some(&model_providers),
+                    cwd_filters: None,
+                    anchor: Some(&anchor),
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Asc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![newer_id]);
+        assert_eq!(
+            page.next_anchor,
+            Some(Anchor {
+                ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_200_000)
+                    .expect("valid timestamp"),
+            })
+        );
+
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: Some(&model_providers),
+                    cwd_filters: None,
+                    anchor: page.next_anchor.as_ref(),
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Asc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("second page should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![middle_id]);
+        assert_eq!(page.next_anchor, None);
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_by_cwd() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let first_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread id");
+        let second_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000102").expect("valid thread id");
+        let other_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000103").expect("valid thread id");
+        let first_cwd = codex_home.join("first");
+        let second_cwd = codex_home.join("second");
+        let other_cwd = codex_home.join("other");
+
+        for (thread_id, cwd, updated_at) in [
+            (first_id, first_cwd.clone(), 1_700_000_100),
+            (second_id, second_cwd.clone(), 1_700_000_300),
+            (other_id, other_cwd, 1_700_000_500),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, cwd);
+            metadata.updated_at =
+                DateTime::<Utc>::from_timestamp(updated_at, 0).expect("valid timestamp");
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let cwd_filters = vec![first_cwd, second_cwd];
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(cwd_filters.as_slice()),
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![second_id, first_id]);
+
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(&[]),
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list with empty cwd filters should succeed");
+
+        assert_eq!(page.items, Vec::new());
     }
 
     #[tokio::test]
@@ -1655,5 +1864,11 @@ mod tests {
             .await
             .expect("open descendants from child should load");
         assert_eq!(open_descendants_from_child, vec![grandchild_thread_id]);
+
+        let all_descendants = runtime
+            .list_thread_spawn_descendants(parent_thread_id)
+            .await
+            .expect("all descendants should load");
+        assert_eq!(all_descendants, vec![child_thread_id, grandchild_thread_id]);
     }
 }

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::HookEventsToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
@@ -29,7 +30,7 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
-use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -51,12 +52,14 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
+    AMAZON_BEDROCK_PROVIDER_ID,
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
@@ -87,6 +90,10 @@ pub struct ConfigToml {
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Optional policy instructions for the guardian auto-reviewer.
+    #[serde(default)]
+    pub auto_review: Option<AutoReviewToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -302,6 +309,10 @@ pub struct ConfigToml {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+
+    /// Experimental / do not use. When set, app-server uses a remote thread
+    /// store at this endpoint instead of the local filesystem/SQLite store.
+    pub experimental_thread_store_endpoint: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -321,6 +332,9 @@ pub struct ConfigToml {
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// Lifecycle hooks configured inline in TOML.
+    pub hooks: Option<HookEventsToml>,
 
     /// User-level plugin config entries keyed by plugin name.
     #[serde(default)]
@@ -393,6 +407,12 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct AutoReviewToml {
+    /// Additional policy instructions inserted into the guardian prompt.
+    pub policy: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -601,7 +621,7 @@ impl ConfigToml {
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
-        resolved_cwd: &Path,
+        active_project: Option<&ProjectConfig>,
         sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
@@ -616,7 +636,7 @@ impl ConfigToml {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).await.and_then(|p| {
+                active_project.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -677,31 +697,28 @@ impl ConfigToml {
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
-    /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let repo_root = resolve_root_git_project_for_trust(resolved_cwd).await;
-        let projects = self.projects.clone().unwrap_or_default();
+    /// does not contain a project corresponding to cwd or the resolved git repo
+    /// root for cwd.
+    pub fn get_active_project(
+        &self,
+        resolved_cwd: &Path,
+        repo_root: Option<&Path>,
+    ) -> Option<ProjectConfig> {
+        let projects = self.projects.as_ref()?;
 
-        let resolved_cwd_key = project_trust_key(resolved_cwd);
-        let resolved_cwd_raw_key = resolved_cwd.to_string_lossy().to_string();
-        if let Some(project_config) = projects
-            .get(&resolved_cwd_key)
-            .or_else(|| projects.get(&resolved_cwd_raw_key))
-        {
-            return Some(project_config.clone());
+        for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
+            if let Some(project_config) = project_config_for_lookup_key(projects, &normalized_cwd) {
+                return Some(project_config);
+            }
         }
 
-        // If cwd lives inside a git repo/worktree, check whether the root git project
-        // (the primary repository working directory) is trusted. This lets
-        // worktrees inherit trust from the main project.
-        if let Some(repo_root) = repo_root.as_deref() {
-            let repo_root_key = project_trust_key(repo_root);
-            let repo_root_raw_key = repo_root.to_string_lossy().to_string();
-            if let Some(project_config_for_root) = projects
-                .get(&repo_root_key)
-                .or_else(|| projects.get(&repo_root_raw_key))
-            {
-                return Some(project_config_for_root.clone());
+        if let Some(repo_root) = repo_root {
+            for normalized_repo_root in normalized_project_lookup_keys(repo_root) {
+                if let Some(project_config_for_root) =
+                    project_config_for_lookup_key(projects, &normalized_repo_root)
+                {
+                    return Some(project_config_for_root);
+                }
             }
         }
 
@@ -733,11 +750,45 @@ impl ConfigToml {
 /// Canonicalize the path and convert it to a string to be used as a key in the
 /// projects trust map. On Windows, strips UNC, when possible, to try to ensure
 /// that different paths that point to the same location have the same key.
-fn project_trust_key(project_path: &Path) -> String {
-    dunce::canonicalize(project_path)
-        .unwrap_or_else(|_| project_path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
+fn normalized_project_lookup_keys(path: &Path) -> Vec<String> {
+    let normalized_path = normalize_project_lookup_key(path.to_string_lossy().to_string());
+    let normalized_canonical_path = normalize_project_lookup_key(
+        normalize_for_path_comparison(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+    );
+    if normalized_path == normalized_canonical_path {
+        vec![normalized_canonical_path]
+    } else {
+        vec![normalized_canonical_path, normalized_path]
+    }
+}
+
+fn normalize_project_lookup_key(key: String) -> String {
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
+    }
+}
+
+fn project_config_for_lookup_key(
+    projects: &HashMap<String, ProjectConfig>,
+    lookup_key: &str,
+) -> Option<ProjectConfig> {
+    if let Some(project_config) = projects.get(lookup_key) {
+        return Some(project_config.clone());
+    }
+
+    let mut normalized_matches: Vec<_> = projects
+        .iter()
+        .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(_, project_config)| (**project_config).clone())
 }
 
 pub fn validate_reserved_model_provider_ids(
@@ -745,7 +796,10 @@ pub fn validate_reserved_model_provider_ids(
 ) -> Result<(), String> {
     let mut conflicts = model_providers
         .keys()
-        .filter(|key| RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str()))
+        .filter(|key| {
+            key.as_str() != AMAZON_BEDROCK_PROVIDER_ID
+                && RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str())
+        })
         .map(|key| format!("`{key}`"))
         .collect::<Vec<_>>();
     conflicts.sort_unstable();
@@ -765,6 +819,19 @@ pub fn validate_model_providers(
 ) -> Result<(), String> {
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
+        if key == AMAZON_BEDROCK_PROVIDER_ID {
+            continue;
+        }
+        if provider.aws.is_some() {
+            return Err(format!(
+                "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
+            ));
+        }
+        if provider.name.trim().is_empty() {
+            return Err(format!(
+                "model_providers.{key}: provider name must not be empty"
+            ));
+        }
         provider
             .validate()
             .map_err(|message| format!("model_providers.{key}: {message}"))?;

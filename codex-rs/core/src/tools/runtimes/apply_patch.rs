@@ -6,9 +6,11 @@
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
@@ -31,6 +33,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -74,12 +77,19 @@ impl ApplyPatchRuntime {
             return None;
         }
 
+        let base_permissions = PermissionProfile::from_runtime_permissions(
+            attempt.file_system_policy,
+            attempt.network_policy,
+        );
+        let permissions =
+            merge_permission_profiles(Some(&base_permissions), req.additional_permissions.as_ref())
+                .unwrap_or(base_permissions);
         Some(FileSystemSandboxContext {
-            sandbox_policy: attempt.policy.clone(),
+            permissions,
+            cwd: Some(attempt.sandbox_cwd.clone()),
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,
-            additional_permissions: req.additional_permissions.clone(),
         })
     }
 
@@ -129,13 +139,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
-            }
             if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, review_id, action, retry_reason)
                     .await;
+            }
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -186,6 +196,17 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         req: &ApplyPatchRequest,
     ) -> Option<ExecApprovalRequirement> {
         Some(req.exec_approval_requirement.clone())
+    }
+
+    fn permission_request_payload(
+        &self,
+        req: &ApplyPatchRequest,
+    ) -> Option<PermissionRequestPayload> {
+        Some(PermissionRequestPayload {
+            tool_name: HookToolName::apply_patch(),
+            command: req.action.patch.clone(),
+            description: None,
+        })
     }
 }
 

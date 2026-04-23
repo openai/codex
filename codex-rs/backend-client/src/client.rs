@@ -1,14 +1,17 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigFileResponse;
 use crate::types::PaginatedListTaskListItem;
+use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use reqwest::StatusCode;
@@ -18,6 +21,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
@@ -79,6 +83,18 @@ impl From<anyhow::Error> for RequestError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddCreditsNudgeCreditType {
+    Credits,
+    UsageLimit,
+}
+
+#[derive(Serialize)]
+struct SendAddCreditsNudgeEmailRequest {
+    credit_type: AddCreditsNudgeCreditType,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathStyle {
     /// /api/codex/…
@@ -122,7 +138,9 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
+            reqwest::Client::builder(),
+        ))?;
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
             base_url,
@@ -280,6 +298,21 @@ impl Client {
         Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 
+    pub async fn send_add_credits_nudge_email(
+        &self,
+        credit_type: AddCreditsNudgeCreditType,
+    ) -> std::result::Result<(), RequestError> {
+        let url = self.send_add_credits_nudge_email_url();
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&SendAddCreditsNudgeEmailRequest { credit_type });
+        self.exec_request_detailed(req, "POST", &url).await?;
+        Ok(())
+    }
+
     pub async fn list_tasks(
         &self,
         limit: Option<i32>,
@@ -412,12 +445,17 @@ impl Client {
         payload: RateLimitStatusPayload,
     ) -> Vec<RateLimitSnapshot> {
         let plan_type = Some(Self::map_plan_type(payload.plan_type));
+        let rate_limit_reached_type = payload
+            .rate_limit_reached_type
+            .flatten()
+            .and_then(|details| Self::map_rate_limit_reached_type(details.kind));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
             /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
             plan_type,
+            rate_limit_reached_type,
         )];
         if let Some(additional) = payload.additional_rate_limits.flatten() {
             snapshots.extend(additional.into_iter().map(|details| {
@@ -427,6 +465,7 @@ impl Client {
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     /*credits*/ None,
                     plan_type,
+                    /*rate_limit_reached_type*/ None,
                 )
             }));
         }
@@ -439,6 +478,7 @@ impl Client {
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
         plan_type: Option<AccountPlanType>,
+        rate_limit_reached_type: Option<RateLimitReachedType>,
     ) -> RateLimitSnapshot {
         let (primary, secondary) = match rate_limit {
             Some(details) => (
@@ -454,6 +494,45 @@ impl Client {
             secondary,
             credits: Self::map_credits(credits),
             plan_type,
+            rate_limit_reached_type,
+        }
+    }
+
+    fn map_rate_limit_reached_type(
+        kind: BackendRateLimitReachedKind,
+    ) -> Option<RateLimitReachedType> {
+        match kind {
+            BackendRateLimitReachedKind::RateLimitReached => {
+                Some(RateLimitReachedType::RateLimitReached)
+            }
+            BackendRateLimitReachedKind::WorkspaceOwnerCreditsDepleted => {
+                Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted)
+            }
+            BackendRateLimitReachedKind::WorkspaceMemberCreditsDepleted => {
+                Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
+            }
+            BackendRateLimitReachedKind::WorkspaceOwnerUsageLimitReached => {
+                Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached)
+            }
+            BackendRateLimitReachedKind::WorkspaceMemberUsageLimitReached => {
+                Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
+            }
+            BackendRateLimitReachedKind::Unknown => None,
+        }
+    }
+
+    fn send_add_credits_nudge_email_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!(
+                "{}/api/codex/accounts/send_add_credits_nudge_email",
+                self.base_url
+            ),
+            PathStyle::ChatGptApi => {
+                format!(
+                    "{}/wham/accounts/send_add_credits_nudge_email",
+                    self.base_url
+                )
+            }
         }
     }
 
@@ -521,6 +600,8 @@ impl Client {
 mod tests {
     use super::*;
     use codex_backend_openapi_models::models::AdditionalRateLimitDetails;
+    use codex_backend_openapi_models::models::RateLimitReachedKind;
+    use codex_backend_openapi_models::models::RateLimitReachedType as BackendRateLimitReachedType;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -574,6 +655,9 @@ mod tests {
                 balance: Some(Some("9.99".to_string())),
                 ..Default::default()
             }))),
+            rate_limit_reached_type: Some(Some(BackendRateLimitReachedType {
+                kind: RateLimitReachedKind::WorkspaceMemberCreditsDepleted,
+            })),
         };
 
         let snapshots = Client::rate_limit_snapshots_from_payload(payload);
@@ -598,6 +682,10 @@ mod tests {
             })
         );
         assert_eq!(snapshots[0].plan_type, Some(AccountPlanType::Pro));
+        assert_eq!(
+            snapshots[0].rate_limit_reached_type,
+            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
+        );
 
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
@@ -607,6 +695,7 @@ mod tests {
         );
         assert_eq!(snapshots[1].credits, None);
         assert_eq!(snapshots[1].plan_type, Some(AccountPlanType::Pro));
+        assert_eq!(snapshots[1].rate_limit_reached_type, None);
     }
 
     #[test]
@@ -620,6 +709,7 @@ mod tests {
                 rate_limit: None,
             }])),
             credits: None,
+            rate_limit_reached_type: None,
         };
 
         let snapshots = Client::rate_limit_snapshots_from_payload(payload);
@@ -645,6 +735,7 @@ mod tests {
                 secondary: None,
                 credits: None,
                 plan_type: Some(AccountPlanType::Pro),
+                rate_limit_reached_type: None,
             },
             RateLimitSnapshot {
                 limit_id: Some("codex".to_string()),
@@ -657,6 +748,7 @@ mod tests {
                 secondary: None,
                 credits: None,
                 plan_type: Some(AccountPlanType::Pro),
+                rate_limit_reached_type: None,
             },
         ];
 
@@ -666,5 +758,105 @@ mod tests {
             .cloned()
             .unwrap_or_else(|| snapshots[0].clone());
         assert_eq!(preferred.limit_id.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn usage_payload_maps_every_rate_limit_reached_type() {
+        let cases = [
+            (
+                RateLimitReachedKind::RateLimitReached,
+                Some(RateLimitReachedType::RateLimitReached),
+            ),
+            (
+                RateLimitReachedKind::WorkspaceOwnerCreditsDepleted,
+                Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted),
+            ),
+            (
+                RateLimitReachedKind::WorkspaceMemberCreditsDepleted,
+                Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted),
+            ),
+            (
+                RateLimitReachedKind::WorkspaceOwnerUsageLimitReached,
+                Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached),
+            ),
+            (
+                RateLimitReachedKind::WorkspaceMemberUsageLimitReached,
+                Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
+            ),
+            (RateLimitReachedKind::Unknown, None),
+        ];
+
+        for (kind, expected) in cases {
+            let payload = RateLimitStatusPayload {
+                plan_type: crate::types::PlanType::Plus,
+                rate_limit: None,
+                credits: None,
+                additional_rate_limits: None,
+                rate_limit_reached_type: Some(Some(BackendRateLimitReachedType { kind })),
+            };
+
+            let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+            assert_eq!(snapshots[0].rate_limit_reached_type, expected);
+        }
+    }
+
+    #[test]
+    fn usage_payload_preserves_absent_rate_limit_reached_type() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Plus,
+            rate_limit: None,
+            credits: None,
+            additional_rate_limits: None,
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots[0].rate_limit_reached_type, None);
+    }
+
+    #[test]
+    fn add_credits_nudge_email_uses_expected_paths_and_bodies() {
+        let codex_client = Client {
+            base_url: "https://example.test".to_string(),
+            http: reqwest::Client::new(),
+            bearer_token: None,
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::CodexApi,
+        };
+        assert_eq!(
+            codex_client.send_add_credits_nudge_email_url(),
+            "https://example.test/api/codex/accounts/send_add_credits_nudge_email"
+        );
+
+        let chatgpt_client = Client {
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            http: reqwest::Client::new(),
+            bearer_token: None,
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::ChatGptApi,
+        };
+        assert_eq!(
+            chatgpt_client.send_add_credits_nudge_email_url(),
+            "https://chatgpt.com/backend-api/wham/accounts/send_add_credits_nudge_email"
+        );
+
+        assert_eq!(
+            serde_json::to_value(SendAddCreditsNudgeEmailRequest {
+                credit_type: AddCreditsNudgeCreditType::Credits,
+            })
+            .unwrap(),
+            serde_json::json!({ "credit_type": "credits" })
+        );
+        assert_eq!(
+            serde_json::to_value(SendAddCreditsNudgeEmailRequest {
+                credit_type: AddCreditsNudgeCreditType::UsageLimit,
+            })
+            .unwrap(),
+            serde_json::json!({ "credit_type": "usage_limit" })
+        );
     }
 }

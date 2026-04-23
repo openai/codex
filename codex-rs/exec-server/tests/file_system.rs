@@ -2,6 +2,8 @@
 
 mod common;
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,9 +22,12 @@ use codex_exec_server::LocalFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -31,6 +36,8 @@ use test_case::test_case;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::TestCodexHelperPaths;
 use common::exec_server::exec_server;
+#[cfg(target_os = "linux")]
+use common::exec_server::exec_server_with_env;
 use common::exec_server::test_codex_helper_paths;
 
 struct FileSystemContext {
@@ -42,7 +49,7 @@ struct FileSystemContext {
 async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContext> {
     if use_remote {
         let server = exec_server().await?;
-        let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
         Ok(FileSystemContext {
             file_system: environment.get_filesystem(),
             _helper_paths: None,
@@ -75,26 +82,60 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
 }
 
 fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![absolute_path(readable_root)],
+    let readable_root = absolute_path(readable_root);
+    sandbox_context(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: readable_root,
         },
-        network_access: false,
-    })
+        access: FileSystemAccessMode::Read,
+    }])
 }
 
 fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![absolute_path(writable_root)],
-        read_only_access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
+    let writable_root = absolute_path(writable_root);
+    sandbox_context(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: writable_root,
         },
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
+        access: FileSystemAccessMode::Write,
+    }])
+}
+
+fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(false),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries,
+            glob_scan_max_depth: None,
+        }),
     })
+}
+
+#[test]
+fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let writable_dir = tmp.path().join("writable");
+    let git_dir = writable_dir.join(".git");
+    std::fs::create_dir_all(&git_dir)?;
+
+    let sandbox = workspace_write_sandbox(writable_dir.clone());
+    let policy = sandbox.permissions.file_system_sandbox_policy();
+    let cwd = absolute_path(writable_dir.clone());
+    let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
+    let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
+    let git_dir = absolute_path(std::fs::canonicalize(git_dir)?);
+    let Some(writable_root) = writable_roots
+        .iter()
+        .find(|writable_root| writable_root.root == writable_dir)
+    else {
+        panic!("writable root should be preserved");
+    };
+
+    assert!(writable_root.read_only_subpaths.contains(&git_dir));
+
+    Ok(())
 }
 
 fn assert_sandbox_denied(error: &std::io::Error) {
@@ -146,6 +187,96 @@ fn alias_root_candidate() -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+#[cfg(target_os = "linux")]
+fn write_fake_bwrap(bin_dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(bin_dir)?;
+    let fake_bwrap = bin_dir.join("bwrap");
+    std::fs::write(
+        &fake_bwrap,
+        r#"#!/bin/bash
+set -euo pipefail
+
+for arg in "$@"; do
+  if [[ "${arg}" == "--help" ]]; then
+    echo "Usage: bwrap --argv0"
+    exit 0
+  fi
+done
+
+printf '%s\n' "$*" >> "${0}.log"
+
+args=("$@")
+argv0=""
+command_start=-1
+for i in "${!args[@]}"; do
+  if [[ "${args[$i]}" == "--argv0" && $((i + 1)) -lt ${#args[@]} ]]; then
+    argv0="${args[$((i + 1))]}"
+  fi
+  if [[ "${args[$i]}" == "--" ]]; then
+    command_start=$((i + 1))
+    break
+  fi
+done
+
+if [[ "${command_start}" -lt 0 || "${command_start}" -ge "${#args[@]}" ]]; then
+  echo "fake bwrap did not find an inner command" >&2
+  exit 125
+fi
+
+cmd=("${args[@]:$command_start}")
+if [[ -n "${argv0}" ]]; then
+  exec -a "${argv0}" "${cmd[@]}"
+fi
+exec "${cmd[@]}"
+"#,
+    )?;
+    let mut permissions = std::fs::metadata(&fake_bwrap)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_bwrap, permissions)?;
+    Ok(fake_bwrap)
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandboxed_file_system_helper_finds_bwrap_on_preserved_path() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let fake_bin_dir = tmp.path().join("bin");
+    let fake_bwrap = write_fake_bwrap(&fake_bin_dir)?;
+    let mut path_entries = vec![fake_bin_dir];
+    if let Some(path) = std::env::var_os("PATH") {
+        path_entries.extend(std::env::split_paths(&path));
+    }
+    let helper_path = std::env::join_paths(path_entries)?;
+
+    let server = exec_server_with_env([("PATH", helper_path.as_os_str())]).await?;
+    let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
+    let file_system = environment.get_filesystem();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace)?;
+    let file_path = workspace.join("created.txt");
+    let sandbox = workspace_write_sandbox(workspace);
+
+    file_system
+        .write_file(
+            &absolute_path(file_path.clone()),
+            b"written through fs helper".to_vec(),
+            Some(&sandbox),
+        )
+        .await?;
+
+    assert_eq!(std::fs::read(&file_path)?, b"written through fs helper");
+
+    let bwrap_log = fake_bwrap.with_file_name("bwrap.log");
+    let log = std::fs::read_to_string(&bwrap_log)
+        .with_context(|| format!("expected fake bwrap log at {}", bwrap_log.display()))?;
+    assert!(
+        log.contains("--argv0"),
+        "expected fs helper sandbox path to invoke PATH bwrap with --argv0, got: {log}"
+    );
+
+    Ok(())
 }
 
 #[test_case(false ; "local")]
@@ -473,13 +604,19 @@ async fn file_system_sandboxed_write_allows_additional_write_root(use_remote: bo
     std::fs::create_dir_all(&writable_dir)?;
 
     let mut sandbox = read_only_sandbox(readable_dir);
-    sandbox.additional_permissions = Some(PermissionProfile {
+    let additional_permissions = PermissionProfile {
         network: None,
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: Some(vec![absolute_path(writable_dir)]),
-        }),
-    });
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            /*read*/ None,
+            Some(vec![absolute_path(writable_dir)]),
+        )),
+    };
+    let Some(permissions) =
+        merge_permission_profiles(Some(&sandbox.permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    sandbox.permissions = permissions;
 
     file_system
         .write_file(

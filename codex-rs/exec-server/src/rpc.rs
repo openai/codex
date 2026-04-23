@@ -18,15 +18,27 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 
-type PendingRequest = oneshot::Sender<Result<Value, JSONRPCErrorError>>;
+#[derive(Debug)]
+pub(crate) enum RpcCallError {
+    /// The underlying JSON-RPC transport closed before this call completed.
+    Closed,
+    /// The response bytes were valid JSON-RPC but not the expected result type.
+    Json(serde_json::Error),
+    /// The executor returned a JSON-RPC error response for this call.
+    Server(JSONRPCErrorError),
+}
+
+type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
-type RequestRoute<S> =
-    Box<dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<RpcServerOutboundMessage> + Send + Sync>;
+type RequestRoute<S> = Box<
+    dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<Option<RpcServerOutboundMessage>> + Send + Sync,
+>;
 type NotificationRoute<S> =
     Box<dyn Fn(Arc<S>, JSONRPCNotification) -> BoxFuture<Result<(), String>> + Send + Sync>;
 
@@ -59,6 +71,17 @@ pub(crate) struct RpcNotificationSender {
 impl RpcNotificationSender {
     pub(crate) fn new(outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>) -> Self {
         Self { outgoing_tx }
+    }
+
+    pub(crate) async fn response(
+        &self,
+        request_id: RequestId,
+        result: Value,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.outgoing_tx
+            .send(RpcServerOutboundMessage::Response { request_id, result })
+            .await
+            .map_err(|_| internal_error("RPC connection closed while sending response".into()))
     }
 
     #[allow(dead_code)]
@@ -120,10 +143,10 @@ where
                     let response = match response {
                         Ok(response) => response.await,
                         Err(error) => {
-                            return RpcServerOutboundMessage::Error { request_id, error };
+                            return Some(RpcServerOutboundMessage::Error { request_id, error });
                         }
                     };
-                    match response {
+                    Some(match response {
                         Ok(result) => match serde_json::to_value(result) {
                             Ok(result) => RpcServerOutboundMessage::Response { request_id, result },
                             Err(err) => RpcServerOutboundMessage::Error {
@@ -132,6 +155,34 @@ where
                             },
                         },
                         Err(error) => RpcServerOutboundMessage::Error { request_id, error },
+                    })
+                })
+            }),
+        );
+    }
+
+    pub(crate) fn request_with_id<P, F, Fut>(&mut self, method: &'static str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(Arc<S>, RequestId, P) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), JSONRPCErrorError>> + Send + 'static,
+    {
+        self.request_routes.insert(
+            method,
+            Box::new(move |state, request| {
+                let request_id = request.id;
+                let params = decode_request_params::<P>(request.params)
+                    .map(|params| handler(state, request_id.clone(), params));
+                Box::pin(async move {
+                    let response = match params {
+                        Ok(response) => response.await,
+                        Err(error) => {
+                            return Some(RpcServerOutboundMessage::Error { request_id, error });
+                        }
+                    };
+                    match response {
+                        Ok(()) => None,
+                        Err(error) => Some(RpcServerOutboundMessage::Error { request_id, error }),
                     }
                 })
             }),
@@ -172,6 +223,10 @@ where
 pub(crate) struct RpcClient {
     write_tx: mpsc::Sender<JSONRPCMessage>,
     pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    // Shared transport state from `JsonRpcConnection`. Calls use this to fail
+    // immediately when the socket closes, even if no JSON-RPC error response
+    // can be delivered for their request id.
+    disconnected_rx: watch::Receiver<bool>,
     next_request_id: AtomicI64,
     transport_tasks: Vec<JoinHandle<()>>,
     reader_task: JoinHandle<()>,
@@ -179,8 +234,7 @@ pub(crate) struct RpcClient {
 
 impl RpcClient {
     pub(crate) fn new(connection: JsonRpcConnection) -> (Self, mpsc::Receiver<RpcClientEvent>) {
-        let (write_tx, mut incoming_rx, _disconnected_rx, transport_tasks) =
-            connection.into_parts();
+        let (write_tx, mut incoming_rx, disconnected_rx, transport_tasks) = connection.into_parts();
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
         let (event_tx, event_rx) = mpsc::channel(128);
 
@@ -218,6 +272,7 @@ impl RpcClient {
             Self {
                 write_tx,
                 pending,
+                disconnected_rx,
                 next_request_id: AtomicI64::new(1),
                 transport_tasks,
                 reader_task,
@@ -253,10 +308,16 @@ impl RpcClient {
     {
         let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .await
-            .insert(request_id.clone(), response_tx);
+        {
+            let mut pending = self.pending.lock().await;
+            // Registering the pending request and checking disconnect must be
+            // atomic with the reader's drain_pending path. Otherwise a call
+            // can sneak in after the drain and wait forever.
+            if *self.disconnected_rx.borrow() {
+                return Err(RpcCallError::Closed);
+            }
+            pending.insert(request_id.clone(), response_tx);
+        }
 
         let params = match serde_json::to_value(params) {
             Ok(params) => params,
@@ -280,10 +341,17 @@ impl RpcClient {
             return Err(RpcCallError::Closed);
         }
 
-        let result = response_rx.await.map_err(|_| RpcCallError::Closed)?;
+        // Do not race in-flight requests directly against the transport-close
+        // watch value. The connection reader receives JSON-RPC messages and
+        // the terminal disconnect event on one ordered queue, then drains any
+        // still-pending requests. Awaiting this receiver preserves that order:
+        // responses already read before EOF still win, and truly pending calls
+        // are failed once the reader observes the disconnect.
+        let result: Result<Value, RpcCallError> =
+            response_rx.await.map_err(|_| RpcCallError::Closed)?;
         let response = match result {
             Ok(response) => response,
-            Err(error) => return Err(RpcCallError::Server(error)),
+            Err(error) => return Err(error),
         };
         serde_json::from_value(response).map_err(RpcCallError::Json)
     }
@@ -302,13 +370,6 @@ impl Drop for RpcClient {
         }
         self.reader_task.abort();
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum RpcCallError {
-    Closed,
-    Json(serde_json::Error),
-    Server(JSONRPCErrorError),
 }
 
 pub(crate) fn encode_server_message(
@@ -417,7 +478,7 @@ async fn handle_server_message(
         }
         JSONRPCMessage::Error(JSONRPCError { id, error }) => {
             if let Some(pending) = pending.lock().await.remove(&id) {
-                let _ = pending.send(Err(error));
+                let _ = pending.send(Err(RpcCallError::Server(error)));
             }
         }
         JSONRPCMessage::Notification(notification) => {
@@ -445,11 +506,7 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
             .collect::<Vec<_>>()
     };
     for pending in pending {
-        let _ = pending.send(Err(JSONRPCErrorError {
-            code: -32000,
-            data: None,
-            message: "JSON-RPC transport closed".to_string(),
-        }));
+        let _ = pending.send(Err(RpcCallError::Closed));
     }
 }
 

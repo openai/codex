@@ -103,7 +103,9 @@ async fn run_connection(
                                 break;
                             }
                         };
-                        if outgoing_tx.send(message).await.is_err() {
+                        if let Some(message) = message
+                            && outgoing_tx.send(message).await.is_err()
+                        {
                             break;
                         }
                     } else if outgoing_tx
@@ -393,6 +395,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            pipe_stdin: false,
             arg0: None,
         }
     }

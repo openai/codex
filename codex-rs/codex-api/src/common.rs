@@ -3,6 +3,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
@@ -71,6 +72,8 @@ pub enum ResponseEvent {
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
     /// This can differ from the requested model when backend safety routing applies.
     ServerModel(String),
+    /// Emitted when the server recommends additional account verification.
+    ModelVerifications(Vec<ModelVerification>),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.
@@ -80,6 +83,11 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
+    ToolCallInputDelta {
+        item_id: String,
+        call_id: Option<String>,
+        delta: String,
+    },
     ReasoningSummaryDelta {
         delta: String,
         summary_index: i64,
@@ -257,6 +265,7 @@ pub enum ResponsesWsRequest {
 pub fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
+    output_schema_strict: bool,
 ) -> Option<TextControls> {
     if verbosity.is_none() && output_schema.is_none() {
         return None;
@@ -266,7 +275,7 @@ pub fn create_text_param_for_request(
         verbosity: verbosity.map(std::convert::Into::into),
         format: output_schema.as_ref().map(|schema| TextFormat {
             r#type: TextFormatType::JsonSchema,
-            strict: true,
+            strict: output_schema_strict,
             schema: schema.clone(),
             name: "codex_output_schema".to_string(),
         }),

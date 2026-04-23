@@ -1,5 +1,5 @@
 use super::MarketplaceAddError;
-use super::MarketplaceSource;
+use super::source::MarketplaceSource;
 use crate::plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
@@ -38,6 +38,7 @@ pub(super) fn record_added_marketplace_entry(
     let timestamp = utc_timestamp_now()?;
     let update = MarketplaceConfigUpdate {
         last_updated: &timestamp,
+        last_revision: None,
         source_type: install_metadata.config_source_type(),
         source: &source,
         ref_name: install_metadata.ref_name(),

@@ -21,6 +21,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
@@ -170,6 +171,11 @@ fn run_realtime_conversation_test_in_subprocess(
         .arg("--exact")
         .arg(test_name)
         .env(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR, "1");
+    // The child talks to a loopback websocket server; parent proxy settings can
+    // route that connection away from the test server in Bazel environments.
+    for &key in codex_network_proxy::PROXY_ENV_KEYS {
+        command.env_remove(key);
+    }
     match openai_api_key {
         Some(openai_api_key) => {
             command.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
@@ -1890,6 +1896,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     let prefixed_user_text = format!("[USER] {user_text}");
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.to_string(),
                 text_elements: Vec::new(),
@@ -2019,6 +2026,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     );
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: user_text.clone(),
                 text_elements: Vec::new(),
@@ -2068,6 +2076,92 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
     insta::assert_snapshot!(
         "conversation_user_text_turn_is_capped_when_mirrored_to_realtime",
         snapshot
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_response() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_silent", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_silent",
+                    "type": "function_call",
+                    "name": "remain_silent",
+                    "call_id": "call_silent",
+                    "arguments": "{}"
+                }
+            }),
+        ],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V2;
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("backend prompt".to_string())),
+            session_id: None,
+            transport: None,
+            voice: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::NoopRequested(RealtimeNoopRequested { call_id, .. }),
+        }) if call_id == "call_silent" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let function_output = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
+    assert_eq!(
+        function_output.body_json(),
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call_silent",
+                "output": ""
+            }
+        })
+    );
+
+    let realtime_response_create = timeout(Duration::from_millis(200), async {
+        wait_for_matching_websocket_request(
+            &realtime_server,
+            "unexpected realtime response request for noop tool call",
+            |request| request.body_json()["type"].as_str() == Some("response.create"),
+        )
+        .await
+    })
+    .await;
+    assert!(
+        realtime_response_create.is_err(),
+        "noop tool calls should not request a realtime response"
     );
 
     realtime_server.shutdown().await;
@@ -2433,7 +2527,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: text from realtime</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2515,14 +2609,14 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>assistant: assistant context\nuser: delegated query\nassistant: assist confirm</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>ignored</input>\n  <transcript_delta>assistant: assistant context\nuser: delegated query\nassistant: assist confirm\nuser: ignored</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -> Result<()> {
+async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2630,13 +2724,13 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
 
     let first_user_texts = requests[0].message_input_texts("user");
     assert!(first_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: first question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>first question</input>\n  <transcript_delta>user: first question</transcript_delta>\n</realtime_delegation>"));
 
     let second_user_texts = requests[1].message_input_texts("user");
     assert!(second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: second question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: second question</transcript_delta>\n</realtime_delegation>"));
     assert!(!second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: first question\nuser: second question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2786,7 +2880,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     ]])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.1").with_config({
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -2932,7 +3026,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
     ]]])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.1").with_config({
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -3063,7 +3157,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.1").with_config({
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -3091,6 +3185,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".to_string(),
                 text_elements: Vec::new(),
@@ -3160,11 +3255,11 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         !first_texts
             .iter()
             .any(|text| text
-                == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>")
+                == "<realtime_delegation>\n  <input>steer via realtime</input>\n  <transcript_delta>user: steer via realtime</transcript_delta>\n</realtime_delegation>")
     );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
     assert!(second_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>steer via realtime</input>\n  <transcript_delta>user: steer via realtime</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -3213,7 +3308,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     ]]])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.1").with_config({
+    let mut builder = test_codex().with_model("gpt-5.4").with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -3280,7 +3375,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
     let expected_text = format!(
-        "<realtime_delegation>\n  <input>user: {delegated_text}</input>\n</realtime_delegation>"
+        "<realtime_delegation>\n  <input>{delegated_text}</input>\n  <transcript_delta>user: {delegated_text}</transcript_delta>\n</realtime_delegation>"
     );
     assert!(first_texts.iter().any(|text| text == &expected_text));
 

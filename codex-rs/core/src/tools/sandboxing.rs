@@ -4,11 +4,12 @@
 //! `ApprovalCtx`, `Approvable`) together with the sandbox orchestration traits
 //! and helpers (`Sandboxable`, `ToolRuntime`, `SandboxAttempt`, etc.).
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -129,6 +130,13 @@ pub(crate) struct ApprovalCtx<'a> {
     pub guardian_review_id: Option<String>,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionRequestPayload {
+    pub tool_name: HookToolName,
+    pub command: String,
+    pub description: Option<String>,
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -273,6 +281,12 @@ pub(crate) trait Approvable<Req> {
         None
     }
 
+    /// Return hook input for approval-time policy hooks when this runtime wants
+    /// hook evaluation to run before guardian or user approval.
+    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
+        None
+    }
+
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
         match policy {
@@ -363,7 +377,16 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
+                let windows_sandbox_policy_cwd =
+                    codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                        self.sandbox_cwd.to_path_buf(),
+                    )
+                    .unwrap_or_else(|_| request.cwd.clone());
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(
+                    request,
+                    options,
+                    windows_sandbox_policy_cwd,
+                )
             })
     }
 }

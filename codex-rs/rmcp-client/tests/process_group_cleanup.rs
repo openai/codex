@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 
 fn process_exists(pid: u32) -> bool {
@@ -78,6 +80,7 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
         )])),
         &[],
         /*cwd*/ None,
+        Arc::new(LocalStdioServerLauncher::new(std::env::current_dir()?)),
     )
     .await?;
 

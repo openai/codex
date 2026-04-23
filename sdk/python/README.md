@@ -11,7 +11,7 @@ cd sdk/python
 python -m pip install -e .
 ```
 
-Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
+Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency. For local
 repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
 local build explicitly, or use the repo examples/notebook bootstrap which
 installs the pinned runtime package automatically.
@@ -53,7 +53,7 @@ python examples/01_quickstart_constructor/async.py
 
 The repo no longer checks `codex` binaries into `sdk/python`.
 
-Published SDK builds are pinned to an exact `codex-cli-bin` package version,
+Published SDK builds are pinned to an exact `openai-codex-cli-bin` package version,
 and that runtime package carries the platform-specific binary for the target
 wheel.
 
@@ -73,7 +73,7 @@ python scripts/update_sdk_artifacts.py \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
-  /tmp/codex-python-release/codex-cli-bin \
+  /tmp/codex-python-release/openai-codex-cli-bin \
   /path/to/codex \
   --runtime-version 1.2.3
 ```
@@ -81,14 +81,14 @@ python scripts/update_sdk_artifacts.py \
 This supports the CI release flow:
 
 - run `generate-types` before packaging
-- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
-- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
+- stage `codex-app-server-sdk` once with an exact `openai-codex-cli-bin==...` dependency
+- stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
 - Package: `codex-app-server-sdk`
-- Runtime package: `codex-cli-bin`
+- Runtime package: `openai-codex-cli-bin`
 - Current SDK version in this repo: `0.2.0`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2

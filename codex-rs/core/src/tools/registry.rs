@@ -9,10 +9,12 @@ use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::sandbox_tag;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::hook_names::HookToolName;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -21,6 +23,7 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
@@ -69,8 +72,13 @@ pub trait ToolHandler: Send + Sync {
         &self,
         _call_id: &str,
         _payload: &ToolPayload,
-        _result: &dyn ToolOutput,
+        _result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
+        None
+    }
+
+    /// Creates an optional consumer for streamed tool argument diffs.
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         None
     }
 
@@ -82,10 +90,24 @@ pub trait ToolHandler: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
 }
 
+/// Consumes streamed argument diffs for a tool call and emits protocol events
+/// derived from partial tool input.
+pub(crate) trait ToolArgumentDiffConsumer: Send {
+    /// Consume the next argument diff for a tool call.
+    fn consume_diff(&mut self, turn: &TurnContext, call_id: String, diff: &str)
+    -> Option<EventMsg>;
+
+    /// Flush any buffered event before the tool call completes.
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        None
+    }
+}
+
 pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
+    pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
 impl AnyToolResult {
@@ -109,12 +131,27 @@ impl AnyToolResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
+    /// Hook-facing tool name model.
+    ///
+    /// The canonical name is serialized to hook stdin, while aliases are used
+    /// only for matcher compatibility.
+    pub(crate) tool_name: HookToolName,
+    /// Command-shaped input exposed at `tool_input.command`.
     pub(crate) command: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
+    /// Hook-facing tool name model.
+    ///
+    /// The canonical name is serialized to hook stdin, while aliases are used
+    /// only for matcher compatibility.
+    pub(crate) tool_name: HookToolName,
+    /// The originating tool-use id exposed at `tool_use_id`.
+    pub(crate) tool_use_id: String,
+    /// Command-shaped input exposed at `tool_input.command`.
     pub(crate) command: String,
+    /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
 }
 
@@ -125,13 +162,7 @@ trait AnyToolHandler: Send + Sync {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
-    fn post_tool_use_payload(
-        &self,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload>;
-
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>>;
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -154,15 +185,9 @@ where
         ToolHandler::pre_tool_use_payload(self, invocation)
     }
 
-    fn post_tool_use_payload(
-        &self,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        ToolHandler::create_diff_consumer(self)
     }
-
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -171,10 +196,13 @@ where
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
             let output = self.handle(invocation).await?;
+            let post_tool_use_payload =
+                ToolHandler::post_tool_use_payload(self, &call_id, &payload, &output);
             Ok(AnyToolResult {
                 call_id,
                 payload,
                 result: Box::new(output),
+                post_tool_use_payload,
             })
         })
     }
@@ -198,6 +226,13 @@ impl ToolRegistry {
         self.handler(name).is_some()
     }
 
+    pub(crate) fn create_diff_consumer(
+        &self,
+        name: &ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.handler(name)?.create_diff_consumer()
+    }
+
     // TODO(jif) for dynamic tools.
     // pub fn register(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
     //     let name = name.into();
@@ -206,6 +241,10 @@ impl ToolRegistry {
     //     }
     // }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "tool dispatch must keep active-turn accounting atomic"
+    )]
     pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,
@@ -293,6 +332,8 @@ impl ToolRegistry {
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
+                pre_tool_use_payload.tool_name.name().to_string(),
+                pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
                 pre_tool_use_payload.command.clone(),
             )
             .await
@@ -347,13 +388,9 @@ impl ToolRegistry {
         emit_metric_for_tool_read(&invocation, success).await;
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
-            guard.as_ref().and_then(|result| {
-                handler.post_tool_use_payload(
-                    &result.call_id,
-                    &result.payload,
-                    result.result.as_ref(),
-                )
-            })
+            guard
+                .as_ref()
+                .and_then(|result| result.post_tool_use_payload.clone())
         } else {
             None
         };
@@ -362,7 +399,9 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     &invocation.turn,
-                    invocation.call_id.clone(),
+                    post_tool_use_payload.tool_use_id,
+                    post_tool_use_payload.tool_name.name().to_string(),
+                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
                     post_tool_use_payload.command,
                     post_tool_use_payload.tool_response,
                 )

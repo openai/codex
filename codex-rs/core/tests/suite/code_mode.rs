@@ -239,6 +239,7 @@ async fn run_code_mode_turn_with_rmcp_config(
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -412,16 +413,15 @@ if (!tool) {
                 .features
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
-            config.model = Some("gpt-5-codex".to_string());
-
             let mut model_catalog = bundled_models_response()
                 .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
             let model = model_catalog
                 .models
                 .iter_mut()
-                .find(|model| model.slug == "gpt-5-codex")
-                .expect("gpt-5-codex exists in bundled models.json");
+                .find(|model| model.slug == "gpt-5.4")
+                .expect("gpt-5.4 exists in bundled models.json");
+            config.chatgpt_base_url = apps_base_url;
+            config.model = Some("gpt-5.4".to_string());
             model.supports_search_tool = true;
             config.model_catalog = Some(model_catalog);
         });
@@ -1969,14 +1969,16 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "https://example.com/image.jpg"
+            "image_url": "https://example.com/image.jpg",
+            "detail": "high"
         }),
     );
     assert_eq!(
         items[2],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "data:image/png;base64,AAA"
+            "image_url": "data:image/png;base64,AAA",
+            "detail": "high"
         }),
     );
 
@@ -2554,6 +2556,7 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
         .start_thread_with_tools(
             base_test.config.clone(),
             vec![DynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
                 name: "hidden_dynamic_tool".to_string(),
                 description: "A hidden dynamic tool.".to_string(),
                 input_schema: serde_json::json!({
@@ -2574,8 +2577,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
-const out = await tools.hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
+const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -2606,6 +2609,7 @@ text(
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "use exec to inspect and call hidden tools".into(),
                 text_elements: Vec::new(),
@@ -2634,6 +2638,7 @@ text(
         _ => None,
     })
     .await;
+    assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, "hidden_dynamic_tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
     test.codex
@@ -2667,7 +2672,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("hidden_dynamic_tool".to_string()))
+        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -2680,7 +2685,7 @@ text(
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("hidden_dynamic_tool(args:")
+                    && description.contains("codex_app_hidden_dynamic_tool(args:")
             })
     );
 

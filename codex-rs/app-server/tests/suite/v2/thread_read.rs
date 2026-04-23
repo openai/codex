@@ -2,12 +2,14 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -23,15 +25,20 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
+use std::io::Write;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -79,7 +86,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
@@ -134,7 +141,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.turns.len(), 1);
     let turn = &thread.turns[0];
@@ -153,6 +160,205 @@ async fn thread_read_can_include_turns() -> Result<()> {
         other => panic!("expected user message item, got {other:?}"),
     }
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "first",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:01:00Z", "second")?;
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:02:00Z", "third")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id.clone(),
+            cursor: None,
+            limit: Some(2),
+            sort_direction: Some(SortDirection::Desc),
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse {
+        data,
+        next_cursor,
+        backwards_cursor,
+    } = to_response::<ThreadTurnsListResponse>(read_resp)?;
+    assert_eq!(turn_user_texts(&data), vec!["third", "second"]);
+    let next_cursor = next_cursor.expect("expected nextCursor for older turns");
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor for newest turn");
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id.clone(),
+            cursor: Some(next_cursor),
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Desc),
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse { data, .. } = to_response::<ThreadTurnsListResponse>(read_resp)?;
+    assert_eq!(turn_user_texts(&data), vec!["first"]);
+
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:03:00Z", "fourth")?;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id,
+            cursor: Some(backwards_cursor),
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse { data, .. } = to_response::<ThreadTurnsListResponse>(read_resp)?;
+    assert_eq!(turn_user_texts(&data), vec!["third", "fourth"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_can_return_archived_threads_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let preview = "Archived saved user message";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        preview,
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let active_rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    std::fs::create_dir_all(&archived_dir)?;
+    let archived_rollout_path =
+        archived_dir.join(active_rollout_path.file_name().expect("rollout file name"));
+    std::fs::rename(&active_rollout_path, &archived_rollout_path)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(thread.id, conversation_id);
+    assert_eq!(thread.preview, preview);
+    let path = thread.path.expect("thread path");
+    assert_eq!(path.canonicalize()?, archived_rollout_path.canonicalize()?);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "first",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:01:00Z", "second")?;
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:02:00Z", "third")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id.clone(),
+            cursor: None,
+            limit: Some(2),
+            sort_direction: Some(SortDirection::Desc),
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse {
+        backwards_cursor, ..
+    } = to_response::<ThreadTurnsListResponse>(read_resp)?;
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor for newest turn");
+
+    append_thread_rollback(
+        rollout_path.as_path(),
+        "2025-01-05T12:03:00Z",
+        /*num_turns*/ 1,
+    )?;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id,
+            cursor: Some(backwards_cursor),
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+        })
+        .await?;
+    let read_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        read_err.error.message,
+        "invalid cursor: anchor turn is no longer present"
+    );
 
     Ok(())
 }
@@ -200,7 +406,7 @@ async fn thread_read_returns_forked_from_id_for_forked_threads() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.forked_from_id, Some(conversation_id));
 
@@ -245,7 +451,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read.id, thread.id);
     assert_eq!(read.path, Some(thread_path));
@@ -313,7 +519,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     )
     .await??;
     let read_result = read_resp.result.clone();
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.name.as_deref(), Some(new_name));
     let thread_json = read_result
@@ -337,10 +543,12 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             cursor: None,
             limit: Some(50),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
             cwd: None,
+            use_state_db_only: false,
             search_term: None,
         })
         .await?;
@@ -522,11 +730,61 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.status, ThreadStatus::SystemError,);
 
     Ok(())
+}
+
+fn append_user_message(path: &Path, timestamp: &str, text: &str) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type":"event_msg",
+            "payload": {
+                "type":"user_message",
+                "message": text,
+                "text_elements": [],
+                "local_images": []
+            }
+        })
+    )
+}
+
+fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type":"event_msg",
+            "payload": {
+                "type":"thread_rolled_back",
+                "num_turns": num_turns
+            }
+        })
+    )
+}
+
+fn turn_user_texts(turns: &[codex_app_server_protocol::Turn]) -> Vec<&str> {
+    turns
+        .iter()
+        .filter_map(|turn| match turn.items.first()? {
+            ThreadItem::UserMessage { content, .. } => match content.first()? {
+                UserInput::Text { text, .. } => Some(text.as_str()),
+                UserInput::Image { .. }
+                | UserInput::LocalImage { .. }
+                | UserInput::Skill { .. }
+                | UserInput::Mention { .. } => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 // Helper to create a config.toml pointing at the mock model server.

@@ -33,6 +33,10 @@ common:windows --test_env=PATH
 common:windows --test_env=SYSTEMROOT
 common:windows --test_env=COMSPEC
 common:windows --test_env=WINDIR
+# Rust's libtest harness runs test bodies on std-spawned threads. The default
+# 2 MiB stack can be too small for large async test futures on Windows CI; see
+# https://github.com/openai/codex/pull/19067 for the motivating failure.
+common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 
 common --test_output=errors
 common --bes_results_url=https://app.buildbuddy.io/invocation/
@@ -65,6 +69,10 @@ common:ci --verbose_failures
 common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
 common:ci --build_metadata=ROLE=CI
 common:ci --build_metadata=VISIBILITY=PUBLIC
+# rules_rust derives debug level from Bazel toolchain/compilation-mode settings,
+# not Cargo profiles. Keep CI Rust actions explicit and lean.
+common:ci --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+common:ci --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
 
 # Disable disk cache in CI since we have a remote one and aren't using persistent workers.
 common:ci --disk_cache=
@@ -82,6 +90,8 @@ build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
 # in their own `Cargo.toml`, but `rules_rust` Bazel clippy does not read Cargo lint levels.
 # `clippy.toml` can configure lint behavior, but it cannot set allow/warn/deny/forbid levels.
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_invalid_type
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_lock
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::expect_used
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::identity_op
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_clamp

@@ -27,14 +27,33 @@ pub(crate) fn select_handlers(
     event_name: HookEventName,
     matcher_input: Option<&str>,
 ) -> Vec<ConfiguredHandler> {
+    let matcher_inputs = matcher_input.into_iter().collect::<Vec<_>>();
+    select_handlers_for_matcher_inputs(handlers, event_name, &matcher_inputs)
+}
+
+pub(crate) fn select_handlers_for_matcher_inputs(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_inputs: &[&str],
+) -> Vec<ConfiguredHandler> {
+    // Check each configured handler once, even when several compatibility names
+    // match the same regex. A hook like `apply_patch|Write|Edit` should run a
+    // single time for one tool call, not once per matching alias.
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
             HookEventName::PreToolUse
+            | HookEventName::PermissionRequest
             | HookEventName::PostToolUse
             | HookEventName::SessionStart => {
-                matches_matcher(handler.matcher.as_deref(), matcher_input)
+                if matcher_inputs.is_empty() {
+                    matches_matcher(handler.matcher.as_deref(), /*input*/ None)
+                } else {
+                    matcher_inputs
+                        .iter()
+                        .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
+                }
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
         })
@@ -50,6 +69,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
@@ -95,6 +115,7 @@ pub(crate) fn completed_summary(
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
@@ -109,6 +130,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
         HookEventName::PreToolUse
+        | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
@@ -118,11 +140,13 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 #[cfg(test)]
 mod tests {
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
 
     use super::ConfiguredHandler;
     use super::select_handlers;
+    use super::select_handlers_for_matcher_inputs;
 
     fn make_handler(
         event_name: HookEventName,
@@ -132,11 +156,13 @@ mod tests {
     ) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            is_managed: false,
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: HookSource::User,
             display_order,
         }
     }
@@ -274,6 +300,51 @@ mod tests {
         assert_eq!(selected_edit.len(), 1);
         assert_eq!(selected_write.len(), 1);
         assert_eq!(selected_bash.len(), 0);
+    }
+
+    #[test]
+    fn pre_tool_use_aliases_match_once_per_handler() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^apply_patch$"),
+                "echo apply_patch",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Write$"),
+                "echo write",
+                /*display_order*/ 1,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Edit$"),
+                "echo edit",
+                /*display_order*/ 2,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("apply_patch|Write|Edit"),
+                "echo combined",
+                /*display_order*/ 3,
+            ),
+        ];
+
+        let selected = select_handlers_for_matcher_inputs(
+            &handlers,
+            HookEventName::PreToolUse,
+            &["apply_patch", "Write", "Edit"],
+        );
+
+        assert_eq!(selected.len(), 4);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|handler| handler.display_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3],
+        );
     }
 
     #[test]

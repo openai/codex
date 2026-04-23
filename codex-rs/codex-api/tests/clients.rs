@@ -5,6 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
+use codex_api::ApiError;
+use codex_api::AuthError;
 use codex_api::AuthProvider;
 use codex_api::Compression;
 use codex_api::Provider;
@@ -164,6 +166,59 @@ impl FlakyTransport {
     }
 }
 
+#[derive(Clone)]
+struct FailsOnceAuth {
+    attempts: Arc<Mutex<i64>>,
+    error: Arc<AuthError>,
+}
+
+impl FailsOnceAuth {
+    fn transient() -> Self {
+        Self {
+            attempts: Arc::new(Mutex::new(0)),
+            error: Arc::new(AuthError::Transient(
+                "sts temporarily unavailable".to_string(),
+            )),
+        }
+    }
+
+    fn build() -> Self {
+        Self {
+            attempts: Arc::new(Mutex::new(0)),
+            error: Arc::new(AuthError::Build("invalid auth configuration".to_string())),
+        }
+    }
+
+    fn attempts(&self) -> i64 {
+        *self
+            .attempts
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
+    }
+}
+
+#[async_trait]
+impl AuthProvider for FailsOnceAuth {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
+        let mut attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|err| panic!("mutex poisoned: {err}"));
+        *attempts += 1;
+
+        if *attempts == 1 {
+            return match self.error.as_ref() {
+                AuthError::Build(message) => Err(AuthError::Build(message.clone())),
+                AuthError::Transient(message) => Err(AuthError::Transient(message.clone())),
+            };
+        }
+
+        Ok(request)
+    }
+}
+
 #[async_trait]
 impl HttpTransport for FlakyTransport {
     async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
@@ -200,7 +255,7 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 async fn responses_client_uses_responses_path() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
@@ -221,7 +276,7 @@ async fn responses_client_uses_responses_path() -> Result<()> {
 async fn streaming_client_adds_auth_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let auth = StaticAuth::new("secret-token", "acct-1");
+    let auth = Arc::new(StaticAuth::new("secret-token", "acct-1"));
     let client = ResponsesClient::new(transport, provider("openai"), auth);
 
     let body = serde_json::json!({ "model": "gpt-test" });
@@ -281,7 +336,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         text: None,
         client_metadata: None,
     };
-    let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
+    let client = ResponsesClient::new(transport.clone(), provider, Arc::new(NoAuth));
 
     let _stream = client
         .stream_request(
@@ -297,10 +352,69 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 }
 
 #[tokio::test]
+async fn streaming_client_retries_on_transient_auth_error() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let auth = FailsOnceAuth::transient();
+
+    let mut provider = provider("openai");
+    provider.retry.max_attempts = 2;
+
+    let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
+    let body = serde_json::json!({ "model": "gpt-test" });
+    let _stream = client
+        .stream(
+            body,
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await?;
+
+    assert_eq!(auth.attempts(), 2);
+    assert_eq!(state.take_stream_requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let auth = FailsOnceAuth::build();
+
+    let mut provider = provider("openai");
+    provider.retry.max_attempts = 2;
+
+    let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
+    let body = serde_json::json!({ "model": "gpt-test" });
+    let result = client
+        .stream(
+            body,
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("auth build errors should fail without retry"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        ApiError::Transport(TransportError::Build(message))
+            if message == "invalid auth configuration"
+    ));
+    assert_eq!(auth.attempts(), 1);
+    assert_eq!(state.take_stream_requests().len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("azure"), NoAuth);
+    let client = ResponsesClient::new(transport, provider("azure"), Arc::new(NoAuth));
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),

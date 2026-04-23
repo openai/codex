@@ -20,8 +20,8 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::contextual_user_message::is_contextual_user_fragment;
-use crate::contextual_user_message::parse_visible_hook_prompt_message;
+use crate::context::is_contextual_user_fragment;
+use crate::context::parse_visible_hook_prompt_message;
 use crate::web_search::web_search_action_detail;
 
 const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
@@ -90,7 +90,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     text_elements: Vec::new(),
                 });
             }
-            ContentItem::InputImage { image_url } => {
+            ContentItem::InputImage { image_url, .. } => {
                 content.push(UserInput::Image {
                     image_url: image_url.clone(),
                 });

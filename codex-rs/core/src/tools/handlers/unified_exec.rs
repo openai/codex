@@ -14,14 +14,17 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -30,6 +33,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::UnifiedExecShellMode;
+use codex_utils_output_truncation::approx_token_count;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,27 +137,33 @@ impl ToolHandler for UnifiedExecHandler {
 
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload { command: args.cmd })
+            .map(|args| PreToolUsePayload {
+                tool_name: HookToolName::bash(),
+                command: args.cmd,
+            })
     }
 
     fn post_tool_use_payload(
         &self,
         call_id: &str,
         payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = payload else {
+        let ToolPayload::Function { .. } = payload else {
             return None;
         };
 
-        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
-        if args.tty {
-            return None;
-        }
-
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let command = result.hook_command.clone()?;
+        let tool_use_id = if result.event_call_id.is_empty() {
+            call_id.to_string()
+        } else {
+            result.event_call_id.clone()
+        };
+        let tool_response = result.post_tool_use_response(&tool_use_id, payload)?;
         Some(PostToolUsePayload {
-            command: args.cmd,
+            tool_name: HookToolName::bash(),
+            tool_use_id,
+            command,
             tool_response,
         })
     }
@@ -192,11 +202,12 @@ impl ToolHandler for UnifiedExecHandler {
             "exec_command" => {
                 let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
                 let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+                let hook_command = args.cmd.clone();
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     context.turn.as_ref(),
-                    &args.cmd,
+                    &hook_command,
                     &workdir,
                 )
                 .await;
@@ -227,6 +238,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let requested_additional_permissions = additional_permissions.clone();
                 let effective_additional_permissions = apply_granted_turn_permissions(
                     context.session.as_ref(),
+                    context.turn.cwd.as_path(),
                     sandbox_permissions,
                     additional_permissions,
                 )
@@ -304,15 +316,16 @@ impl ToolHandler for UnifiedExecHandler {
                         process_id: None,
                         exit_code: None,
                         original_token_count: None,
-                        session_command: None,
+                        hook_command: None,
                     });
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                manager
+                match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            hook_command: hook_command.clone(),
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -330,11 +343,31 @@ impl ToolHandler for UnifiedExecHandler {
                         &context,
                     )
                     .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
+                {
+                    Ok(response) => response,
+                    Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+                        let output_text = output.aggregated_output.text;
+                        let original_token_count = approx_token_count(&output_text);
+                        ExecCommandToolOutput {
+                            event_call_id: context.call_id.clone(),
+                            chunk_id: generate_chunk_id(),
+                            wall_time: output.duration,
+                            raw_output: output_text.into_bytes(),
+                            max_output_tokens,
+                            // Sandbox denial is terminal, so there is no live
+                            // process for write_stdin to resume.
+                            process_id: None,
+                            exit_code: Some(output.exit_code),
+                            original_token_count: Some(original_token_count),
+                            hook_command: Some(hook_command),
+                        }
+                    }
+                    Err(err) => {
+                        return Err(FunctionCallError::RespondToModel(format!(
                             "exec_command failed for `{command_for_display}`: {err:?}"
-                        ))
-                    })?
+                        )));
+                    }
+                }
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;

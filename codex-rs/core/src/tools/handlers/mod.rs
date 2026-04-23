@@ -28,9 +28,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
-use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
@@ -169,6 +169,7 @@ pub(super) fn implicit_granted_permissions(
 
 pub(super) async fn apply_granted_turn_permissions(
     session: &Session,
+    cwd: &std::path::Path,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
 ) -> EffectiveAdditionalPermissions {
@@ -192,8 +193,7 @@ pub(super) async fn apply_granted_turn_permissions(
     );
     let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
         (Some(effective_permissions), Some(granted_permissions)) => {
-            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
-                == *effective_permissions
+            permissions_are_preapproved(effective_permissions, granted_permissions, cwd)
         }
         _ => false,
     };
@@ -212,17 +212,38 @@ pub(super) async fn apply_granted_turn_permissions(
     }
 }
 
+fn permissions_are_preapproved(
+    effective_permissions: &PermissionProfile,
+    granted_permissions: PermissionProfile,
+    cwd: &Path,
+) -> bool {
+    let materialized_effective_permissions = intersect_permission_profiles(
+        effective_permissions.clone(),
+        effective_permissions.clone(),
+        cwd,
+    );
+    intersect_permission_profiles(effective_permissions.clone(), granted_permissions, cwd)
+        == materialized_effective_permissions
+}
+
 #[cfg(test)]
 mod tests {
     use super::EffectiveAdditionalPermissions;
     use super::implicit_granted_permissions;
     use super::normalize_and_validate_additional_permissions;
+    use super::permissions_are_preapproved;
     use crate::sandboxing::SandboxPermissions;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::GranularApprovalConfig;
+    use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+    use codex_sandboxing::policy_transforms::merge_permission_profiles;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -238,12 +259,12 @@ mod tests {
 
     fn file_system_permissions(path: &std::path::Path) -> PermissionProfile {
         PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![
                     AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
                 ]),
-            }),
+            )),
             ..Default::default()
         }
     }
@@ -324,5 +345,44 @@ mod tests {
         );
 
         assert_eq!(implicit_permissions, None);
+    }
+
+    #[test]
+    fn relative_deny_glob_grants_remain_preapproved_after_materialization() {
+        let cwd = tempdir().expect("tempdir");
+        let requested_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: "**/*.env".to_string(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            }),
+            ..Default::default()
+        };
+        let stored_grant = intersect_permission_profiles(
+            requested_permissions.clone(),
+            requested_permissions.clone(),
+            cwd.path(),
+        );
+        let effective_permissions =
+            merge_permission_profiles(Some(&requested_permissions), Some(&stored_grant))
+                .expect("merged permissions");
+
+        assert!(permissions_are_preapproved(
+            &effective_permissions,
+            stored_grant,
+            cwd.path(),
+        ));
     }
 }

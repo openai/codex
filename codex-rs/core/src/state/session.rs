@@ -6,9 +6,9 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::codex::PreviousTurnSettings;
-use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::session::PreviousTurnSettings;
+use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;

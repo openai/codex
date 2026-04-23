@@ -10,7 +10,7 @@ use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
 
 use crate::ResponseEvent;
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
 pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
@@ -74,6 +74,13 @@ impl TurnTimingState {
         (completed_at, duration_ms)
     }
 
+    pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        state
+            .time_to_first_token()
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+    }
+
     pub(crate) async fn record_ttft_for_response_event(
         &self,
         event: &ResponseEvent,
@@ -102,14 +109,17 @@ fn now_unix_timestamp_secs() -> i64 {
 }
 
 impl TurnTimingStateInner {
+    fn time_to_first_token(&self) -> Option<Duration> {
+        Some(self.first_token_at?.duration_since(self.started_at?))
+    }
+
     fn record_turn_ttft(&mut self) -> Option<Duration> {
         if self.first_token_at.is_some() {
             return None;
         }
-        let started_at = self.started_at?;
-        let first_token_at = Instant::now();
-        self.first_token_at = Some(first_token_at);
-        Some(first_token_at.duration_since(started_at))
+        self.started_at?;
+        self.first_token_at = Some(Instant::now());
+        self.time_to_first_token()
     }
 
     fn record_turn_ttfm(&mut self) -> Option<Duration> {
@@ -133,7 +143,9 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created
         | ResponseEvent::ServerModel(_)
+        | ResponseEvent::ModelVerifications(_)
         | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::Completed { .. }
         | ResponseEvent::ReasoningSummaryPartAdded { .. }
         | ResponseEvent::RateLimits(_)

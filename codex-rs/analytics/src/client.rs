@@ -1,5 +1,6 @@
 use crate::events::AppServerRpcTransport;
-use crate::events::GuardianReviewEventParams;
+use crate::events::GuardianReviewAnalyticsResult;
+use crate::events::GuardianReviewTrackContext;
 use crate::events::TrackEventRequest;
 use crate::events::TrackEventsRequest;
 use crate::events::current_runtime_metadata;
@@ -9,6 +10,8 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::HookRunFact;
+use crate::facts::HookRunInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -159,9 +162,13 @@ impl AnalyticsEventsClient {
         ));
     }
 
-    pub fn track_guardian_review(&self, input: GuardianReviewEventParams) {
+    pub fn track_guardian_review(
+        &self,
+        tracking: &GuardianReviewTrackContext,
+        result: GuardianReviewAnalyticsResult,
+    ) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
-            Box::new(input),
+            Box::new(tracking.event_params(result)),
         )));
     }
 
@@ -188,6 +195,12 @@ impl AnalyticsEventsClient {
         }
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
             AppUsedInput { tracking, app },
+        )));
+    }
+
+    pub fn track_hook_run(&self, tracking: TrackEventsContext, hook: HookRunFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(
+            HookRunInput { tracking, hook },
         )));
     }
 

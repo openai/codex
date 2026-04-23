@@ -1,5 +1,4 @@
 pub(crate) mod command_runner;
-pub(crate) mod config;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
@@ -7,8 +6,11 @@ pub(crate) mod schema_loader;
 
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::events::permission_request::PermissionRequestOutcome;
+use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
@@ -29,11 +31,13 @@ pub(crate) struct CommandShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
+    pub is_managed: bool,
     pub matcher: Option<String>,
     pub command: String,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
     pub display_order: i64,
 }
 
@@ -50,6 +54,7 @@ impl ConfiguredHandler {
     fn event_name_label(&self) -> &'static str {
         match self.event_name {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
+            codex_protocol::protocol::HookEventName::PermissionRequest => "permission-request",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
@@ -103,6 +108,13 @@ impl ClaudeHooksEngine {
         crate::events::pre_tool_use::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_permission_request(
+        &self,
+        request: &PermissionRequestRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::permission_request::preview(&self.handlers, request)
+    }
+
     pub(crate) fn preview_post_tool_use(
         &self,
         request: &PostToolUseRequest,
@@ -120,6 +132,13 @@ impl ClaudeHooksEngine {
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
         crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) async fn run_permission_request(
+        &self,
+        request: PermissionRequestRequest,
+    ) -> PermissionRequestOutcome {
+        crate::events::permission_request::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_post_tool_use(
@@ -151,3 +170,7 @@ impl ClaudeHooksEngine {
         crate::events::stop::run(&self.handlers, &self.shell, request).await
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

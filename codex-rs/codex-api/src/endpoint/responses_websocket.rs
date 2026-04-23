@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
@@ -229,6 +229,10 @@ impl ResponsesWebsocketConnection {
 
         let current_span = Span::current();
         tokio::spawn(
+            #[expect(
+                clippy::await_holding_invalid_type,
+                reason = "the guard serializes exclusive use of the websocket stream for the lifetime of the response stream"
+            )]
             async move {
                 if let Some(model) = server_model {
                     let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
@@ -279,13 +283,13 @@ impl ResponsesWebsocketConnection {
     }
 }
 
-pub struct ResponsesWebsocketClient<A: AuthProvider> {
+pub struct ResponsesWebsocketClient {
     provider: Provider,
-    auth: A,
+    auth: SharedAuthProvider,
 }
 
-impl<A: AuthProvider> ResponsesWebsocketClient<A> {
-    pub fn new(provider: Provider, auth: A) -> Self {
+impl ResponsesWebsocketClient {
+    pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self {
         Self { provider, auth }
     }
 
@@ -604,6 +608,7 @@ async fn run_websocket_response_stream(
                         continue;
                     }
                 };
+                let model_verifications = event.model_verifications();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -617,6 +622,16 @@ async fn run_websocket_response_stream(
                         .send(Ok(ResponseEvent::ServerModel(model.clone())))
                         .await;
                     last_server_model = Some(model);
+                }
+                if let Some(verifications) = model_verifications
+                    && tx_event
+                        .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                        .await
+                        .is_err()
+                {
+                    return Err(ApiError::Stream(
+                        "response event consumer dropped".to_string(),
+                    ));
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {

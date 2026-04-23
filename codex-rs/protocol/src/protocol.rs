@@ -38,6 +38,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -49,7 +50,6 @@ use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
-use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -67,6 +67,7 @@ pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::GuardianAssessmentAction;
 pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
+pub use crate::approvals::GuardianAssessmentOutcome;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
 pub use crate::approvals::GuardianRiskLevel;
@@ -102,6 +103,23 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct TurnEnvironmentSelection {
+    pub environment_id: String,
+    pub cwd: AbsolutePathBuf,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(type = "string")]
+pub struct GitSha(pub String);
+
+impl GitSha {
+    pub fn new(sha: &str) -> Self {
+        Self(sha.to_string())
+    }
+}
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -319,6 +337,12 @@ pub struct RealtimeHandoffRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeNoopRequested {
+    pub call_id: String,
+    pub item_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeInputAudioSpeechStarted {
     pub item_id: Option<String>,
 }
@@ -358,6 +382,7 @@ pub enum RealtimeEvent {
         item_id: String,
     },
     HandoffRequested(RealtimeHandoffRequested),
+    NoopRequested(RealtimeNoopRequested),
     Error(String),
 }
 
@@ -407,12 +432,88 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+    },
+
+    /// Similar to [`Op::UserInput`], but first applies persistent turn-context
+    /// overrides in the same queued operation. This preserves submission order
+    /// and prevents the input from starting if the overrides are rejected.
+    UserInputWithTurnContext {
+        /// User input items, see `InputItem`
+        items: Vec<UserInput>,
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+        /// Optional JSON Schema used to constrain the final assistant message for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
+
+        /// Updated `cwd` for sandbox/tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+
+        /// Updated command approval policy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_policy: Option<AskForApproval>,
+
+        /// Updated approval reviewer for future approval prompts.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approvals_reviewer: Option<ApprovalsReviewer>,
+
+        /// Updated sandbox policy for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated permissions profile for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
+        /// Updated Windows sandbox mode for tool execution.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        windows_sandbox_level: Option<WindowsSandboxLevel>,
+
+        /// Updated model slug. When set, the model info is derived
+        /// automatically.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+
+        /// Updated reasoning effort (honored only for reasoning-capable models).
+        ///
+        /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
+        /// the effort, or `None` to leave the existing value unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<Option<ReasoningEffortConfig>>,
+
+        /// Updated reasoning summary preference (honored only for reasoning-capable models).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<ReasoningSummaryConfig>,
+
+        /// Updated service tier preference for future turns.
+        ///
+        /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
+        /// preference, or `None` to leave the existing value unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<Option<ServiceTier>>,
+
+        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// Takes precedence over model, effort, and developer instructions if set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<CollaborationMode>,
+
+        /// Updated personality preference.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -470,6 +571,10 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Optional turn-scoped environment selections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
@@ -500,6 +605,10 @@ pub enum Op {
         /// Updated sandbox policy for tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated permissions profile for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
 
         /// Updated Windows sandbox mode for tool execution.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -670,6 +779,9 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Record that the user approved one retry of a concrete Guardian-denied action.
+    ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
+
     /// Request to shut down codex instance.
     Shutdown,
 
@@ -697,6 +809,7 @@ pub enum ThreadMemoryMode {
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
+            environments: None,
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -765,6 +878,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
+            Self::UserInputWithTurnContext { .. } => "user_input_with_turn_context",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
@@ -788,6 +902,7 @@ impl Op {
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
+            Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
             Self::ListModels => "list_models",
@@ -1405,6 +1520,9 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Warning issued by the guardian automatic approval reviewer.
+    GuardianWarning(WarningEvent),
+
     /// Realtime conversation lifecycle start event.
     RealtimeConversationStarted(RealtimeConversationStartedEvent),
 
@@ -1419,6 +1537,9 @@ pub enum EventMsg {
 
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
+
+    /// Backend recommends additional account verification for this turn.
+    ModelVerification(ModelVerificationEvent),
 
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
@@ -1536,6 +1657,9 @@ pub enum EventMsg {
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
 
+    /// Latest model-generated structured changes for an `apply_patch` call.
+    PatchApplyUpdated(PatchApplyUpdatedEvent),
+
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
 
@@ -1607,6 +1731,7 @@ pub enum EventMsg {
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     PreToolUse,
+    PermissionRequest,
     PostToolUse,
     SessionStart,
     UserPromptSubmit,
@@ -1633,6 +1758,20 @@ pub enum HookExecutionMode {
 pub enum HookScope {
     Thread,
     Turn,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookSource {
+    System,
+    User,
+    Project,
+    Mdm,
+    SessionFlags,
+    LegacyManagedConfigFile,
+    LegacyManagedConfigMdm,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1671,6 +1810,8 @@ pub struct HookRunSummary {
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
     pub source_path: AbsolutePathBuf,
+    #[serde(default)]
+    pub source: HookSource,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -1826,6 +1967,7 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    CyberPolicy,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1862,6 +2004,7 @@ impl CodexErrorInfo {
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
+            | Self::CyberPolicy
             | Self::HttpConnectionFailed { .. }
             | Self::ResponseStreamConnectionFailed { .. }
             | Self::InternalServerError
@@ -2045,6 +2188,18 @@ pub struct ModelRerouteEvent {
     pub reason: ModelRerouteReason,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ModelVerification {
+    TrustedAccessForCyber,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ModelVerificationEvent {
+    pub verifications: Vec<ModelVerification>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
 
@@ -2060,6 +2215,10 @@ pub struct TurnCompleteEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number | null", optional)]
     pub duration_ms: Option<i64>,
+    /// Duration between turn start and the first model token in milliseconds, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub time_to_first_token_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2170,6 +2329,18 @@ pub struct RateLimitSnapshot {
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
+    pub rate_limit_reached_type: Option<RateLimitReachedType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RateLimitReachedType {
+    RateLimitReached,
+    WorkspaceOwnerCreditsDepleted,
+    WorkspaceMemberCreditsDepleted,
+    WorkspaceOwnerUsageLimitReached,
+    WorkspaceMemberUsageLimitReached,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -2391,6 +2562,9 @@ pub struct DynamicToolCallResponseEvent {
     pub call_id: String,
     /// Turn ID that this dynamic tool call belongs to.
     pub turn_id: String,
+    /// Dynamic tool namespace, when one was provided.
+    #[serde(default)]
+    pub namespace: Option<String>,
     /// Dynamic tool name.
     pub tool: String,
     /// Dynamic tool call arguments.
@@ -2681,6 +2855,9 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
             }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some(AgentPath::morpheus())
+            }
             _ => None,
         }
     }
@@ -2842,8 +3019,12 @@ pub struct TurnContextItem {
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -2862,6 +3043,24 @@ pub struct TurnContextItem {
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,
+}
+
+impl TurnContextItem {
+    pub fn permission_profile(&self) -> PermissionProfile {
+        self.permission_profile.clone().unwrap_or_else(|| {
+            let file_system_sandbox_policy =
+                self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                        &self.sandbox_policy,
+                        &self.cwd,
+                    )
+                });
+            PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::from(&self.sandbox_policy),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -3213,6 +3412,14 @@ pub struct PatchApplyBeginEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PatchApplyUpdatedEvent {
+    /// Identifier for the originating `apply_patch` tool call.
+    pub call_id: String,
+    /// Structured file changes parsed from the model-generated patch input so far.
+    pub changes: HashMap<PathBuf, FileChange>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
@@ -3482,8 +3689,16 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// How to sandbox commands executed in the system
+    /// Legacy sandbox projection for commands executed in the system.
+    ///
+    /// Consumers should prefer `permission_profile` when it is present. This
+    /// field remains available as a compatibility fallback for older emitters
+    /// and sessions that only expose legacy sandbox state.
     pub sandbox_policy: SandboxPolicy,
+
+    /// Canonical effective permissions for commands executed in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -4817,6 +5032,7 @@ mod tests {
     #[test]
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -4835,6 +5051,7 @@ mod tests {
         assert_eq!(
             op,
             Op::UserInput {
+                environments: None,
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
@@ -4855,6 +5072,7 @@ mod tests {
             "additionalProperties": false
         });
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
@@ -4876,6 +5094,7 @@ mod tests {
     #[test]
     fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
         let op = Op::UserInput {
+            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: Some(HashMap::from([(
@@ -4974,6 +5193,7 @@ mod tests {
 
         assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
+        assert_eq!(item.file_system_sandbox_policy, None);
         Ok(())
     }
 
@@ -4987,10 +5207,19 @@ mod tests {
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
             }),
+            file_system_sandbox_policy: Some(FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "/tmp/private/**/*.txt".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+            ])),
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
@@ -5009,6 +5238,19 @@ mod tests {
             json!({
                 "allowed_domains": ["api.example.com"],
                 "denied_domains": ["blocked.example.com"],
+            })
+        );
+        assert_eq!(
+            value["file_system_sandbox_policy"],
+            json!({
+                "kind": "restricted",
+                "entries": [{
+                    "path": {
+                        "type": "glob_pattern",
+                        "pattern": "/tmp/private/**/*.txt"
+                    },
+                    "access": "none"
+                }]
             })
         );
         Ok(())
@@ -5032,6 +5274,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,

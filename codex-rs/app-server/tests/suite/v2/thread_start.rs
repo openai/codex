@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::PathBufExt;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -20,6 +21,8 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
+use codex_core::config_loader::project_trust_key;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
@@ -61,7 +64,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     // Start a v2 thread with an explicit model override.
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1".to_string()),
+            model: Some("gpt-5.2".to_string()),
             ..Default::default()
         })
         .await?;
@@ -411,7 +414,7 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1".to_string()),
+            model: Some("gpt-5.2".to_string()),
             ephemeral: Some(true),
             ..Default::default()
         })
@@ -716,10 +719,12 @@ model_reasoning_effort = "high"
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root = resolve_root_git_project_for_trust(workspace.path())
+    let workspace_abs = workspace.path().to_path_buf().abs();
+    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &workspace_abs)
         .await
-        .unwrap_or_else(|| workspace.path().to_path_buf());
-    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
+        .unwrap_or(workspace_abs);
+    let trusted_root_key = project_trust_key(trusted_root.as_path());
+    assert!(config_toml.contains(&trusted_root_key));
     assert!(config_toml.contains("trust_level = \"trusted\""));
 
     Ok(())
@@ -754,11 +759,14 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     .await??;
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root = resolve_root_git_project_for_trust(&nested)
+    let nested_abs = nested.abs();
+    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested_abs)
         .await
         .expect("git root should resolve");
-    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
-    assert!(!config_toml.contains(&persisted_trust_path(&nested)));
+    let trusted_root_key = project_trust_key(trusted_root.as_path());
+    let nested_key = project_trust_key(&nested);
+    assert!(config_toml.contains(&trusted_root_key));
+    assert!(!config_toml.contains(&nested_key));
 
     Ok(())
 }
@@ -850,21 +858,6 @@ fn create_config_toml_without_approval_policy(
     create_config_toml_with_optional_approval_policy(
         codex_home, server_uri, /*approval_policy*/ None,
     )
-}
-
-fn persisted_trust_path(project_path: &Path) -> String {
-    let project_path =
-        std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
-    let project_path = project_path.display().to_string();
-
-    if let Some(project_path) = project_path.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{project_path}");
-    }
-
-    project_path
-        .strip_prefix(r"\\?\")
-        .unwrap_or(&project_path)
-        .to_string()
 }
 
 fn create_config_toml_with_optional_approval_policy(

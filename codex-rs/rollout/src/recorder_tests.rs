@@ -372,8 +372,10 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         /*page_size*/ 1,
         /*cursor*/ None,
         ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -387,8 +389,10 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         /*page_size*/ 1,
         Some(&cursor),
         ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -444,8 +448,10 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
         /*page_size*/ 10,
         /*cursor*/ None,
         ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -506,8 +512,10 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
         /*page_size*/ 1,
         /*cursor*/ None,
         ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -520,6 +528,402 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
         .await
         .expect("state db lookup should succeed");
     assert_eq!(repaired_path, Some(real_path));
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+
+    let uuid = Uuid::from_u128(9012);
+    let ts = "2025-01-03T14-00-00";
+    let day_dir = home.path().join("sessions/2025/01/03");
+    fs::create_dir_all(&day_dir)?;
+    let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&path)?;
+    let meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {
+            "id": uuid,
+            "timestamp": ts,
+            "cwd": home.path().display().to_string(),
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    writeln!(file, "{meta}")?;
+    let user_event = serde_json::json!({
+        "timestamp": ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "Hello from user",
+            "kind": "plain",
+        },
+    });
+    writeln!(file, "{user_event}")?;
+
+    let cwd_filters = [home.path().to_path_buf()];
+    let state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(state_db_only_page.items.len(), 0);
+
+    let repaired_page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_page.items.len(), 1);
+
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_state_db_only_page.items.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9013);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let real_path = write_session_file(home.path(), "2025-01-03T13-00-00", uuid)?;
+    let stale_cwd = home.path().join("stale-cwd");
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 13, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        real_path,
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = stale_cwd.clone();
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.first_user_message = Some("Hello from user".to_string());
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let cwd_filters = [stale_cwd];
+    let state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(state_db_only_page.items.len(), 1);
+
+    let scanned_page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(scanned_page.items.len(), 0);
+
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_state_db_only_page.items.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9015);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let rollout_path = write_session_file(home.path(), "2025-01-03T16-00-00", uuid)?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 16, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path,
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    builder.git_branch = Some("sqlite-branch".to_string());
+    builder.git_sha = Some("sqlite-sha".to_string());
+    builder.git_origin_url = Some("https://example.com/repo.git".to_string());
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.first_user_message = Some("Hello from user".to_string());
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[SessionSource::Cli],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].git_branch.as_deref(), Some("sqlite-branch"));
+    assert_eq!(page.items[0].git_sha.as_deref(), Some("sqlite-sha"));
+    assert_eq!(
+        page.items[0].git_origin_url.as_deref(),
+        Some("https://example.com/repo.git")
+    );
+    Ok(())
+}
+
+#[test]
+fn fill_missing_thread_item_metadata_preserves_filesystem_identity() {
+    let filesystem_thread_id = ThreadId::new();
+    let state_thread_id = ThreadId::new();
+    let filesystem_path = PathBuf::from("/tmp/filesystem-rollout.jsonl");
+    let state_path = PathBuf::from("/tmp/state-rollout.jsonl");
+    let mut item = ThreadItem {
+        path: filesystem_path.clone(),
+        thread_id: Some(filesystem_thread_id),
+        first_user_message: Some("filesystem message".to_string()),
+        cwd: None,
+        git_branch: None,
+        git_sha: None,
+        git_origin_url: None,
+        source: None,
+        agent_nickname: None,
+        agent_role: None,
+        model_provider: None,
+        cli_version: None,
+        created_at: None,
+        updated_at: None,
+    };
+    let state_item = ThreadItem {
+        path: state_path,
+        thread_id: Some(state_thread_id),
+        first_user_message: Some("state message".to_string()),
+        cwd: Some(PathBuf::from("/tmp/state-cwd")),
+        git_branch: Some("state-branch".to_string()),
+        git_sha: Some("state-sha".to_string()),
+        git_origin_url: Some("https://example.com/state.git".to_string()),
+        source: Some(SessionSource::Exec),
+        agent_nickname: Some("state-agent".to_string()),
+        agent_role: Some("state-role".to_string()),
+        model_provider: Some("state-provider".to_string()),
+        cli_version: Some("state-version".to_string()),
+        created_at: Some("2025-01-03T16:00:00Z".to_string()),
+        updated_at: Some("2025-01-03T16:01:02.003Z".to_string()),
+    };
+
+    fill_missing_thread_item_metadata(&mut item, state_item);
+
+    assert_eq!(item.path, filesystem_path);
+    assert_eq!(item.thread_id, Some(filesystem_thread_id));
+    assert_eq!(
+        item.first_user_message.as_deref(),
+        Some("filesystem message")
+    );
+    assert_eq!(item.cwd.as_deref(), Some(Path::new("/tmp/state-cwd")));
+    assert_eq!(item.git_branch.as_deref(), Some("state-branch"));
+    assert_eq!(item.git_sha.as_deref(), Some("state-sha"));
+    assert_eq!(
+        item.git_origin_url.as_deref(),
+        Some("https://example.com/state.git")
+    );
+    assert_eq!(item.source, Some(SessionSource::Exec));
+    assert_eq!(item.agent_nickname.as_deref(), Some("state-agent"));
+    assert_eq!(item.agent_role.as_deref(), Some("state-role"));
+    assert_eq!(item.model_provider.as_deref(), Some("state-provider"));
+    assert_eq!(item.cli_version.as_deref(), Some("state-version"));
+    assert_eq!(item.created_at.as_deref(), Some("2025-01-03T16:00:00Z"));
+    assert_eq!(item.updated_at.as_deref(), Some("2025-01-03T16:01:02.003Z"));
+}
+
+#[tokio::test]
+async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9014);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let real_path = write_session_file(home.path(), "2025-01-03T15-00-00", uuid)?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 15, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        real_path,
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.title = "needle stale title".to_string();
+    metadata.first_user_message = Some("stale first user".to_string());
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let stale_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        Some("needle"),
+    )
+    .await?;
+    assert_eq!(stale_state_db_only_page.items.len(), 1);
+
+    let scanned_page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        Some("needle"),
+    )
+    .await?;
+    assert_eq!(scanned_page.items.len(), 0);
+
+    let repaired_state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        Some("needle"),
+    )
+    .await?;
+    assert_eq!(repaired_state_db_only_page.items.len(), 0);
     Ok(())
 }
 
@@ -543,7 +947,9 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             network: None,
+            file_system_sandbox_policy: None,
             model: "test-model".to_string(),
             personality: None,
             collaboration_mode: None,

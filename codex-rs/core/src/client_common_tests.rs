@@ -13,7 +13,7 @@ fn serializes_text_verbosity_when_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -52,12 +52,15 @@ fn serializes_text_schema_with_strict_format() {
         },
         "required": ["answer"],
     });
-    let text_controls =
-        create_text_param_for_request(/*verbosity*/ None, &Some(schema.clone()))
-            .expect("text controls");
+    let text_controls = create_text_param_for_request(
+        /*verbosity*/ None,
+        &Some(schema.clone()),
+        /*output_schema_strict*/ true,
+    )
+    .expect("text controls");
 
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -91,11 +94,34 @@ fn serializes_text_schema_with_strict_format() {
 }
 
 #[test]
+fn serializes_text_schema_with_non_strict_format() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "rationale": {"type": "string"}
+        },
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    let text_controls = create_text_param_for_request(
+        /*verbosity*/ None,
+        &Some(schema.clone()),
+        /*output_schema_strict*/ false,
+    )
+    .expect("text controls");
+
+    let format = text_controls.format.expect("format field");
+    assert!(!format.strict);
+    assert_eq!(format.schema, schema);
+}
+
+#[test]
 fn omits_text_when_not_set() {
     let input: Vec<ResponseItem> = vec![];
     let tools: Vec<serde_json::Value> = vec![];
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input,
         tools,
@@ -118,7 +144,7 @@ fn omits_text_when_not_set() {
 #[test]
 fn serializes_flex_service_tier_when_set() {
     let req = ResponsesApiRequest {
-        model: "gpt-5.1".to_string(),
+        model: "gpt-5.4".to_string(),
         instructions: "i".to_string(),
         input: vec![],
         tools: vec![],

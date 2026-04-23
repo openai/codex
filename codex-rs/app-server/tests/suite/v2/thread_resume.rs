@@ -3,6 +3,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
+use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
@@ -50,6 +52,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -124,7 +131,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -200,7 +207,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.2-codex", "resumed");
+    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed");
     Ok(())
 }
 
@@ -279,6 +286,268 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_token_usage(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
+        panic!("expected thread/tokenUsage/updated notification");
+    };
+
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.turn_id, thread.turns[0].id);
+    assert_eq!(notification.token_usage.total.total_tokens, 150);
+    assert_eq!(notification.token_usage.total.input_tokens, 120);
+    assert_eq!(notification.token_usage.total.cached_input_tokens, 20);
+    assert_eq!(notification.token_usage.total.output_tokens, 30);
+    assert_eq!(notification.token_usage.total.reasoning_output_tokens, 10);
+    assert_eq!(notification.token_usage.last.total_tokens, 90);
+    assert_eq!(notification.token_usage.model_context_window, Some(200_000));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_token_usage_replay_ignores_stale_interrupted_tail_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let conversation_id = create_fake_rollout_with_token_usage(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        "Saved user message",
+        Some("mock_provider"),
+    )?;
+    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let persisted_rollout = std::fs::read_to_string(&rollout_file_path)?;
+    let stale_turn_id = "incomplete-turn-after-token-usage";
+    let appended_rollout = [
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: stale_turn_id.to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }))?,
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Still running".to_string(),
+                phase: None,
+                memory_citation: None,
+            }))?,
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    std::fs::write(
+        &rollout_file_path,
+        format!("{persisted_rollout}{appended_rollout}\n"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.turns.len(), 2);
+    assert_eq!(thread.turns[0].status, TurnStatus::Completed);
+    assert_eq!(thread.turns[1].id, stale_turn_id);
+    assert_eq!(thread.turns[1].status, TurnStatus::Interrupted);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
+        panic!("expected thread/tokenUsage/updated notification");
+    };
+
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.turn_id, thread.turns[0].id);
+    assert_ne!(notification.turn_id, stale_turn_id);
+    assert_eq!(notification.token_usage.total.total_tokens, 150);
+    assert_eq!(notification.token_usage.last.total_tokens, 90);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let conversation_id = create_fake_rollout_with_token_usage(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        "Saved user message",
+        Some("mock_provider"),
+    )?;
+    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let persisted_rollout = std::fs::read_to_string(&rollout_file_path)?;
+    let interrupted_turn_id = "interrupted-turn-with-token-usage";
+    let appended_rollout = [
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: interrupted_turn_id.to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }))?,
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Interrupted after usage".to_string(),
+                phase: None,
+                memory_citation: None,
+            }))?,
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::TokenCount(TokenCountEvent {
+                info: Some(TokenUsageInfo {
+                    total_token_usage: TokenUsage {
+                        input_tokens: 180,
+                        cached_input_tokens: 40,
+                        output_tokens: 50,
+                        reasoning_output_tokens: 15,
+                        total_tokens: 230,
+                    },
+                    last_token_usage: TokenUsage {
+                        input_tokens: 90,
+                        cached_input_tokens: 30,
+                        output_tokens: 40,
+                        reasoning_output_tokens: 12,
+                        total_tokens: 130,
+                    },
+                    model_context_window: Some(200_000),
+                }),
+                rate_limits: None,
+            }))?,
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(interrupted_turn_id.to_string()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }))?,
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    std::fs::write(
+        &rollout_file_path,
+        format!("{persisted_rollout}{appended_rollout}\n"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.turns.len(), 2);
+    assert_eq!(thread.turns[0].status, TurnStatus::Completed);
+    assert_eq!(thread.turns[1].id, interrupted_turn_id);
+    assert_eq!(thread.turns[1].status, TurnStatus::Interrupted);
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await??;
+    let parsed: ServerNotification = note.try_into()?;
+    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
+        panic!("expected thread/tokenUsage/updated notification");
+    };
+
+    assert_eq!(notification.thread_id, thread.id);
+    assert_eq!(notification.turn_id, interrupted_turn_id);
+    assert_eq!(notification.token_usage.total.total_tokens, 230);
+    assert_eq!(notification.token_usage.last.total_tokens, 130);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -287,7 +556,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
         &config_toml,
         format!(
             r#"
-model = "gpt-5.2-codex"
+model = "gpt-5.3-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -575,6 +844,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
     .await??;
     let ThreadReadResponse {
         thread: read_thread,
+        ..
     } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read_thread.status, ThreadStatus::Idle);
@@ -652,7 +922,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -759,7 +1029,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -875,7 +1145,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -981,7 +1251,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1050,7 +1320,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     .await??;
     let ThreadResumeResponse { thread, model, .. } =
         to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(model, "gpt-5.1-codex-max");
+    assert_eq!(model, "gpt-5.4");
     // The running-thread resume response is queued onto the thread listener task.
     // If the in-flight turn completes before that queued command runs, the response
     // can legitimately observe the thread as idle.
@@ -1094,7 +1364,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1231,7 +1501,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
         })
@@ -1581,7 +1851,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1701,7 +1971,7 @@ async fn start_materialized_thread_and_restart(
 
     let start_id = first_mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
+            model: Some("gpt-5.4".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1775,7 +2045,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
+            model: Some("gpt-5.3-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1813,7 +2083,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
-            model: Some("gpt-5.2-codex".to_string()),
+            model: Some("gpt-5.3-codex".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
@@ -1875,7 +2145,7 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         config_toml,
         format!(
             r#"
-model = "gpt-5.2-codex"
+model = "gpt-5.3-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 
@@ -1912,7 +2182,7 @@ fn create_config_toml_with_chatgpt_base_url(
         config_toml,
         format!(
             r#"
-model = "gpt-5.2-codex"
+model = "gpt-5.3-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
@@ -1943,7 +2213,7 @@ fn create_config_toml_with_required_broken_mcp(
         config_toml,
         format!(
             r#"
-model = "gpt-5.2-codex"
+model = "gpt-5.3-codex"
 approval_policy = "never"
 sandbox_mode = "read-only"
 

@@ -56,6 +56,64 @@ pub struct McpServerToolConfig {
     pub approval_mode: Option<AppToolApproval>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum McpServerEnvVar {
+    Name(String),
+    Config {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+}
+
+impl McpServerEnvVar {
+    pub fn name(&self) -> &str {
+        match self {
+            McpServerEnvVar::Name(name) => name,
+            McpServerEnvVar::Config { name, .. } => name,
+        }
+    }
+
+    pub fn source(&self) -> Option<&str> {
+        match self {
+            McpServerEnvVar::Name(_) => None,
+            McpServerEnvVar::Config { source, .. } => source.as_deref(),
+        }
+    }
+
+    pub fn is_remote_source(&self) -> bool {
+        self.source() == Some("remote")
+    }
+
+    pub fn validate_source(&self) -> Result<(), String> {
+        match self.source() {
+            None | Some("local") | Some("remote") => Ok(()),
+            Some(source) => Err(format!(
+                "unsupported env_vars source `{source}`; expected `local` or `remote`"
+            )),
+        }
+    }
+}
+
+impl From<String> for McpServerEnvVar {
+    fn from(value: String) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl From<&str> for McpServerEnvVar {
+    fn from(value: &str) -> Self {
+        Self::Name(value.to_string())
+    }
+}
+
+impl AsRef<str> for McpServerEnvVar {
+    fn as_ref(&self) -> &str {
+        self.name()
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -93,6 +151,10 @@ pub struct McpServerConfig {
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
 
+    /// Approval mode for tools in this server unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
     /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
@@ -129,7 +191,7 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
     #[serde(default)]
-    pub env_vars: Option<Vec<String>>,
+    pub env_vars: Option<Vec<McpServerEnvVar>>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
     pub http_headers: Option<HashMap<String, String>>,
@@ -157,6 +219,8 @@ pub struct RawMcpServerConfig {
     pub required: Option<bool>,
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
@@ -194,6 +258,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled,
             required,
             supports_parallel_tool_calls,
+            default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
             scopes,
@@ -228,11 +293,15 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
             throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
+            let env_vars = env_vars.unwrap_or_default();
+            for env_var in &env_vars {
+                env_var.validate_source()?;
+            }
             McpServerTransportConfig::Stdio {
                 command,
                 args: args.unwrap_or_default(),
                 env,
-                env_vars: env_vars.unwrap_or_default(),
+                env_vars,
                 cwd,
             }
         } else if let Some(url) = url {
@@ -260,6 +329,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             required: required.unwrap_or_default(),
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             disabled_reason: None,
+            default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
             scopes,
@@ -295,7 +365,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env: Option<HashMap<String, String>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        env_vars: Vec<String>,
+        env_vars: Vec<McpServerEnvVar>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,
     },

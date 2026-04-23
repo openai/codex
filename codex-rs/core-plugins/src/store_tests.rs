@@ -34,6 +34,18 @@ fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
 }
 
 #[test]
+fn try_new_rejects_relative_codex_home() {
+    let err = PluginStore::try_new(PathBuf::from("relative"))
+        .expect_err("relative codex home should fail");
+    let err = err.to_string().replace('\\', "/");
+
+    assert_eq!(
+        err,
+        "failed to resolve plugin cache root: path is not absolute: relative/plugins/cache"
+    );
+}
+
+#[test]
 fn install_copies_plugin_into_default_marketplace() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
@@ -173,13 +185,9 @@ fn install_rejects_blank_manifest_version() {
         .expect_err("blank manifest version should be rejected");
     let err = err.to_string().replace('\\', "/");
 
-    assert!(
-        err.starts_with("invalid plugin version in manifest "),
-        "unexpected error: {err}"
-    );
-    assert!(
-        err.ends_with("sample-plugin/.codex-plugin/plugin.json: must not be blank"),
-        "unexpected error: {err}"
+    assert_eq!(
+        err,
+        "invalid plugin version in plugin.json: must not be blank"
     );
 }
 
@@ -305,6 +313,6 @@ fn install_rejects_manifest_names_that_do_not_match_marketplace_plugin_name() {
 
     assert_eq!(
         err.to_string(),
-        "plugin manifest name `manifest-name` does not match marketplace plugin name `different-name`"
+        "plugin.json name `manifest-name` does not match marketplace plugin name `different-name`"
     );
 }
