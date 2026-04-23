@@ -1505,7 +1505,8 @@ mod tests {
             time_used_seconds: 56,
             created_at: 1,
             updated_at: 2,
-        });
+        })
+        .replace("\r\n", "\n");
 
         assert!(prompt.contains("finish the stack"));
         assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
@@ -1529,7 +1530,8 @@ mod tests {
             time_used_seconds: 56,
             created_at: 1,
             updated_at: 2,
-        });
+        })
+        .replace("\r\n", "\n");
 
         assert!(prompt.contains("finish the stack"));
         assert!(prompt.contains("<untrusted_objective>\nfinish the stack\n</untrusted_objective>"));
