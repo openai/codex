@@ -120,7 +120,7 @@ impl TurnContext {
     pub(crate) async fn with_model(
         &self,
         model: String,
-        models_manager: &dyn ModelsManager,
+        models_manager: &SharedModelsManager,
     ) -> Self {
         let mut config = (*self.config).clone();
         config.model = Some(model.clone());
@@ -385,7 +385,7 @@ impl Session {
         main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
-        models_manager: &dyn ModelsManager,
+        models_manager: &SharedModelsManager,
         network: Option<NetworkProxy>,
         environment: Option<Arc<Environment>>,
         environments: Vec<TurnEnvironment>,
@@ -652,7 +652,7 @@ impl Session {
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
-            self.services.models_manager.as_ref(),
+            &self.services.models_manager,
             self.services
                 .network_proxy
                 .as_ref()

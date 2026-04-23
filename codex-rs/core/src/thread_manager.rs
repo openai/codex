@@ -27,8 +27,8 @@ use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
@@ -224,7 +224,7 @@ pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
-    models_manager: Arc<dyn ModelsManager>,
+    models_manager: SharedModelsManager,
     environment_manager: Arc<EnvironmentManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
@@ -240,7 +240,7 @@ pub fn build_models_manager(
     config: &Config,
     auth_manager: Arc<AuthManager>,
     collaboration_modes_config: CollaborationModesConfig,
-) -> Arc<dyn ModelsManager> {
+) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
         config.codex_home.to_path_buf(),
@@ -416,7 +416,7 @@ impl ThreadManager {
         validate_environment_selections(self.state.environment_manager.as_ref(), environments)
     }
 
-    pub fn get_models_manager(&self) -> Arc<dyn ModelsManager> {
+    pub fn get_models_manager(&self) -> SharedModelsManager {
         self.state.models_manager.clone()
     }
 

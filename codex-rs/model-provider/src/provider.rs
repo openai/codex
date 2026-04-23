@@ -8,8 +8,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::OpenAiModelsManager;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::openai_models::ModelsResponse;
@@ -92,7 +92,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
-    ) -> Arc<dyn ModelsManager>;
+    ) -> SharedModelsManager;
 }
 
 /// Shared runtime model provider handle.
@@ -181,7 +181,7 @@ impl ModelProvider for ConfiguredModelProvider {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
-    ) -> Arc<dyn ModelsManager> {
+    ) -> SharedModelsManager {
         match config_model_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),

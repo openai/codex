@@ -14,7 +14,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets;
-use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -104,7 +104,7 @@ pub fn models_manager_with_provider(
     codex_home: PathBuf,
     auth_manager: Arc<AuthManager>,
     provider: ModelProviderInfo,
-) -> Arc<dyn ModelsManager> {
+) -> SharedModelsManager {
     let provider = create_model_provider(provider, Some(auth_manager));
     provider.models_manager(
         codex_home,

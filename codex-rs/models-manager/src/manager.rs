@@ -117,6 +117,9 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     async fn refresh_if_new_etag(&self, etag: String);
 }
 
+/// Shared model manager handle used across runtime services.
+pub type SharedModelsManager = Arc<dyn ModelsManager>;
+
 /// OpenAI-compatible model manager backed by bundled models, cache, and `/models`.
 #[derive(Debug)]
 pub struct OpenAiModelsManager {

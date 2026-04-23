@@ -752,10 +752,7 @@ async fn maybe_run_previous_model_inline_compact(
     };
     let previous_model_turn_context = Arc::new(
         turn_context
-            .with_model(
-                previous_turn_settings.model,
-                sess.services.models_manager.as_ref(),
-            )
+            .with_model(previous_turn_settings.model, &sess.services.models_manager)
             .await,
     );
 
