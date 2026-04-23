@@ -350,6 +350,13 @@ pub(crate) async fn execute_exec_request(
         arg0,
     };
 
+    #[cfg(target_os = "windows")]
+    maybe_cleanup_stale_windows_sandbox_denies(
+        sandbox_policy,
+        params.windows_sandbox_level,
+        &params.cwd,
+    )?;
+
     let start = Instant::now();
     let raw_output_result = exec(
         params,
@@ -377,6 +384,30 @@ fn extract_create_process_as_user_error_code(err: &str) -> Option<String> {
     } else {
         Some(digits)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_cleanup_stale_windows_sandbox_denies(
+    sandbox_policy: &SandboxPolicy,
+    windows_sandbox_level: WindowsSandboxLevel,
+    cwd: &Path,
+) -> Result<()> {
+    if !matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
+        || !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
+    {
+        return Ok(());
+    }
+
+    let codex_home = crate::config::find_codex_home().map_err(|err| {
+        CodexErr::Io(io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home for ACL cleanup: {err}"
+        )))
+    })?;
+    crate::windows_sandbox::cleanup_stale_protected_write_denies(cwd, codex_home.as_ref())
+        .map_err(|err| CodexErr::Io(io::Error::other(format!("windows sandbox: {err}"))))
 }
 
 #[cfg(target_os = "windows")]

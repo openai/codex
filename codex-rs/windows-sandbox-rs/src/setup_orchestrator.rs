@@ -10,11 +10,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
+use crate::acl::revoke_ace;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths;
+use crate::cap::load_or_create_cap_sids;
+use crate::cap::workspace_cap_sid_for_cwd;
+use crate::convert_string_sid_to_sid;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::canonicalize_path;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -29,6 +34,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
@@ -140,6 +147,43 @@ pub fn run_setup_refresh_with_extra_read_roots(
             write_roots: Some(Vec::new()),
         },
     )
+}
+
+pub fn cleanup_stale_protected_write_denies(command_cwd: &Path, codex_home: &Path) -> Result<()> {
+    let caps = load_or_create_cap_sids(codex_home)?;
+    let cap_psid = unsafe {
+        convert_string_sid_to_sid(&caps.workspace)
+            .ok_or_else(|| anyhow!("convert capability SID {} failed", caps.workspace))?
+    };
+    let workspace_sid = workspace_cap_sid_for_cwd(codex_home, command_cwd)?;
+    let workspace_psid = unsafe {
+        convert_string_sid_to_sid(&workspace_sid)
+            .ok_or_else(|| anyhow!("convert workspace capability SID {workspace_sid} failed"))?
+    };
+    let canonical_command_cwd = canonicalize_path(command_cwd);
+
+    for protected_subdir in [".git", ".codex", ".agents"] {
+        let protected_path = canonical_command_cwd.join(protected_subdir);
+        if !protected_path.exists() {
+            continue;
+        }
+
+        unsafe {
+            revoke_ace(&protected_path, workspace_psid);
+            revoke_ace(&protected_path, cap_psid);
+        }
+    }
+
+    unsafe {
+        if !cap_psid.is_null() {
+            LocalFree(cap_psid as HLOCAL);
+        }
+        if !workspace_psid.is_null() {
+            LocalFree(workspace_psid as HLOCAL);
+        }
+    }
+
+    Ok(())
 }
 
 fn run_setup_refresh_inner(

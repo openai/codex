@@ -192,6 +192,22 @@ pub fn run_elevated_setup(
     )
 }
 
+#[cfg(target_os = "windows")]
+pub fn cleanup_stale_protected_write_denies(
+    command_cwd: &Path,
+    codex_home: &Path,
+) -> anyhow::Result<()> {
+    codex_windows_sandbox::cleanup_stale_protected_write_denies(command_cwd, codex_home)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn cleanup_stale_protected_write_denies(
+    _command_cwd: &Path,
+    _codex_home: &Path,
+) -> anyhow::Result<()> {
+    anyhow::bail!("Windows sandbox ACL cleanup is only supported on Windows")
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn run_elevated_setup(
     _policy: &SandboxPolicy,
