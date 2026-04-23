@@ -108,6 +108,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -155,7 +156,7 @@ mod tests {
             .insert(side_thread_id, SideThreadState::new(main_thread_id));
         app.config.permissions.approval_policy =
             codex_config::Constrained::allow_any(AskForApproval::OnRequest);
-        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         app.config.permissions.sandbox_policy =
             codex_config::Constrained::allow_any(SandboxPolicy::new_workspace_write_policy());
 
@@ -164,7 +165,7 @@ mod tests {
 
         let expected_main_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             ..main_session
         };

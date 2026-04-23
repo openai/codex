@@ -325,7 +325,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
-    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    #[serde(rename = "guardian_subagent", alias = "auto_review")]
     AutoReview,
 }
 
@@ -7483,7 +7483,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
-            "\"auto_review\""
+            "\"guardian_subagent\""
         );
 
         for value in ["user", "auto_review", "guardian_subagent"] {
