@@ -48,6 +48,27 @@ fn builds_permissions_with_network_access_override() {
 }
 
 #[test]
+fn includes_network_proxy_guidance() {
+    let instructions = PermissionsInstructions::from_permissions_with_network(
+        SandboxMode::WorkspaceWrite,
+        NetworkAccess::Restricted,
+        PermissionsPromptConfig {
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            exec_policy: &Policy::empty(),
+            exec_permission_approvals_enabled: false,
+            request_permissions_tool_enabled: false,
+        },
+        /*writable_roots*/ None,
+    );
+
+    let text = instructions.body();
+    assert!(text.contains("# Network Proxy"));
+    assert!(text.contains("proxy-related environment variables"));
+    assert!(text.contains("request additional network permissions"));
+}
+
+#[test]
 fn builds_permissions_from_policy() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
