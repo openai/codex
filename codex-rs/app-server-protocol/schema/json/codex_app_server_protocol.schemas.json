@@ -25,7 +25,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Partial overlay used for per-command permission requests."
         }
       },
       "type": "object"
@@ -11269,61 +11270,132 @@
         ]
       },
       "PermissionProfile": {
-        "properties": {
-          "fileSystem": {
-            "anyOf": [
-              {
+        "oneOf": [
+          {
+            "description": "Codex owns sandbox construction for this profile.",
+            "properties": {
+              "fileSystem": {
                 "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "network": {
-            "anyOf": [
-              {
+              "network": {
                 "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
               },
-              {
-                "type": "null"
+              "type": {
+                "enum": [
+                  "managed"
+                ],
+                "title": "ManagedPermissionProfileType",
+                "type": "string"
               }
-            ]
+            },
+            "required": [
+              "fileSystem",
+              "network",
+              "type"
+            ],
+            "title": "ManagedPermissionProfile",
+            "type": "object"
+          },
+          {
+            "description": "Do not apply an outer sandbox.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "disabled"
+                ],
+                "title": "DisabledPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DisabledPermissionProfile",
+            "type": "object"
+          },
+          {
+            "description": "Filesystem isolation is enforced by an external caller.",
+            "properties": {
+              "network": {
+                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
+              },
+              "type": {
+                "enum": [
+                  "external"
+                ],
+                "title": "ExternalPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "network",
+              "type"
+            ],
+            "title": "ExternalPermissionProfile",
+            "type": "object"
           }
-        },
-        "type": "object"
+        ]
       },
       "PermissionProfileFileSystemPermissions": {
-        "properties": {
-          "entries": {
-            "items": {
-              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+        "oneOf": [
+          {
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+                },
+                "type": "array"
+              },
+              "globScanMaxDepth": {
+                "format": "uint",
+                "minimum": 1.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedPermissionProfileFileSystemPermissionsType",
+                "type": "string"
+              }
             },
-            "type": "array"
+            "required": [
+              "entries",
+              "type"
+            ],
+            "title": "RestrictedPermissionProfileFileSystemPermissions",
+            "type": "object"
           },
-          "globScanMaxDepth": {
-            "format": "uint",
-            "minimum": 1.0,
-            "type": [
-              "integer",
-              "null"
-            ]
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "unrestricted"
+                ],
+                "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "UnrestrictedPermissionProfileFileSystemPermissions",
+            "type": "object"
           }
-        },
-        "required": [
-          "entries"
-        ],
-        "type": "object"
+        ]
       },
       "PermissionProfileNetworkPermissions": {
         "properties": {
           "enabled": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           }
         },
+        "required": [
+          "enabled"
+        ],
         "type": "object"
       },
       "Personality": {
@@ -14544,7 +14616,7 @@
               }
             ],
             "default": null,
-            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+            "description": "Canonical active permissions view for this thread."
           },
           "reasoningEffort": {
             "anyOf": [
@@ -15987,7 +16059,7 @@
               }
             ],
             "default": null,
-            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+            "description": "Canonical active permissions view for this thread."
           },
           "reasoningEffort": {
             "anyOf": [
@@ -16314,7 +16386,7 @@
               }
             ],
             "default": null,
-            "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+            "description": "Canonical active permissions view for this thread."
           },
           "reasoningEffort": {
             "anyOf": [
