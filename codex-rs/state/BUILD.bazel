@@ -4,4 +4,7 @@ codex_rust_crate(
     name = "state",
     crate_name = "codex_state",
     compile_data = glob(["logs_migrations/**", "migrations/**"]),
+    test_shard_counts = {
+        "state-unit-tests": 4,
+    },
 )
