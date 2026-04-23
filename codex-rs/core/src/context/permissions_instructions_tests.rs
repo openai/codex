@@ -5,19 +5,27 @@ use std::path::PathBuf;
 
 #[test]
 fn renders_sandbox_mode_text() {
+    let proxy_guidance = " If the environment context includes a `<network>` block, a managed network proxy may enforce the listed allowed and denied domains; prefer allowed domains, avoid denied domains, and use the configured approval path if a needed host is blocked.";
+
     assert_eq!(
         sandbox_text(SandboxMode::WorkspaceWrite, NetworkAccess::Restricted),
-        "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+        format!(
+            "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted.{proxy_guidance}"
+        )
     );
 
     assert_eq!(
         sandbox_text(SandboxMode::ReadOnly, NetworkAccess::Restricted),
-        "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
+        format!(
+            "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted.{proxy_guidance}"
+        )
     );
 
     assert_eq!(
         sandbox_text(SandboxMode::DangerFullAccess, NetworkAccess::Enabled),
-        "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled."
+        format!(
+            "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.{proxy_guidance}"
+        )
     );
 }
 

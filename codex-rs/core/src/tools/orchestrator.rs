@@ -12,6 +12,7 @@ use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
+use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
@@ -76,7 +77,25 @@ impl ToolOrchestrator {
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
-        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+        let attempt_with_network_approval = SandboxAttempt {
+            sandbox: attempt.sandbox,
+            policy: attempt.policy,
+            file_system_policy: attempt.file_system_policy,
+            network_policy: attempt.network_policy,
+            enforce_managed_network: attempt.enforce_managed_network,
+            manager: attempt.manager,
+            sandbox_cwd: attempt.sandbox_cwd,
+            codex_linux_sandbox_exe: attempt.codex_linux_sandbox_exe,
+            use_legacy_landlock: attempt.use_legacy_landlock,
+            windows_sandbox_level: attempt.windows_sandbox_level,
+            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
+            network_denial_cancellation_token: network_approval
+                .as_ref()
+                .map(ActiveNetworkApproval::cancellation_token),
+        };
+        let run_result = tool
+            .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
+            .await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);
@@ -94,7 +113,11 @@ impl ToolOrchestrator {
             NetworkApprovalMode::Deferred => {
                 let deferred = network_approval.into_deferred();
                 if run_result.is_err() {
-                    finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+                    let finalize_result =
+                        finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+                    if let Err(err) = finalize_result {
+                        return (Err(err), None);
+                    }
                     return (run_result, None);
                 }
                 (run_result, deferred)
@@ -219,6 +242,7 @@ impl ToolOrchestrator {
                 .config
                 .permissions
                 .windows_sandbox_private_desktop,
+            network_denial_cancellation_token: None,
         };
 
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
@@ -338,6 +362,7 @@ impl ToolOrchestrator {
                         .config
                         .permissions
                         .windows_sandbox_private_desktop,
+                    network_denial_cancellation_token: None,
                 };
 
                 // Second attempt.

@@ -1,6 +1,7 @@
 use super::ShellRequest;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
+use crate::exec::cancel_when_either;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
@@ -187,7 +188,10 @@ pub(super) async fn try_run_zsh_fork(
     // to minimize the time between creating the Stopwatch and starting the
     // escalation server.
     let stopwatch = Stopwatch::new(effective_timeout);
-    let cancel_token = stopwatch.cancellation_token();
+    let mut cancel_token = stopwatch.cancellation_token();
+    if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
+        cancel_token = cancel_when_either(cancel_token, cancellation);
+    }
     let approval_sandbox_permissions = approval_sandbox_permissions(
         req.sandbox_permissions,
         req.additional_permissions_preapproved,

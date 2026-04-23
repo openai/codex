@@ -149,6 +149,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
         use_legacy_landlock: true,
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
         windows_sandbox_private_desktop: true,
+        network_denial_cancellation_token: None,
     };
 
     let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
@@ -204,6 +205,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
+        network_denial_cancellation_token: None,
     };
 
     assert_eq!(
