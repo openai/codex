@@ -6,7 +6,8 @@ cause avoidable cache misses.
 
 This script derives a smaller, cache-stable PATH that keeps the Windows
 toolchain entries Bazel-backed CI tasks need: MSVC and Windows SDK paths, Git,
-PowerShell, Node, DotSlash, and the standard Windows system directories.
+PowerShell, Node, Python, DotSlash, and the standard Windows system
+directories.
 `setup-bazel-ci` runs this after exporting the MSVC environment, and the script
 publishes the result via `GITHUB_ENV` as `CODEX_BAZEL_WINDOWS_PATH` so later
 steps can pass that explicit PATH to Bazel.
@@ -51,9 +52,9 @@ foreach ($pathEntry in ($env:PATH -split ';')) {
     $pathEntry -like 'C:\Program Files\Git\*' -or
     $pathEntry -like 'C:\Program Files\PowerShell\*' -or
     $pathEntry -like 'C:\hostedtoolcache\windows\node\*' -or
+    $pathEntry -like 'C:\hostedtoolcache\windows\Python\*' -or
     $pathEntry -eq 'D:\a\_temp\install-dotslash\bin' -or
-    ($windowsDir -and ($pathEntry -eq $windowsDir -or $pathEntry -like "${windowsDir}\*")) -or
-    ($windowsAppsPath -and $pathEntry -eq $windowsAppsPath)
+    ($windowsDir -and ($pathEntry -eq $windowsDir -or $pathEntry -like "${windowsDir}\*"))
   ) {
     Add-StablePathEntry $pathEntry
   }
@@ -67,6 +68,16 @@ if ($gitCommand) {
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 if ($nodeCommand) {
   Add-StablePathEntry (Split-Path $nodeCommand.Source -Parent)
+}
+
+$python3Command = Get-Command python3 -ErrorAction SilentlyContinue
+if ($python3Command) {
+  Add-StablePathEntry (Split-Path $python3Command.Source -Parent)
+}
+
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if ($pythonCommand) {
+  Add-StablePathEntry (Split-Path $pythonCommand.Source -Parent)
 }
 
 $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
