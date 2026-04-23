@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
 use futures::FutureExt;
@@ -46,7 +45,7 @@ use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
-use rmcp::transport::auth::OAuthState;
+use rmcp::transport::auth::StoredCredentials;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use serde::Deserialize;
@@ -64,10 +63,10 @@ use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth_http_client::create_oauth_http_setup;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -934,28 +933,17 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
-    let builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
-    let oauth_metadata_client = build_reqwest_client_with_custom_ca(builder)?;
-    // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
-    // shared HTTP client abstraction instead of always creating the local
-    // reqwest metadata client here.
-    let mut oauth_state =
-        OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
-
-    oauth_state
-        .set_credentials(
-            &initial_tokens.client_id,
-            initial_tokens.token_response.0.clone(),
-        )
-        .await?;
-
-    let manager = match oauth_state {
-        OAuthState::Authorized(manager) => manager,
-        OAuthState::Unauthorized(manager) => manager,
-        OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
-            return Err(anyhow!("unexpected OAuth state during client setup"));
-        }
-    };
+    let oauth_http_setup = create_oauth_http_setup(
+        url,
+        &default_headers,
+        http_client.clone(),
+        Some(StoredCredentials {
+            client_id: initial_tokens.client_id.clone(),
+            token_response: Some(initial_tokens.token_response.0.clone()),
+        }),
+    )
+    .await?;
+    let manager = oauth_http_setup.authorization_manager;
 
     let auth_client = AuthClient::new(
         StreamableHttpClientAdapter::new(http_client, default_headers),
@@ -972,6 +960,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        oauth_http_setup.proxy,
         credentials_store,
         Some(initial_tokens),
     );

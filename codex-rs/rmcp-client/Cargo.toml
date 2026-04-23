@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+async-trait = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",

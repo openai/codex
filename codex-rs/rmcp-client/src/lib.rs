@@ -4,6 +4,7 @@ mod executor_process_transport;
 mod http_client_adapter;
 mod logging_client_handler;
 mod oauth;
+mod oauth_http_client;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;

@@ -48,6 +48,7 @@ use codex_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
+use crate::oauth_http_client::OAuthHttpProxy;
 use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
@@ -258,6 +259,7 @@ struct OAuthPersistorInner {
     server_name: String,
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
+    _oauth_http_proxy: Option<OAuthHttpProxy>,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
 }
@@ -267,6 +269,7 @@ impl OAuthPersistor {
         server_name: String,
         url: String,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
+        oauth_http_proxy: Option<OAuthHttpProxy>,
         store_mode: OAuthCredentialsStoreMode,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
@@ -275,6 +278,7 @@ impl OAuthPersistor {
                 server_name,
                 url,
                 authorization_manager,
+                _oauth_http_proxy: oauth_http_proxy,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
             }),
