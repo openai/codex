@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -33,6 +34,14 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -76,6 +85,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_sandbox_user_profile(offline_username, &offline_password, log)?;
+    initialize_sandbox_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -92,6 +103,105 @@ pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut File) -> Re
     ensure_local_user(username, password, log)?;
     ensure_local_group_member(SANDBOX_USERS_GROUP, username)?;
     Ok(())
+}
+
+fn initialize_sandbox_user_profile(username: &str, password: &str, log: &mut File) -> Result<()> {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let system32 = PathBuf::from(system_root).join("System32");
+    let cmd_path = system32.join("cmd.exe");
+    let cmdline = format!("{} /c exit 0", quote_for_command_line(&cmd_path));
+    let mut cmdline_w = to_wide(cmdline);
+    let user_w = to_wide(username);
+    let domain_w = to_wide(".");
+    let password_w = to_wide(password);
+    let cmd_path_w = to_wide(cmd_path.as_os_str());
+    let cwd_w = to_wide(system32.as_os_str());
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    super::log_line(
+        log,
+        &format!("bootstrapping sandbox user profile for {username}"),
+    )?;
+
+    let spawn_res = unsafe {
+        CreateProcessWithLogonW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            cmd_path_w.as_ptr(),
+            cmdline_w.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            cwd_w.as_ptr(),
+            &si,
+            &mut pi,
+        )
+    };
+    if spawn_res == 0 {
+        let err = unsafe { GetLastError() };
+        super::log_line(
+            log,
+            &format!("profile bootstrap failed for {username}: {err}"),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("CreateProcessWithLogonW failed for {username}: {err}"),
+        )));
+    }
+
+    let wait_status = unsafe { WaitForSingleObject(pi.hProcess, INFINITE) };
+    let mut exit_code = 0u32;
+    let exit_status = unsafe { GetExitCodeProcess(pi.hProcess, &mut exit_code) };
+    unsafe {
+        if pi.hThread != 0 {
+            CloseHandle(pi.hThread);
+        }
+        if pi.hProcess != 0 {
+            CloseHandle(pi.hProcess);
+        }
+    }
+
+    if wait_status != 0 {
+        super::log_line(
+            log,
+            &format!("profile bootstrap wait failed for {username}: {wait_status}"),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("WaitForSingleObject failed for {username}: {wait_status}"),
+        )));
+    }
+    if exit_status == 0 {
+        let err = unsafe { GetLastError() };
+        super::log_line(
+            log,
+            &format!("profile bootstrap exit-code read failed for {username}: {err}"),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("GetExitCodeProcess failed for {username}: {err}"),
+        )));
+    }
+    if exit_code != 0 {
+        super::log_line(
+            log,
+            &format!("profile bootstrap exited non-zero for {username}: {exit_code}"),
+        )?;
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProfileInitFailed,
+            format!("profile bootstrap exited {exit_code} for {username}"),
+        )));
+    }
+
+    super::log_line(log, &format!("profile bootstrap succeeded for {username}"))?;
+    Ok(())
+}
+
+fn quote_for_command_line(path: &Path) -> String {
+    format!("\"{}\"", path.display())
 }
 
 pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {

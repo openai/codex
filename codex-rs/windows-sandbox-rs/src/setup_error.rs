@@ -42,6 +42,8 @@ pub enum SetupErrorCode {
     HelperUsersGroupCreateFailed,
     /// Helper failed to create or update a sandbox user account.
     HelperUserCreateOrUpdateFailed,
+    /// Helper failed to initialize a sandbox user profile.
+    HelperUserProfileInitFailed,
     /// Helper failed to protect user passwords with DPAPI.
     HelperDpapiProtectFailed,
     /// Helper failed to write the sandbox users secrets file.
@@ -84,6 +86,7 @@ impl SetupErrorCode {
             Self::HelperUserProvisionFailed => "helper_user_provision_failed",
             Self::HelperUsersGroupCreateFailed => "helper_users_group_create_failed",
             Self::HelperUserCreateOrUpdateFailed => "helper_user_create_or_update_failed",
+            Self::HelperUserProfileInitFailed => "helper_user_profile_init_failed",
             Self::HelperDpapiProtectFailed => "helper_dpapi_protect_failed",
             Self::HelperUsersFileWriteFailed => "helper_users_file_write_failed",
             Self::HelperSetupMarkerWriteFailed => "helper_setup_marker_write_failed",
