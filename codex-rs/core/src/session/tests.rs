@@ -2815,7 +2815,6 @@ fn turn_environments_for_tests(
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
 ) -> Vec<TurnEnvironment> {
     vec![TurnEnvironment {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment: Arc::clone(environment),
         cwd: cwd.clone(),
     }]

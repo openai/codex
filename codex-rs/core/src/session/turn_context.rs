@@ -30,7 +30,6 @@ impl TurnSkillsContext {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnEnvironment {
-    pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
 }
@@ -612,11 +611,7 @@ impl Session {
                     ))
                 })?;
             let cwd = selected_environment.cwd.clone();
-            turn_environments.push(TurnEnvironment {
-                environment_id,
-                environment,
-                cwd,
-            });
+            turn_environments.push(TurnEnvironment { environment, cwd });
         }
 
         Ok(turn_environments)

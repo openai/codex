@@ -2473,18 +2473,14 @@ impl CodexMessageProcessor {
                 })
                 .collect::<Vec<_>>()
         });
-        if let Some(environments) = environments.as_ref() {
-            if let Err(err) = self
+        if let Some(environments) = environments.as_ref()
+            && let Err(err) = self
                 .thread_manager
                 .validate_environment_selections(environments)
-            {
-                self.send_invalid_request_error(
-                    request_id,
-                    environment_selection_error_message(err),
-                )
+        {
+            self.send_invalid_request_error(request_id, environment_selection_error_message(err))
                 .await;
-                return;
-            }
+            return;
         }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -6968,18 +6964,14 @@ impl CodexMessageProcessor {
                     })
                     .collect()
             });
-        if let Some(environments) = environments.as_ref() {
-            if let Err(err) = self
+        if let Some(environments) = environments.as_ref()
+            && let Err(err) = self
                 .thread_manager
                 .validate_environment_selections(environments)
-            {
-                self.send_invalid_request_error(
-                    request_id,
-                    environment_selection_error_message(err),
-                )
+        {
+            self.send_invalid_request_error(request_id, environment_selection_error_message(err))
                 .await;
-                return;
-            }
+            return;
         }
 
         // Map v2 input items to core input items.
