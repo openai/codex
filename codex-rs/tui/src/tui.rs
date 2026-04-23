@@ -175,8 +175,10 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 #[cfg(test)]
 mod tests {
+    use super::ResizeReflowDrawRefresh;
     use super::keyboard_enhancement_disabled_for;
     use super::parse_bool_env;
+    use super::resize_reflow_draw_refresh;
     use super::should_emit_notification;
     use super::vscode_terminal_detected;
     use codex_config::types::NotificationCondition;
@@ -265,6 +267,32 @@ mod tests {
         assert!(!vscode_terminal_detected(
             /*linux_term_program*/ None, /*windows_term_program*/ None
         ));
+    }
+
+    #[test]
+    fn resize_reflow_replay_invalidates_without_clearing_after_insert() {
+        assert_eq!(
+            resize_reflow_draw_refresh(
+                /*needs_full_repaint*/ true, /*flushed_reflow_history*/ true
+            ),
+            ResizeReflowDrawRefresh {
+                clear_after_history_flush: false,
+                invalidate_viewport: true,
+            }
+        );
+    }
+
+    #[test]
+    fn resize_reflow_draw_refresh_preserves_legacy_clear_without_replay() {
+        assert_eq!(
+            resize_reflow_draw_refresh(
+                /*needs_full_repaint*/ true, /*flushed_reflow_history*/ false
+            ),
+            ResizeReflowDrawRefresh {
+                clear_after_history_flush: true,
+                invalidate_viewport: true,
+            }
+        );
     }
 }
 
@@ -479,6 +507,24 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResizeReflowDrawRefresh {
+    clear_after_history_flush: bool,
+    invalidate_viewport: bool,
+}
+
+fn resize_reflow_draw_refresh(
+    needs_full_repaint: bool,
+    flushed_reflow_history: bool,
+) -> ResizeReflowDrawRefresh {
+    ResizeReflowDrawRefresh {
+        // Resize reflow clears the terminal before queueing rebuilt rows. Clearing again after
+        // replay can erase the source-backed tail rows that were just inserted.
+        clear_after_history_flush: needs_full_repaint && !flushed_reflow_history,
+        invalidate_viewport: needs_full_repaint,
+    }
 }
 
 impl Tui {
@@ -937,8 +983,11 @@ impl Tui {
             )?;
             needs_full_repaint |= flushed_reflow_history;
 
-            if needs_full_repaint {
+            let refresh = resize_reflow_draw_refresh(needs_full_repaint, flushed_reflow_history);
+            if refresh.clear_after_history_flush {
                 terminal.clear()?;
+            }
+            if refresh.invalidate_viewport {
                 terminal.invalidate_viewport();
             }
 

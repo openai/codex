@@ -784,7 +784,28 @@ async fn slash_quit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+    let mut rendered = String::new();
+    let mut saw_exit = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                rendered.push_str(&lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+            }
+            AppEvent::Exit(ExitMode::ShutdownFirst) => {
+                saw_exit = true;
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+    assert!(
+        rendered.contains("/quit"),
+        "expected quit command in history, got: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Exiting."),
+        "expected exiting notice in history, got: {rendered:?}"
+    );
+    assert!(saw_exit, "expected shutdown-first exit event");
 }
 
 #[tokio::test]

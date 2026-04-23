@@ -285,6 +285,21 @@ impl ChatWidget {
                 self.open_memories_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
+                let command = if matches!(cmd, SlashCommand::Quit) {
+                    "/quit"
+                } else {
+                    "/exit"
+                };
+                self.add_to_history(history_cell::new_user_prompt(
+                    command.to_string(),
+                    /*text_elements*/ Vec::new(),
+                    /*local_image_paths*/ Vec::new(),
+                    /*remote_image_urls*/ Vec::new(),
+                ));
+                self.add_to_history(history_cell::new_info_event(
+                    "Exiting.".to_string(),
+                    /*hint*/ None,
+                ));
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {

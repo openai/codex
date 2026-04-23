@@ -165,6 +165,21 @@ where
                 }
                 write_history_line(writer, line, wrap_width)?;
             }
+
+            if matches!(mode, InsertHistoryMode::FullScreenReplayPrefill) {
+                let reserve_rows = wrapped_lines
+                    .min(screen_size.height)
+                    .saturating_sub(area.top());
+                if reserve_rows > 0 {
+                    queue!(
+                        writer,
+                        MoveTo(/*x*/ 0, screen_size.height.saturating_sub(1))
+                    )?;
+                    for _ in 0..reserve_rows {
+                        queue!(writer, Print("\n"))?;
+                    }
+                }
+            }
         }
         InsertHistoryMode::FullScreenReplayDirect => {
             // Rebuild scrollback with transcript content itself. Pre-scrolling with blank
@@ -896,5 +911,43 @@ mod tests {
         );
         assert_eq!(term.viewport_area, viewport);
         assert_eq!(term.visible_history_rows(), viewport.top());
+    }
+
+    #[test]
+    fn vt100_full_screen_replay_reserves_viewport_rows_for_tui() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 3);
+        term.set_viewport_area(viewport);
+
+        let lines: Vec<Line<'static>> = (0..6)
+            .map(|idx| Line::from(format!("reflow line {idx:02}")))
+            .collect();
+        insert_history_lines_with_mode(
+            &mut term,
+            lines,
+            InsertHistoryMode::FullScreenReplayPrefill,
+        )
+        .expect("insert reflow history");
+
+        let rows: Vec<String> = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .collect();
+        assert!(
+            rows[viewport.top() as usize - 1].contains("reflow line 05"),
+            "expected replayed tail immediately above viewport, rows: {rows:?}"
+        );
+        assert!(
+            rows[viewport.top() as usize..]
+                .iter()
+                .all(|row| !row.contains("reflow line")),
+            "expected replay not to occupy reserved viewport rows, rows: {rows:?}"
+        );
+        assert_eq!(term.viewport_area, viewport);
     }
 }
