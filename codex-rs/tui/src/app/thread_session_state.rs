@@ -3,6 +3,8 @@ use crate::app_server_session::ThreadSessionState;
 use crate::read_session_model;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SandboxPolicy;
 
 impl App {
     pub(super) async fn sync_active_thread_permission_settings_to_cached_session(&mut self) {
@@ -17,6 +19,15 @@ impl App {
             session.approval_policy = approval_policy;
             session.approvals_reviewer = approvals_reviewer;
             session.sandbox_policy = sandbox_policy.clone();
+            session.permission_profile =
+                if matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. }) {
+                    None
+                } else {
+                    Some(PermissionProfile::from_legacy_sandbox_policy(
+                        &sandbox_policy,
+                        &session.cwd,
+                    ))
+                };
         };
 
         if self.primary_thread_id == Some(active_thread_id)
@@ -108,6 +119,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -155,17 +167,23 @@ mod tests {
             .insert(side_thread_id, SideThreadState::new(main_thread_id));
         app.config.permissions.approval_policy =
             codex_config::Constrained::allow_any(AskForApproval::OnRequest);
-        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        let expected_sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let expected_permission_profile = PermissionProfile::from_legacy_sandbox_policy(
+            &expected_sandbox_policy,
+            &main_session.cwd,
+        );
         app.config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(SandboxPolicy::new_workspace_write_policy());
+            codex_config::Constrained::allow_any(expected_sandbox_policy.clone());
 
         app.sync_active_thread_permission_settings_to_cached_session()
             .await;
 
         let expected_main_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
-            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
+            sandbox_policy: expected_sandbox_policy,
+            permission_profile: Some(expected_permission_profile),
             ..main_session
         };
         assert_eq!(
