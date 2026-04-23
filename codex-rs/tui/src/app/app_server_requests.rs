@@ -544,7 +544,7 @@ mod tests {
                         )),
                     },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
-                    strict_auto_review: None,
+                    strict_auto_review: false,
                 },
             })
             .expect("permissions response should serialize")
