@@ -3689,8 +3689,16 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// How to sandbox commands executed in the system
+    /// Legacy sandbox projection for commands executed in the system.
+    ///
+    /// Consumers should prefer `permission_profile` when it is present. This
+    /// field remains available as a compatibility fallback for older emitters
+    /// and sessions that only expose legacy sandbox state.
     pub sandbox_policy: SandboxPolicy,
+
+    /// Canonical effective permissions for commands executed in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -5266,6 +5274,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,

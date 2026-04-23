@@ -777,6 +777,7 @@ allowed_approval_policies = ["on-request"]
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 mcp_servers: None,
                 apps: None,
                 rules: None,
@@ -833,6 +834,7 @@ allowed_approval_policies = ["on-request"]
             remote_sandbox_config: None,
             allowed_web_search_modes: None,
             feature_requirements: None,
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -1041,6 +1043,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
+        hooks: None,
         mcp_servers: None,
         apps: None,
         rules: None,
@@ -1079,6 +1082,62 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
             allowed: "[Never]".into(),
             requirement_source: RequirementSource::CloudRequirements,
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let managed_dir = tmp.path().join("managed-hooks");
+    tokio::fs::create_dir_all(&managed_dir).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements = ConfigRequirementsToml {
+        hooks: Some(codex_config::ManagedHooksRequirementsToml {
+            managed_dir: Some(managed_dir.clone()),
+            windows_managed_dir: None,
+            hooks: codex_config::HookEventsToml {
+                pre_tool_use: vec![codex_config::MatcherGroup {
+                    matcher: Some("^Bash$".to_string()),
+                    hooks: vec![codex_config::HookHandlerConfig::Command {
+                        command: format!("python3 {}/pre.py", managed_dir.display()),
+                        timeout_sec: Some(10),
+                        r#async: false,
+                        status_message: Some("checking".to_string()),
+                    }],
+                }],
+                ..Default::default()
+            },
+        }),
+        ..ConfigRequirementsToml::default()
+    };
+    let expected = requirements.clone();
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().hooks, expected.hooks);
+    assert_eq!(
+        layers
+            .requirements()
+            .managed_hooks
+            .as_ref()
+            .map(|hooks| hooks.source.clone()),
+        Some(Some(RequirementSource::CloudRequirements))
     );
 
     Ok(())
