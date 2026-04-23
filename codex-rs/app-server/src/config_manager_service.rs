@@ -196,8 +196,9 @@ impl ConfigManager {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigManagerError> {
-        let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, self.codex_home());
+        let allowed_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
                 .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?,
@@ -309,7 +310,7 @@ impl ConfigManager {
         })?;
 
         if !config_edits.is_empty() {
-            ConfigEditsBuilder::new(self.codex_home())
+            ConfigEditsBuilder::for_config_path(provided_path.as_path())
                 .with_edits(config_edits)
                 .apply()
                 .await

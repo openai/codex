@@ -1,5 +1,6 @@
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -80,6 +81,16 @@ impl ConfigManager {
 
     pub(crate) fn codex_home(&self) -> &Path {
         self.codex_home.as_path()
+    }
+
+    pub(crate) fn user_config_path(&self) -> std::io::Result<AbsolutePathBuf> {
+        match self.loader_overrides.user_config_path.as_ref() {
+            Some(path) => AbsolutePathBuf::from_absolute_path(path.clone()),
+            None => Ok(AbsolutePathBuf::resolve_path_against_base(
+                CONFIG_TOML_FILE,
+                self.codex_home(),
+            )),
+        }
     }
 
     pub(crate) fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {

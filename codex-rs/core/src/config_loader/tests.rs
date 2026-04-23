@@ -369,6 +369,75 @@ async fn returns_empty_when_all_layers_missing() {
 }
 
 #[tokio::test]
+async fn selected_user_config_file_layers_over_base_user_config() {
+    let tmp = tempdir().expect("tempdir");
+    let managed_path = tmp.path().join("managed_config.toml");
+    let selected_config = tmp.path().join("work.config.toml");
+
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+model = "gpt-main"
+approval_policy = "on-failure"
+"#,
+    )
+    .expect("write default user config");
+    std::fs::write(&selected_config, r#"model = "gpt-work""#).expect("write selected user config");
+
+    let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
+    overrides.user_config_path = Some(selected_config.clone());
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
+    )
+    .await
+    .expect("load layers");
+
+    let user_layers = layers.get_user_layers(
+        super::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    assert_eq!(user_layers.len(), 2);
+    assert_eq!(
+        user_layers[0].name,
+        super::ConfigLayerSource::User {
+            file: AbsolutePathBuf::from_absolute_path(tmp.path().join(CONFIG_TOML_FILE))
+                .expect("base user config path")
+        }
+    );
+    let user_layer = layers.get_user_layer().expect("selected user layer");
+    assert_eq!(
+        user_layer.name,
+        super::ConfigLayerSource::User {
+            file: AbsolutePathBuf::from_absolute_path(&selected_config)
+                .expect("selected user config path")
+        }
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("model")
+            .and_then(TomlValue::as_str),
+        Some("gpt-work")
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("approval_policy")
+            .and_then(TomlValue::as_str),
+        Some("on-failure")
+    );
+}
+
+#[tokio::test]
 async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let cwd_dir = tmp.path().join("project");

@@ -10,6 +10,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::find_codex_home;
 use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
 use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
@@ -741,12 +742,22 @@ pub async fn run_main(
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
+    let mut loader_overrides = loader_overrides;
+    if let Some(user_config_path) = cli
+        .config_profile_v2
+        .as_deref()
+        .map(|profile_v2| resolve_profile_v2_config_path(&codex_home, profile_v2))
+        .transpose()?
+    {
+        loader_overrides.user_config_path = Some(user_config_path);
+    }
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
         &codex_home,
         config_cwd.as_ref(),
         cli_kv_overrides.clone(),
+        loader_overrides.clone(),
     )
     .await
     {
@@ -848,6 +859,7 @@ pub async fn run_main(
     let config = load_config_or_exit(
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         cloud_requirements.clone(),
     )
     .await;
@@ -1165,6 +1177,7 @@ async fn run_ratatui_app(
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
             )
             .await
@@ -1366,6 +1379,7 @@ async fn run_ratatui_app(
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
+                loader_overrides.clone(),
                 cloud_requirements.clone(),
                 fallback_cwd,
             )
@@ -1408,7 +1422,7 @@ async fn run_ratatui_app(
             arg0_paths,
             config.clone(),
             cli_kv_overrides.clone(),
-            loader_overrides,
+            loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
             log_db.clone(),
@@ -1432,6 +1446,7 @@ async fn run_ratatui_app(
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
+        loader_overrides.clone(),
         active_profile,
         prompt,
         images,
@@ -1676,11 +1691,13 @@ async fn get_login_status(
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
     load_config_or_exit_with_fallback_cwd(
         cli_kv_overrides,
         overrides,
+        loader_overrides,
         cloud_requirements,
         /*fallback_cwd*/ None,
     )
@@ -1690,6 +1707,7 @@ async fn load_config_or_exit(
 async fn load_config_or_exit_with_fallback_cwd(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
@@ -1697,6 +1715,7 @@ async fn load_config_or_exit_with_fallback_cwd(
     match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
+        .loader_overrides(loader_overrides)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
         .build()

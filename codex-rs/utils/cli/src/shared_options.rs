@@ -33,6 +33,10 @@ pub struct SharedCliOptions {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
+    #[arg(long = "profile-v2")]
+    pub config_profile_v2: Option<String>,
+
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's')]
@@ -72,6 +76,7 @@ impl SharedCliOptions {
             oss,
             oss_provider,
             config_profile,
+            config_profile_v2,
             sandbox_mode,
             full_auto,
             dangerously_bypass_approvals_and_sandbox,
@@ -84,6 +89,7 @@ impl SharedCliOptions {
             oss: root_oss,
             oss_provider: root_oss_provider,
             config_profile: root_config_profile,
+            config_profile_v2: root_config_profile_v2,
             sandbox_mode: root_sandbox_mode,
             full_auto: root_full_auto,
             dangerously_bypass_approvals_and_sandbox: root_dangerously_bypass_approvals_and_sandbox,
@@ -102,6 +108,9 @@ impl SharedCliOptions {
         }
         if config_profile.is_none() {
             config_profile.clone_from(root_config_profile);
+        }
+        if config_profile_v2.is_none() {
+            config_profile_v2.clone_from(root_config_profile_v2);
         }
         if sandbox_mode.is_none() {
             *sandbox_mode = *root_sandbox_mode;
@@ -136,6 +145,7 @@ impl SharedCliOptions {
             oss,
             oss_provider,
             config_profile,
+            config_profile_v2,
             sandbox_mode,
             full_auto,
             dangerously_bypass_approvals_and_sandbox,
@@ -154,6 +164,9 @@ impl SharedCliOptions {
         }
         if let Some(config_profile) = config_profile {
             self.config_profile = Some(config_profile);
+        }
+        if let Some(config_profile_v2) = config_profile_v2 {
+            self.config_profile_v2 = Some(config_profile_v2);
         }
         if subcommand_selected_sandbox_mode {
             self.sandbox_mode = sandbox_mode;

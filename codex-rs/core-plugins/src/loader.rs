@@ -322,10 +322,10 @@ fn refresh_non_curated_plugin_cache_with_mode(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
-    configured_plugins_from_user_config_value(&user_layer.config)
+    configured_plugins_from_user_config_value(&user_config)
 }
 
 fn configured_plugins_from_user_config_value(
@@ -1001,7 +1001,53 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+
+    fn user_config_path(file_name: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("codex-test").join(file_name))
+            .expect("test user config path should be absolute")
+    }
+
+    fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User { file: path },
+            toml::from_str(config).expect("user config toml"),
+        )
+    }
+
+    #[test]
+    fn configured_plugins_from_stack_merges_user_layers() {
+        let stack = ConfigLayerStack::new(
+            vec![
+                user_layer(
+                    user_config_path("config.toml"),
+                    "[plugins.base]\nenabled = true\n",
+                ),
+                user_layer(
+                    user_config_path("work.config.toml"),
+                    "[plugins.profile]\nenabled = false\n",
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("valid config layer stack");
+
+        let plugins = configured_plugins_from_stack(&stack);
+
+        assert_eq!(
+            plugins,
+            HashMap::from([
+                ("base".to_string(), PluginConfig { enabled: true }),
+                ("profile".to_string(), PluginConfig { enabled: false }),
+            ])
+        );
+    }
 
     #[test]
     fn plugin_mcp_file_supports_mcp_servers_object_format() {
