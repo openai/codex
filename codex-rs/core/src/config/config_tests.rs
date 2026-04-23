@@ -39,6 +39,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
@@ -3628,8 +3629,7 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
--> anyhow::Result<()> {
+async fn set_feature_enabled_persists_feature_disable_in_profile() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
 
     ConfigEditsBuilder::new(codex_home.path())
@@ -5300,6 +5300,50 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(None),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.service_tier, None);
+    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fast_default_opt_out_notice_config_is_respected() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+    let mut cfg = fixture.cfg.clone();
+    cfg.notice = Some(Notice {
+        fast_default_opt_out: Some(true),
+        ..Default::default()
+    });
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.service_tier, None);
+    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
@@ -5733,6 +5777,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
         feature_requirements: None,
+        hooks: None,
         mcp_servers: None,
         apps: None,
         rules: None,
@@ -6408,6 +6453,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
+        hooks: None,
         mcp_servers: None,
         apps: None,
         rules: None,
@@ -6881,7 +6927,7 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
@@ -6910,7 +6956,7 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;

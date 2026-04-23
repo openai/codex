@@ -189,6 +189,7 @@ async fn approvals_popup_shows_disabled_presets() {
 #[tokio::test]
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
@@ -198,14 +199,23 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
-    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
-    // and selection should wrap back to idx 0 (also enabled).
+    // Keep the popup layout stable across platforms and feature defaults so
+    // the hidden numeric shortcut below still targets the disabled Full Access row.
+    let disabled_shortcut = if cfg!(target_os = "windows") {
+        '3'
+    } else {
+        '2'
+    };
+
+    // The approvals popup is the active bottom-pane view; drive navigation via
+    // chat.handle_key_event. Move through the menu so selection stays on an
+    // enabled preset even when disabled rows are skipped.
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
-    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
-    chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
+    // Press the hidden numeric shortcut for the disabled Full Access row; it
+    // should not close the popup or accept the preset.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(disabled_shortcut)));
 
     // Ensure the popup remains open and no selection actions were sent.
     let width = 80;
@@ -401,7 +411,7 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled() {
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden until the experimental feature is enabled: {popup}"
+        "expected Auto-review to stay hidden until the feature is enabled: {popup}"
     );
 }
 
@@ -433,7 +443,7 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden when the experimental feature is disabled: {popup}"
+        "expected Auto-review to stay hidden when the feature is disabled: {popup}"
     );
 }
 
@@ -463,6 +473,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -516,6 +527,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,

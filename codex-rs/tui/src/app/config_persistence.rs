@@ -638,6 +638,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,

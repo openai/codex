@@ -534,6 +534,7 @@ mod tests {
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PreToolUse,
+            is_managed: false,
             matcher: Some("^Bash$".to_string()),
             command: "echo hook".to_string(),
             timeout_sec: 5,

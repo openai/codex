@@ -77,6 +77,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::ToolName;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -94,6 +95,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
@@ -599,11 +601,20 @@ impl Codex {
                 developer_instructions: None,
             },
         };
+        let account_plan_type = auth_manager
+            .auth_cached()
+            .and_then(|auth| auth.account_plan_type());
+        let service_tier = get_service_tier(
+            config.service_tier,
+            config.notices.fast_default_opt_out.unwrap_or(false),
+            account_plan_type,
+            config.features.enabled(Feature::FastMode),
+        );
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
-            service_tier: config.service_tier,
+            service_tier,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.personality,
@@ -782,6 +793,27 @@ impl Codex {
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
     }
+}
+
+fn get_service_tier(
+    configured_service_tier: Option<ServiceTier>,
+    fast_default_opt_out: bool,
+    account_plan_type: Option<AccountPlanType>,
+    fast_mode_enabled: bool,
+) -> Option<ServiceTier> {
+    if configured_service_tier.is_some() || fast_default_opt_out || !fast_mode_enabled {
+        return configured_service_tier;
+    }
+
+    account_plan_type
+        .is_some_and(is_enterprise_default_service_tier_plan)
+        .then_some(ServiceTier::Fast)
+}
+
+fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {
+    plan_type == AccountPlanType::Enterprise
+        || plan_type.is_business_like()
+        || plan_type.is_team_like()
 }
 
 #[cfg(test)]
@@ -1893,6 +1925,7 @@ impl Session {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 });
             }
             AskForApproval::Granular(granular_config)
@@ -1901,6 +1934,7 @@ impl Session {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 });
             }
             AskForApproval::OnFailure
@@ -1944,11 +1978,13 @@ impl Session {
                     RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     }
                 }
                 ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
                     permissions: requested_permissions.clone(),
                     scope: PermissionGrantScope::Session,
+                    strict_auto_review: false,
                 },
                 ReviewDecision::NetworkPolicyAmendment {
                     network_policy_amendment,
@@ -1956,16 +1992,19 @@ impl Session {
                     NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
                         permissions: requested_permissions.clone(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     },
                     NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     },
                 },
                 ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
                     RequestPermissionsResponse {
                         permissions: RequestPermissionProfile::default(),
                         scope: PermissionGrantScope::Turn,
+                        strict_auto_review: false,
                     }
                 }
             };
@@ -2137,6 +2176,14 @@ impl Session {
         response: RequestPermissionsResponse,
         cwd: &Path,
     ) -> RequestPermissionsResponse {
+        if response.strict_auto_review && matches!(response.scope, PermissionGrantScope::Session) {
+            return RequestPermissionsResponse {
+                permissions: RequestPermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            };
+        }
+
         if response.permissions.is_empty() {
             return response;
         }
@@ -2149,6 +2196,7 @@ impl Session {
             )
             .into(),
             scope: response.scope,
+            strict_auto_review: response.strict_auto_review,
         }
     }
 
@@ -2164,7 +2212,11 @@ impl Session {
             PermissionGrantScope::Turn => {
                 if let Some(turn_state) = originating_turn_state {
                     let mut ts = turn_state.lock().await;
-                    ts.record_granted_permissions(response.permissions.clone().into());
+                    let permissions: PermissionProfile = response.permissions.clone().into();
+                    ts.record_granted_permissions(permissions);
+                    if response.strict_auto_review {
+                        ts.enable_strict_auto_review();
+                    }
                 }
             }
             PermissionGrantScope::Session => {
@@ -2183,6 +2235,19 @@ impl Session {
         let active = active.as_ref()?;
         let ts = active.turn_state.lock().await;
         ts.granted_permissions()
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
+    pub(crate) async fn strict_auto_review_enabled_for_turn(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        let Some(active) = active.as_ref() else {
+            return false;
+        };
+        let ts = active.turn_state.lock().await;
+        ts.strict_auto_review_enabled()
     }
 
     pub(crate) async fn granted_session_permissions(&self) -> Option<PermissionProfile> {

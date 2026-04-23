@@ -131,6 +131,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         Some(RequestPermissionsResponse {
             permissions: requested_permissions.clone(),
             scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
         })
     );
     assert_eq!(
@@ -377,6 +378,119 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
 
     assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
     assert!(exec_output.output.contains("hi"));
+}
+
+#[tokio::test]
+async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
+    let server = start_mock_server().await;
+    let guardian_request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                &serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "The command stays within the strict turn permission grant.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (mut session, mut turn_context_raw) = make_session_and_context().await;
+    let active_turn = crate::state::ActiveTurn::default();
+    let originating_turn_state = Arc::clone(&active_turn.turn_state);
+    *session.active_turn.lock().await = Some(active_turn);
+    session
+        .record_granted_request_permissions_for_turn(
+            &RequestPermissionsResponse {
+                permissions: RequestPermissionProfile {
+                    network: Some(NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: true,
+            },
+            Some(&originating_turn_state),
+        )
+        .await;
+
+    turn_context_raw
+        .approval_policy
+        .set(AskForApproval::OnFailure)
+        .expect("test setup should allow updating approval policy");
+    turn_context_raw
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("test setup should allow updating sandbox policy");
+    turn_context_raw.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
+    turn_context_raw.network_sandbox_policy =
+        NetworkSandboxPolicy::from(turn_context_raw.sandbox_policy.get());
+    let mut config = (*turn_context_raw.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn_context_raw.config = Arc::clone(&config);
+    turn_context_raw.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context_raw.auth_manager.clone(),
+    );
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    let handler = ShellHandler;
+    let command = if cfg!(windows) {
+        vec![
+            "cmd.exe".to_string(),
+            "/Q".to_string(),
+            "/D".to_string(),
+            "/C".to_string(),
+            "echo hi".to_string(),
+        ]
+    } else {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo hi".to_string(),
+        ]
+    };
+    let resp = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            cancellation_token: CancellationToken::new(),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "strict-shell-call".to_string(),
+            tool_name: codex_tools::ToolName::plain("shell"),
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "command": command,
+                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                    "timeout_ms": 1_000_u64,
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let output = expect_text_output(&resp.expect("expected Ok result"));
+    assert!(output.contains("hi"));
+    let guardian_request = guardian_request_log.single_request();
+    assert!(guardian_request.body_contains_text("echo hi"));
 }
 
 #[tokio::test]
