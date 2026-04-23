@@ -883,6 +883,7 @@ pub(crate) struct ChatWidget {
     plugin_install_apps_needing_auth: Vec<AppSummary>,
     plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     plugins_active_tab_id: Option<String>,
+    newly_installed_marketplace_tab_id: Option<String>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -5240,6 +5241,7 @@ impl ChatWidget {
             plugin_install_apps_needing_auth: Vec::new(),
             plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
+            newly_installed_marketplace_tab_id: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),

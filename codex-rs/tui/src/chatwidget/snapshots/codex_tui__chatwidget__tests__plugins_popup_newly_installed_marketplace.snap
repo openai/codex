@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 329
+expression: popup
+---
+  Plugins
+  Debug Marketplace installed successfully.
+  Select the plugins you want to use and press Enter to install or view details.
+
+  All Plugins  Installed (0)  OpenAI Curated  [Debug Marketplace]  Add Marketplace
+
+  Type to search plugins
+› [-] Debug Plugin  Available   Press Enter to install or view plugin details.
+
+  space enable/disable · ←/→ select marketplace · enter view details · esc close

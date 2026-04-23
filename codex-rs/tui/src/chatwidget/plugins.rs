@@ -195,11 +195,18 @@ impl ChatWidget {
                         marketplace_tab_id_matching_saved_id(tab_id, &response.marketplaces)
                     })
                     .or_else(|| self.plugins_active_tab_id.clone());
+                self.newly_installed_marketplace_tab_id = self
+                    .newly_installed_marketplace_tab_id
+                    .as_deref()
+                    .and_then(|tab_id| {
+                        marketplace_tab_id_matching_saved_id(tab_id, &response.marketplaces)
+                    });
                 self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
                 if !auth_flow_active {
                     self.refresh_plugins_popup_if_open(&response);
                 }
+                self.newly_installed_marketplace_tab_id = None;
             }
             Err(err) => {
                 if !auth_flow_active {
@@ -424,8 +431,10 @@ impl ChatWidget {
 
         match result {
             Ok(response) => {
-                self.plugins_active_tab_id =
-                    Some(marketplace_tab_id_from_path(&response.installed_root));
+                let marketplace_tab_id = marketplace_tab_id_from_path(&response.installed_root);
+                self.plugins_active_tab_id = Some(marketplace_tab_id.clone());
+                self.newly_installed_marketplace_tab_id =
+                    (!response.already_added).then_some(marketplace_tab_id);
                 let message = if response.already_added {
                     format!(
                         "Marketplace {} is already added.",
@@ -1060,15 +1069,25 @@ impl ChatWidget {
                 .iter()
                 .filter(|(_, plugin, _)| plugin.installed)
                 .count();
-            tabs.push(SelectionTab {
-                id: marketplace_tab_id(marketplace),
-                label: label.clone(),
-                header: plugins_header(
+            let tab_id = marketplace_tab_id(marketplace);
+            let header = if self.newly_installed_marketplace_tab_id.as_deref() == Some(&tab_id) {
+                plugins_header(
+                    format!("{label} installed successfully."),
+                    "Select the plugins you want to use and press Enter to install or view details."
+                        .to_string(),
+                )
+            } else {
+                plugins_header(
                     format!("{label}."),
                     format!(
                         "Installed {marketplace_installed} of {marketplace_total} {label} plugins."
                     ),
-                ),
+                )
+            };
+            tabs.push(SelectionTab {
+                id: tab_id,
+                label: label.clone(),
+                header,
                 items: self.plugin_selection_items(
                     entries,
                     /*include_marketplace_names*/ false,
@@ -1300,7 +1319,7 @@ impl ChatWidget {
                     format!("{selected_status_label}   Space to {toggle_action}.")
                 }
             } else if can_view_details {
-                format!("{selected_status_label}   Press Enter to view plugin details.")
+                format!("{selected_status_label}   Press Enter to install or view plugin details.")
             } else {
                 format!("{selected_status_label}   Remote plugin details are not available yet.")
             };
