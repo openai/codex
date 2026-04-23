@@ -8,7 +8,6 @@ use super::*;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::path::Path;
 
 impl App {
     pub(super) fn fetch_mcp_inventory(
@@ -537,10 +536,9 @@ pub(super) async fn fetch_plugin_detail(
 
 pub(super) async fn fetch_marketplace_add(
     request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
+    _cwd: PathBuf,
     source: String,
 ) -> Result<MarketplaceAddResponse> {
-    let source = normalize_marketplace_add_source(cwd.as_path(), source);
     let request_id = RequestId::String(format!("marketplace-add-{}", Uuid::new_v4()));
     request_handle
         .request_typed(ClientRequest::MarketplaceAdd {
@@ -553,25 +551,6 @@ pub(super) async fn fetch_marketplace_add(
         })
         .await
         .wrap_err("marketplace/add failed in TUI")
-}
-
-fn normalize_marketplace_add_source(cwd: &Path, source: String) -> String {
-    if should_resolve_marketplace_source_against_cwd(&source) {
-        AbsolutePathBuf::resolve_path_against_base(&source, cwd)
-            .display()
-            .to_string()
-    } else {
-        source
-    }
-}
-
-fn should_resolve_marketplace_source_against_cwd(source: &str) -> bool {
-    source.starts_with("./")
-        || source.starts_with(".\\")
-        || source.starts_with("../")
-        || source.starts_with("..\\")
-        || source == "."
-        || source == ".."
 }
 
 pub(super) async fn fetch_plugin_install(
@@ -710,48 +689,9 @@ mod tests {
     use codex_protocol::mcp::Tool;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
-    }
-
-    #[test]
-    fn normalize_marketplace_add_source_resolves_relative_local_paths_against_cwd() {
-        let cwd = tempdir().expect("tempdir");
-        let cwd = cwd.path();
-
-        assert_eq!(
-            normalize_marketplace_add_source(cwd, "./marketplace".to_string()),
-            AbsolutePathBuf::resolve_path_against_base("./marketplace", cwd)
-                .display()
-                .to_string()
-        );
-        assert_eq!(
-            normalize_marketplace_add_source(cwd, "../marketplace".to_string()),
-            AbsolutePathBuf::resolve_path_against_base("../marketplace", cwd)
-                .display()
-                .to_string()
-        );
-    }
-
-    #[test]
-    fn normalize_marketplace_add_source_leaves_non_relative_sources_unchanged() {
-        let cwd = tempdir().expect("tempdir");
-        let cwd = cwd.path();
-
-        assert_eq!(
-            normalize_marketplace_add_source(cwd, "owner/repo".to_string()),
-            "owner/repo"
-        );
-        assert_eq!(
-            normalize_marketplace_add_source(cwd, "~/marketplace".to_string()),
-            "~/marketplace"
-        );
-        assert_eq!(
-            normalize_marketplace_add_source(cwd, cwd.join("marketplace").display().to_string()),
-            cwd.join("marketplace").display().to_string()
-        );
     }
 
     #[test]
