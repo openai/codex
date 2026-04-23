@@ -25,7 +25,7 @@ use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::SideContentWidth;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
 use crate::bottom_pane::popup_content_width;
 use crate::bottom_pane::side_by_side_layout_widths;
 use crate::diff_render::DiffLineType;
@@ -33,6 +33,7 @@ use crate::diff_render::current_diff_render_style_context;
 use crate::diff_render::line_number_width;
 use crate::diff_render::push_wrapped_diff_line_with_style_context;
 use crate::diff_render::push_wrapped_diff_line_with_syntax_and_style_context;
+use crate::keymap::ListKeymap;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
@@ -315,6 +316,7 @@ pub(crate) fn build_theme_picker_params(
     current_name: Option<&str>,
     codex_home: Option<&Path>,
     terminal_width: Option<u16>,
+    list_keymap: &ListKeymap,
 ) -> SelectionViewParams {
     // Snapshot the current theme so we can restore on cancel.
     let original_theme = highlight::current_syntax_theme();
@@ -390,7 +392,7 @@ pub(crate) fn build_theme_picker_params(
             codex_home_owned.as_deref(),
             terminal_width,
         )),
-        footer_hint: Some(standard_popup_hint_line()),
+        footer_hint: Some(standard_popup_hint_line_for_keymap(list_keymap)),
         items,
         is_searchable: true,
         search_placeholder: Some("Type to filter themes...".to_string()),
@@ -477,7 +479,10 @@ mod tests {
     #[test]
     fn theme_picker_uses_half_width_with_stacked_fallback_preview() {
         let params = build_theme_picker_params(
-            /*current_name*/ None, /*codex_home*/ None, /*terminal_width*/ None,
+            /*current_name*/ None,
+            /*codex_home*/ None,
+            /*terminal_width*/ None,
+            &crate::keymap::RuntimeKeymap::defaults().list,
         );
         assert_eq!(params.side_content_width, SideContentWidth::Half);
         assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
@@ -487,7 +492,10 @@ mod tests {
     #[test]
     fn theme_picker_items_include_search_values_for_preview_mapping() {
         let params = build_theme_picker_params(
-            /*current_name*/ None, /*codex_home*/ None, /*terminal_width*/ None,
+            /*current_name*/ None,
+            /*codex_home*/ None,
+            /*terminal_width*/ None,
+            &crate::keymap::RuntimeKeymap::defaults().list,
         );
         assert!(
             params.items.iter().all(|item| item.search_value.is_some()),
@@ -640,6 +648,7 @@ mod tests {
             Some("not-a-real-theme"),
             /*codex_home*/ None,
             Some(120),
+            &crate::keymap::RuntimeKeymap::defaults().list,
         );
         let selected_idx = params
             .initial_selected_idx

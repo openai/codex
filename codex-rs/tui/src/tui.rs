@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -342,7 +343,11 @@ fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
     if should_disable_raw_mode {
         disable_raw_mode()?;
     }
-    let _ = execute!(stdout(), crossterm::cursor::Show);
+    let _ = execute!(
+        stdout(),
+        SetCursorStyle::DefaultUserShape,
+        crossterm::cursor::Show
+    );
     Ok(())
 }
 

@@ -100,6 +100,13 @@ pub(crate) enum RateLimitRefreshOrigin {
     StatusCommand { request_id: u64 },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeymapEditIntent {
+    ReplaceAll,
+    AddAlternate,
+    ReplaceOne { old_key: String },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -677,6 +684,39 @@ pub(crate) enum AppEvent {
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {
         name: String,
+    },
+
+    /// Open set/remove actions for the selected keymap action.
+    OpenKeymapActionMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open binding selection before replacing one binding for an action.
+    OpenKeymapReplaceBindingMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open key capture for the selected keymap action.
+    OpenKeymapCapture {
+        context: String,
+        action: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Apply a captured key to the selected keymap action.
+    KeymapCaptured {
+        context: String,
+        action: String,
+        key: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Remove the custom root binding for the selected keymap action.
+    KeymapCleared {
+        context: String,
+        action: String,
     },
 }
 

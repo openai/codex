@@ -1,0 +1,25 @@
+---
+source: tui/src/keymap_setup.rs
+expression: snapshot
+---
+unbound:
+Set key | Capture a key for this unbound action. | enabled
+Remove custom binding | No root override to remove. | There is no custom root binding for this action to remove.
+Back to shortcuts | Return to the shortcut list. | enabled
+
+single:
+Replace binding | Capture a replacement key. | enabled
+Add alternate binding | Keep the current binding and add another key. | enabled
+Remove custom binding | Restore the default keymap binding. | enabled
+Back to shortcuts | Return to the shortcut list. | enabled
+
+multi:
+Replace one binding... | Choose which existing binding to replace. | enabled
+Replace all bindings | Replace every current binding with one key. | enabled
+Add alternate binding | Keep current bindings and add another key. | enabled
+Remove custom binding | Restore the default keymap binding. | enabled
+Back to shortcuts | Return to the shortcut list. | enabled
+
+replace picker:
+ctrl-enter | Replace this binding. | enabled
+alt-enter | Replace this binding. | enabled

@@ -121,7 +121,6 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
-use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -165,6 +164,7 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::max_left_width_for_right;
+use super::footer::mode_indicator_line as collaboration_mode_indicator_line;
 use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
@@ -183,6 +183,10 @@ use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::EditorKeymap;
+use crate::keymap::RuntimeKeymap;
+use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -386,6 +390,18 @@ pub(crate) struct ChatComposer {
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
     history_search: Option<HistorySearchSession>,
+    submit_keys: Vec<KeyBinding>,
+    queue_keys: Vec<KeyBinding>,
+    toggle_shortcuts_keys: Vec<KeyBinding>,
+    editor_keymap: EditorKeymap,
+    footer_toggle_shortcuts_key: Option<KeyBinding>,
+    footer_queue_key: Option<KeyBinding>,
+    footer_insert_newline_key: Option<KeyBinding>,
+    footer_external_editor_key: Option<KeyBinding>,
+    footer_edit_previous_key: Option<KeyBinding>,
+    footer_show_transcript_key: Option<KeyBinding>,
+    footer_reasoning_down_key: Option<KeyBinding>,
+    footer_reasoning_up_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -533,6 +549,25 @@ impl ChatComposer {
             side_conversation_context_label: None,
             active_agent_label: None,
             history_search: None,
+            submit_keys: vec![key_hint::plain(KeyCode::Enter)],
+            queue_keys: vec![key_hint::plain(KeyCode::Tab)],
+            toggle_shortcuts_keys: vec![
+                key_hint::plain(KeyCode::Char('?')),
+                key_hint::shift(KeyCode::Char('?')),
+            ],
+            editor_keymap: RuntimeKeymap::defaults().editor,
+            footer_toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            footer_queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            footer_insert_newline_key: Some(if use_shift_enter_hint {
+                key_hint::shift(KeyCode::Enter)
+            } else {
+                key_hint::ctrl(KeyCode::Char('j'))
+            }),
+            footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
+            footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            footer_reasoning_down_key: Some(key_hint::alt(KeyCode::Char(','))),
+            footer_reasoning_up_key: Some(key_hint::alt(KeyCode::Char('.'))),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -604,6 +639,28 @@ impl ChatComposer {
 
     pub fn set_fast_command_enabled(&mut self, enabled: bool) {
         self.fast_command_enabled = enabled;
+    }
+
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.submit_keys = keymap.composer.submit.clone();
+        self.queue_keys = keymap.composer.queue.clone();
+        self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
+        self.editor_keymap = keymap.editor.clone();
+        self.textarea.set_keymap_bindings(keymap);
+        self.footer_toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
+        self.footer_queue_key = primary_binding(&keymap.composer.queue);
+        let shift_enter = key_hint::shift(KeyCode::Enter);
+        self.footer_insert_newline_key =
+            if self.use_shift_enter_hint && keymap.editor.insert_newline.contains(&shift_enter) {
+                Some(shift_enter)
+            } else {
+                primary_binding(&keymap.editor.insert_newline)
+            };
+        self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
+        self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
+        self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
+        self.footer_reasoning_down_key = primary_binding(&keymap.chat.reasoning_down);
+        self.footer_reasoning_up_key = primary_binding(&keymap.chat.reasoning_up);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -919,6 +976,65 @@ impl ChatComposer {
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.textarea.set_vim_enabled(enabled);
+        self.paste_burst.clear_after_explicit_paste();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = !self.textarea.is_vim_enabled();
+        self.set_vim_enabled(enabled);
+        enabled
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_vim_enabled(&self) -> bool {
+        self.textarea.is_vim_enabled()
+    }
+
+    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.textarea.should_handle_vim_insert_escape(key_event)
+    }
+
+    fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+        self.textarea.vim_mode_label().map(|label| match label {
+            "Normal" => "Vim: Normal".magenta(),
+            "Insert" => "Vim: Insert".green(),
+            _ => unreachable!(),
+        })
+    }
+
+    fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            spans.push(vim_mode);
+        }
+        if let Some(collab) =
+            collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+        {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.extend(collab.spans);
+        }
+        if spans.is_empty() {
+            None
+        } else {
+            Some(Line::from(spans))
+        }
+    }
+
+    fn right_footer_line_with_context(&self) -> Line<'static> {
+        let mut line =
+            context_window_line(self.context_window_percent, self.context_window_used_tokens);
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            line.spans.push(" | ".dim());
+            line.spans.push(vim_mode);
+        }
+        line
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
@@ -2835,6 +2951,27 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
+        if self.should_handle_vim_insert_escape(key_event) {
+            return self.handle_input_basic(key_event);
+        }
+        if self.textarea.is_vim_normal_mode()
+            && self.is_empty()
+            && matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char('/'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }
+            )
+        {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+            self.textarea.set_text_clearing_elements("/");
+            self.textarea.set_cursor(self.textarea.text().len());
+            self.textarea.enter_vim_insert_mode();
+            return (InputResult::None, true);
+        }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
@@ -2846,6 +2983,14 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if self.queue_keys.is_pressed(key_event) && self.is_task_running {
+            return self.handle_submission(/*should_queue*/ true);
+        }
+
+        if self.submit_keys.is_pressed(key_event) {
+            return self.handle_submission(/*should_queue*/ false);
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -2993,7 +3138,7 @@ impl ChatComposer {
         } = input
         {
             let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
-            if !has_ctrl_or_alt && !self.disable_paste_burst {
+            if !has_ctrl_or_alt && !self.disable_paste_burst && self.textarea.allows_paste_burst() {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
                 // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
@@ -3146,13 +3291,18 @@ impl ChatComposer {
         }
     }
 
+    /// Handle the dedicated shortcut-overlay toggle key(s).
+    ///
+    /// This only toggles when the composer is empty and no paste burst is in
+    /// progress, so typing/pasting `?` still inserts text instead of opening
+    /// help. The bound key list intentionally supports terminal-variant
+    /// modifier reporting (for example `?` vs `shift-?`).
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
         if key_event.kind != KeyEventKind::Press {
             return false;
         }
 
-        let toggles = matches!(key_event.code, KeyCode::Char('?'))
-            && !has_ctrl_or_alt(key_event.modifiers)
+        let toggles = self.toggle_shortcuts_keys.is_pressed(*key_event)
             && self.is_empty()
             && !self.is_in_paste_burst();
 
@@ -3191,10 +3341,16 @@ impl ChatComposer {
             quit_shortcut_key: self.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            context_window_percent: self.context_window_percent,
-            context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            toggle_shortcuts_key: self.footer_toggle_shortcuts_key,
+            queue_key: self.footer_queue_key,
+            insert_newline_key: self.footer_insert_newline_key,
+            external_editor_key: self.footer_external_editor_key,
+            edit_previous_key: self.footer_edit_previous_key,
+            show_transcript_key: self.footer_show_transcript_key,
+            reasoning_down_key: self.footer_reasoning_down_key,
+            reasoning_up_key: self.footer_reasoning_up_key,
             active_agent_label: self.active_agent_label.clone(),
         }
     }
@@ -3837,6 +3993,14 @@ impl Renderable for ChatComposer {
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
+    fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
+        if self.textarea.uses_vim_insert_cursor() {
+            crossterm::cursor::SetCursorStyle::SteadyBar
+        } else {
+            crossterm::cursor::SetCursorStyle::DefaultUserShape
+        }
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -3963,31 +4127,23 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line = if let Some(label) =
-                        self.side_conversation_context_label.as_ref()
-                    {
-                        Some(side_conversation_context_line(label))
-                    } else if let Some(line) = self.shell_mode_footer_line() {
-                        Some(line)
-                    } else if status_line_active {
-                        let full =
-                            mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                        let compact = mode_indicator_line(
-                            self.collaboration_mode_indicator,
-                            /*show_cycle_hint*/ false,
-                        );
-                        let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                        if can_show_left_with_context(hint_rect, left_width, full_width) {
-                            full
+                    let right_line =
+                        if let Some(label) = self.side_conversation_context_label.as_ref() {
+                            Some(side_conversation_context_line(label))
+                        } else if let Some(line) = self.shell_mode_footer_line() {
+                            Some(line)
+                        } else if status_line_active {
+                            let full = self.mode_indicator_line(show_cycle_hint);
+                            let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
+                            let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                            if can_show_left_with_context(hint_rect, left_width, full_width) {
+                                full
+                            } else {
+                                compact
+                            }
                         } else {
-                            compact
-                        }
-                    } else {
-                        Some(context_window_line(
-                            footer_props.context_window_percent,
-                            footer_props.context_window_used_tokens,
-                        ))
-                    };
+                            Some(self.right_footer_line_with_context())
+                        };
                     let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if status_line_active
                         && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
@@ -4015,6 +4171,7 @@ impl ChatComposer {
                                 Some(single_line_footer_layout(
                                     hint_rect,
                                     right_width,
+                                    &footer_props,
                                     left_mode_indicator,
                                     show_cycle_hint,
                                     show_shortcuts_hint,
@@ -4942,6 +5099,44 @@ mod tests {
     }
 
     #[test]
+    fn empty_vim_insert_escape_enters_normal_without_esc_hint() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
+        assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
     fn base_footer_mode_tracks_empty_state_after_quit_hint_expires() {
         use crossterm::event::KeyCode;
 
@@ -5053,6 +5248,186 @@ mod tests {
             }
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn vim_mode_stays_enabled_after_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_steer_enabled(/*enabled*/ true);
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("h".to_string(), Vec::new(), Vec::new());
+        let (result, _) = composer.handle_submission(/*should_queue*/ false);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert!(composer.is_empty());
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn slash_opens_command_popup_in_vim_normal_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), "/");
+        assert_eq!(composer.textarea.cursor(), "/".len());
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+    }
+
+    #[test]
+    fn slash_command_can_be_typed_and_dispatched_after_vim_normal_slash() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        for ch in ['/', 'd', 'i', 'f', 'f'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(composer.textarea.text(), "/diff");
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(needs_redraw);
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
+    }
+
+    #[test]
+    fn esc_switches_vim_insert_to_normal() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert_eq!(composer.textarea.cursor(), "hey".len());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        assert_eq!(composer.textarea.cursor(), "he".len());
+    }
+
+    #[test]
+    fn vim_insert_uses_bar_cursor_style() {
+        use crate::render::renderable::Renderable;
+        use crossterm::cursor::SetCursorStyle;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use crossterm::queue;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        let area = Rect::new(0, 0, 80, 10);
+        let style_output = |style| {
+            let mut output = Vec::new();
+            queue!(output, style).expect("queue cursor style");
+            output
+        };
+        let default = style_output(SetCursorStyle::DefaultUserShape);
+        let steady_bar = style_output(SetCursorStyle::SteadyBar);
+
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
+
+        composer.set_vim_enabled(/*enabled*/ true);
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
+        assert_eq!(style_output(composer.cursor_style(area)), steady_bar);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(style_output(composer.cursor_style(area)), default,);
     }
 
     #[test]
@@ -5217,6 +5592,30 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
+    }
+
+    #[test]
+    fn shift_question_mark_toggles_shortcut_overlay_when_empty() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_steer_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "toggling overlay should request redraw");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
     /// Behavior: while a paste-like burst is being captured, `?` must not toggle the shortcut
@@ -6307,7 +6706,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(/*enabled*/ true);
         let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS);
         composer.textarea.set_text_clearing_elements(&input);
 
@@ -6335,7 +6734,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(/*enabled*/ true);
         let input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
         composer.textarea.set_text_clearing_elements(&input);
 
@@ -6489,6 +6888,40 @@ mod tests {
 
             insta::assert_snapshot!(name, terminal.backend());
         }
+    }
+
+    #[test]
+    fn vim_escape_cursor_position_snapshot() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey you, how are you?".to_string(), Vec::new(), Vec::new());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, 100, 10);
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("create test terminal");
+        terminal
+            .draw(|frame| composer.render(frame.area(), frame.buffer_mut()))
+            .expect("draw composer");
+        let cursor = composer.cursor_pos(area).expect("cursor should be visible");
+        let snapshot = format!("cursor={cursor:?}\n{:?}", terminal.backend());
+        insta::assert_snapshot!("vim_escape_cursor_position", snapshot);
     }
 
     #[test]
@@ -6753,7 +7186,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_steer_enabled(true);
+        composer.set_steer_enabled(/*enabled*/ true);
         composer.textarea.insert_str("restore me");
         composer.textarea.set_cursor(/*pos*/ 0);
 

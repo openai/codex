@@ -23,11 +23,12 @@ use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
-use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ViewCompletion;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
@@ -91,6 +92,8 @@ mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
+#[cfg(test)]
+pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -203,6 +206,7 @@ pub(crate) struct BottomPane {
     pending_thread_approvals: PendingThreadApprovals,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    keymap: RuntimeKeymap,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -236,6 +240,8 @@ impl BottomPane {
             disable_paste_burst,
         );
         composer.set_frame_requester(frame_requester.clone());
+        let keymap = RuntimeKeymap::defaults();
+        composer.set_keymap_bindings(&keymap);
         composer.set_skill_mentions(skills);
         Self {
             composer,
@@ -254,6 +260,7 @@ impl BottomPane {
             animations_enabled,
             context_window_percent: None,
             context_window_used_tokens: None,
+            keymap,
         }
     }
 
@@ -299,6 +306,12 @@ impl BottomPane {
     /// Slash recall records the submitted command text regardless of whether the command succeeds.
     pub(crate) fn record_pending_slash_command_history(&mut self) {
         self.composer.record_pending_slash_command_history();
+    }
+
+    pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.keymap = keymap.clone();
+        self.composer.set_keymap_bindings(keymap);
+        self.request_redraw();
     }
 
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
@@ -367,6 +380,17 @@ impl BottomPane {
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
         self.pending_input_preview.set_edit_binding(binding);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.composer.set_vim_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = self.composer.toggle_vim_enabled();
+        self.request_redraw();
+        enabled
     }
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
@@ -840,7 +864,11 @@ impl BottomPane {
 
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
-        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
         self.push_view(Box::new(view));
     }
 
@@ -859,7 +887,44 @@ impl BottomPane {
         }
 
         self.view_stack.pop();
-        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
+        self.push_view(Box::new(view));
+        true
+    }
+
+    /// Replace one or more active views whose IDs are in `view_ids` with a
+    /// generic list selection view.
+    pub(crate) fn replace_active_views_with_selection_view(
+        &mut self,
+        view_ids: &[&'static str],
+        params: list_selection_view::SelectionViewParams,
+    ) -> bool {
+        let is_match = self
+            .view_stack
+            .last()
+            .and_then(|view| view.view_id())
+            .is_some_and(|view_id| view_ids.contains(&view_id));
+        if !is_match {
+            return false;
+        }
+
+        while self
+            .view_stack
+            .last()
+            .and_then(|view| view.view_id())
+            .is_some_and(|view_id| view_ids.contains(&view_id))
+        {
+            self.view_stack.pop();
+        }
+        let view = list_selection_view::ListSelectionView::new(
+            params,
+            self.app_event_tx.clone(),
+            self.keymap.list.clone(),
+        );
         self.push_view(Box::new(view));
         true
     }
@@ -928,6 +993,15 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn composer_is_vim_enabled(&self) -> bool {
+        self.composer.is_vim_enabled()
+    }
+
+    pub(crate) fn composer_should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.composer.should_handle_vim_insert_escape(key_event)
+    }
+
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }
@@ -935,6 +1009,11 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn has_active_view(&self) -> bool {
         !self.view_stack.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_view_id(&self) -> Option<&'static str> {
+        self.view_stack.last().and_then(|view| view.view_id())
     }
 
     /// Return true when the pane is in the regular composer state without any
@@ -977,7 +1056,13 @@ impl BottomPane {
         };
 
         // Otherwise create a new approval modal overlay.
-        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
+        let modal = ApprovalOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            features.clone(),
+            self.keymap.approval.clone(),
+            self.keymap.list.clone(),
+        );
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }
@@ -1330,6 +1415,10 @@ impl Renderable for BottomPane {
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable().cursor_style(area)
     }
 }
 

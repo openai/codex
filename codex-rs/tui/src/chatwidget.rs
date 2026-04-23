@@ -111,6 +111,7 @@ use codex_chatgpt::connectors;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
+use codex_config::types::TuiKeymap;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
@@ -333,7 +334,7 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
@@ -353,6 +354,11 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ChatKeymap;
+use crate::keymap::ListKeymap;
+use crate::keymap::RuntimeKeymap;
+use crate::keymap_setup;
 #[cfg(test)]
 use crate::markdown::append_markdown;
 use crate::render::Insets;
@@ -819,6 +825,9 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    copy_last_response_binding: Vec<KeyBinding>,
+    chat_keymap: ChatKeymap,
+    list_keymap: ListKeymap,
     /// Raw markdown of the most recently completed agent response that
     /// survived any local thread rollback.
     last_agent_markdown: Option<String>,
@@ -2793,7 +2802,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(MULTI_AGENT_ENABLE_TITLE.to_string()),
             subtitle: Some("Subagents are currently disabled in your config.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -2843,7 +2852,7 @@ impl ChatWidget {
                 "Learn more: ".dim(),
                 MEMORIES_DOC_URL.cyan().underlined(),
             ])),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -5168,6 +5177,20 @@ impl ChatWidget {
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = config.service_tier;
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
+        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
+        let copy_last_response_binding = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.app.copy.clone())
+            .unwrap_or_else(|| RuntimeKeymap::defaults().app.copy);
+        let chat_keymap = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.chat.clone())
+            .unwrap_or_else(|| RuntimeKeymap::defaults().chat);
+        let list_keymap = runtime_keymap
+            .as_ref()
+            .map(|keymap| keymap.list.clone())
+            .unwrap_or_else(|| RuntimeKeymap::defaults().list);
+
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -5209,6 +5232,9 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             clipboard_lease: None,
+            copy_last_response_binding,
+            chat_keymap,
+            list_keymap,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
@@ -5305,6 +5331,13 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
+        widget.prefetch_rate_limits();
+        if let Some(keymap) = runtime_keymap {
+            widget.bottom_pane.set_keymap_bindings(&keymap);
+        }
+        widget
+            .bottom_pane
+            .set_vim_enabled(widget.config.tui_vim_mode_default);
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -5342,6 +5375,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Press
+            && self.copy_last_response_binding.is_pressed(key_event)
+        {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.copy_last_agent_markdown();
+            return;
+        }
+
         if self.handle_reasoning_shortcut(key_event) {
             self.bottom_pane.clear_quit_shortcut_hint();
             self.quit_shortcut_expires_at = None;
@@ -5350,19 +5393,6 @@ impl ChatWidget {
         }
 
         match key_event {
-            // Ctrl+O - copy last agent response from the main view.
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.bottom_pane.clear_quit_shortcut_hint();
-                self.quit_shortcut_expires_at = None;
-                self.quit_shortcut_key = None;
-                self.copy_last_agent_markdown();
-                return;
-            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -7775,8 +7805,117 @@ impl ChatWidget {
             self.config.tui_theme.as_deref(),
             codex_home.as_deref(),
             terminal_width,
+            &self.list_keymap,
         );
         self.bottom_pane.show_selection_view(params);
+    }
+
+    fn open_keymap_picker(&mut self) {
+        match RuntimeKeymap::from_config(&self.config.tui_keymap) {
+            Ok(runtime_keymap) => {
+                let params = keymap_setup::build_keymap_picker_params(
+                    &runtime_keymap,
+                    &self.config.tui_keymap,
+                );
+                self.bottom_pane.show_selection_view(params);
+            }
+            Err(err) => {
+                self.add_error_message(format!("Invalid `tui.keymap` configuration: {err}"));
+            }
+        }
+    }
+
+    pub(crate) fn open_keymap_action_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_action_menu_params(
+            context,
+            action,
+            runtime_keymap,
+            &self.config.tui_keymap,
+        );
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn open_keymap_capture(
+        &mut self,
+        context: String,
+        action: String,
+        intent: crate::app_event::KeymapEditIntent,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let view = keymap_setup::build_keymap_capture_view(
+            context,
+            action,
+            intent,
+            runtime_keymap,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_keymap_replace_binding_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params =
+            keymap_setup::build_keymap_replace_binding_menu_params(context, action, runtime_keymap);
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn apply_keymap_update(
+        &mut self,
+        keymap_config: TuiKeymap,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        self.config.tui_keymap = keymap_config;
+        self.copy_last_response_binding = runtime_keymap.app.copy.clone();
+        self.chat_keymap = runtime_keymap.chat.clone();
+        self.list_keymap = runtime_keymap.list.clone();
+        self.bottom_pane.set_keymap_bindings(runtime_keymap);
+        self.request_redraw();
+    }
+
+    fn standard_popup_hint_line(&self) -> Line<'static> {
+        standard_popup_hint_line_for_keymap(&self.list_keymap)
+    }
+
+    pub(crate) fn return_to_keymap_picker(
+        &mut self,
+        context: &str,
+        action: &str,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+            runtime_keymap,
+            &self.config.tui_keymap,
+            context,
+            action,
+        );
+        let replaced = self.bottom_pane.replace_active_views_with_selection_view(
+            &[
+                keymap_setup::KEYMAP_PICKER_VIEW_ID,
+                keymap_setup::KEYMAP_ACTION_MENU_VIEW_ID,
+                keymap_setup::KEYMAP_REPLACE_BINDING_MENU_VIEW_ID,
+            ],
+            params,
+        );
+        if !replaced {
+            let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+                runtime_keymap,
+                &self.config.tui_keymap,
+                context,
+                action,
+            );
+            self.bottom_pane.show_selection_view(params);
+        }
+        self.request_redraw();
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
@@ -8056,7 +8195,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Approaching rate limits".to_string()),
             subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8102,7 +8241,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(title.to_string()),
             subtitle: Some(prompt.to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             initial_selected_idx: Some(1),
             ..Default::default()
@@ -8251,7 +8390,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8284,7 +8423,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Settings".to_string()),
             subtitle: Some("Configure settings for Codex.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8369,7 +8508,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8406,7 +8545,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8529,7 +8668,7 @@ impl ChatWidget {
             "Pick a quick auto mode or browse all models.",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header,
             ..Default::default()
@@ -8634,7 +8773,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Collaboration Mode".to_string()),
             subtitle: Some("Pick a collaboration preset.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -8745,7 +8884,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(PLAN_MODE_REASONING_SCOPE_TITLE.to_string()),
             subtitle: Some(subtitle),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items: vec![
                 SelectionItem {
                     name: PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string(),
@@ -8929,7 +9068,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             initial_selected_idx,
             ..Default::default()
@@ -9167,7 +9306,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Update Model Permissions".to_string()),
             footer_note,
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header: Box::new(()),
             ..Default::default()
@@ -9370,7 +9509,7 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header: Box::new(header),
             ..Default::default()
@@ -9481,7 +9620,7 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header: Box::new(header),
             ..Default::default()
@@ -9541,7 +9680,7 @@ impl ChatWidget {
 
             self.bottom_pane.show_selection_view(SelectionViewParams {
                 title: None,
-                footer_hint: Some(standard_popup_hint_line()),
+                footer_hint: Some(self.standard_popup_hint_line()),
                 items,
                 header: Box::new(header),
                 ..Default::default()
@@ -9618,7 +9757,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header: Box::new(header),
             ..Default::default()
@@ -9709,7 +9848,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: None,
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             header: Box::new(header),
             ..Default::default()
@@ -10844,6 +10983,16 @@ impl ChatWidget {
         self.bottom_pane.is_task_running()
     }
 
+    pub(crate) fn toggle_vim_mode_and_notify(&mut self) {
+        let enabled = self.bottom_pane.toggle_vim_enabled();
+        let message = if enabled {
+            "Vim mode enabled."
+        } else {
+            "Vim mode disabled."
+        };
+        self.add_info_message(message.to_string(), /*hint*/ None);
+    }
+
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
@@ -10883,6 +11032,11 @@ impl ChatWidget {
     /// In this state Esc-Esc backtracking is enabled.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         self.bottom_pane.is_normal_backtrack_mode()
+    }
+
+    pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
+        self.bottom_pane
+            .composer_should_handle_vim_insert_escape(key_event)
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -11163,7 +11317,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a review preset".into()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -11196,7 +11350,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a base branch".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
@@ -11232,7 +11386,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a commit to review".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some(self.standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
@@ -11427,6 +11581,10 @@ impl Renderable for ChatWidget {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.as_renderable().cursor_pos(area)
     }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable().cursor_style(area)
+    }
 }
 
 #[derive(Debug)]
@@ -11610,7 +11768,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
     chat.bottom_pane.show_selection_view(SelectionViewParams {
         title: Some("Select a commit to review".to_string()),
-        footer_hint: Some(standard_popup_hint_line()),
+        footer_hint: Some(chat.standard_popup_hint_line()),
         items,
         is_searchable: true,
         search_placeholder: Some("Type to search commits".to_string()),

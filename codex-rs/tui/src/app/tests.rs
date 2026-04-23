@@ -3633,6 +3633,8 @@ async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
+        .expect("test config should always produce a valid runtime keymap");
 
     App {
         model_catalog: chat_widget.model_catalog(),
@@ -3646,6 +3648,7 @@ async fn make_test_app() -> App {
         runtime_approval_policy_override: None,
         runtime_sandbox_policy_override: None,
         file_search,
+        keymap,
         transcript_cells: Vec::new(),
         overlay: None,
         deferred_history_lines: Vec::new(),
@@ -3689,6 +3692,8 @@ async fn make_test_app_with_channels() -> (
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let keymap = RuntimeKeymap::from_config(&config.tui_keymap)
+        .expect("test config should always produce a valid runtime keymap");
 
     (
         App {
@@ -3703,6 +3708,7 @@ async fn make_test_app_with_channels() -> (
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            keymap,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -4573,7 +4579,10 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
             /*is_first_line*/ false,
         )) as Arc<dyn HistoryCell>,
     ];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
@@ -4799,7 +4808,10 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         local_image_paths: Vec::new(),
         remote_image_urls: Vec::new(),
     }) as Arc<dyn HistoryCell>];
-    app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+    app.overlay = Some(Overlay::new_transcript(
+        app.transcript_cells.clone(),
+        app.keymap.pager.clone(),
+    ));
     app.deferred_history_lines = vec![Line::from("stale buffered line")];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;
@@ -4819,6 +4831,29 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     assert!(!app.backtrack_render_pending);
     assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
+}
+
+#[tokio::test]
+async fn edit_previous_shortcut_does_not_steal_empty_vim_insert_escape() {
+    let mut app = make_test_app().await;
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    assert!(app.chat_widget.composer_is_empty());
+    assert!(app.should_route_edit_previous_message(esc));
+
+    app.chat_widget.toggle_vim_mode_and_notify();
+    assert!(app.should_route_edit_previous_message(esc));
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(!app.should_route_edit_previous_message(esc));
+
+    app.chat_widget.handle_key_event(esc);
+
+    assert!(!app.backtrack.primed);
+    assert!(!app.chat_widget.should_handle_vim_insert_escape(esc));
+    assert!(app.should_route_edit_previous_message(esc));
 }
 
 #[tokio::test]

@@ -129,6 +129,8 @@ mod history_cell;
 pub(crate) mod insert_history;
 pub use insert_history::insert_history_lines;
 mod key_hint;
+mod keymap;
+mod keymap_setup;
 mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;

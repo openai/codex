@@ -1,0 +1,30 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: snapshot
+---
+cursor=(22, 1)
+TestBackend { buffer: Buffer {
+    area: Rect { x: 0, y: 0, width: 100, height: 10 },
+    content: [
+        "                                                                                                    ",
+        "› hey you, how are you?                                                                             ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                                                    ",
+        "                                                                   100% context left | Vim: Normal  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 67, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 87, y: 9, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 98, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}, scrollback: Buffer {
+    area: Rect { x: 0, y: 0, width: 100, height: 0 }
+}, cursor: false, pos: (0, 0) }
