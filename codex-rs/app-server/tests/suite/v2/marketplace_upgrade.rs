@@ -12,13 +12,13 @@ use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
-use codex_core::plugins::marketplace_install_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
 
 fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
@@ -108,6 +108,10 @@ fn disable_plugin_startup_tasks(codex_home: &Path) -> Result<()> {
         format!("{config}\n[features]\nplugins = false\n"),
     )?;
     Ok(())
+}
+
+fn marketplace_install_root(codex_home: &Path) -> std::path::PathBuf {
+    codex_home.join(INSTALLED_MARKETPLACES_DIR)
 }
 
 fn expected_installed_root(codex_home: &Path, marketplace_name: &str) -> Result<AbsolutePathBuf> {
