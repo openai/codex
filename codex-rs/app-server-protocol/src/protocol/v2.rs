@@ -72,6 +72,7 @@ use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
+use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -163,6 +164,7 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    CyberPolicy,
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -207,6 +209,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
             CoreCodexErrorInfo::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -422,6 +425,12 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ModelRerouteReason from CoreModelRerouteReason {
         HighRiskCyberActivity
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ModelVerification from CoreModelVerification {
+        TrustedAccessForCyber
     }
 );
 
@@ -7357,6 +7366,15 @@ pub struct ModelReroutedNotification {
     pub reason: ModelRerouteReason,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelVerificationNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub verifications: Vec<ModelVerification>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -9965,6 +9983,14 @@ mod tests {
                     "httpStatusCode": 401
                 }
             })
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_cyber_policy_in_camel_case() {
+        assert_eq!(
+            serde_json::to_value(CodexErrorInfo::CyberPolicy).unwrap(),
+            json!("cyberPolicy")
         );
     }
 

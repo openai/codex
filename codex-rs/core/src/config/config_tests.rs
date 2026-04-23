@@ -39,6 +39,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
@@ -5295,6 +5296,50 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
     .await?;
 
     assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(None),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.service_tier, None);
+    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn fast_default_opt_out_notice_config_is_respected() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+    let mut cfg = fixture.cfg.clone();
+    cfg.notice = Some(Notice {
+        fast_default_opt_out: Some(true),
+        ..Default::default()
+    });
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(config.service_tier, None);
+    assert_eq!(config.notices.fast_default_opt_out, Some(true));
     Ok(())
 }
 

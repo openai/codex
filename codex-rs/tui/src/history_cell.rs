@@ -50,7 +50,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ServiceTier;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
@@ -1241,12 +1240,7 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| {
-                    tooltips::get_tooltip(
-                        auth_plan,
-                        matches!(config.service_tier, Some(ServiceTier::Fast)),
-                    )
-                })
+                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status))
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
@@ -1836,6 +1830,50 @@ fn decode_mcp_image(block: &serde_json::Value) -> Option<DynamicImage> {
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+}
+
+const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
+
+#[derive(Debug)]
+pub(crate) struct CyberPolicyNoticeCell;
+
+pub(crate) fn new_cyber_policy_error_event() -> CyberPolicyNoticeCell {
+    CyberPolicyNoticeCell
+}
+
+impl HistoryCell for CyberPolicyNoticeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(
+            vec![
+                "ⓘ ".cyan(),
+                "This chat was flagged for possible cybersecurity risk".bold(),
+            ]
+            .into(),
+        );
+
+        let wrap_width = width.saturating_sub(2).max(1) as usize;
+        let body = Line::from(vec![
+            "  If this seems wrong, try rephrasing your request. To get authorized for security work, join the "
+                .dim(),
+            "Trusted Access for Cyber".cyan().underlined(),
+            " program.".dim(),
+        ]);
+        let wrapped = adaptive_wrap_line(
+            &body,
+            RtOptions::new(wrap_width).subsequent_indent("  ".into()),
+        );
+        push_owned_lines(&wrapped, &mut lines);
+        lines.push(
+            vec![
+                "  ".into(),
+                TRUSTED_ACCESS_FOR_CYBER_URL.cyan().underlined(),
+            ]
+            .into(),
+        );
+
+        lines
+    }
 }
 
 #[derive(Debug)]
@@ -3258,6 +3296,20 @@ mod tests {
             },
         ]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn cyber_policy_error_event_snapshot() {
+        let cell = new_cyber_policy_error_event();
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn cyber_policy_error_event_narrow_snapshot() {
+        let cell = new_cyber_policy_error_event();
+        let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 

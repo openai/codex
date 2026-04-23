@@ -4428,6 +4428,26 @@
           "properties": {
             "method": {
               "enum": [
+                "model/verification"
+              ],
+              "title": "Model/verificationNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelVerificationNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/verificationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "warning"
               ],
               "title": "WarningNotificationMethod",
@@ -5985,6 +6005,7 @@
               "contextWindowExceeded",
               "usageLimitExceeded",
               "serverOverloaded",
+              "cyberPolicy",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -10902,6 +10923,36 @@
         "required": [
           "model"
         ],
+        "type": "object"
+      },
+      "ModelVerification": {
+        "enum": [
+          "trustedAccessForCyber"
+        ],
+        "type": "string"
+      },
+      "ModelVerificationNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "verifications": {
+            "items": {
+              "$ref": "#/definitions/v2/ModelVerification"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId",
+          "verifications"
+        ],
+        "title": "ModelVerificationNotification",
         "type": "object"
       },
       "NetworkAccess": {
