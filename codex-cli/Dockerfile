@@ -2,6 +2,7 @@ FROM node:24-slim
 
 ARG TZ
 ENV TZ="$TZ"
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 # Install basic development tools, ca-certificates, and iptables/ipset, then clean up apt cache to reduce image size
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -28,14 +29,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG USERNAME=node
 
 # Install codex
-COPY dist/codex.tgz codex.tgz
-RUN mkdir -p /usr/local/lib/codex-cli \
-  && tar -xzf codex.tgz -C /usr/local/lib/codex-cli --strip-components=1 \
-  && ln -s /usr/local/lib/codex-cli/bin/codex.js /usr/local/bin/codex \
-  && rm codex.tgz \
-  && rm -rf /usr/local/lib/codex-cli/node_modules/.cache \
-  && rm -rf /usr/local/lib/codex-cli/tests \
-  && rm -rf /usr/local/lib/codex-cli/docs
+COPY container-install/package.json \
+  container-install/pnpm-lock.yaml \
+  container-install/pnpm-workspace.yaml \
+  /opt/codex-install/
+COPY dist/codex.tgz /opt/dist/codex.tgz
+RUN cd /opt/codex-install \
+  && corepack pnpm install --prod --frozen-lockfile \
+  && ln -s /opt/codex-install/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
+  && rm -rf /opt/dist \
+  && rm -rf /opt/codex-install/node_modules/.cache \
+  && rm -rf /opt/codex-install/node_modules/@openai/codex/tests \
+  && rm -rf /opt/codex-install/node_modules/@openai/codex/docs
 
 # Set up non-root user
 USER node
