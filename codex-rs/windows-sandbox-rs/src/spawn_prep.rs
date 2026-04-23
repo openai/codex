@@ -56,18 +56,19 @@ pub(crate) struct LegacySessionSecurity {
     pub(crate) cap_sid_str: String,
 }
 
-pub(crate) struct LocalSid {
+/// Owns a SID allocated by `ConvertStringSidToSidW` and releases it with `LocalFree`.
+pub struct LocalSid {
     psid: *mut c_void,
 }
 
 impl LocalSid {
-    pub(crate) fn from_string(sid: &str) -> Result<Self> {
+    pub fn from_string(sid: &str) -> Result<Self> {
         let psid = unsafe { convert_string_sid_to_sid(sid) }
             .ok_or_else(|| anyhow::anyhow!("invalid SID string: {sid}"))?;
         Ok(Self { psid })
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut c_void {
+    pub fn as_ptr(&self) -> *mut c_void {
         self.psid
     }
 }

@@ -19,19 +19,29 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::ptr;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
+use windows_sys::Win32::Foundation::DuplicateHandle;
+use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
+use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::GetCurrentThread;
 use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::TerminateProcess;
 
 const RUNNER_SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const RUNNER_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_SPAWN_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 
@@ -136,26 +146,116 @@ pub(crate) fn spawn_runner_transport(
     }
 
     let connect_result = (|| -> Result<()> {
-        connect_pipe(h_pipe_in)?;
-        connect_pipe(h_pipe_out)?;
-        Ok(())
+        // `connect_pipe` is a synchronous named-pipe call, so there is no built-in async
+        // timeout we can apply from this thread. Run the two blocking connects on a helper
+        // thread, duplicate that thread's HANDLE back to the parent, and use
+        // `CancelSynchronousIo` if the handshake does not finish in time.
+        let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
+        let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
+        let connect_thread = thread::Builder::new()
+            .name("codex-runner-connect".to_string())
+            .spawn(move || {
+                let current_process = unsafe { GetCurrentProcess() };
+                let mut thread_handle = 0;
+                let duplicate_ok = unsafe {
+                    DuplicateHandle(
+                        current_process,
+                        GetCurrentThread(),
+                        current_process,
+                        &mut thread_handle,
+                        0,
+                        0,
+                        DUPLICATE_SAME_ACCESS,
+                    )
+                };
+                if duplicate_ok == 0 {
+                    let _ = thread_handle_tx.send(Err(anyhow::anyhow!(
+                        "DuplicateHandle failed for runner connect thread: {}",
+                        unsafe { GetLastError() }
+                    )));
+                    return;
+                }
+                // Publish the helper thread HANDLE before we start the blocking pipe connects so
+                // the parent always has a way to cancel them on timeout.
+                let _ = thread_handle_tx.send(Ok(thread_handle));
+
+                let result = (|| -> Result<()> {
+                    connect_pipe(h_pipe_in)?;
+                    connect_pipe(h_pipe_out)?;
+                    Ok(())
+                })();
+                let _ = connect_result_tx.send(result);
+            })?;
+        let thread_handle = thread_handle_rx.recv().map_err(|_| {
+            anyhow::anyhow!("runner connect thread exited before publishing its handle")
+        })??;
+
+        let connect_result = match connect_result_rx.recv_timeout(RUNNER_PIPE_CONNECT_TIMEOUT) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle) };
+                if cancel_ok == 0 {
+                    let err = unsafe { GetLastError() };
+                    if err != ERROR_NOT_FOUND {
+                        let _ = connect_thread.join();
+                        unsafe {
+                            CloseHandle(thread_handle);
+                        }
+                        return Err(anyhow::anyhow!("CancelSynchronousIo failed: {err}"));
+                    }
+                    // `ERROR_NOT_FOUND` means the helper thread no longer has a cancelable
+                    // synchronous I/O request. In practice that usually means the connect call
+                    // finished in the narrow race between our timeout firing and the cancel
+                    // request reaching the kernel, so we still treat this as the timeout path
+                    // and join the thread to observe its final result.
+                }
+                let _ = connect_thread.join();
+                unsafe {
+                    CloseHandle(thread_handle);
+                }
+                return Err(anyhow::anyhow!(
+                    "timed out after {}ms connecting runner pipes",
+                    RUNNER_PIPE_CONNECT_TIMEOUT.as_millis()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(
+                "runner pipe connect thread exited before reporting its result"
+            )),
+        };
+        let _ = connect_thread.join();
+        unsafe {
+            CloseHandle(thread_handle);
+        }
+        connect_result
     })();
 
     unsafe {
         if pi.hThread != 0 {
             CloseHandle(pi.hThread);
         }
-        if pi.hProcess != 0 {
-            CloseHandle(pi.hProcess);
-        }
     }
 
     if let Err(err) = connect_result {
         unsafe {
+            // Keep the process handle alive until the pipe handshake finishes. If the handshake
+            // fails after the runner process has already launched, we still need a way to stop
+            // that child instead of leaking a stray `codex-command-runner.exe`.
+            if pi.hProcess != 0 {
+                let _ = TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+            }
             CloseHandle(h_pipe_in);
             CloseHandle(h_pipe_out);
         }
         return Err(err);
+    }
+
+    unsafe {
+        if pi.hProcess != 0 {
+            // After the handshake succeeds we no longer need the runner process HANDLE. The
+            // pipes are now the lifetime anchor for the transport.
+            CloseHandle(pi.hProcess);
+        }
     }
 
     let pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
