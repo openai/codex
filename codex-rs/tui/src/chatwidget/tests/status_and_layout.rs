@@ -602,8 +602,24 @@ async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
     );
     let popup = render_bottom_popup(&chat, /*width*/ 90);
     assert_chatwidget_snapshot!("workspace_member_credits_depleted_prompt", popup);
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::Shown,
+            AddCreditsNudgeCreditType::Credits
+        )
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::CtaClicked,
+            AddCreditsNudgeCreditType::Credits
+        )
+    );
     let event = next_send_add_credits_nudge_email_event(&mut rx);
     assert_eq!(event, AddCreditsNudgeCreditType::Credits);
 }
@@ -622,8 +638,24 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
     );
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert_chatwidget_snapshot!("workspace_member_usage_limit_prompt", popup);
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::Shown,
+            AddCreditsNudgeCreditType::UsageLimit
+        )
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::CtaClicked,
+            AddCreditsNudgeCreditType::UsageLimit
+        )
+    );
     let event = next_send_add_credits_nudge_email_event(&mut rx);
     assert_eq!(event, AddCreditsNudgeCreditType::UsageLimit);
 }
@@ -775,6 +807,14 @@ async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
         RateLimitErrorKind::Generic,
         "Usage limit reached.".to_string(),
     );
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::Shown,
+            AddCreditsNudgeCreditType::Credits
+        )
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
@@ -791,6 +831,14 @@ async fn workspace_owner_nudge_reappears_after_dismissing_no() {
     chat.on_rate_limit_error(
         RateLimitErrorKind::UsageLimit,
         "Usage limit reached.".to_string(),
+    );
+    let event = next_track_usage_limit_banner_event(&mut rx);
+    assert_eq!(
+        event,
+        (
+            TrackUsageLimitBannerAction::Shown,
+            AddCreditsNudgeCreditType::UsageLimit
+        )
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
@@ -891,6 +939,21 @@ fn next_send_add_credits_nudge_email_event(
     panic!("expected SendAddCreditsNudgeEmail app event");
 }
 
+fn next_track_usage_limit_banner_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> (TrackUsageLimitBannerAction, AddCreditsNudgeCreditType) {
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::TrackUsageLimitBanner {
+            action,
+            credit_type,
+        } = event
+        {
+            return (action, credit_type);
+        }
+    }
+    panic!("expected TrackUsageLimitBanner app event");
+}
+
 fn assert_no_owner_nudge_or_rate_limit_refresh(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) {
@@ -898,7 +961,9 @@ fn assert_no_owner_nudge_or_rate_limit_refresh(
         assert!(
             !matches!(
                 event,
-                AppEvent::SendAddCreditsNudgeEmail { .. } | AppEvent::RefreshRateLimits { .. }
+                AppEvent::SendAddCreditsNudgeEmail { .. }
+                    | AppEvent::RefreshRateLimits { .. }
+                    | AppEvent::TrackUsageLimitBanner { .. }
             ),
             "unexpected event: {event:?}"
         );

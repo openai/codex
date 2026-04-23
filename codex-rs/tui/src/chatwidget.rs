@@ -103,6 +103,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
+use codex_app_server_protocol::TrackUsageLimitBannerAction;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
@@ -8089,6 +8090,10 @@ impl ChatWidget {
             ),
         };
         let send_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::TrackUsageLimitBanner {
+                action: TrackUsageLimitBannerAction::CtaClicked,
+                credit_type,
+            });
             tx.send(AppEvent::SendAddCreditsNudgeEmail { credit_type });
         })];
         let items = vec![
@@ -8115,6 +8120,10 @@ impl ChatWidget {
             items,
             initial_selected_idx: Some(1),
             ..Default::default()
+        });
+        self.app_event_tx.send(AppEvent::TrackUsageLimitBanner {
+            action: TrackUsageLimitBannerAction::Shown,
+            credit_type,
         });
     }
 
