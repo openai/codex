@@ -536,11 +536,9 @@ mod tests {
             },
             access: FileSystemAccessMode::Write,
         }]);
-        let sandbox_context =
-            crate::FileSystemSandboxContext::from_permission_profile(PermissionProfile {
-                network: None,
-                file_system: Some((&policy).into()),
-            });
+        let sandbox_context = crate::FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        );
 
         let err = sandbox_cwd(&sandbox_context).expect_err("missing cwd should be rejected");
 

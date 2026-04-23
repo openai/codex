@@ -35,7 +35,7 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
@@ -53,7 +53,7 @@ pub struct ShellRequest {
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -97,7 +97,7 @@ pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
 impl ShellRuntime {
