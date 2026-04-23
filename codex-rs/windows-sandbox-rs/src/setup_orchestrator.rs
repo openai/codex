@@ -59,6 +59,14 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\ProgramData",
 ];
 
+fn setup_helper_launch_failure_message(last_error: u32) -> String {
+    if last_error == ERROR_CANCELLED {
+        "Windows canceled the sandbox setup helper launch (error 1223). This usually means the UAC elevation prompt was dismissed or denied before the helper could start.".to_string()
+    } else {
+        format!("ShellExecuteExW failed to launch setup helper: {last_error}")
+    }
+}
+
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
 }
@@ -686,7 +694,7 @@ fn run_setup_exe(
         };
         return Err(failure(
             code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
+            setup_helper_launch_failure_message(last_error),
         ));
     }
     unsafe {
@@ -960,6 +968,23 @@ mod tests {
                 "offline firewall settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn canceled_helper_launch_message_mentions_uac() {
+        let message = super::setup_helper_launch_failure_message(super::ERROR_CANCELLED);
+
+        assert!(message.contains("1223"));
+        assert!(message.contains("UAC"));
+        assert!(message.contains("dismissed or denied"));
+    }
+
+    #[test]
+    fn generic_helper_launch_message_preserves_error_code() {
+        assert_eq!(
+            super::setup_helper_launch_failure_message(5),
+            "ShellExecuteExW failed to launch setup helper: 5"
         );
     }
 
