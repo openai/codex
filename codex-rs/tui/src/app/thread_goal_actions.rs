@@ -33,7 +33,7 @@ impl App {
             return;
         };
 
-        self.chat_widget.open_goal_menu(thread_id, goal);
+        self.chat_widget.show_goal_summary(goal);
     }
 
     pub(super) async fn set_thread_goal_status(

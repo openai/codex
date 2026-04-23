@@ -822,6 +822,71 @@ async fn goal_slash_command_preserves_attached_images() {
 }
 
 #[tokio::test]
+async fn bare_goal_slash_command_drains_pending_submission_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let remote_url = "https://example.com/goal-menu.png".to_string();
+    let local_image = PathBuf::from("/tmp/goal-menu-local.png");
+    chat.set_remote_image_urls(vec![remote_url]);
+    chat.bottom_pane
+        .set_composer_text("/goal".to_string(), Vec::new(), vec![local_image]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenThreadGoalMenu { thread_id: opened }) if opened == thread_id
+    );
+    assert!(chat.remote_image_urls().is_empty());
+    assert!(chat.bottom_pane.composer_local_image_paths().is_empty());
+}
+
+#[tokio::test]
+async fn goal_control_slash_commands_emit_goal_events() {
+    let cases = [
+        ("/goal clear", None),
+        ("/goal pause", Some(AppThreadGoalStatus::Paused)),
+        ("/goal unpause", Some(AppThreadGoalStatus::Active)),
+    ];
+
+    for (command, status) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+
+        submit_composer_text(&mut chat, command);
+
+        match status {
+            Some(status) => {
+                let event = rx.try_recv().expect("expected goal status event");
+                let AppEvent::SetThreadGoalStatus {
+                    thread_id: actual_thread_id,
+                    status: actual_status,
+                } = event
+                else {
+                    panic!("expected SetThreadGoalStatus, got {event:?}");
+                };
+                assert_eq!(actual_thread_id, thread_id);
+                assert_eq!(actual_status, status);
+            }
+            None => {
+                let event = rx.try_recv().expect("expected clear goal event");
+                let AppEvent::ClearThreadGoal {
+                    thread_id: actual_thread_id,
+                } = event
+                else {
+                    panic!("expected ClearThreadGoal, got {event:?}");
+                };
+                assert_eq!(actual_thread_id, thread_id);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn goal_slash_command_keeps_draft_when_model_is_unavailable() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);

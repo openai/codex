@@ -37,6 +37,9 @@ impl ChatWidget {
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
         self.dispatch_command(cmd);
+        if cmd == SlashCommand::Goal {
+            self.bottom_pane.drain_pending_submission_state();
+        }
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -599,6 +602,41 @@ impl ChatWidget {
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
+                    return;
+                }
+                enum GoalControlCommand {
+                    Clear,
+                    SetStatus(AppThreadGoalStatus),
+                }
+                let control_command = match trimmed.to_ascii_lowercase().as_str() {
+                    "clear" => Some(GoalControlCommand::Clear),
+                    "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
+                    "unpause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
+                    _ => None,
+                };
+                if let Some(command) = control_command {
+                    let Some(thread_id) = self.thread_id else {
+                        self.add_info_message(
+                            "Usage: /goal <objective, optionally with a token budget>".to_string(),
+                            Some(
+                                "The session must start before you can change a goal.".to_string(),
+                            ),
+                        );
+                        return;
+                    };
+                    match command {
+                        GoalControlCommand::Clear => {
+                            self.app_event_tx
+                                .send(AppEvent::ClearThreadGoal { thread_id });
+                        }
+                        GoalControlCommand::SetStatus(status) => {
+                            self.app_event_tx
+                                .send(AppEvent::SetThreadGoalStatus { thread_id, status });
+                        }
+                    }
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
                     return;
                 }
                 let prepared_args = args;
