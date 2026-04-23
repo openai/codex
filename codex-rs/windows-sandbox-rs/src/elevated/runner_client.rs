@@ -39,11 +39,13 @@ use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 use windows_sys::Win32::System::Threading::TerminateProcess;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const RUNNER_SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_SPAWN_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
+const WAIT_OBJECT_0: u32 = 0;
 
 pub(crate) struct RunnerTransport {
     pipe_write: File,
@@ -77,6 +79,134 @@ impl RunnerTransport {
     pub(crate) fn into_files(self) -> (File, File) {
         (self.pipe_write, self.pipe_read)
     }
+}
+
+fn try_take_completed_connect_result(
+    connect_thread: &mut Option<thread::JoinHandle<()>>,
+    connect_result_rx: &mpsc::Receiver<Result<()>>,
+    thread_handle: HANDLE,
+    pipe_label: &str,
+) -> Result<Option<Result<()>>> {
+    let thread_wait = unsafe { WaitForSingleObject(thread_handle, 0) };
+    if thread_wait != WAIT_OBJECT_0 {
+        return Ok(None);
+    }
+
+    if let Some(connect_thread) = connect_thread.take() {
+        let _ = connect_thread.join();
+    }
+
+    let result = connect_result_rx.recv().map_err(|_| {
+        anyhow::anyhow!("runner {pipe_label} connect thread exited before reporting its result")
+    })?;
+    Ok(Some(result))
+}
+
+fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
+    let pipe_label = pipe_label.to_string();
+    let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
+    let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
+    let mut connect_thread = Some(
+        thread::Builder::new()
+            .name(format!("codex-runner-connect-{pipe_label}"))
+            .spawn(move || {
+                let current_process = unsafe { GetCurrentProcess() };
+                let mut thread_handle = 0;
+                let duplicate_ok = unsafe {
+                    DuplicateHandle(
+                        current_process,
+                        GetCurrentThread(),
+                        current_process,
+                        &mut thread_handle,
+                        0,
+                        0,
+                        DUPLICATE_SAME_ACCESS,
+                    )
+                };
+                if duplicate_ok == 0 {
+                    let _ = thread_handle_tx.send(Err(anyhow::anyhow!(
+                        "DuplicateHandle failed for runner {pipe_label} connect thread: {}",
+                        unsafe { GetLastError() }
+                    )));
+                    return;
+                }
+
+                // Publish the helper thread HANDLE before the blocking pipe connect so the
+                // parent can cancel this specific operation if it times out.
+                let _ = thread_handle_tx.send(Ok(thread_handle));
+
+                let result = connect_pipe(h_pipe)
+                    .map_err(anyhow::Error::from)
+                    .context(format!("connect {pipe_label}"));
+                let _ = connect_result_tx.send(result);
+            })?,
+    );
+    let thread_handle = thread_handle_rx.recv().map_err(|_| {
+        anyhow::anyhow!("runner {pipe_label} connect thread exited before publishing its handle")
+    })??;
+
+    let result = match connect_result_rx.recv_timeout(RUNNER_PIPE_CONNECT_TIMEOUT) {
+        Ok(result) => {
+            if let Some(connect_thread) = connect_thread.take() {
+                let _ = connect_thread.join();
+            }
+            result
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            if let Some(result) = try_take_completed_connect_result(
+                &mut connect_thread,
+                &connect_result_rx,
+                thread_handle,
+                pipe_label,
+            )? {
+                result
+            } else {
+                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle) };
+                if cancel_ok == 0 {
+                    let err = unsafe { GetLastError() };
+                    if err != ERROR_NOT_FOUND {
+                        Err(anyhow::anyhow!(
+                            "CancelSynchronousIo failed for runner {pipe_label} connect thread: {err}"
+                        ))
+                    } else if let Some(result) = try_take_completed_connect_result(
+                        &mut connect_thread,
+                        &connect_result_rx,
+                        thread_handle,
+                        pipe_label,
+                    )? {
+                        result
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "timed out after {}ms connecting runner {pipe_label}",
+                            RUNNER_PIPE_CONNECT_TIMEOUT.as_millis()
+                        ))
+                    }
+                } else {
+                    // Do not join the helper thread on the timeout path. Parent-side cleanup will
+                    // close the pipe handles, which lets the blocked connect unwind without
+                    // risking another indefinite wait here.
+                    Err(anyhow::anyhow!(
+                        "timed out after {}ms connecting runner {pipe_label}",
+                        RUNNER_PIPE_CONNECT_TIMEOUT.as_millis()
+                    ))
+                }
+            }
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            if let Some(connect_thread) = connect_thread.take() {
+                let _ = connect_thread.join();
+            }
+            Err(anyhow::anyhow!(
+                "runner {pipe_label} connect thread exited before reporting its result"
+            ))
+        }
+    };
+
+    unsafe {
+        CloseHandle(thread_handle);
+    }
+
+    result
 }
 
 pub(crate) fn spawn_runner_transport(
@@ -146,87 +276,9 @@ pub(crate) fn spawn_runner_transport(
     }
 
     let connect_result = (|| -> Result<()> {
-        // `connect_pipe` is a synchronous named-pipe call, so there is no built-in async
-        // timeout we can apply from this thread. Run the two blocking connects on a helper
-        // thread, duplicate that thread's HANDLE back to the parent, and use
-        // `CancelSynchronousIo` if the handshake does not finish in time.
-        let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
-        let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
-        let connect_thread = thread::Builder::new()
-            .name("codex-runner-connect".to_string())
-            .spawn(move || {
-                let current_process = unsafe { GetCurrentProcess() };
-                let mut thread_handle = 0;
-                let duplicate_ok = unsafe {
-                    DuplicateHandle(
-                        current_process,
-                        GetCurrentThread(),
-                        current_process,
-                        &mut thread_handle,
-                        0,
-                        0,
-                        DUPLICATE_SAME_ACCESS,
-                    )
-                };
-                if duplicate_ok == 0 {
-                    let _ = thread_handle_tx.send(Err(anyhow::anyhow!(
-                        "DuplicateHandle failed for runner connect thread: {}",
-                        unsafe { GetLastError() }
-                    )));
-                    return;
-                }
-                // Publish the helper thread HANDLE before we start the blocking pipe connects so
-                // the parent always has a way to cancel them on timeout.
-                let _ = thread_handle_tx.send(Ok(thread_handle));
-
-                let result = (|| -> Result<()> {
-                    connect_pipe(h_pipe_in)?;
-                    connect_pipe(h_pipe_out)?;
-                    Ok(())
-                })();
-                let _ = connect_result_tx.send(result);
-            })?;
-        let thread_handle = thread_handle_rx.recv().map_err(|_| {
-            anyhow::anyhow!("runner connect thread exited before publishing its handle")
-        })??;
-
-        let connect_result = match connect_result_rx.recv_timeout(RUNNER_PIPE_CONNECT_TIMEOUT) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle) };
-                if cancel_ok == 0 {
-                    let err = unsafe { GetLastError() };
-                    if err != ERROR_NOT_FOUND {
-                        let _ = connect_thread.join();
-                        unsafe {
-                            CloseHandle(thread_handle);
-                        }
-                        return Err(anyhow::anyhow!("CancelSynchronousIo failed: {err}"));
-                    }
-                    // `ERROR_NOT_FOUND` means the helper thread no longer has a cancelable
-                    // synchronous I/O request. In practice that usually means the connect call
-                    // finished in the narrow race between our timeout firing and the cancel
-                    // request reaching the kernel, so we still treat this as the timeout path
-                    // and join the thread to observe its final result.
-                }
-                let _ = connect_thread.join();
-                unsafe {
-                    CloseHandle(thread_handle);
-                }
-                return Err(anyhow::anyhow!(
-                    "timed out after {}ms connecting runner pipes",
-                    RUNNER_PIPE_CONNECT_TIMEOUT.as_millis()
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(
-                "runner pipe connect thread exited before reporting its result"
-            )),
-        };
-        let _ = connect_thread.join();
-        unsafe {
-            CloseHandle(thread_handle);
-        }
-        connect_result
+        connect_pipe_with_timeout(h_pipe_in, "pipe-in")?;
+        connect_pipe_with_timeout(h_pipe_out, "pipe-out")?;
+        Ok(())
     })();
 
     unsafe {
