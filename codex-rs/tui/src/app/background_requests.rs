@@ -59,6 +59,20 @@ impl App {
         });
     }
 
+    pub(super) fn track_usage_limit_banner(
+        &mut self,
+        app_server: &AppServerSession,
+        action: TrackUsageLimitBannerAction,
+        credit_type: AddCreditsNudgeCreditType,
+    ) {
+        let request_handle = app_server.request_handle();
+        tokio::spawn(async move {
+            if let Err(err) = track_usage_limit_banner(request_handle, action, credit_type).await {
+                tracing::warn!("failed to track usage limit banner event: {err:#}");
+            }
+        });
+    }
+
     /// Starts the initial skills refresh without delaying the first interactive frame.
     ///
     /// Startup only needs skill metadata to populate skill mentions and the skills UI; the prompt can be
@@ -449,6 +463,26 @@ pub(super) async fn send_add_credits_nudge_email(
         .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
 
     Ok(response.status)
+}
+
+pub(super) async fn track_usage_limit_banner(
+    request_handle: AppServerRequestHandle,
+    action: TrackUsageLimitBannerAction,
+    credit_type: AddCreditsNudgeCreditType,
+) -> Result<()> {
+    let request_id = RequestId::String(format!("usage-limit-banner-{}", Uuid::new_v4()));
+    let _: TrackUsageLimitBannerResponse = request_handle
+        .request_typed(ClientRequest::TrackUsageLimitBanner {
+            request_id,
+            params: TrackUsageLimitBannerParams {
+                action,
+                credit_type,
+            },
+        })
+        .await
+        .wrap_err("account/usageLimitBanner/track failed in TUI")?;
+
+    Ok(())
 }
 
 pub(super) async fn fetch_skills_list(
