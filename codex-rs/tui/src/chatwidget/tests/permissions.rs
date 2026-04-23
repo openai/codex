@@ -189,6 +189,7 @@ async fn approvals_popup_shows_disabled_presets() {
 #[tokio::test]
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
@@ -198,14 +199,23 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
-    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
-    // and selection should wrap back to idx 0 (also enabled).
+    // Keep the popup layout stable across platforms and feature defaults so
+    // the hidden numeric shortcut below still targets the disabled Full Access row.
+    let disabled_shortcut = if cfg!(target_os = "windows") {
+        '3'
+    } else {
+        '2'
+    };
+
+    // The approvals popup is the active bottom-pane view; drive navigation via
+    // chat.handle_key_event. Move through the menu so selection stays on an
+    // enabled preset even when disabled rows are skipped.
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
-    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
-    chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
+    // Press the hidden numeric shortcut for the disabled Full Access row; it
+    // should not close the popup or accept the preset.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(disabled_shortcut)));
 
     // Ensure the popup remains open and no selection actions were sent.
     let width = 80;
