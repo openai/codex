@@ -87,16 +87,14 @@ impl CodexThread {
         self.codex
             .session
             .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
-            .await?;
-        Ok(())
+            .await
     }
 
     pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
         self.codex
             .session
             .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-            .await?;
-        Ok(())
+            .await
     }
 
     pub async fn prepare_external_goal_mutation(&self) {

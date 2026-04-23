@@ -333,7 +333,7 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::ExternalClear => Box::pin(async move {
-                self.clear_cached_thread_goal_after_delete().await;
+                self.clear_stopped_thread_goal_runtime_state().await;
                 Ok(())
             }),
             GoalRuntimeEvent::ThreadResumed => Box::pin(async move {
@@ -546,10 +546,6 @@ impl Session {
         )
         .await;
         Ok(goal)
-    }
-
-    async fn clear_cached_thread_goal_after_delete(&self) {
-        self.clear_stopped_thread_goal_runtime_state().await;
     }
 
     async fn apply_external_thread_goal_status(
@@ -996,11 +992,6 @@ impl Session {
             return Ok(());
         }
 
-        self.pause_active_thread_goal_with_event_id(uuid::Uuid::new_v4().to_string())
-            .await
-    }
-
-    async fn pause_active_thread_goal_with_event_id(&self, event_id: String) -> anyhow::Result<()> {
         if !self.enabled(Feature::Goals) {
             return Ok(());
         }
@@ -1034,7 +1025,7 @@ impl Session {
             .wall_clock
             .clear_active_goal();
         self.send_event_raw(Event {
-            id: event_id,
+            id: uuid::Uuid::new_v4().to_string(),
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id: self.conversation_id,
                 turn_id: None,
@@ -1474,11 +1465,13 @@ mod tests {
     use super::budget_limit_prompt;
     use super::continuation_prompt;
     use super::escape_xml_text;
+    use super::goal_token_delta_for_usage;
     use super::should_ignore_goal_for_mode;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
+    use codex_protocol::protocol::TokenUsage;
 
     #[test]
     fn goal_continuation_is_ignored_only_in_plan_mode() {
@@ -1486,6 +1479,19 @@ mod tests {
         assert!(!should_ignore_goal_for_mode(ModeKind::Default));
         assert!(!should_ignore_goal_for_mode(ModeKind::PairProgramming));
         assert!(!should_ignore_goal_for_mode(ModeKind::Execute));
+    }
+
+    #[test]
+    fn goal_token_delta_excludes_cached_input_and_does_not_double_count_reasoning() {
+        let usage = TokenUsage {
+            input_tokens: 900,
+            cached_input_tokens: 400,
+            output_tokens: 80,
+            reasoning_output_tokens: 20,
+            total_tokens: 1_000,
+        };
+
+        assert_eq!(580, goal_token_delta_for_usage(&usage));
     }
 
     #[test]
