@@ -30,6 +30,7 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
         }],
         end_turn: Some(true),
         phase,
+        exclude_from_compaction: false,
     }
 }
 

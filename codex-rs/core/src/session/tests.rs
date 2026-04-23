@@ -161,6 +161,7 @@ fn user_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -173,6 +174,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -233,6 +235,7 @@ fn skill_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -1233,6 +1236,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let replacement_history = vec![
         summary_item.clone(),
@@ -1244,6 +1248,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
     ];
     let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
@@ -4742,7 +4747,12 @@ async fn record_model_warning_appends_user_message() {
     let last = history_items.last().expect("warning recorded");
 
     match last {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message {
+            role,
+            content,
+            exclude_from_compaction,
+            ..
+        } => {
             assert_eq!(role, "user");
             assert_eq!(
                 content,
@@ -4750,6 +4760,7 @@ async fn record_model_warning_appends_user_message() {
                     text: "Warning: too many unified exec processes".to_string(),
                 }]
             );
+            assert!(*exclude_from_compaction);
         }
         other => panic!("expected user message, got {other:?}"),
     }
@@ -5457,6 +5468,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     session
         .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
@@ -6050,6 +6062,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     assert!(
         history.raw_items().iter().any(|item| item == &expected),
@@ -6742,6 +6755,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&user1),
@@ -6757,6 +6771,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&assistant1),
@@ -6784,6 +6799,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&user2),
@@ -6799,6 +6815,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&assistant2),
@@ -6826,6 +6843,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&user3),
@@ -6841,6 +6859,7 @@ async fn sample_rollout(
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     live_history.record_items(
         std::iter::once(&assistant3),

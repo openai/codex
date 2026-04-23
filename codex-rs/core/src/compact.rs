@@ -511,6 +511,7 @@ fn build_compacted_history_with_limit(
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         });
     }
 
@@ -526,6 +527,7 @@ fn build_compacted_history_with_limit(
         content: vec![ContentItem::InputText { text: summary_text }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     });
 
     history

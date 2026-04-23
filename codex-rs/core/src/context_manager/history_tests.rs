@@ -43,6 +43,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -62,6 +63,7 @@ fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -82,6 +84,7 @@ fn user_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -94,6 +97,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -106,6 +110,7 @@ fn developer_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -121,6 +126,7 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
             .collect(),
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -202,6 +208,7 @@ fn filters_non_api_messages() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
@@ -233,6 +240,7 @@ fn filters_non_api_messages() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
             ResponseItem::Message {
                 id: None,
@@ -242,6 +250,7 @@ fn filters_non_api_messages() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             }
         ]
     );
@@ -322,6 +331,25 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
 }
 
 #[test]
+fn for_prompt_strips_compaction_exclusion_marker() {
+    let mut item = user_input_text_msg("generated warning");
+    let ResponseItem::Message {
+        exclude_from_compaction,
+        ..
+    } = &mut item
+    else {
+        panic!("expected message item");
+    };
+    *exclude_from_compaction = true;
+    let history = create_history_with_items(vec![item]);
+
+    let prompt_items = history.for_prompt(&default_input_modalities());
+
+    let expected = vec![user_input_text_msg("generated warning")];
+    assert_eq!(prompt_items, expected);
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");
@@ -392,6 +420,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             ],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -455,6 +484,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             ],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -514,6 +544,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }]);
     let preserved = with_images.for_prompt(&modalities);
     assert_eq!(preserved.len(), 1);
@@ -542,6 +573,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
     ]);
 
@@ -562,6 +594,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             }
         ]
     );
@@ -578,6 +611,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::ImageGenerationCall {
             id: "ig_123".to_string(),
@@ -598,6 +632,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
             ResponseItem::ImageGenerationCall {
                 id: "ig_123".to_string(),
@@ -760,6 +795,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }];
     let mut history = create_history_with_items(items.clone());
 
@@ -1692,6 +1728,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let text_only_item = ResponseItem::Message {
         id: None,
@@ -1701,6 +1738,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     let raw_len = serde_json::to_string(&image_item).unwrap().len() as i64;
@@ -1775,6 +1813,7 @@ fn non_base64_image_urls_are_unchanged() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let function_output_item = ResponseItem::FunctionCallOutput {
         call_id: "call-1".to_string(),
@@ -1807,6 +1846,7 @@ fn data_url_without_base64_marker_is_unchanged() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     assert_eq!(
@@ -1848,6 +1888,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1881,6 +1922,7 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1964,6 +2006,7 @@ fn text_only_items_unchanged() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     let estimated = estimate_response_item_model_visible_bytes(&item);

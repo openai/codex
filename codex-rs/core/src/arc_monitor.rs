@@ -330,6 +330,7 @@ fn build_arc_monitor_message_item(
             role,
             content,
             phase: Some(MessagePhase::FinalAnswer),
+            exclude_from_compaction: false,
             ..
         } if role == "assistant" => content_items_to_text(content)
             .map(|text| build_arc_monitor_text_message("assistant", "output_text", text)),

@@ -21,6 +21,7 @@ fn user_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -33,6 +34,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -52,6 +54,7 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 

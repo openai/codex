@@ -271,6 +271,10 @@ pub(crate) async fn process_compacted_history(
 ///   they parse as `TurnItem::UserMessage`.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
+        ResponseItem::Message {
+            exclude_from_compaction: true,
+            ..
+        } => false,
         ResponseItem::Message { role, .. } if role == "developer" => false,
         ResponseItem::Message { role, .. } if role == "user" => {
             matches!(

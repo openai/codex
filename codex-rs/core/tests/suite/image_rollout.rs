@@ -165,6 +165,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     assert_eq!(actual, expected);
@@ -253,6 +254,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
 
     assert_eq!(actual, expected);

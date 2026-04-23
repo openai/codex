@@ -72,6 +72,7 @@ fn message(role: &str, content: ContentItem) -> ResponseItem {
         content: vec![content],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 

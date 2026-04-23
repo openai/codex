@@ -83,6 +83,7 @@ pub trait ContextualUserFragment {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         }
     }
 }

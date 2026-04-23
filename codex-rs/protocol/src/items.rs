@@ -268,6 +268,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         content,
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     })
 }
 

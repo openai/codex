@@ -177,6 +177,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::FunctionCall {
                     id: None,
@@ -200,6 +201,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             turn.as_ref(),
@@ -344,6 +346,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -353,6 +356,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             turn.as_ref(),
@@ -477,6 +481,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -486,6 +491,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             /*reference_context_item*/ None,
@@ -502,6 +508,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -511,6 +518,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             turn.as_ref(),
@@ -560,6 +568,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::Message {
             id: None,
@@ -569,6 +578,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
     ];
 
@@ -595,6 +605,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -617,6 +628,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
     ];
 
@@ -1342,6 +1354,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -1351,6 +1364,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             turn.as_ref(),
@@ -1388,6 +1402,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -1397,6 +1412,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     }],
                     end_turn: None,
                     phase: None,
+                    exclude_from_compaction: false,
                 },
             ],
             turn.as_ref(),
@@ -1775,6 +1791,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         }],
                         end_turn: None,
                         phase: None,
+                exclude_from_compaction: false,
                     },
                     ResponseItem::Message {
                         id: None,
@@ -1784,6 +1801,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         }],
                         end_turn: None,
                         phase: None,
+                exclude_from_compaction: false,
                     },
                 ],
                 turn.as_ref(),
@@ -1844,6 +1862,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         }],
                         end_turn: None,
                         phase: None,
+                exclude_from_compaction: false,
                     },
                     ResponseItem::Message {
                         id: None,
@@ -1853,6 +1872,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                         }],
                         end_turn: None,
                         phase: None,
+                exclude_from_compaction: false,
                     },
                 ],
                 turn.as_ref(),

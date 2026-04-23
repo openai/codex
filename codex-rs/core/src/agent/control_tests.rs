@@ -67,6 +67,7 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
             text: text.to_string(),
         }],
         end_turn: None,
+        exclude_from_compaction: false,
         phase,
     }
 }
@@ -521,6 +522,7 @@ async fn append_message_records_assistant_message() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
         )
         .await
@@ -679,6 +681,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
     ];

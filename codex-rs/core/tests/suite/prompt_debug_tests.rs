@@ -40,6 +40,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     assert_eq!(input.last(), Some(&expected_user_message));
     assert!(input.iter().any(|item| {

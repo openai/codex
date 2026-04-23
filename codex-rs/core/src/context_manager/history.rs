@@ -121,6 +121,15 @@ impl ContextManager {
         self.normalize_history(input_modalities);
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        for item in &mut self.items {
+            if let ResponseItem::Message {
+                exclude_from_compaction,
+                ..
+            } = item
+            {
+                *exclude_from_compaction = false;
+            }
+        }
         self.items
     }
 

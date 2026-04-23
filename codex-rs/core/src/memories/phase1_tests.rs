@@ -26,6 +26,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
         ],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let skill_message = ResponseItem::Message {
         id: None,
@@ -36,6 +37,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let subagent_message = ResponseItem::Message {
         id: None,
@@ -46,6 +48,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
         }],
         end_turn: None,
         phase: None,
+                exclude_from_compaction: false,
     };
 
     let serialized = serialize_filtered_rollout_response_items(&[
@@ -68,6 +71,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
             subagent_message,
         ]

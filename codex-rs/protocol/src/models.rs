@@ -461,6 +461,10 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
+        // Local-only marker for generated transcript items that should not be
+        // carried forward into replacement history after compaction.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        exclude_from_compaction: bool,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -810,6 +814,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 id: None,
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }

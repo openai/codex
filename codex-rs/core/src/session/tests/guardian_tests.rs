@@ -568,6 +568,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
             ResponseItem::Message {
                 id: None,
@@ -577,6 +578,7 @@ async fn process_compacted_history_preserves_separate_guardian_developer_message
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             },
         ],
         InitialContextInjection::BeforeLastUserMessage,

@@ -290,6 +290,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let prior_user_json = serde_json::to_value(&prior_user).unwrap();
     writeln!(
@@ -312,6 +313,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     };
     let prior_system_json = serde_json::to_value(&prior_system).unwrap();
     writeln!(
@@ -334,6 +336,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         end_turn: None,
         phase: Some(MessagePhase::Commentary),
+        exclude_from_compaction: false,
     };
     let prior_item_json = serde_json::to_value(&prior_item).unwrap();
     writeln!(
@@ -517,6 +520,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             }),
         },
     ];
@@ -903,6 +907,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     });
 
     let mut stream = client_session
@@ -2227,6 +2232,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     });
     prompt.input.push(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),

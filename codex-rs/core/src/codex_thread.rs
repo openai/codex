@@ -232,6 +232,7 @@ impl CodexThread {
             content: vec![ContentItem::InputText { text: message }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         };
         let pending_item = match pending_message_input_item(&message) {
             Ok(pending_item) => pending_item,

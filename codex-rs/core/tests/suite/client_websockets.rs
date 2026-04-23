@@ -1702,6 +1702,7 @@ fn message_item(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText { text: text.into() }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 
@@ -1712,6 +1713,7 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText { text: text.into() }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }
 }
 

@@ -104,6 +104,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }));
 }
 
@@ -117,6 +118,7 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }));
     assert!(!response_item_records_turn_ttft(
         &ResponseItem::FunctionCallOutput {
