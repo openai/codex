@@ -310,6 +310,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -2073,7 +2075,16 @@ impl CodexMessageProcessor {
             env: env_overrides,
             size,
             sandbox_policy,
+            permission_profile,
         } = params;
+        if sandbox_policy.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -2205,13 +2216,56 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
         let (
             effective_policy,
             effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+        ) = if let Some(permission_profile) = permission_profile {
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from(permission_profile);
+            let sandbox_policy = match permission_profile.to_legacy_sandbox_policy(&sandbox_cwd) {
+                Ok(sandbox_policy) => sandbox_policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            };
+            match self
+                .config
+                .permissions
+                .sandbox_policy
+                .can_set(&sandbox_policy)
+            {
+                Ok(()) => {
+                    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                        permission_profile.to_runtime_permissions();
+                    Self::preserve_configured_deny_read_restrictions(
+                        &mut file_system_sandbox_policy,
+                        &self.config.permissions.file_system_sandbox_policy,
+                    );
+                    (
+                        sandbox_policy,
+                        file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    )
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            }
+        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+            match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
@@ -2228,12 +2282,13 @@ impl CodexMessageProcessor {
                     self.outgoing.send_error(request, error).await;
                     return;
                 }
-            },
-            None => (
+            }
+        } else {
+            (
                 self.config.permissions.sandbox_policy.get().clone(),
                 self.config.permissions.file_system_sandbox_policy.clone(),
                 self.config.permissions.network_sandbox_policy,
-            ),
+            )
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
@@ -2286,6 +2341,30 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request, error).await;
+            }
+        }
+    }
+
+    fn preserve_configured_deny_read_restrictions(
+        file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+        configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    ) {
+        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
+            file_system_sandbox_policy.glob_scan_max_depth =
+                configured_file_system_sandbox_policy.glob_scan_max_depth;
+        }
+
+        for deny_entry in configured_file_system_sandbox_policy
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !file_system_sandbox_policy
+                .entries
+                .iter()
+                .any(|entry| entry == deny_entry)
+            {
+                file_system_sandbox_policy.entries.push(deny_entry.clone());
             }
         }
     }
@@ -10085,6 +10164,8 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
@@ -10350,6 +10431,36 @@ mod tests {
             },
             cwd.as_path()
         ));
+    }
+
+    #[test]
+    fn command_profile_preserves_configured_deny_read_restrictions() {
+        let readable_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: test_path_buf("/tmp/project").abs(),
+            },
+            access: FileSystemAccessMode::Read,
+        };
+        let deny_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "/tmp/project/**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        };
+        let mut file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![readable_entry.clone()]);
+        let mut configured_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
+        configured_file_system_sandbox_policy.glob_scan_max_depth = Some(2);
+
+        CodexMessageProcessor::preserve_configured_deny_read_restrictions(
+            &mut file_system_sandbox_policy,
+            &configured_file_system_sandbox_policy,
+        );
+
+        let mut expected = FileSystemSandboxPolicy::restricted(vec![readable_entry, deny_entry]);
+        expected.glob_scan_max_depth = Some(2);
+        assert_eq!(file_system_sandbox_policy, expected);
     }
 
     #[test]
