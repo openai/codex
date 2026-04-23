@@ -400,6 +400,23 @@ impl CodexMessageProcessor {
             }
         };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
+        let config = match self.load_latest_config(config_cwd.clone()).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        let auth = self.auth_manager.auth().await;
+
+        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+            self.send_invalid_request_error(
+                request_id,
+                "Codex plugins are disabled for this workspace".to_string(),
+            )
+            .await;
+            return;
+        }
 
         let plugins_manager = self.thread_manager.plugins_manager();
         let request = PluginInstallRequest {
@@ -417,7 +434,7 @@ impl CodexMessageProcessor {
                         warn!(
                             "failed to reload config after plugin install, using current config: {err:?}"
                         );
-                        self.config.as_ref().clone()
+                        config
                     }
                 };
 
