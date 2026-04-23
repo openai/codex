@@ -723,6 +723,27 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
 }
 
 #[tokio::test]
+async fn live_app_server_model_verification_renders_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ModelVerification(ModelVerificationNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            verifications: vec![AppServerModelVerification::TrustedAccessForCyber],
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("flagged for potentially high-risk cyber activity"));
+    assert!(rendered.contains("Requests may be slower"));
+    assert!(rendered.contains("https://chatgpt.com/cyber"));
+}
+
+#[tokio::test]
 async fn live_app_server_invalid_thread_name_update_is_ignored() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

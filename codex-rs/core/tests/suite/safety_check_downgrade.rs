@@ -379,7 +379,7 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_verification_emits_warning_without_reroute_or_warning_item() -> Result<()> {
+async fn model_verification_emits_structured_event_without_reroute_or_warning() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -414,8 +414,8 @@ async fn model_verification_emits_warning_without_reroute_or_warning_item() -> R
         .await?;
 
     let mut verification_count = 0;
-    let mut warning_count = 0;
     let mut reroute_count = 0;
+    let mut warning_count = 0;
     let mut warning_item_count = 0;
     loop {
         let event = wait_for_event(&test.codex, |_| true).await;
@@ -427,13 +427,7 @@ async fn model_verification_emits_warning_without_reroute_or_warning_item() -> R
                 );
                 verification_count += 1;
             }
-            EventMsg::Warning(warning)
-                if warning
-                    .message
-                    .contains("flagged for potentially high-risk cyber activity") =>
-            {
-                warning_count += 1;
-            }
+            EventMsg::Warning(_) => warning_count += 1,
             EventMsg::ModelReroute(_) => reroute_count += 1,
             EventMsg::RawResponseItem(raw)
                 if matches!(
@@ -453,8 +447,8 @@ async fn model_verification_emits_warning_without_reroute_or_warning_item() -> R
     }
 
     assert_eq!(verification_count, 1);
-    assert_eq!(warning_count, 1);
     assert_eq!(reroute_count, 0);
+    assert_eq!(warning_count, 0);
     assert_eq!(warning_item_count, 0);
 
     Ok(())
@@ -519,17 +513,12 @@ async fn model_verification_only_emits_once_per_turn() -> Result<()> {
         .await?;
 
     let mut verification_count = 0;
-    let mut warning_count = 0;
     loop {
         let event = wait_for_event(&test.codex, |_| true).await;
         match event {
             EventMsg::ModelVerification(_) => verification_count += 1,
-            EventMsg::Warning(warning)
-                if warning
-                    .message
-                    .contains("flagged for potentially high-risk cyber activity") =>
-            {
-                warning_count += 1;
+            EventMsg::Warning(warning) if warning.message.contains("high-risk cyber activity") => {
+                panic!("model verification should not emit a warning event");
             }
             EventMsg::TurnComplete(_) => break,
             _ => {}
@@ -537,7 +526,6 @@ async fn model_verification_only_emits_once_per_turn() -> Result<()> {
     }
 
     assert_eq!(verification_count, 1);
-    assert_eq!(warning_count, 1);
 
     Ok(())
 }

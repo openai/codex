@@ -49,6 +49,25 @@ async fn core_cyber_policy_error_renders_dedicated_notice() {
 }
 
 #[tokio::test]
+async fn core_model_verification_renders_warning() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "model-verification".into(),
+        msg: EventMsg::ModelVerification(ModelVerificationEvent {
+            verifications: vec![CoreModelVerification::TrustedAccessForCyber],
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("flagged for potentially high-risk cyber activity"));
+    assert!(rendered.contains("Requests may be slower"));
+    assert!(rendered.contains("https://chatgpt.com/cyber"));
+}
+
+#[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 

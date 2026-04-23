@@ -18,7 +18,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
-use codex_app_server_protocol::WarningNotification;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -292,7 +291,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     .await??;
     let turn_start: TurnStartResponse = to_response(turn_resp)?;
 
-    let (verification, warning) =
+    let verification =
         collect_model_verification_notifications_and_validate_no_warning_item(&mut mcp).await?;
     assert_eq!(
         verification,
@@ -301,11 +300,6 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
             turn_id: turn_start.turn.id,
             verifications: vec![ModelVerification::TrustedAccessForCyber],
         }
-    );
-    assert!(
-        warning
-            .message
-            .contains("flagged for potentially high-risk cyber activity")
     );
 
     Ok(())
@@ -355,9 +349,8 @@ async fn collect_turn_notifications_and_validate_no_warning_item(
 
 async fn collect_model_verification_notifications_and_validate_no_warning_item(
     mcp: &mut McpProcess,
-) -> Result<(ModelVerificationNotification, WarningNotification)> {
+) -> Result<ModelVerificationNotification> {
     let mut verification = None;
-    let mut warning = None;
 
     loop {
         let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
@@ -373,16 +366,7 @@ async fn collect_model_verification_notifications_and_validate_no_warning_item(
                 verification = Some(payload);
             }
             "warning" => {
-                let params = notification
-                    .params
-                    .ok_or_else(|| anyhow::anyhow!("warning notifications must include params"))?;
-                let payload: WarningNotification = serde_json::from_value(params)?;
-                if payload
-                    .message
-                    .contains("flagged for potentially high-risk cyber activity")
-                {
-                    warning = Some(payload);
-                }
+                anyhow::bail!("verification-only response must not emit warning");
             }
             "model/rerouted" => {
                 anyhow::bail!("verification-only response must not emit model/rerouted");
@@ -407,10 +391,7 @@ async fn collect_model_verification_notifications_and_validate_no_warning_item(
                         "expected model/verification notification before turn/completed"
                     )
                 })?;
-                let warning = warning.ok_or_else(|| {
-                    anyhow::anyhow!("expected warning notification before turn/completed")
-                })?;
-                return Ok((verification, warning));
+                return Ok(verification);
             }
             _ => {}
         }

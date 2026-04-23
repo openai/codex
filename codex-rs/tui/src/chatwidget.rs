@@ -97,6 +97,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -194,6 +195,8 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+#[cfg(test)]
+use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
@@ -256,6 +259,7 @@ const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
 const MULTI_AGENT_ENABLE_NOTICE: &str = "Subagents will be enabled in the next session.";
+const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING: &str = "Your account was flagged for potentially high-risk cyber activity. Requests may be slower while additional verification is applied. To regain faster access, apply for trusted access: https://chatgpt.com/cyber or learn more: https://developers.openai.com/codex/concepts/cyber-safety";
 const MEMORIES_DOC_URL: &str = "https://developers.openai.com/codex/memories";
 const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
 const MEMORIES_ENABLE_YES: &str = "Yes, enable";
@@ -3143,6 +3147,19 @@ impl ChatWidget {
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
         self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_core_model_verification(&mut self, verifications: &[CoreModelVerification]) {
+        if verifications.contains(&CoreModelVerification::TrustedAccessForCyber) {
+            self.on_warning(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING);
+        }
+    }
+
+    fn on_app_server_model_verification(&mut self, verifications: &[AppServerModelVerification]) {
+        if verifications.contains(&AppServerModelVerification::TrustedAccessForCyber) {
+            self.on_warning(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING);
+        }
     }
 
     /// Record one MCP startup update, promoting it into either the active startup
@@ -6592,7 +6609,10 @@ impl ChatWidget {
             ServerNotification::SkillsChanged(_) => {
                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
-            ServerNotification::ModelRerouted(_) | ServerNotification::ModelVerification(_) => {}
+            ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::ModelVerification(notification) => {
+                self.on_app_server_model_verification(&notification.verifications)
+            }
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
@@ -7097,7 +7117,10 @@ impl ChatWidget {
             EventMsg::Warning(WarningEvent { message })
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
-            EventMsg::ModelReroute(_) | EventMsg::ModelVerification(_) => {}
+            EventMsg::ModelReroute(_) => {}
+            EventMsg::ModelVerification(event) => {
+                self.on_core_model_verification(&event.verifications)
+            }
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,

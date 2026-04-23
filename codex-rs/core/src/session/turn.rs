@@ -2115,7 +2115,7 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::ModelVerifications(verifications) => {
                 if !*model_verification_emitted_for_turn {
-                    sess.warn_on_model_verification(&turn_context, verifications)
+                    sess.emit_model_verification(&turn_context, verifications)
                         .await;
                     *model_verification_emitted_for_turn = true;
                 }
