@@ -25,26 +25,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   zsh \
   && rm -rf /var/lib/apt/lists/*
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
-
 ARG USERNAME=node
-
-# Set up non-root user
-USER node
-
-# Install global packages
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
 # Install codex
 COPY dist/codex.tgz codex.tgz
-RUN npm install -g codex.tgz \
-  && npm cache clean --force \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \
-  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/docs
+RUN mkdir -p /usr/local/lib/codex-cli \
+  && tar -xzf codex.tgz -C /usr/local/lib/codex-cli --strip-components=1 \
+  && ln -s /usr/local/lib/codex-cli/bin/codex.js /usr/local/bin/codex \
+  && rm codex.tgz \
+  && rm -rf /usr/local/lib/codex-cli/node_modules/.cache \
+  && rm -rf /usr/local/lib/codex-cli/tests \
+  && rm -rf /usr/local/lib/codex-cli/docs
+
+# Set up non-root user
+USER node
 
 # Inside the container we consider the environment already sufficiently locked
 # down, therefore instruct Codex CLI to allow running without sandboxing.

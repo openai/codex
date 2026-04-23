@@ -8,7 +8,7 @@ pushd "$SCRIPT_DIR/.." >> /dev/null || {
   echo "Error: Failed to change directory to $SCRIPT_DIR/.."
   exit 1
 }
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run build
 rm -rf ./dist/openai-codex-*.tgz
 pnpm pack --pack-destination ./dist

@@ -8,7 +8,8 @@ The generated wire-model layer is currently sourced from the bundled v2 schema a
 
 ```bash
 cd sdk/python
-python -m pip install -e .
+uv sync
+source .venv/bin/activate
 ```
 
 Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency. For local
