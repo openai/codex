@@ -1387,6 +1387,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/upgrade"
+              ],
+              "title": "Marketplace/upgradeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceUpgradeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/upgradeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -7033,6 +7057,64 @@
       "title": "MarketplaceRemoveResponse",
       "type": "object"
     },
+    "MarketplaceUpgradeErrorInfo": {
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName",
+        "message"
+      ],
+      "type": "object"
+    },
+    "MarketplaceUpgradeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "MarketplaceUpgradeParams",
+      "type": "object"
+    },
+    "MarketplaceUpgradeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/MarketplaceUpgradeErrorInfo"
+          },
+          "type": "array"
+        },
+        "selectedMarketplaces": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "upgradedRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "errors",
+        "selectedMarketplaces",
+        "upgradedRoots"
+      ],
+      "title": "MarketplaceUpgradeResponse",
+      "type": "object"
+    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -12243,6 +12325,10 @@
         "ephemeral": {
           "type": "boolean"
         },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
+          "type": "boolean"
+        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -13671,6 +13757,10 @@
             "string",
             "null"
           ]
+        },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",

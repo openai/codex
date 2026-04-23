@@ -1867,6 +1867,7 @@ dependencies = [
  "codex-state",
  "codex-thread-store",
  "codex-tools",
+ "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -2102,6 +2103,7 @@ dependencies = [
  "codex-cloud-tasks",
  "codex-config",
  "codex-core",
+ "codex-core-plugins",
  "codex-exec",
  "codex-exec-server",
  "codex-execpolicy",
@@ -2292,6 +2294,7 @@ dependencies = [
  "libc",
  "multimap",
  "pretty_assertions",
+ "prost 0.14.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2300,8 +2303,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "wildmatch",
  "winapi-util",
@@ -2438,7 +2445,6 @@ dependencies = [
  "whoami",
  "windows-sys 0.52.0",
  "wiremock",
- "zip 2.4.2",
  "zstd 0.13.3",
 ]
 
@@ -2446,6 +2452,7 @@ dependencies = [
 name = "codex-core-plugins"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "codex-app-server-protocol",
  "codex-config",
@@ -2453,11 +2460,13 @@ dependencies = [
  "codex-exec-server",
  "codex-git-utils",
  "codex-login",
+ "codex-otel",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "dirs",
+ "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2468,6 +2477,8 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "url",
+ "wiremock",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -3202,6 +3213,7 @@ name = "codex-rollout-trace"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-code-mode",
  "codex-protocol",
  "pretty_assertions",
  "serde",
@@ -3375,6 +3387,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tracing",
  "uuid",
 ]
 
@@ -3414,6 +3427,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-config",
  "codex-connectors",
+ "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
  "codex-features",

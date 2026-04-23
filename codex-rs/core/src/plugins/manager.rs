@@ -1,9 +1,5 @@
 use super::PluginLoadOutcome;
-use super::curated_plugins_repo_path;
-use super::installed_marketplaces::installed_marketplace_roots_from_config;
-use super::read_curated_plugins_sha;
 use super::startup_sync::start_startup_remote_plugin_sync_once;
-use super::sync_openai_plugins_repo;
 use crate::SkillMetadata;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
@@ -11,6 +7,8 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerStack;
 use codex_analytics::AnalyticsEventsClient;
 use codex_config::types::PluginConfig;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
 use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
 use codex_core_plugins::loader::load_plugin_apps;
@@ -44,6 +42,9 @@ use codex_core_plugins::marketplace_upgrade::upgrade_configured_git_marketplaces
 use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::remote_legacy::RemotePluginFetchError;
 use codex_core_plugins::remote_legacy::RemotePluginMutationError;
+use codex_core_plugins::startup_sync::curated_plugins_repo_path;
+use codex_core_plugins::startup_sync::read_curated_plugins_sha;
+use codex_core_plugins::startup_sync::sync_openai_plugins_repo;
 use codex_core_plugins::store::PluginInstallResult as StorePluginInstallResult;
 use codex_core_plugins::store::PluginStore;
 use codex_core_plugins::store::PluginStoreError;
@@ -70,8 +71,6 @@ use toml_edit::value;
 use tracing::info;
 use tracing::warn;
 
-pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
-pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const FEATURED_PLUGIN_IDS_CACHE_TTL: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 3);
@@ -1466,8 +1465,8 @@ impl PluginsManager {
         // Treat the curated catalog as an extra marketplace root so plugin listing can surface it
         // without requiring every caller to know where it is stored.
         let mut roots = additional_roots.to_vec();
-        roots.extend(installed_marketplace_roots_from_config(
-            config,
+        roots.extend(installed_marketplace_roots_from_layer_stack(
+            &config.config_layer_stack,
             self.codex_home.as_path(),
         ));
         let curated_repo_root = curated_plugins_repo_path(self.codex_home.as_path());

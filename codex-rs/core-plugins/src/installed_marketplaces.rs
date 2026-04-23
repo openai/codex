@@ -1,11 +1,12 @@
-use crate::config::Config;
-use codex_core_plugins::marketplace::find_marketplace_manifest_path;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
+
+use codex_config::ConfigLayerStack;
+use codex_plugin::validate_plugin_segment;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
-use super::validate_plugin_segment;
+use crate::marketplace::find_marketplace_manifest_path;
 
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
 
@@ -13,11 +14,11 @@ pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
     codex_home.join(INSTALLED_MARKETPLACES_DIR)
 }
 
-pub(crate) fn installed_marketplace_roots_from_config(
-    config: &Config,
+pub fn installed_marketplace_roots_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> Vec<AbsolutePathBuf> {
-    let Some(user_layer) = config.config_layer_stack.get_user_layer() else {
+    let Some(user_layer) = config_layer_stack.get_user_layer() else {
         return Vec::new();
     };
     let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
@@ -59,7 +60,7 @@ pub(crate) fn installed_marketplace_roots_from_config(
     roots
 }
 
-pub(crate) fn resolve_configured_marketplace_root(
+pub fn resolve_configured_marketplace_root(
     marketplace_name: &str,
     marketplace: &toml::Value,
     default_install_root: &Path,

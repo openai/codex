@@ -19,6 +19,7 @@ codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -30,11 +31,15 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+libc = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
