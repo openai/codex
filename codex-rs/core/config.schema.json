@@ -865,7 +865,21 @@
           },
           "type": "array"
         },
+        "PostCompact": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreCompact": {
           "default": [],
           "items": {
             "$ref": "#/definitions/MatcherGroup"
