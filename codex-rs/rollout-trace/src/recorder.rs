@@ -12,6 +12,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::AgentThreadId;
+use crate::CodeCellTraceContext;
 use crate::CodexTurnId;
 use crate::CompactionId;
 use crate::CompactionTraceContext;
@@ -19,6 +20,8 @@ use crate::InferenceTraceContext;
 use crate::RawPayloadKind;
 use crate::RawPayloadRef;
 use crate::RawTraceEventPayload;
+use crate::ToolDispatchInvocation;
+use crate::ToolDispatchTraceContext;
 use crate::TraceWriter;
 
 /// Environment variable that enables local trace-bundle recording.
@@ -99,6 +102,14 @@ impl RolloutTraceRecorder {
         }
     }
 
+    /// Creates a trace bundle in a known root directory.
+    ///
+    /// This is public so integration tests in downstream crates can replay the
+    /// exact bundle they produced without mutating process environment.
+    pub fn create_in_root_for_test(root: &Path, thread_id: ThreadId) -> anyhow::Result<Self> {
+        Self::create_in_root(root, thread_id)
+    }
+
     fn create_in_root(root: &Path, thread_id: ThreadId) -> anyhow::Result<Self> {
         let trace_id = Uuid::new_v4().to_string();
         let thread_id = thread_id.to_string();
@@ -145,6 +156,83 @@ impl RolloutTraceRecorder {
             agent_path: metadata.agent_path,
             metadata_payload,
         });
+    }
+
+    /// Emits a turn-start lifecycle event.
+    ///
+    /// Most production turn lifecycle wiring lives outside this PR layer, but
+    /// trace-focused integration tests need a small explicit hook so reducer
+    /// inputs remain valid without exercising the full session loop.
+    pub fn record_codex_turn_started(
+        &self,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+    ) {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return;
+        };
+        let thread_id = thread_id.into();
+        let codex_turn_id = codex_turn_id.into();
+        recorder.append_with_context_best_effort(
+            thread_id.clone(),
+            codex_turn_id.clone(),
+            RawTraceEventPayload::CodexTurnStarted {
+                codex_turn_id,
+                thread_id,
+            },
+        );
+    }
+
+    /// Starts a first-class code-mode cell lifecycle and returns its trace handle.
+    pub fn start_code_cell_trace(
+        &self,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+        runtime_cell_id: impl Into<String>,
+        model_visible_call_id: impl Into<String>,
+        source_js: impl Into<String>,
+    ) -> CodeCellTraceContext {
+        let context = self.code_cell_trace_context(thread_id, codex_turn_id, runtime_cell_id);
+        context.record_started(model_visible_call_id, source_js);
+        context
+    }
+
+    /// Builds a trace handle for an already-started code-mode runtime cell.
+    pub fn code_cell_trace_context(
+        &self,
+        thread_id: impl Into<AgentThreadId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+        runtime_cell_id: impl Into<String>,
+    ) -> CodeCellTraceContext {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return CodeCellTraceContext::disabled();
+        };
+
+        CodeCellTraceContext::enabled(
+            Arc::clone(&recorder.writer),
+            thread_id,
+            codex_turn_id,
+            runtime_cell_id,
+        )
+    }
+
+    /// Starts one dispatch-level tool lifecycle and returns its trace handle.
+    ///
+    /// `invocation` is lazy because adapting core tool objects into trace-owned
+    /// payloads can clone large arguments. Disabled tracing should not pay that
+    /// cost on the hot tool-dispatch path.
+    pub fn start_tool_dispatch_trace(
+        &self,
+        invocation: impl FnOnce() -> Option<ToolDispatchInvocation>,
+    ) -> ToolDispatchTraceContext {
+        let RolloutTraceRecorderState::Enabled(recorder) = &self.state else {
+            return ToolDispatchTraceContext::disabled();
+        };
+        let Some(invocation) = invocation() else {
+            return ToolDispatchTraceContext::disabled();
+        };
+
+        ToolDispatchTraceContext::start(Arc::clone(&recorder.writer), invocation)
     }
 
     /// Builds reusable inference trace context for one Codex turn.
@@ -218,6 +306,21 @@ impl EnabledRolloutTraceRecorder {
 
     fn append_best_effort(&self, payload: RawTraceEventPayload) {
         if let Err(err) = self.writer.append(payload) {
+            warn!("failed to append rollout trace event: {err:#}");
+        }
+    }
+
+    fn append_with_context_best_effort(
+        &self,
+        thread_id: AgentThreadId,
+        codex_turn_id: CodexTurnId,
+        payload: RawTraceEventPayload,
+    ) {
+        let context = crate::RawTraceEventContext {
+            thread_id: Some(thread_id),
+            codex_turn_id: Some(codex_turn_id),
+        };
+        if let Err(err) = self.writer.append_with_context(context, payload) {
             warn!("failed to append rollout trace event: {err:#}");
         }
     }

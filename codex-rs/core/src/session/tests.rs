@@ -6875,6 +6875,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -6954,6 +6955,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
