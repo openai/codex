@@ -23,6 +23,7 @@ use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -56,11 +57,15 @@ pub struct AnalyticsEventsClient {
 impl AnalyticsEventsQueue {
     pub(crate) fn new(auth_manager: Arc<AuthManager>, base_url: String) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
+        let auth_manager = Arc::downgrade(&auth_manager);
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
             while let Some(input) = receiver.recv().await {
                 let mut events = Vec::new();
                 reducer.ingest(input, &mut events).await;
+                let Some(auth_manager) = auth_manager.upgrade() else {
+                    break;
+                };
                 send_track_events(&auth_manager, &base_url, events).await;
             }
         });
@@ -124,6 +129,18 @@ impl AnalyticsEventsClient {
         }
     }
 
+    pub fn disabled() -> Self {
+        let (sender, _receiver) = mpsc::channel(1);
+        Self {
+            queue: AnalyticsEventsQueue {
+                sender,
+                app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+                plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+            },
+            analytics_enabled: Some(false),
+        }
+    }
+
     pub fn track_skill_invocations(
         &self,
         tracking: TrackEventsContext,
@@ -182,6 +199,9 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_request(&self, connection_id: u64, request_id: RequestId, request: ClientRequest) {
+        if !tracks_client_request(&request) {
+            return;
+        }
         self.record_fact(AnalyticsFact::Request {
             connection_id,
             request_id,
@@ -275,9 +295,28 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
+        if !tracks_client_response(&response) {
+            return;
+        }
         self.record_fact(AnalyticsFact::Response {
             connection_id,
             response: Box::new(response),
+        });
+    }
+
+    pub fn track_response_payload(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: Box<ClientResponsePayload>,
+    ) {
+        if !tracks_client_response_payload(response.as_ref()) {
+            return;
+        }
+        self.record_fact(AnalyticsFact::ResponsePayload {
+            connection_id,
+            request_id,
+            response,
         });
     }
 
@@ -299,6 +338,35 @@ impl AnalyticsEventsClient {
     pub fn track_notification(&self, notification: ServerNotification) {
         self.record_fact(AnalyticsFact::Notification(Box::new(notification)));
     }
+}
+
+fn tracks_client_request(request: &ClientRequest) -> bool {
+    matches!(
+        request,
+        ClientRequest::TurnStart { .. } | ClientRequest::TurnSteer { .. }
+    )
+}
+
+fn tracks_client_response(response: &ClientResponse) -> bool {
+    matches!(
+        response,
+        ClientResponse::ThreadStart { .. }
+            | ClientResponse::ThreadResume { .. }
+            | ClientResponse::ThreadFork { .. }
+            | ClientResponse::TurnStart { .. }
+            | ClientResponse::TurnSteer { .. }
+    )
+}
+
+fn tracks_client_response_payload(response: &ClientResponsePayload) -> bool {
+    matches!(
+        response,
+        ClientResponsePayload::ThreadStart(_)
+            | ClientResponsePayload::ThreadResume(_)
+            | ClientResponsePayload::ThreadFork(_)
+            | ClientResponsePayload::TurnStart(_)
+            | ClientResponsePayload::TurnSteer(_)
+    )
 }
 
 async fn send_track_events(
