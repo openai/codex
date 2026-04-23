@@ -306,7 +306,6 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     INCLUDE
     LIB
     LIBPATH
-    PATH
     UCRTVersion
     UniversalCRTSdkDir
     VCINSTALLDIR
@@ -323,6 +322,48 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
     fi
   done
+
+  # The GitHub Windows image puts many unrelated versioned tools on PATH. Those
+  # entries are still part of Bazel action/test keys when PATH is forwarded, so
+  # image churn such as Maven minor-version updates can invalidate otherwise
+  # reusable cache entries. Keep only the PATH segments Bazel actions/tests need.
+  windows_cache_stable_path_entries=()
+  if [[ -n "${PATH:-}" ]]; then
+    windows_path="${PATH}"
+    if command -v cygpath >/dev/null 2>&1; then
+      windows_path="$(cygpath -w -p "${PATH}")"
+    fi
+
+    IFS=';' read -r -a windows_path_entries <<< "${windows_path}"
+    for path_entry in "${windows_path_entries[@]}"; do
+      case "${path_entry}" in
+        *'Microsoft Visual Studio'* | \
+          *'Windows Kits'* | \
+          *'Microsoft SDKs'* | \
+          'C:\Program Files\Git\'* | \
+          'C:\Program Files\PowerShell\'* | \
+          'C:\Users\runneradmin\AppData\Local\Microsoft\WindowsApps' | \
+          'C:\hostedtoolcache\windows\node\'* | \
+          'C:\Windows' | \
+          'C:\Windows\'* | \
+          'D:\a\_temp\install-dotslash\bin')
+          windows_cache_stable_path_entries+=("${path_entry}")
+          ;;
+      esac
+    done
+  fi
+
+  if (( ${#windows_cache_stable_path_entries[@]} == 0 )); then
+    echo "Failed to derive cache-stable Windows PATH from runner PATH." >&2
+    exit 1
+  fi
+
+  stable_windows_path="$(IFS=';'; printf '%s' "${windows_cache_stable_path_entries[*]}")"
+  post_config_bazel_args+=(
+    "--action_env=PATH=${stable_windows_path}"
+    "--host_action_env=PATH=${stable_windows_path}"
+    "--test_env=PATH=${stable_windows_path}"
+  )
 fi
 
 bazel_console_log="$(mktemp)"
