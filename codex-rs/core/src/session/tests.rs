@@ -1471,6 +1471,33 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_configured_omits_permission_profile_for_external_sandbox() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let sandbox_policy = SandboxPolicy::ExternalSandbox {
+        network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+    };
+    let expected_sandbox_policy = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.file_system_sandbox_policy = FileSystemSandboxPolicy::external_sandbox();
+        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    });
+
+    let test = builder.build(&server).await?;
+
+    assert_eq!(
+        test.session_configured.sandbox_policy,
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        test.session_configured.permission_profile, None,
+        "ExternalSandbox is enforced outside the PermissionProfile model, so SessionConfigured must \
+         not expose a lossy root-write profile"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     mount_sse_once(
