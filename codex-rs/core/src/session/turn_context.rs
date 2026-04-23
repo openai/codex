@@ -1,8 +1,11 @@
 use super::*;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -89,7 +92,8 @@ pub(crate) struct TurnContext {
 }
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
             &self.file_system_sandbox_policy,
             self.network_sandbox_policy,
         )
@@ -236,12 +240,21 @@ impl TurnContext {
 
     pub(crate) fn file_system_sandbox_context(
         &self,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> FileSystemSandboxContext {
-        let base_permissions = self.permission_profile();
-        let permissions =
-            merge_permission_profiles(Some(&base_permissions), additional_permissions.as_ref())
-                .unwrap_or(base_permissions);
+        let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+            &self.file_system_sandbox_policy,
+            additional_permissions.as_ref(),
+        );
+        let network_sandbox_policy = effective_network_sandbox_policy(
+            self.network_sandbox_policy,
+            additional_permissions.as_ref(),
+        );
+        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
         FileSystemSandboxContext {
             permissions,
             cwd: Some(self.cwd.clone()),

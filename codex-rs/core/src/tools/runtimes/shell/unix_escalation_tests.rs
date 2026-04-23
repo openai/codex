@@ -16,6 +16,7 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -257,7 +258,7 @@ fn map_exec_result_preserves_stdout_and_stderr() {
 
 #[test]
 fn shell_request_escalation_execution_is_explicit() {
-    let requested_permissions = PermissionProfile {
+    let requested_permissions = AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
             Some(vec![
