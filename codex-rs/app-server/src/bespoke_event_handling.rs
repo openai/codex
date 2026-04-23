@@ -2672,10 +2672,11 @@ fn request_permissions_response_from_client_result(
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
                 scope: codex_app_server_protocol::PermissionGrantScope::Turn,
-                strict_auto_review: false,
+                strict_auto_review: None,
             }
         });
-    if response.strict_auto_review
+    let strict_auto_review = response.strict_auto_review.unwrap_or(false);
+    if strict_auto_review
         && matches!(
             response.scope,
             codex_app_server_protocol::PermissionGrantScope::Session
@@ -2697,7 +2698,7 @@ fn request_permissions_response_from_client_result(
     Some(CoreRequestPermissionsResponse {
         permissions,
         scope: response.scope.to_core(),
-        strict_auto_review: response.strict_auto_review,
+        strict_auto_review,
     })
 }
 

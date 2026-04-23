@@ -3503,8 +3503,10 @@
           "default": "turn"
         },
         "strictAutoReview": {
-          "default": false,
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

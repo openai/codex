@@ -292,8 +292,8 @@ impl ToolOrchestrator {
                     };
 
                 // Ask for approval before retrying with the escalated sandbox.
-                let bypass_retry_approval = tool
-                    .should_bypass_approval(approval_policy, already_approved)
+                let bypass_retry_approval = !strict_auto_review
+                    && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
                     let guardian_review_id = use_guardian.then(new_guardian_review_id);

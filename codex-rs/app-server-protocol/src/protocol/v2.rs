@@ -6996,8 +6996,9 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
-    #[serde(default)]
-    pub strict_auto_review: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub strict_auto_review: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7713,7 +7714,7 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
-        assert!(!response.strict_auto_review);
+        assert_eq!(response.strict_auto_review, None);
     }
 
     #[test]
@@ -7724,7 +7725,7 @@ mod tests {
         }))
         .expect("response should deserialize");
 
-        assert!(response.strict_auto_review);
+        assert_eq!(response.strict_auto_review, Some(true));
     }
 
     #[test]
