@@ -782,6 +782,14 @@ fn elicitation_capability_enabled_for_custom_servers() {
 }
 
 #[test]
+fn client_protocol_version_claims_url_elicitation_revision() {
+    assert_eq!(
+        protocol_version_with_url_elicitation().to_string(),
+        MCP_PROTOCOL_VERSION_WITH_URL_ELICITATION
+    );
+}
+
+#[test]
 fn mcp_init_error_display_prompts_for_github_pat() {
     let server_name = "github";
     let entry = McpAuthStatusEntry {
