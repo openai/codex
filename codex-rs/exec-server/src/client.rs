@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
@@ -20,6 +22,7 @@ use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -206,6 +209,25 @@ impl LazyRemoteExecServerClient {
     }
 }
 
+impl HttpClient for LazyRemoteExecServerClient {
+    fn http_request(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
+        async move { self.get().await?.http_request(params).await }.boxed()
+    }
+
+    fn http_request_stream(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<
+        '_,
+        Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
+    > {
+        async move { self.get().await?.http_request_stream(params).await }.boxed()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecServerError {
     #[error("failed to spawn exec-server: {0}")]
@@ -226,6 +248,8 @@ pub enum ExecServerError {
     Disconnected(String),
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("HTTP request failed: {0}")]
+    HttpRequest(String),
     #[error("exec-server protocol error: {0}")]
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]

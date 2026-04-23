@@ -75,6 +75,8 @@ pub enum Feature {
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
+    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
+    CodexHooks,
 
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
@@ -95,8 +97,6 @@ pub enum Feature {
     ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
-    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
-    CodexHooks,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
@@ -156,6 +156,18 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Allow the in-app browser pane in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    InAppBrowser,
+    /// Allow Browser Use agent integration in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUse,
+    /// Allow Codex Computer Use.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
     /// Show the startup prompt for migrating external agent config into Codex.
@@ -745,8 +757,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodexHooks,
         key: "codex_hooks",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RequestPermissionsTool,
@@ -851,6 +863,24 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::InAppBrowser,
+        key: "in_app_browser",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserUse,
+        key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ComputerUse,
+        key: "computer_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::RemotePlugin,
         key: "remote_plugin",
         stage: Stage::UnderDevelopment,
@@ -899,12 +929,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianApproval,
         key: "guardian_approval",
-        stage: Stage::Experimental {
-            name: "Auto-review",
-            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Goals,

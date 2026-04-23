@@ -139,6 +139,28 @@ pub(super) fn target_preset_for_upgrade<'a>(
         .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
+pub(super) fn apply_accepted_model_migration(
+    config: &mut Config,
+    app_event_tx: &AppEventSender,
+    from_model: String,
+    target_model: String,
+    target_default_effort: ReasoningEffortConfig,
+) {
+    app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+        from_model,
+        to_model: target_model.clone(),
+    });
+
+    config.model = Some(target_model.clone());
+    config.model_reasoning_effort = Some(target_default_effort);
+    app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+    app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(target_default_effort)));
+    app_event_tx.send(AppEvent::PersistModelSelection {
+        model: target_model,
+        effort: Some(target_default_effort),
+    });
+}
+
 pub(super) const MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,7 +240,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
 
     if let Some(ModelUpgrade {
         id: target_model,
-        reasoning_effort_mapping,
+        reasoning_effort_mapping: _,
         migration_config_key,
         model_link,
         upgrade_copy,
@@ -263,30 +285,13 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
         );
         match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
-                app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                    from_model: model.to_string(),
-                    to_model: target_model.clone(),
-                });
-
-                let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
-                    && let Some(reasoning_effort) = config.model_reasoning_effort
-                {
-                    reasoning_effort_mapping
-                        .get(&reasoning_effort)
-                        .cloned()
-                        .or(config.model_reasoning_effort)
-                } else {
-                    config.model_reasoning_effort
-                };
-
-                config.model = Some(target_model.clone());
-                config.model_reasoning_effort = mapped_effort;
-                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
-                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
-                app_event_tx.send(AppEvent::PersistModelSelection {
-                    model: target_model.clone(),
-                    effort: mapped_effort,
-                });
+                apply_accepted_model_migration(
+                    config,
+                    app_event_tx,
+                    model.to_string(),
+                    target_model.clone(),
+                    target_preset.default_reasoning_effort,
+                );
             }
             ModelMigrationOutcome::Rejected => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
