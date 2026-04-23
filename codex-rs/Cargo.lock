@@ -2580,7 +2580,9 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "codex-app-server-protocol",
+ "codex-client",
  "codex-config",
  "codex-protocol",
  "codex-sandboxing",
@@ -2590,6 +2592,7 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",
@@ -2598,6 +2601,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -3140,6 +3144,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "codex-client",
  "codex-config",
  "codex-exec-server",

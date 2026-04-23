@@ -272,6 +272,7 @@ impl TurnContext {
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
+            permission_profile: Some(self.permission_profile()),
             network: self.turn_context_network_item(),
             file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
@@ -612,8 +613,7 @@ impl Session {
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
-            mcp_connection_manager
-                .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
+            mcp_connection_manager.set_sandbox_policy(session_configuration.sandbox_policy.get());
         }
 
         let model_info = self

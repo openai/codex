@@ -1,4 +1,5 @@
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -47,6 +48,7 @@ pub(crate) enum NetworkApprovalMode {
 pub(crate) struct NetworkApprovalSpec {
     pub network: Option<NetworkProxy>,
     pub mode: NetworkApprovalMode,
+    pub trigger: GuardianNetworkAccessTrigger,
     pub command: String,
 }
 
@@ -177,6 +179,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
+    trigger: GuardianNetworkAccessTrigger,
     command: String,
 }
 
@@ -210,7 +213,13 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String, turn_id: String, command: String) {
+    async fn register_call(
+        &self,
+        registration_id: String,
+        turn_id: String,
+        trigger: GuardianNetworkAccessTrigger,
+        command: String,
+    ) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
         active_calls.insert(
@@ -218,6 +227,7 @@ impl NetworkApprovalService {
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
+                trigger,
                 command,
             }),
         );
@@ -369,11 +379,11 @@ impl NetworkApprovalService {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
+        let owner_call = self.resolve_single_active_call().await;
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,
         };
-        let owner_call = self.resolve_single_active_call().await;
         let guardian_approval_id = Self::approval_id_for_key(&key);
         let prompt_command = vec!["network-access".to_string(), target.clone()];
         let command = owner_call
@@ -431,6 +441,7 @@ impl NetworkApprovalService {
                     host: request.host,
                     protocol,
                     port: key.port,
+                    trigger: owner_call.as_ref().map(|call| call.trigger.clone()),
                 },
                 Some(policy_denial_message.clone()),
             )
@@ -623,8 +634,13 @@ pub(crate) async fn begin_network_approval(
     managed_network_active: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
-    let spec = spec?;
-    if !managed_network_active || spec.network.is_none() {
+    let NetworkApprovalSpec {
+        network,
+        mode,
+        trigger,
+        command,
+    } = spec?;
+    if !managed_network_active || network.is_none() {
         return None;
     }
 
@@ -632,12 +648,17 @@ pub(crate) async fn begin_network_approval(
     session
         .services
         .network_approval
-        .register_call(registration_id.clone(), turn_id.to_string(), spec.command)
+        .register_call(
+            registration_id.clone(),
+            turn_id.to_string(),
+            trigger,
+            command,
+        )
         .await;
 
     Some(ActiveNetworkApproval {
         registration_id: Some(registration_id),
-        mode: spec.mode,
+        mode,
     })
 }
 

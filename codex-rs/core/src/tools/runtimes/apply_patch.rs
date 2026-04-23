@@ -139,13 +139,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
-            }
             if let Some(review_id) = guardian_review_id {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, review_id, action, retry_reason)
                     .await;
+            }
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session

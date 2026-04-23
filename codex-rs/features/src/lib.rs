@@ -156,6 +156,14 @@ pub enum Feature {
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Allow the in-app browser pane in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    InAppBrowser,
+    /// Allow Browser Use agent integration in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
     /// Show the startup prompt for migrating external agent config into Codex.
@@ -849,6 +857,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::InAppBrowser,
+        key: "in_app_browser",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserUse,
+        key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::RemotePlugin,
         key: "remote_plugin",
         stage: Stage::UnderDevelopment,
@@ -897,12 +917,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianApproval,
         key: "guardian_approval",
-        stage: Stage::Experimental {
-            name: "Auto-review",
-            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,

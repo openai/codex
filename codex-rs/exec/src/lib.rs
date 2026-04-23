@@ -391,6 +391,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         approval_policy: Some(AskForApproval::Never),
         approvals_reviewer: None,
         sandbox_mode,
+        permission_profile: None,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         service_tier: None,
@@ -737,6 +738,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             items,
             output_schema,
         } => {
+            let permission_profile = permission_profile_override_from_config(&config);
+            let sandbox_policy = permission_profile
+                .is_none()
+                .then(|| default_sandbox_policy.clone().into());
             let response: TurnStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::TurnStart {
@@ -749,7 +754,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
                         approvals_reviewer: None,
-                        sandbox_policy: Some(default_sandbox_policy.clone().into()),
+                        sandbox_policy,
+                        permission_profile,
                         model: None,
                         service_tier: None,
                         effort: default_effort,
@@ -923,13 +929,19 @@ fn sandbox_mode_from_policy(
 }
 
 fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+    let permission_profile = permission_profile_override_from_config(config);
+    let sandbox = permission_profile
+        .is_none()
+        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get()))
+        .flatten();
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+        sandbox,
+        permission_profile,
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
@@ -937,6 +949,11 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
 }
 
 fn thread_resume_params_from_config(config: &Config, thread_id: String) -> ThreadResumeParams {
+    let permission_profile = permission_profile_override_from_config(config);
+    let sandbox = permission_profile
+        .is_none()
+        .then(|| sandbox_mode_from_policy(config.permissions.sandbox_policy.get()))
+        .flatten();
     ThreadResumeParams {
         thread_id,
         model: config.model.clone(),
@@ -944,9 +961,23 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
-        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+        sandbox,
+        permission_profile,
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
+    }
+}
+
+fn permission_profile_override_from_config(
+    config: &Config,
+) -> Option<codex_app_server_protocol::PermissionProfile> {
+    if matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::ExternalSandbox { .. }
+    ) {
+        None
+    } else {
+        Some(config.permissions.permission_profile().into())
     }
 }
 

@@ -33,6 +33,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
@@ -403,6 +404,64 @@ elif mode == "exit_2":
     });
 
     fs::write(&script_path, script).context("write post tool use hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_logging_pre_and_blocking_post_tool_use_hooks(home: &Path, feedback: &str) -> Result<()> {
+    let pre_script_path = home.join("pre_tool_use_hook.py");
+    let pre_log_path = home.join("pre_tool_use_hook_log.jsonl");
+    let post_script_path = home.join("post_tool_use_hook.py");
+    let post_log_path = home.join("post_tool_use_hook_log.jsonl");
+    let feedback_json =
+        serde_json::to_string(feedback).context("serialize post tool use feedback")?;
+    let pre_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{pre_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+"#,
+        pre_log_path = pre_log_path.display(),
+    );
+    let post_script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+with Path(r"{post_log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+sys.stderr.write({feedback_json} + "\n")
+raise SystemExit(2)
+"#,
+        post_log_path = post_log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", pre_script_path.display()),
+                    "statusMessage": "running pre tool use hook",
+                }]
+            }],
+            "PostToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", post_script_path.display()),
+                    "statusMessage": "running post tool use hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&pre_script_path, pre_script).context("write pre tool use hook script")?;
+    fs::write(&post_script_path, post_script).context("write post tool use hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -2509,6 +2568,112 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("post-hook-output".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let start_call_id = "posttooluse-exec-session-start";
+    let poll_call_id = "posttooluse-exec-session-poll";
+    let command = "sleep 1; printf session-post-hook-output".to_string();
+    let start_args = serde_json::json!({
+        "cmd": command,
+        "shell": "/bin/sh",
+        "login": false,
+        "tty": false,
+        "yield_time_ms": 250,
+    });
+    let poll_args = serde_json::json!({
+        "session_id": 1000,
+        "chars": "",
+        "yield_time_ms": 5_000,
+    });
+    let feedback = "blocked by session post hook";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    start_call_id,
+                    "exec_command",
+                    &serde_json::to_string(&start_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                core_test_support::responses::ev_function_call(
+                    poll_call_id,
+                    "write_stdin",
+                    &serde_json::to_string(&poll_args)?,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "session post hook observed"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_logging_pre_and_blocking_post_tool_use_hooks(home, feedback) {
+                panic!("failed to write tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the exec command session with post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let output_item = requests[2].function_call_output(poll_call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("write_stdin output string");
+    assert_eq!(output, feedback);
+
+    let pre_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(pre_hook_inputs.len(), 1);
+    assert_eq!(pre_hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(pre_hook_inputs[0]["tool_use_id"], start_call_id);
+    assert_eq!(pre_hook_inputs[0]["tool_input"]["command"], command);
+
+    let post_hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(post_hook_inputs.len(), 1);
+    assert_eq!(post_hook_inputs[0]["hook_event_name"], "PostToolUse");
+    assert_eq!(post_hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(post_hook_inputs[0]["tool_use_id"], start_call_id);
+    assert_eq!(post_hook_inputs[0]["tool_input"]["command"], command);
+    assert!(
+        post_hook_inputs[0]["tool_response"]
+            .as_str()
+            .is_some_and(|tool_response| tool_response.contains("session-post-hook-output")),
+        "PostToolUse should see the final session output, got {:?}",
+        post_hook_inputs[0]["tool_response"]
     );
 
     Ok(())

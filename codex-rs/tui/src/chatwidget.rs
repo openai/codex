@@ -6570,6 +6570,9 @@ impl ChatWidget {
             }
             ServerNotification::ModelRerouted(_) => {}
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
+            ServerNotification::GuardianWarning(notification) => {
+                self.on_warning(notification.message)
+            }
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(DeprecationNoticeEvent {
                     summary: notification.summary,
@@ -7067,7 +7070,8 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
-            EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::Warning(WarningEvent { message })
+            | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
@@ -9038,7 +9042,7 @@ impl ChatWidget {
                             "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent."
                                 .to_string(),
                         ),
-                        is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
+                        is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
                                 current_approval,
                                 current_sandbox,
@@ -9048,7 +9052,7 @@ impl ChatWidget {
                             preset.approval,
                             preset.sandbox.clone(),
                             "Auto-review".to_string(),
-                            ApprovalsReviewer::GuardianSubagent,
+                            ApprovalsReviewer::AutoReview,
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason

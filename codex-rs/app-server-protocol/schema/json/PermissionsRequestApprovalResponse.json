@@ -311,6 +311,13 @@
         }
       ],
       "default": "turn"
+    },
+    "strictAutoReview": {
+      "description": "Review every subsequent command in this turn before normal sandboxed execution.",
+      "type": [
+        "boolean",
+        "null"
+      ]
     }
   },
   "required": [

@@ -109,7 +109,7 @@ pub(crate) fn matcher_pattern_for_event(
 }
 
 pub(crate) fn validate_matcher_pattern(matcher: &str) -> Result<(), regex::Error> {
-    if is_match_all_matcher(matcher) {
+    if is_match_all_matcher(matcher) || is_exact_matcher(matcher) {
         return Ok(());
     }
     regex::Regex::new(matcher).map(|_| ())
@@ -119,6 +119,9 @@ pub(crate) fn matches_matcher(matcher: Option<&str>, input: Option<&str>) -> boo
     match matcher {
         None => true,
         Some(matcher) if is_match_all_matcher(matcher) => true,
+        Some(matcher) if is_exact_matcher(matcher) => input
+            .map(|input| matcher.split('|').any(|candidate| candidate == input))
+            .unwrap_or(false),
         Some(matcher) => input
             .and_then(|input| {
                 regex::Regex::new(matcher)
@@ -142,6 +145,12 @@ pub(crate) fn matcher_inputs<'a>(
 
 fn is_match_all_matcher(matcher: &str) -> bool {
     matcher.is_empty() || matcher == "*"
+}
+
+fn is_exact_matcher(matcher: &str) -> bool {
+    matcher
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '|')
 }
 
 #[cfg(test)]
@@ -179,6 +188,27 @@ mod tests {
         assert!(matches_matcher(Some("Edit|Write"), Some("Write")));
         assert!(!matches_matcher(Some("Edit|Write"), Some("Bash")));
         assert_eq!(validate_matcher_pattern("Edit|Write"), Ok(()));
+    }
+
+    #[test]
+    fn matcher_exact_string_does_not_substring_match() {
+        assert!(matches_matcher(Some("Bash"), Some("Bash")));
+        assert!(!matches_matcher(Some("Bash"), Some("BashOutput")));
+        assert_eq!(validate_matcher_pattern("Bash"), Ok(()));
+    }
+
+    #[test]
+    fn matcher_uses_regex_when_it_contains_other_characters() {
+        assert!(matches_matcher(Some("^Bash"), Some("BashOutput")));
+        assert!(matches_matcher(
+            Some("mcp__memory__.*"),
+            Some("mcp__memory__create_entities")
+        ));
+        assert!(!matches_matcher(
+            Some("mcp__memory"),
+            Some("mcp__memory__create_entities")
+        ));
+        assert_eq!(validate_matcher_pattern("mcp__memory__.*"), Ok(()));
     }
 
     #[test]

@@ -90,6 +90,7 @@ fn post_tool_use_payload_uses_patch_input_and_tool_output() {
         handler.post_tool_use_payload("call-apply-patch", &payload, &output),
         Some(PostToolUsePayload {
             tool_name: HookToolName::apply_patch(),
+            tool_use_id: "call-apply-patch".to_string(),
             command: patch.to_string(),
             tool_response: json!("Success. Updated files."),
         })

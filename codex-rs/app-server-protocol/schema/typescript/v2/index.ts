@@ -147,6 +147,7 @@ export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatu
 export type { GuardianCommandSource } from "./GuardianCommandSource";
 export type { GuardianRiskLevel } from "./GuardianRiskLevel";
 export type { GuardianUserAuthorization } from "./GuardianUserAuthorization";
+export type { GuardianWarningNotification } from "./GuardianWarningNotification";
 export type { HookCompletedNotification } from "./HookCompletedNotification";
 export type { HookEventName } from "./HookEventName";
 export type { HookExecutionMode } from "./HookExecutionMode";
