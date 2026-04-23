@@ -178,8 +178,6 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    #[serde(rename = "openai_verification_recommendation")]
-    openai_model_verification: Option<Value>,
     headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
@@ -216,36 +214,6 @@ impl ResponsesStreamEvent {
                 .and_then(header_openai_model_value_from_json),
         }
     }
-
-    pub fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
-        self.openai_model_verification
-            .as_ref()
-            .and_then(model_verifications_from_json_value)
-            .or_else(|| {
-                self.response
-                    .as_ref()
-                    .and_then(|response| response.get("openai_verification_recommendation"))
-                    .and_then(model_verifications_from_json_value)
-            })
-            .or_else(|| {
-                self.response
-                    .as_ref()
-                    .and_then(|response| response.get("headers"))
-                    .and_then(header_model_verifications_from_json)
-            })
-            .or_else(|| {
-                self.headers.as_ref().and_then(|headers| {
-                    headers
-                        .get("openai_verification_recommendation")
-                        .and_then(model_verifications_from_json_value)
-                })
-            })
-            .or_else(|| {
-                self.headers
-                    .as_ref()
-                    .and_then(header_model_verifications_from_json)
-            })
-    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -269,6 +237,38 @@ fn header_model_verifications_from_json(value: &Value) -> Option<Vec<ModelVerifi
             None
         }
     })
+}
+
+pub(crate) fn model_verifications_from_event_value(
+    event: &Value,
+) -> Option<Vec<ModelVerification>> {
+    event
+        .get("openai_verification_recommendation")
+        .and_then(model_verifications_from_json_value)
+        .or_else(|| {
+            event
+                .get("response")
+                .and_then(|response| response.get("openai_verification_recommendation"))
+                .and_then(model_verifications_from_json_value)
+        })
+        .or_else(|| {
+            event
+                .get("response")
+                .and_then(|response| response.get("headers"))
+                .and_then(header_model_verifications_from_json)
+        })
+        .or_else(|| {
+            event.get("headers").and_then(|headers| {
+                headers
+                    .get("openai_verification_recommendation")
+                    .and_then(model_verifications_from_json_value)
+            })
+        })
+        .or_else(|| {
+            event
+                .get("headers")
+                .and_then(header_model_verifications_from_json)
+        })
 }
 
 fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
@@ -504,7 +504,15 @@ pub async fn process_sse(
 
         trace!("SSE event: {}", &sse.data);
 
-        let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
+        let event_value: Value = match serde_json::from_str(&sse.data) {
+            Ok(value) => value,
+            Err(e) => {
+                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                continue;
+            }
+        };
+        let model_verifications = model_verifications_from_event_value(&event_value);
+        let event: ResponsesStreamEvent = match serde_json::from_value(event_value) {
             Ok(event) => event,
             Err(e) => {
                 debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
@@ -524,7 +532,7 @@ pub async fn process_sse(
             }
             last_server_model = Some(model);
         }
-        if let Some(verifications) = event.model_verifications()
+        if let Some(verifications) = model_verifications
             && tx_event
                 .send(Ok(ResponseEvent::ModelVerifications(verifications)))
                 .await
@@ -1375,21 +1383,20 @@ mod tests {
 
     #[test]
     fn responses_stream_event_model_verification_reads_top_level_field() {
-        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+        let event = json!({
             "type": "codex.response.metadata",
             "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
-        }))
-        .expect("expected event to deserialize");
+        });
 
         assert_eq!(
-            ev.model_verifications(),
+            model_verifications_from_event_value(&event),
             Some(vec![ModelVerification::TrustedAccessForCyber])
         );
     }
 
     #[test]
     fn responses_stream_event_model_verification_reads_response_headers() {
-        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+        let event = json!({
             "type": "response.created",
             "response": {
                 "id": "resp-1",
@@ -1397,40 +1404,37 @@ mod tests {
                     "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
                 }
             }
-        }))
-        .expect("expected event to deserialize");
+        });
 
         assert_eq!(
-            ev.model_verifications(),
+            model_verifications_from_event_value(&event),
             Some(vec![ModelVerification::TrustedAccessForCyber])
         );
     }
 
     #[test]
     fn responses_stream_event_model_verification_reads_top_level_headers() {
-        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+        let event = json!({
             "type": "codex.response.metadata",
             "headers": {
                 "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
             }
-        }))
-        .expect("expected event to deserialize");
+        });
 
         assert_eq!(
-            ev.model_verifications(),
+            model_verifications_from_event_value(&event),
             Some(vec![ModelVerification::TrustedAccessForCyber])
         );
     }
 
     #[test]
     fn responses_stream_event_model_verification_ignores_unknown_field() {
-        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+        let event = json!({
             "type": "codex.response.metadata",
             "openai_verification_recommendation": "unknown"
-        }))
-        .expect("expected event to deserialize");
+        });
 
-        assert_eq!(ev.model_verifications(), None);
+        assert_eq!(model_verifications_from_event_value(&event), None);
     }
 
     #[test]

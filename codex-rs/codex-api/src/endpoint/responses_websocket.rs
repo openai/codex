@@ -6,6 +6,7 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::ResponsesStreamEvent;
+use crate::sse::model_verifications_from_event_value;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
@@ -601,7 +602,15 @@ async fn run_websocket_response_stream(
                     return Err(error);
                 }
 
-                let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
+                let event_value = match serde_json::from_str::<Value>(&text) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        debug!("failed to parse websocket event: {err}, data: {text}");
+                        continue;
+                    }
+                };
+                let model_verifications = model_verifications_from_event_value(&event_value);
+                let event = match serde_json::from_value::<ResponsesStreamEvent>(event_value) {
                     Ok(event) => event,
                     Err(err) => {
                         debug!("failed to parse websocket event: {err}, data: {text}");
@@ -622,7 +631,7 @@ async fn run_websocket_response_stream(
                         .await;
                     last_server_model = Some(model);
                 }
-                if let Some(verifications) = event.model_verifications()
+                if let Some(verifications) = model_verifications
                     && tx_event
                         .send(Ok(ResponseEvent::ModelVerifications(verifications)))
                         .await
