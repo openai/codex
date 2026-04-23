@@ -2439,7 +2439,6 @@ dependencies = [
  "whoami",
  "windows-sys 0.52.0",
  "wiremock",
- "zip 2.4.2",
  "zstd 0.13.3",
 ]
 
@@ -2455,11 +2454,13 @@ dependencies = [
  "codex-exec-server",
  "codex-git-utils",
  "codex-login",
+ "codex-otel",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-plugins",
  "dirs",
+ "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -2470,6 +2471,8 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "url",
+ "wiremock",
+ "zip 2.4.2",
 ]
 
 [[package]]

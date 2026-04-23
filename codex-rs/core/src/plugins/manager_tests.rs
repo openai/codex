@@ -18,6 +18,7 @@ use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
+use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;

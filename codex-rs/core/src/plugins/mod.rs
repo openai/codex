@@ -2,7 +2,6 @@ use codex_config::types::McpServerConfig;
 
 mod discoverable;
 mod injection;
-mod installed_marketplaces;
 mod manager;
 mod mentions;
 mod render;
@@ -40,9 +39,6 @@ pub use manager::PluginUninstallError;
 pub use manager::PluginsManager;
 pub use manager::RemotePluginSyncResult;
 pub(crate) use render::render_explicit_plugin_instructions;
-pub(crate) use startup_sync::curated_plugins_repo_path;
-pub(crate) use startup_sync::read_curated_plugins_sha;
-pub(crate) use startup_sync::sync_openai_plugins_repo;
 
 pub(crate) use mentions::build_connector_slug_counts;
 pub(crate) use mentions::build_skill_name_counts;
