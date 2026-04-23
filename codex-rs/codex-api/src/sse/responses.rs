@@ -167,6 +167,7 @@ pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
     headers: Option<Value>,
+    metadata: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
     item_id: Option<String>,
@@ -201,6 +202,17 @@ impl ResponsesStreamEvent {
                 .and_then(header_openai_model_value_from_json),
         }
     }
+
+    pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("openai_verification_recommendation"))
+            .and_then(model_verifications_from_json_value)
+    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -213,19 +225,6 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
             None
         }
     })
-}
-
-pub(crate) fn model_verifications_from_event_value(
-    event: &Value,
-) -> Option<Vec<ModelVerification>> {
-    if event.get("type").and_then(Value::as_str) != Some("response.metadata") {
-        return None;
-    }
-
-    event
-        .get("metadata")
-        .and_then(|metadata| metadata.get("openai_verification_recommendation"))
-        .and_then(model_verifications_from_json_value)
 }
 
 fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
@@ -461,21 +460,14 @@ pub async fn process_sse(
 
         trace!("SSE event: {}", &sse.data);
 
-        let event_value: Value = match serde_json::from_str(&sse.data) {
-            Ok(value) => value,
-            Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
-                continue;
-            }
-        };
-        let model_verifications = model_verifications_from_event_value(&event_value);
-        let event: ResponsesStreamEvent = match serde_json::from_value(event_value) {
+        let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
                 debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
                 continue;
             }
         };
+        let model_verifications = event.model_verifications();
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -1284,9 +1276,11 @@ mod tests {
                 "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
             }
         });
+        let event: ResponsesStreamEvent =
+            serde_json::from_value(event).expect("expected event to deserialize");
 
         assert_eq!(
-            model_verifications_from_event_value(&event),
+            event.model_verifications(),
             Some(vec![ModelVerification::TrustedAccessForCyber])
         );
     }
@@ -1299,8 +1293,10 @@ mod tests {
                 "openai_verification_recommendation": "unknown"
             }
         });
+        let event: ResponsesStreamEvent =
+            serde_json::from_value(event).expect("expected event to deserialize");
 
-        assert_eq!(model_verifications_from_event_value(&event), None);
+        assert_eq!(event.model_verifications(), None);
     }
 
     #[test]
