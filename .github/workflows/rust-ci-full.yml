@@ -76,6 +76,8 @@ jobs:
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
         run: cargo test
+        env:
+          RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
     name: Argument comment lint - ${{ matrix.name }}
@@ -671,6 +673,7 @@ jobs:
         run: cargo nextest run --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
         env:
           RUST_BACKTRACE: 1
+          RUST_MIN_STACK: "8388608" # 8 MiB
           NEXTEST_STATUS_LEVEL: leak
 
       - name: Upload Cargo timings (nextest)
