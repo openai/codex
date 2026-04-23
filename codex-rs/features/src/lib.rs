@@ -164,7 +164,7 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
-    /// Allow Computer Use integration in desktop apps.
+    /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     ComputerUse,
