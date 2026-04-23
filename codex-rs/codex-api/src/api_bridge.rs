@@ -32,8 +32,6 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
             identity_error_code: None,
         }),
         ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
-        // Streaming response.failed events are typed before they reach this bridge. HTTP errors
-        // and wrapped websocket errors arrive as transport bodies and are decoded below.
         ApiError::CyberPolicy { message } => CodexErr::CyberPolicy { message },
         ApiError::Transport(transport) => match transport {
             TransportError::Http {
