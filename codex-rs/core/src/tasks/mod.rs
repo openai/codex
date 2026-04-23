@@ -276,6 +276,15 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+                turn_context: turn_context.as_ref(),
+                token_usage: token_usage_at_turn_start.clone(),
+            })
+            .await
+        {
+            warn!("failed to apply goal runtime turn-start event: {err}");
+        }
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -286,22 +295,13 @@ impl Session {
         };
         {
             let mut turn_state = turn_state.lock().await;
-            turn_state.token_usage_at_turn_start = token_usage_at_turn_start.clone();
+            turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
             for item in mailbox_items {
                 turn_state.push_pending_input(item);
             }
-        }
-        if let Err(err) = self
-            .goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
-                turn_context: turn_context.as_ref(),
-                token_usage: token_usage_at_turn_start,
-            })
-            .await
-        {
-            warn!("failed to apply goal runtime turn-start event: {err}");
         }
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
