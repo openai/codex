@@ -571,6 +571,14 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let permission_profile = if !app_server.is_remote()
+                        && self.runtime_sandbox_policy_override.is_some()
+                        && !matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. })
+                    {
+                        Some(self.config.permissions.permission_profile())
+                    } else {
+                        None
+                    };
                     app_server
                         .turn_start(
                             thread_id,
@@ -580,6 +588,7 @@ impl App {
                             approvals_reviewer
                                 .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
+                            permission_profile,
                             model.to_string(),
                             effort,
                             *summary,

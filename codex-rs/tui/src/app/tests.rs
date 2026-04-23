@@ -1643,7 +1643,10 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approvals_reviewer
     );
     assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(app.runtime_sandbox_policy_override, None);
+    assert_eq!(
+        app.runtime_sandbox_policy_override,
+        Some(auto_review.sandbox_policy.clone())
+    );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
