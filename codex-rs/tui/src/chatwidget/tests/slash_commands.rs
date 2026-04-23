@@ -1768,6 +1768,34 @@ async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
 }
 
 #[tokio::test]
+async fn queued_menu_slash_keeps_agent_turn_complete_notification() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    queue_composer_text_with_tab(&mut chat, "/model");
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Done"))),
+    });
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response == "Done"
+    );
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Select Model"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn slash_copy_uses_latest_surviving_response_after_rollback() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

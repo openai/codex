@@ -7992,14 +7992,14 @@ impl ChatWidget {
                 QueuedInputAction::ParseSlash => {
                     let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
                     if drain == QueueDrain::Stop {
-                        submitted_follow_up = true;
+                        submitted_follow_up = self.is_user_turn_pending_or_running();
                         break;
                     }
                 }
                 QueuedInputAction::RunShell => {
                     let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
                     if drain == QueueDrain::Stop {
-                        submitted_follow_up = true;
+                        submitted_follow_up = self.is_user_turn_pending_or_running();
                         break;
                     }
                 }
