@@ -1,4 +1,10 @@
 use super::*;
+use codex_protocol::protocol::FileSystemAccessMode;
+use codex_protocol::protocol::FileSystemPath;
+use codex_protocol::protocol::FileSystemSandboxEntry;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::FileSystemSpecialPath;
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -252,6 +258,25 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
 
     let expected_sandbox = SandboxPolicy::new_read_only_policy();
     let expected_cwd = test_path_buf("/home/user/sub-agent").abs();
+    let expected_file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/.secret".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let expected_permission_profile =
+        codex_protocol::models::PermissionProfile::from_runtime_permissions(
+            &expected_file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -262,7 +287,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
-        permission_profile: None,
+        permission_profile: Some(expected_permission_profile.clone()),
         cwd: expected_cwd.clone(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -284,6 +309,10 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     assert_eq!(
         chat.config_ref().permissions.sandbox_policy.get(),
         &expected_sandbox
+    );
+    assert_eq!(
+        chat.config_ref().permissions.permission_profile(),
+        expected_permission_profile
     );
     assert_eq!(&chat.config_ref().cwd, &expected_cwd);
 }
