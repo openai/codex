@@ -401,7 +401,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden until the experimental feature is enabled: {popup}"
+        "expected Auto-review to stay hidden until the feature is enabled: {popup}"
     );
 }
 
@@ -433,7 +433,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden when the experimental feature is disabled: {popup}"
+        "expected Auto-review to stay hidden when the feature is disabled: {popup}"
     );
 }
 
