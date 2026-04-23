@@ -388,12 +388,21 @@ impl ListSelectionView {
     fn apply_filter(&mut self) {
         let previously_selected = self
             .selected_actual_idx()
+            .filter(|actual_idx| self.enabled_actual_idx(*actual_idx).is_some())
             .or_else(|| {
                 (!self.is_searchable)
-                    .then(|| self.active_items().iter().position(|item| item.is_current))
+                    .then(|| {
+                        self.active_items()
+                            .iter()
+                            .position(|item| item.is_current && Self::item_is_enabled(item))
+                    })
                     .flatten()
             })
-            .or_else(|| self.initial_selected_idx.take());
+            .or_else(|| {
+                self.initial_selected_idx
+                    .take()
+                    .filter(|actual_idx| self.enabled_actual_idx(*actual_idx).is_some())
+            });
 
         if self.is_searchable && !self.search_query.is_empty() {
             let query_lower = self.search_query.to_lowercase();
@@ -551,6 +560,13 @@ impl ListSelectionView {
                 .get(*actual_idx)
                 .is_some_and(Self::item_is_enabled)
         })
+    }
+
+    fn enabled_actual_idx(&self, actual_idx: usize) -> Option<usize> {
+        self.active_items()
+            .get(actual_idx)
+            .is_some_and(Self::item_is_enabled)
+            .then_some(actual_idx)
     }
 
     fn item_is_enabled(item: &SelectionItem) -> bool {
@@ -1865,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_rows_skip_default_selection_and_number_shortcuts() {
+    fn disabled_current_rows_skip_default_selection_and_number_shortcuts() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = ListSelectionView::new(
@@ -1874,6 +1890,7 @@ mod tests {
                     SelectionItem {
                         name: "Unavailable".to_string(),
                         description: Some("Not available right now.".to_string()),
+                        is_current: true,
                         is_disabled: true,
                         ..Default::default()
                     },
