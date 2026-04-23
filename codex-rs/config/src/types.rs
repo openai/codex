@@ -540,15 +540,15 @@ pub const DEFAULT_TERMINAL_RESIZE_REFLOW_MAX_ROWS: usize = 12_000;
 #[schemars(deny_unknown_fields)]
 pub struct TerminalResizeReflowToml {
     /// Disable resize reflow for the current transcript when a reflow operation exceeds this many
-    /// milliseconds. Set to `0` to disable the slow-reflow time limit.
+    /// milliseconds. Omit or set to `0` to disable the slow-reflow time limit.
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub slow_threshold_ms: Option<u64>,
 
     /// Trim resize-reflow replay to the most recent rendered terminal rows when the transcript
-    /// exceeds this cap.
+    /// exceeds this cap. Omit or set to `0` to keep all rendered rows.
     #[serde(default)]
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 0))]
     pub max_rows: Option<usize>,
 }
 

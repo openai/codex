@@ -694,7 +694,7 @@ max_rows = 9000
             app.config.terminal_resize_reflow.slow_threshold,
             Some(Duration::from_millis(/*millis*/ 350))
         );
-        assert_eq!(app.config.terminal_resize_reflow.max_rows, 9000);
+        assert_eq!(app.config.terminal_resize_reflow.max_rows, Some(9000));
         assert!(!app.transcript_reflow.is_runtime_disabled());
         Ok(())
     }

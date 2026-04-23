@@ -186,7 +186,11 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_metrics.is_some() {
+                if self
+                    .initial_history_replay_metrics
+                    .as_ref()
+                    .is_some_and(|metrics| !metrics.replay_finished)
+                {
                     self.insert_history_cell_lines_with_initial_replay_measurement(
                         tui,
                         cell.as_ref(),
@@ -201,7 +205,7 @@ impl App {
                 }
             }
             AppEvent::EndInitialHistoryReplayMeasurement { replay_elapsed } => {
-                self.finish_initial_history_replay_measurement(replay_elapsed);
+                self.finish_initial_history_replay_measurement(tui, replay_elapsed);
             }
             AppEvent::ConsolidateAgentMessage { source, cwd } => {
                 if !self.terminal_resize_reflow_enabled() {

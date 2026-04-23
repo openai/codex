@@ -1359,14 +1359,14 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
         cfg.terminal_resize_reflow.slow_threshold,
         Some(Duration::from_millis(/*millis*/ 350))
     );
-    assert_eq!(cfg.terminal_resize_reflow.max_rows, 9000);
+    assert_eq!(cfg.terminal_resize_reflow.max_rows, Some(9000));
 
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
             tui: Some(Tui {
                 terminal_resize_reflow: TerminalResizeReflowToml {
                     slow_threshold_ms: Some(0),
-                    max_rows: None,
+                    max_rows: Some(0),
                 },
                 ..Default::default()
             }),
@@ -1376,13 +1376,10 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
         tempdir().expect("tempdir").abs(),
     )
     .await
-    .expect("load config with disabled slow threshold");
+    .expect("load config with disabled resize reflow limits");
 
     assert_eq!(cfg.terminal_resize_reflow.slow_threshold, None);
-    assert_eq!(
-        cfg.terminal_resize_reflow.max_rows,
-        TerminalResizeReflowConfig::default().max_rows
-    );
+    assert_eq!(cfg.terminal_resize_reflow.max_rows, None);
 }
 
 #[tokio::test]
@@ -5111,6 +5108,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tool_suggest: ToolSuggestConfig::default(),
@@ -5263,6 +5261,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -5413,6 +5412,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -5548,6 +5548,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),

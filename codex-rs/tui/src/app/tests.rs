@@ -3713,7 +3713,7 @@ fn rendered_line_text(line: &Line<'static>) -> String {
 #[tokio::test]
 async fn capped_resize_reflow_renders_recent_suffix_only() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = 5;
+    app.config.terminal_resize_reflow.max_rows = Some(5);
     app.transcript_cells = (0..20)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
@@ -3743,9 +3743,23 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
 }
 
 #[tokio::test]
+async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = None;
+    app.transcript_cells = (0..20)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+
+    assert!(!rendered.row_cap_limited);
+    assert_eq!(rendered.rendered_cell_count, app.transcript_cells.len());
+}
+
+#[tokio::test]
 async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = 100;
+    app.config.terminal_resize_reflow.max_rows = Some(100);
     app.transcript_cells = (0..3)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
@@ -3766,6 +3780,43 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
             "cell 1".to_string(),
             String::new(),
             "cell 2".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn initial_replay_measurement_buffers_recent_rows_when_row_cap_present() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = Some(3);
+
+    app.begin_initial_history_replay_measurement();
+    for index in 0..5 {
+        App::buffer_initial_history_replay_display_lines(
+            app.initial_history_replay_metrics
+                .as_mut()
+                .expect("measurement active"),
+            vec![Line::from(format!("line {index}"))],
+            /*max_rows*/ 3,
+        );
+    }
+
+    let metrics = app
+        .initial_history_replay_metrics
+        .as_ref()
+        .expect("measurement should remain active");
+    assert_eq!(metrics.retained_line_count, 3);
+    assert_eq!(metrics.trimmed_line_count, 2);
+    assert_eq!(
+        metrics
+            .retained_lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec![
+            "line 2".to_string(),
+            "line 3".to_string(),
+            "line 4".to_string(),
         ]
     );
 }

@@ -1939,14 +1939,14 @@
       "properties": {
         "max_rows": {
           "default": null,
-          "description": "Trim resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap.",
+          "description": "Trim resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit or set to `0` to keep all rendered rows.",
           "format": "uint",
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "slow_threshold_ms": {
           "default": null,
-          "description": "Disable resize reflow for the current transcript when a reflow operation exceeds this many milliseconds. Set to `0` to disable the slow-reflow time limit.",
+          "description": "Disable resize reflow for the current transcript when a reflow operation exceeds this many milliseconds. Omit or set to `0` to disable the slow-reflow time limit.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"

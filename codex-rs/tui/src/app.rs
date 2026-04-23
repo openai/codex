@@ -516,8 +516,11 @@ struct InitialHistoryReplayMetrics {
     render_elapsed: Duration,
     enqueue_elapsed: Duration,
     flush_elapsed: Duration,
+    retained_lines: VecDeque<Line<'static>>,
     cell_count: usize,
     rendered_line_count: usize,
+    retained_line_count: usize,
+    trimmed_line_count: usize,
     flushed_line_count: usize,
     replay_finished: bool,
 }

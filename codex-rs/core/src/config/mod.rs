@@ -32,8 +32,6 @@ use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
-use codex_config::types::DEFAULT_TERMINAL_RESIZE_REFLOW_MAX_ROWS;
-use codex_config::types::DEFAULT_TERMINAL_RESIZE_REFLOW_SLOW_THRESHOLD_MS;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
@@ -631,16 +629,14 @@ impl Default for MultiAgentV2Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalResizeReflowConfig {
     pub slow_threshold: Option<Duration>,
-    pub max_rows: usize,
+    pub max_rows: Option<usize>,
 }
 
 impl Default for TerminalResizeReflowConfig {
     fn default() -> Self {
         Self {
-            slow_threshold: Some(Duration::from_millis(
-                DEFAULT_TERMINAL_RESIZE_REFLOW_SLOW_THRESHOLD_MS,
-            )),
-            max_rows: DEFAULT_TERMINAL_RESIZE_REFLOW_MAX_ROWS,
+            slow_threshold: None,
+            max_rows: None,
         }
     }
 }
@@ -1512,19 +1508,13 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
         slow_threshold: tui
             .terminal_resize_reflow
             .slow_threshold_ms
-            .map(|millis| {
-                if millis == 0 {
-                    None
-                } else {
-                    Some(Duration::from_millis(millis))
-                }
-            })
-            .unwrap_or(defaults.slow_threshold),
+            .and_then(|millis| (millis > 0).then(|| Duration::from_millis(millis)))
+            .or(defaults.slow_threshold),
         max_rows: tui
             .terminal_resize_reflow
             .max_rows
-            .filter(|rows| *rows > 0)
-            .unwrap_or(defaults.max_rows),
+            .and_then(|rows| (rows > 0).then_some(rows))
+            .or(defaults.max_rows),
     }
 }
 
