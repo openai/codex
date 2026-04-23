@@ -11,6 +11,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_model_verification_metadata;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_response_sequence;
@@ -26,7 +27,6 @@ use wiremock::ResponseTemplate;
 
 const SERVER_MODEL: &str = "gpt-5.2";
 const REQUESTED_MODEL: &str = "gpt-5.3-codex";
-const OPENAI_MODEL_VERIFICATION_HEADER: &str = "OpenAI-Verification-Recommendation";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 const CYBER_POLICY_MESSAGE: &str =
@@ -383,10 +383,11 @@ async fn model_verification_emits_structured_event_without_reroute_or_warning() 
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let response = sse_response(sse_completed("resp-1")).insert_header(
-        OPENAI_MODEL_VERIFICATION_HEADER,
-        TRUSTED_ACCESS_FOR_CYBER_VERIFICATION,
-    );
+    let response = sse_response(sse(vec![
+        ev_response_created("resp-1"),
+        ev_model_verification_metadata("resp-1", vec![TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]),
+        core_test_support::responses::ev_completed("resp-1"),
+    ]));
     let _mock = mount_response_once(&server, response).await;
 
     let mut builder = test_codex().with_model(REQUESTED_MODEL);
@@ -471,21 +472,15 @@ async fn model_verification_only_emits_once_per_turn() -> Result<()> {
             "shell_command",
             &serde_json::to_string(&tool_args)?,
         ),
+        ev_model_verification_metadata("resp-1", vec![TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]),
         core_test_support::responses::ev_completed("resp-1"),
-    ]))
-    .insert_header(
-        OPENAI_MODEL_VERIFICATION_HEADER,
-        TRUSTED_ACCESS_FOR_CYBER_VERIFICATION,
-    );
+    ]));
     let second_response = sse_response(sse(vec![
         ev_response_created("resp-2"),
+        ev_model_verification_metadata("resp-2", vec![TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]),
         ev_assistant_message("msg-1", "done"),
         core_test_support::responses::ev_completed("resp-2"),
-    ]))
-    .insert_header(
-        OPENAI_MODEL_VERIFICATION_HEADER,
-        TRUSTED_ACCESS_FOR_CYBER_VERIFICATION,
-    );
+    ]));
     let _mock = mount_response_sequence(&server, vec![first_response, second_response]).await;
 
     let mut builder = test_codex().with_model(REQUESTED_MODEL);

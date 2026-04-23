@@ -28,7 +28,6 @@ use wiremock::ResponseTemplate;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const REQUESTED_MODEL: &str = "gpt-5.4";
 const SERVER_MODEL: &str = "gpt-5.3-codex";
-const OPENAI_MODEL_VERIFICATION_HEADER: &str = "OpenAI-Verification-Recommendation";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 const CYBER_POLICY_MESSAGE: &str =
     "This request has been flagged for potentially high-risk cyber activity.";
@@ -246,13 +245,14 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
+        responses::ev_model_verification_metadata(
+            "resp-1",
+            vec![TRUSTED_ACCESS_FOR_CYBER_VERIFICATION],
+        ),
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response = responses::sse_response(body).insert_header(
-        OPENAI_MODEL_VERIFICATION_HEADER,
-        TRUSTED_ACCESS_FOR_CYBER_VERIFICATION,
-    );
+    let response = responses::sse_response(body);
     let _response_mock = responses::mount_response_once(&server, response).await;
 
     let codex_home = TempDir::new()?;
