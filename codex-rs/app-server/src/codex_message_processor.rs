@@ -245,27 +245,28 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
-use codex_core::plugins::MarketplaceAddError;
-use codex_core::plugins::MarketplaceRemoveError;
-use codex_core::plugins::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
-use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
-use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
-use codex_core::plugins::remove_marketplace;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::marketplace_add::MarketplaceAddError;
+use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
+use codex_core_plugins::marketplace_add::add_marketplace as add_marketplace_to_codex_home;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveError;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
+use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_core_plugins::remote::RemoteMarketplace;
 use codex_core_plugins::remote::RemotePluginCatalogError;
 use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
@@ -6762,7 +6763,7 @@ impl CodexMessageProcessor {
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
-            codex_core::plugins::MarketplaceAddRequest {
+            MarketplaceAddRequest {
                 source: params.source,
                 ref_name: params.ref_name,
                 sparse_paths: params.sparse_paths.unwrap_or_default(),

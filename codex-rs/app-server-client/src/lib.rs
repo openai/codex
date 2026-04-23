@@ -98,7 +98,7 @@ pub mod legacy_core {
     }
 
     pub mod plugins {
-        pub use codex_core::plugins::*;
+        pub use codex_core::plugins::PluginsManager;
     }
 
     pub mod review_format {

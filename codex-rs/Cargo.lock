@@ -2102,6 +2102,7 @@ dependencies = [
  "codex-cloud-tasks",
  "codex-config",
  "codex-core",
+ "codex-core-plugins",
  "codex-exec",
  "codex-exec-server",
  "codex-execpolicy",
@@ -2446,6 +2447,7 @@ dependencies = [
 name = "codex-core-plugins"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "codex-app-server-protocol",
  "codex-config",
@@ -3414,6 +3416,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-config",
  "codex-connectors",
+ "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
  "codex-features",

@@ -1,17 +1,12 @@
 use crate::config::Config;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
-use std::path::PathBuf;
 use tracing::warn;
 
 use super::validate_plugin_segment;
-
-pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
-
-pub fn marketplace_install_root(codex_home: &Path) -> PathBuf {
-    codex_home.join(INSTALLED_MARKETPLACES_DIR)
-}
 
 pub(crate) fn installed_marketplace_roots_from_config(
     config: &Config,
@@ -57,19 +52,4 @@ pub(crate) fn installed_marketplace_roots_from_config(
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
     roots
-}
-
-pub(crate) fn resolve_configured_marketplace_root(
-    marketplace_name: &str,
-    marketplace: &toml::Value,
-    default_install_root: &Path,
-) -> Option<PathBuf> {
-    match marketplace.get("source_type").and_then(toml::Value::as_str) {
-        Some("local") => marketplace
-            .get("source")
-            .and_then(toml::Value::as_str)
-            .filter(|source| !source.is_empty())
-            .map(PathBuf::from),
-        _ => Some(default_install_root.join(marketplace_name)),
-    }
 }

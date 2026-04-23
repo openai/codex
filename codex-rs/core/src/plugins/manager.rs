@@ -11,6 +11,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerStack;
 use codex_analytics::AnalyticsEventsClient;
 use codex_config::types::PluginConfig;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::loader::configured_curated_plugin_ids_from_codex_home;
 use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
 use codex_core_plugins::loader::load_plugin_apps;
@@ -70,8 +71,6 @@ use toml_edit::value;
 use tracing::info;
 use tracing::warn;
 
-pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
-pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const FEATURED_PLUGIN_IDS_CACHE_TTL: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 3);
