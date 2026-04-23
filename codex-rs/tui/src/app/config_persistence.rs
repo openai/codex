@@ -72,13 +72,15 @@ impl App {
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
-        {
-            tracing::warn!(%err, "failed to carry forward sandbox policy override");
-            self.chat_widget.add_error_message(format!(
-                "Failed to carry forward sandbox policy override: {err}"
-            ));
+        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref() {
+            if let Err(err) = config.permissions.sandbox_policy.set(policy.clone()) {
+                tracing::warn!(%err, "failed to carry forward sandbox policy override");
+                self.chat_widget.add_error_message(format!(
+                    "Failed to carry forward sandbox policy override: {err}"
+                ));
+            } else {
+                sync_runtime_permissions_from_legacy_sandbox_policy(config);
+            }
         }
     }
 
@@ -117,6 +119,7 @@ impl App {
                 .add_error_message(format!("{user_message_prefix}: {err}"));
             return false;
         }
+        sync_runtime_permissions_from_legacy_sandbox_policy(config);
 
         true
     }
@@ -534,6 +537,17 @@ impl App {
             Personality::Pragmatic => "Pragmatic",
         }
     }
+}
+
+fn sync_runtime_permissions_from_legacy_sandbox_policy(config: &mut Config) {
+    let sandbox_policy = config.permissions.sandbox_policy.get();
+    config.permissions.file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            sandbox_policy,
+            &config.cwd,
+        );
+    config.permissions.network_sandbox_policy =
+        codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
 }
 
 #[cfg(test)]
