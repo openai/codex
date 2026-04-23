@@ -34,6 +34,18 @@ fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
 }
 
 #[test]
+fn try_new_rejects_relative_codex_home() {
+    let err = PluginStore::try_new(PathBuf::from("relative"))
+        .expect_err("relative codex home should fail");
+    let err = err.to_string().replace('\\', "/");
+
+    assert_eq!(
+        err,
+        "failed to resolve plugin cache root: path is not absolute: relative/plugins/cache"
+    );
+}
+
+#[test]
 fn install_copies_plugin_into_default_marketplace() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");

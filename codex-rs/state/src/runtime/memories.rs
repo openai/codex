@@ -175,6 +175,7 @@ LEFT JOIN jobs
                 archived_only: false,
                 allowed_sources,
                 model_providers: None,
+                cwd_filters: None,
                 anchor: None,
                 sort_key: SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,

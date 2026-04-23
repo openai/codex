@@ -18,14 +18,14 @@ fn blocking_set_model_top_level() {
         codex_home,
         /*profile*/ None,
         &[ConfigEdit::SetModel {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("gpt-5.4".to_string()),
             effort: Some(ReasoningEffort::High),
         }],
     )
     .expect("persist");
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"model = "gpt-5.1-codex"
+    let expected = r#"model = "gpt-5.4"
 model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
@@ -197,7 +197,7 @@ fn blocking_set_model_writes_through_symlink_chain() {
         codex_home,
         /*profile*/ None,
         &[ConfigEdit::SetModel {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("gpt-5.4".to_string()),
             effort: Some(ReasoningEffort::High),
         }],
     )
@@ -207,7 +207,7 @@ fn blocking_set_model_writes_through_symlink_chain() {
     assert!(meta.file_type().is_symlink());
 
     let contents = std::fs::read_to_string(&target_path).expect("read target");
-    let expected = r#"model = "gpt-5.1-codex"
+    let expected = r#"model = "gpt-5.4"
 model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
@@ -230,7 +230,7 @@ fn blocking_set_model_replaces_symlink_on_cycle() {
         codex_home,
         /*profile*/ None,
         &[ConfigEdit::SetModel {
-            model: Some("gpt-5.1-codex".to_string()),
+            model: Some("gpt-5.4".to_string()),
             effort: None,
         }],
     )
@@ -240,7 +240,7 @@ fn blocking_set_model_replaces_symlink_on_cycle() {
     assert!(!meta.file_type().is_symlink());
 
     let contents = std::fs::read_to_string(&config_path).expect("read config");
-    let expected = r#"model = "gpt-5.1-codex"
+    let expected = r#"model = "gpt-5.4"
 "#;
     assert_eq!(contents, expected);
 }
@@ -381,7 +381,7 @@ fn blocking_set_model_with_explicit_profile() {
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
         r#"[profiles."team a"]
-model = "gpt-5.1-codex"
+model = "gpt-5.4"
 "#,
     )
     .expect("seed");
@@ -536,8 +536,8 @@ existing = "value"
         codex_home,
         /*profile*/ None,
         &[ConfigEdit::RecordModelMigrationSeen {
-            from: "gpt-5".to_string(),
-            to: "gpt-5.1".to_string(),
+            from: "gpt-5.2".to_string(),
+            to: "gpt-5.4".to_string(),
         }],
     )
     .expect("persist");
@@ -547,7 +547,131 @@ existing = "value"
 existing = "value"
 
 [notice.model_migrations]
-gpt-5 = "gpt-5.1"
+"gpt-5.2" = "gpt-5.4"
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn blocking_set_hide_external_config_migration_prompt_home_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(
+            true,
+        )],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts]
+home = true
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn blocking_set_hide_external_config_migration_prompt_project_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[
+            ConfigEdit::SetNoticeHideExternalConfigMigrationPromptProject(
+                "/Users/alexsong/code/skills".to_string(),
+                true,
+            ),
+        ],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts.projects]
+"/Users/alexsong/code/skills" = true
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn blocking_set_external_config_migration_prompt_home_last_prompted_at_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[ConfigEdit::SetNoticeExternalConfigMigrationPromptHomeLastPromptedAt(1_760_000_000)],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts]
+home_last_prompted_at = 1760000000
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn blocking_set_external_config_migration_prompt_project_last_prompted_at_preserves_table() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"[notice]
+existing = "value"
+"#,
+    )
+    .expect("seed");
+    apply_blocking(
+        codex_home,
+        /*profile*/ None,
+        &[
+            ConfigEdit::SetNoticeExternalConfigMigrationPromptProjectLastPromptedAt(
+                "/Users/alexsong/code/skills".to_string(),
+                1_760_000_000,
+            ),
+        ],
+    )
+    .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[notice]
+existing = "value"
+
+[notice.external_config_migration_prompts.project_last_prompted_at]
+"/Users/alexsong/code/skills" = 1760000000
 "#;
     assert_eq!(contents, expected);
 }
@@ -572,7 +696,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                     .into_iter()
                     .collect(),
                 ),
-                env_vars: vec!["FOO".to_string()],
+                env_vars: vec!["FOO".into()],
                 cwd: None,
             },
             experimental_environment: None,
@@ -978,13 +1102,13 @@ async fn async_builder_set_model_persists() {
     let codex_home = tmp.path().to_path_buf();
 
     ConfigEditsBuilder::new(&codex_home)
-        .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::High))
         .apply()
         .await
         .expect("persist");
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"model = "gpt-5.1-codex"
+    let expected = r#"model = "gpt-5.4"
 model_reasoning_effort = "high"
 "#;
     assert_eq!(contents, expected);
@@ -1006,11 +1130,11 @@ model_reasoning_effort = "low"
         std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     assert_eq!(contents, initial_expected);
 
-    let updated_expected = r#"model = "gpt-5.1-codex"
+    let updated_expected = r#"model = "gpt-5.4"
 model_reasoning_effort = "high"
 "#;
     ConfigEditsBuilder::new(codex_home)
-        .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
+        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::High))
         .apply_blocking()
         .expect("persist update");
     contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");

@@ -57,7 +57,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     builder = builder.with_config(|config| {
-        config.model = Some("gpt-5".to_string());
+        config.model = Some("gpt-5.2".to_string());
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(1);
     });
@@ -90,6 +90,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hi".into(),
                 text_elements: Vec::new(),
@@ -350,6 +351,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),

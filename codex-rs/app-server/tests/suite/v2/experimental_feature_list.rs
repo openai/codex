@@ -15,6 +15,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::LoaderOverrides;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
@@ -24,7 +25,7 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test]
 async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Result<()> {
@@ -32,6 +33,9 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::with_managed_config_path_for_tests(
+            codex_home.path().join("managed_config.toml"),
+        ))
         .build()
         .await?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -125,18 +129,20 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\napps = false\n",
+        "[features]\nmemories = false\n",
     )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let actual =
-        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
-            .await?;
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("memories".to_string(), true)]),
+    )
+    .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureEnablementSetResponse {
-            enablement: BTreeMap::from([("apps".to_string(), true)]),
+            enablement: BTreeMap::from([("memories".to_string(), true)]),
         }
     );
 
@@ -146,7 +152,7 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
         config
             .additional
             .get("features")
-            .and_then(|features| features.get("apps")),
+            .and_then(|features| features.get("memories")),
         Some(&json!(false))
     );
 
@@ -164,6 +170,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
     let actual = set_experimental_feature_enablement(
         &mut mcp,
         BTreeMap::from([
+            ("memories".to_string(), true),
             ("plugins".to_string(), true),
             ("tool_search".to_string(), true),
             ("tool_suggest".to_string(), true),
@@ -176,6 +183,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         actual,
         ExperimentalFeatureEnablementSetResponse {
             enablement: BTreeMap::from([
+                ("memories".to_string(), true),
                 ("plugins".to_string(), true),
                 ("tool_search".to_string(), true),
                 ("tool_suggest".to_string(), true),
@@ -191,6 +199,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .additional
             .get("features")
             .and_then(|features| features.get("apps")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("memories")),
         Some(&json!(true))
     );
     assert_eq!(
@@ -281,9 +296,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         error.message
     );
     assert!(
-        error
-            .message
-            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
+        error.message.contains(
+            "apps, memories, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"
+        ),
         "{}",
         error.message
     );

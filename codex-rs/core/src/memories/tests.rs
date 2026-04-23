@@ -429,6 +429,7 @@ mod phase2 {
     use codex_config::Constrained;
     use codex_features::Feature;
     use codex_login::CodexAuth;
+    use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -490,9 +491,7 @@ mod phase2 {
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
             );
             let (mut session, _turn_context) = make_session_and_context().await;
             session.services.state_db = Some(Arc::clone(&state_db));
@@ -703,6 +702,19 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        pretty_assertions::assert_eq!(
+            config_snapshot.session_source.get_agent_path(),
+            Some(AgentPath::morpheus())
+        );
+        assert!(
+            harness
+                .session
+                .services
+                .agent_control
+                .get_agent_metadata(thread_id)
+                .is_none(),
+            "memory consolidation should not be registered in the root collab agent registry"
+        );
         let turn_context = subagent.codex.session.new_default_turn().await;
         pretty_assertions::assert_eq!(
             turn_context.file_system_sandbox_policy,
@@ -991,21 +1003,21 @@ mod phase2 {
             "stage-1 success should enqueue global consolidation"
         );
 
-        let telepathy_resources = config
+        let chronicle_resources = config
             .codex_home
-            .join("memories_extensions/telepathy/resources");
-        tokio::fs::create_dir_all(&telepathy_resources)
+            .join("memories_extensions/chronicle/resources");
+        tokio::fs::create_dir_all(&chronicle_resources)
             .await
-            .expect("create telepathy resources");
+            .expect("create chronicle resources");
         tokio::fs::write(
             config
                 .codex_home
-                .join("memories_extensions/telepathy/instructions.md"),
+                .join("memories_extensions/chronicle/instructions.md"),
             "instructions",
         )
         .await
-        .expect("write telepathy instructions");
-        let old_file = telepathy_resources.join(format!(
+        .expect("write chronicle instructions");
+        let old_file = chronicle_resources.join(format!(
             "{}-abcd-10min-old.md",
             (Utc::now() - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
         ));

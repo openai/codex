@@ -33,8 +33,8 @@ pub struct FramedMessage {
 
 /// IPC message variants exchanged between parent and runner.
 ///
-/// `SpawnRequest`, `Stdin`, and `Terminate` are parent->runner commands. `SpawnReady`,
-/// `Output`, `Exit`, and `Error` are runner->parent events/results.
+/// `SpawnRequest`, `Stdin`, `CloseStdin`, `Resize`, and `Terminate` are parent->runner commands.
+/// `SpawnReady`, `Output`, `Exit`, and `Error` are runner->parent events/results.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
@@ -42,6 +42,8 @@ pub enum Message {
     SpawnReady { payload: SpawnReady },
     Output { payload: OutputPayload },
     Stdin { payload: StdinPayload },
+    CloseStdin { payload: EmptyPayload },
+    Resize { payload: ResizePayload },
     Exit { payload: ExitPayload },
     Error { payload: ErrorPayload },
     Terminate { payload: EmptyPayload },
@@ -91,6 +93,13 @@ pub enum OutputStream {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StdinPayload {
     pub data_b64: String,
+}
+
+/// PTY resize request sent from parent to runner.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResizePayload {
+    pub rows: u16,
+    pub cols: u16,
 }
 
 /// Exit status sent from runner to parent.

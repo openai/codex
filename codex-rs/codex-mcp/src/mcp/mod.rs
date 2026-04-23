@@ -32,9 +32,12 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpRuntimeEnvironment;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 pub type McpManager = McpConnectionManager;
 
@@ -317,18 +320,68 @@ pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
     ToolPluginProvenance::from_capability_summaries(&config.plugin_capability_summaries)
 }
 
+pub async fn read_mcp_resource(
+    config: &McpConfig,
+    auth: Option<&CodexAuth>,
+    runtime_environment: McpRuntimeEnvironment,
+    server: &str,
+    uri: &str,
+) -> anyhow::Result<ReadResourceResult> {
+    let mut mcp_servers = effective_mcp_servers(config, auth);
+    mcp_servers.retain(|name, _| name == server);
+    let auth_statuses =
+        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+    let (manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_statuses,
+        &config.approval_policy,
+        String::new(),
+        tx_event,
+        SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth),
+        tool_plugin_provenance(config),
+    )
+    .await;
+
+    let result = manager
+        .read_resource(
+            server,
+            ReadResourceRequestParams {
+                meta: None,
+                uri: uri.to_string(),
+            },
+        )
+        .await;
+    cancel_token.cancel();
+    result
+}
+
 pub async fn collect_mcp_snapshot(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
 ) -> McpListToolsResponseEvent {
-    collect_mcp_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full).await
+    collect_mcp_snapshot_with_detail(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        McpSnapshotDetail::Full,
+    )
+    .await
 }
 
 pub async fn collect_mcp_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
     detail: McpSnapshotDetail,
 ) -> McpListToolsResponseEvent {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -356,6 +409,7 @@ pub async fn collect_mcp_snapshot_with_detail(
         submit_id,
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
@@ -386,15 +440,23 @@ pub async fn collect_mcp_server_status_snapshot(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
 ) -> McpServerStatusSnapshot {
-    collect_mcp_server_status_snapshot_with_detail(config, auth, submit_id, McpSnapshotDetail::Full)
-        .await
+    collect_mcp_server_status_snapshot_with_detail(
+        config,
+        auth,
+        submit_id,
+        runtime_environment,
+        McpSnapshotDetail::Full,
+    )
+    .await
 }
 
 pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     submit_id: String,
+    runtime_environment: McpRuntimeEnvironment,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -422,6 +484,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         submit_id,
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,

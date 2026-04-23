@@ -17,6 +17,7 @@ async fn resumed_initial_messages_render_history() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -130,6 +131,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -191,6 +193,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -259,6 +262,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
+        permission_profile: None,
         cwd: expected_cwd.clone(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -302,6 +306,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -355,6 +360,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -391,20 +397,11 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
 async fn forked_thread_history_line_includes_name_and_id_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
-            .expect("temp dir is absolute");
 
     let forked_from_id =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
-    let session_index_entry = format!(
-        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"named-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
-    );
-    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
-        .expect("write session index");
 
-    chat.emit_forked_thread_event(forked_from_id);
+    chat.emit_forked_thread_event(forked_from_id, Some("named-thread".to_string()));
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -437,7 +434,7 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
-    chat.emit_forked_thread_event(forked_from_id);
+    chat.emit_forked_thread_event(forked_from_id, /*fork_parent_title*/ None);
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -453,6 +450,88 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
     let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
 
     assert_chatwidget_snapshot!("forked_thread_history_line_without_name", combined);
+}
+
+#[tokio::test]
+async fn app_server_forked_thread_history_line_uses_app_server_title_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
+
+    let forked_from_id =
+        ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
+    let session_index_entry = format!(
+        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"stale-local-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
+        .expect("write session index");
+
+    chat.emit_forked_thread_event(forked_from_id, Some("app-server-parent-thread".to_string()));
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert!(combined.contains("app-server-parent-thread"));
+    assert!(
+        !combined.contains("stale-local-thread"),
+        "app-server fork title lookup should not read local CODEX_HOME"
+    );
+    assert_chatwidget_snapshot!("app_server_forked_thread_history_line", combined);
+}
+
+#[tokio::test]
+async fn app_server_forked_thread_history_line_without_app_server_name_ignores_local_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(temp.path())
+            .expect("temp dir is absolute");
+
+    let forked_from_id =
+        ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
+    let session_index_entry = format!(
+        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"stale-local-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
+        .expect("write session index");
+
+    chat.emit_forked_thread_event(forked_from_id, /*fork_parent_title*/ None);
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(/*width*/ 80));
+
+    assert!(
+        !combined.contains("stale-local-thread"),
+        "app-server fork title lookup should not read local CODEX_HOME"
+    );
+    assert_chatwidget_snapshot!(
+        "app_server_forked_thread_history_line_without_app_server_name",
+        combined
+    );
 }
 
 #[tokio::test]
@@ -603,6 +682,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -650,6 +730,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,

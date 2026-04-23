@@ -11,6 +11,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -127,10 +128,15 @@ pub struct ListThreadsParams {
     /// Optional model provider filter. `None` means implementation default, while an empty vector
     /// means all providers.
     pub model_providers: Option<Vec<String>>,
+    /// Optional cwd filters. `None` means all working directories, while an empty vector matches no
+    /// threads.
+    pub cwd_filters: Option<Vec<PathBuf>>,
     /// Whether archived threads should be listed instead of active threads.
     pub archived: bool,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
+    /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
+    pub use_state_db_only: bool,
 }
 
 /// A page of stored thread records.
@@ -193,15 +199,6 @@ pub struct StoredThread {
     pub history: Option<StoredThreadHistory>,
 }
 
-/// Parameters for setting a user-facing thread name.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetThreadNameParams {
-    /// Thread id to update.
-    pub thread_id: ThreadId,
-    /// Normalized thread name.
-    pub name: String,
-}
-
 /// Optional field patch where omission leaves a value unchanged and `Some(None)` clears it.
 pub type OptionalStringPatch = Option<Option<String>>;
 
@@ -219,6 +216,10 @@ pub struct GitInfoPatch {
 /// Patch for mutable thread metadata.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadMetadataPatch {
+    /// Replacement user-facing thread name.
+    pub name: Option<String>,
+    /// Replacement thread memory behavior.
+    pub memory_mode: Option<MemoryMode>,
     /// Optional Git metadata patch.
     pub git_info: Option<GitInfoPatch>,
 }
@@ -230,6 +231,8 @@ pub struct UpdateThreadMetadataParams {
     pub thread_id: ThreadId,
     /// Patch to apply.
     pub patch: ThreadMetadataPatch,
+    /// Whether archived threads are eligible.
+    pub include_archived: bool,
 }
 
 /// Parameters for archiving or unarchiving a thread.

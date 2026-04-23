@@ -253,6 +253,16 @@ impl ModelsManager {
         self.build_available_models(remote_models)
     }
 
+    /// Return the active raw model catalog, refreshing according to the specified strategy.
+    pub async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
+        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
+            error!("failed to refresh available models: {err}");
+        }
+        ModelsResponse {
+            models: self.get_remote_models().await,
+        }
+    }
+
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.

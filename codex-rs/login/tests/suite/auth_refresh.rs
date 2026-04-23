@@ -984,6 +984,7 @@ impl RefreshTokenTestContext {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
 
         Ok(Self {

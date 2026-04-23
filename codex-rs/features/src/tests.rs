@@ -87,20 +87,28 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
-fn guardian_approval_is_experimental_and_user_toggleable() {
+fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
+
+    assert_eq!(spec.stage, Stage::Stable);
+    assert_eq!(Feature::GuardianApproval.default_enabled(), true);
+}
+
+#[test]
+fn external_migration_is_experimental_and_disabled_by_default() {
+    let spec = Feature::ExternalMigration.info();
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Auto-review"));
+    assert_eq!(stage.experimental_menu_name(), Some("External migration"));
     assert_eq!(
-        stage.experimental_menu_description().map(str::to_owned),
+        stage.experimental_menu_description(),
         Some(
-            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.".to_string()
+            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
         )
     );
     assert_eq!(stage.experimental_announcement(), None);
-    assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
 }
 
 #[test]
@@ -131,6 +139,24 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 fn tool_search_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSearch.default_enabled(), true);
+}
+
+#[test]
+fn browser_controls_are_stable_and_enabled_by_default() {
+    assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
+    assert_eq!(Feature::InAppBrowser.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("in_app_browser"),
+        Some(Feature::InAppBrowser)
+    );
+
+    assert_eq!(Feature::BrowserUse.stage(), Stage::Stable);
+    assert_eq!(Feature::BrowserUse.default_enabled(), true);
+    assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
+
+    assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
+    assert_eq!(Feature::ComputerUse.default_enabled(), true);
+    assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
 }
 
 #[test]
@@ -209,12 +235,6 @@ fn remote_control_is_under_development() {
 }
 
 #[test]
-fn use_agent_identity_is_under_development() {
-    assert_eq!(Feature::UseAgentIdentity.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::UseAgentIdentity.default_enabled(), false);
-}
-
-#[test]
 fn workspace_dependencies_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::WorkspaceDependencies.stage(), Stage::Stable);
     assert_eq!(Feature::WorkspaceDependencies.default_enabled(), true);
@@ -222,6 +242,14 @@ fn workspace_dependencies_is_stable_and_enabled_by_default() {
         feature_for_key("workspace_dependencies"),
         Some(Feature::WorkspaceDependencies)
     );
+}
+
+#[test]
+fn telepathy_is_legacy_alias_for_chronicle() {
+    assert_eq!(Feature::Chronicle.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Chronicle.default_enabled(), false);
+    assert_eq!(feature_for_key("chronicle"), Some(Feature::Chronicle));
+    assert_eq!(feature_for_key("telepathy"), Some(Feature::Chronicle));
 }
 
 #[test]

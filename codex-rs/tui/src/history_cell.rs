@@ -50,7 +50,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ServiceTier;
 #[cfg(test)]
 use codex_protocol::mcp::Resource;
 #[cfg(test)]
@@ -1241,12 +1240,7 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| {
-                    tooltips::get_tooltip(
-                        auth_plan,
-                        matches!(config.service_tier, Some(ServiceTier::Fast)),
-                    )
-                })
+                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status))
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
@@ -1838,6 +1832,50 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
+const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
+
+#[derive(Debug)]
+pub(crate) struct CyberPolicyNoticeCell;
+
+pub(crate) fn new_cyber_policy_error_event() -> CyberPolicyNoticeCell {
+    CyberPolicyNoticeCell
+}
+
+impl HistoryCell for CyberPolicyNoticeCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(
+            vec![
+                "ⓘ ".cyan(),
+                "This chat was flagged for possible cybersecurity risk".bold(),
+            ]
+            .into(),
+        );
+
+        let wrap_width = width.saturating_sub(2).max(1) as usize;
+        let body = Line::from(vec![
+            "  If this seems wrong, try rephrasing your request. To get authorized for security work, join the "
+                .dim(),
+            "Trusted Access for Cyber".cyan().underlined(),
+            " program.".dim(),
+        ]);
+        let wrapped = adaptive_wrap_line(
+            &body,
+            RtOptions::new(wrap_width).subsequent_indent("  ".into()),
+        );
+        push_owned_lines(&wrapped, &mut lines);
+        lines.push(
+            vec![
+                "  ".into(),
+                TRUSTED_ACCESS_FOR_CYBER_URL.cyan().underlined(),
+            ]
+            .into(),
+        );
+
+        lines
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct DeprecationNoticeCell {
     summary: String,
@@ -2097,6 +2135,18 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
 
         lines.push(header.into());
+        if matches!(detail, McpServerStatusDetail::Full) {
+            let enabled = cfg.map(|cfg| cfg.enabled).unwrap_or(true);
+            let status_text = if enabled {
+                "enabled".green()
+            } else {
+                "disabled".red()
+            };
+            lines.push(vec!["    • Status: ".into(), status_text].into());
+            if let Some(reason) = cfg.and_then(|cfg| cfg.disabled_reason.as_ref()) {
+                lines.push(vec!["    • Reason: ".into(), reason.to_string().dim()].into());
+            }
+        }
         let auth_status = status
             .map(|status| match status.auth_status {
                 codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
@@ -3061,6 +3111,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -3245,6 +3296,20 @@ mod tests {
             },
         ]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn cyber_policy_error_event_snapshot() {
+        let cell = new_cyber_policy_error_event();
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn cyber_policy_error_event_narrow_snapshot() {
+        let cell = new_cyber_policy_error_event();
+        let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -3441,6 +3506,61 @@ mod tests {
             &statuses,
             McpServerStatusDetail::ToolsAndAuthOnly,
         );
+        let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
+        let mut config = test_config().await;
+        let plugin_docs =
+            stdio_server_config("docs-server", vec!["--stdio"], /*env*/ None, vec![]);
+        let servers = HashMap::from([("plugin_docs".to_string(), plugin_docs)]);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+
+        let statuses = vec![McpServerStatus {
+            name: "plugin_docs".to_string(),
+            tools: HashMap::from([(
+                "lookup".to_string(),
+                Tool {
+                    description: None,
+                    name: "lookup".to_string(),
+                    title: None,
+                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
+            )]),
+            resources: vec![Resource {
+                annotations: None,
+                description: None,
+                mime_type: None,
+                name: "docs".to_string(),
+                size: None,
+                title: Some("Docs".to_string()),
+                uri: "file:///docs".to_string(),
+                icons: None,
+                meta: None,
+            }],
+            resource_templates: vec![ResourceTemplate {
+                annotations: None,
+                uri_template: "file:///docs/{id}".to_string(),
+                name: "doc-template".to_string(),
+                title: Some("Doc Template".to_string()),
+                description: None,
+                mime_type: None,
+            }],
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        }];
+
+        let cell =
+            new_mcp_tools_output_from_statuses(&config, &statuses, McpServerStatusDetail::Full);
         let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
         insta::assert_snapshot!(rendered);

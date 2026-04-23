@@ -1,6 +1,7 @@
 use super::*;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -45,6 +46,7 @@ fn content_items_to_text_joins_non_empty_segments() {
 fn content_items_to_text_ignores_image_only_content() {
     let items = vec![ContentItem::InputImage {
         image_url: "file://image.png".to_string(),
+        detail: Some(DEFAULT_IMAGE_DETAIL),
     }];
 
     let joined = content_items_to_text(&items);
@@ -196,6 +198,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

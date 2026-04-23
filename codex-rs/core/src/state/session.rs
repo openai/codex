@@ -6,7 +6,6 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::agent_identity::RegisteredAgentTask;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -31,7 +30,6 @@ pub(crate) struct SessionState {
     previous_turn_settings: Option<PreviousTurnSettings>,
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
-    pub(crate) agent_task: Option<RegisteredAgentTask>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
@@ -51,7 +49,6 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
             startup_prewarm: None,
-            agent_task: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
@@ -187,18 +184,6 @@ impl SessionState {
 
     pub(crate) fn take_session_startup_prewarm(&mut self) -> Option<SessionStartupPrewarmHandle> {
         self.startup_prewarm.take()
-    }
-
-    pub(crate) fn agent_task(&self) -> Option<RegisteredAgentTask> {
-        self.agent_task.clone()
-    }
-
-    pub(crate) fn set_agent_task(&mut self, agent_task: RegisteredAgentTask) {
-        self.agent_task = Some(agent_task);
-    }
-
-    pub(crate) fn clear_agent_task(&mut self) {
-        self.agent_task = None;
     }
 
     // Adds connector IDs to the active set and returns the merged selection.

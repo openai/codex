@@ -172,6 +172,10 @@ impl RemoteControlWebsocket {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "remote-control client shutdown must serialize tracker state"
+    )]
     pub(crate) async fn run(
         mut self,
         app_server_client_name_rx: Option<oneshot::Receiver<String>>,
@@ -381,6 +385,10 @@ impl RemoteControlWebsocket {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "remote-control server event receiver is shared across reconnects"
+    )]
     async fn run_server_writer_inner(
         state: Arc<Mutex<WebsocketState>>,
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -522,6 +530,10 @@ impl RemoteControlWebsocket {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "remote-control client tracking must stay serialized while processing inbound events"
+    )]
     async fn run_websocket_reader_inner(
         client_tracker: Arc<Mutex<ClientTracker>>,
         state: Arc<Mutex<WebsocketState>>,
@@ -1079,6 +1091,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
@@ -1160,6 +1173,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
+            /*chatgpt_base_url*/ None,
         );
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = None;

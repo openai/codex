@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-PACKAGE_NAME = "codex-cli-bin"
+PACKAGE_NAME = "openai-codex-cli-bin"
 
 
 def bundled_codex_path() -> Path:

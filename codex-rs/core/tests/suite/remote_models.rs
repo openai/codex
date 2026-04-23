@@ -116,6 +116,236 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     Ok(())
 }
 
+/// Scenario: the model advertises a default 273k context window and a 400k max
+/// context window, and the user explicitly configures 1M. This verifies the
+/// runtime turn clamps the override to the advertised max window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_config_context_window_override_clamps_to_max_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.4-test";
+    let mut remote_model =
+        test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
+    remote_model.context_window = Some(273_000);
+    remote_model.max_context_window = Some(400_000);
+    remote_model.effective_context_window_percent = 100;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(requested_model.to_string());
+            config.model_context_window = Some(1_000_000);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+            environments: None,
+        })
+        .await?;
+
+    let turn_started_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TurnStarted(started)
+                if started.model_context_window == Some(400_000)
+        )
+    })
+    .await;
+    let EventMsg::TurnStarted(turn_started) = turn_started_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    assert_eq!(turn_started.model_context_window, Some(400_000));
+
+    Ok(())
+}
+
+/// Scenario: the user explicitly configures a context window above the model's
+/// max_context_window. This verifies the runtime window is clamped to the max
+/// instead of using the oversized config value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_config_override_above_max_uses_max_context_window() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.4-test";
+    let mut remote_model =
+        test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
+    remote_model.context_window = Some(273_000);
+    remote_model.max_context_window = Some(400_000);
+    remote_model.effective_context_window_percent = 100;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(requested_model.to_string());
+            config.model_context_window = Some(500_000);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+            environments: None,
+        })
+        .await?;
+
+    let turn_started_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TurnStarted(started)
+                if started.model_context_window == Some(400_000)
+        )
+    })
+    .await;
+    let EventMsg::TurnStarted(turn_started) = turn_started_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    assert_eq!(turn_started.model_context_window, Some(400_000));
+
+    Ok(())
+}
+
+/// Scenario: model metadata includes both context_window and max_context_window,
+/// but the user did not configure an override. This verifies the runtime keeps
+/// using the model's default context_window in the no-override path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_use_context_window_when_config_override_is_absent() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.4-test";
+    let mut remote_model =
+        test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
+    remote_model.context_window = Some(273_000);
+    remote_model.max_context_window = Some(400_000);
+    remote_model.effective_context_window_percent = 100;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(requested_model.to_string());
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+            environments: None,
+        })
+        .await?;
+
+    let turn_started_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TurnStarted(started)
+                if started.model_context_window == Some(273_000)
+        )
+    })
+    .await;
+    let EventMsg::TurnStarted(turn_started) = turn_started_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    assert_eq!(turn_started.model_context_window, Some(273_000));
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -184,6 +414,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -247,6 +478,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -312,6 +544,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
@@ -328,7 +561,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
         });
     let TestCodex {
         codex,
@@ -362,6 +595,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
@@ -408,6 +642,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
@@ -452,7 +687,7 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
         });
     let test = builder.build(&server).await?;
 
@@ -498,7 +733,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
             config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
@@ -561,6 +796,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
@@ -586,7 +822,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.2".to_string());
         });
     let TestCodex {
         codex,
@@ -605,6 +841,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: Some(model.to_string()),
             effort: None,
@@ -632,13 +869,14 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         })
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let base_model_info = models_manager
-        .get_model_info("gpt-5.1", &config.to_models_manager_config())
+        .get_model_info("gpt-5.2", &config.to_models_manager_config())
         .await;
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
@@ -1044,6 +1282,7 @@ fn test_remote_model_with_policy(
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),

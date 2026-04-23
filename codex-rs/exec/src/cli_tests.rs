@@ -14,10 +14,14 @@ fn resume_parses_prompt_after_global_flags() {
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         PROMPT,
     ]);
 
     assert!(cli.ephemeral);
+    assert!(cli.ignore_user_config);
+    assert!(cli.ignore_rules);
     let Some(Command::Resume(args)) = cli.command else {
         panic!("expected resume command");
     };
@@ -52,4 +56,17 @@ fn resume_accepts_output_last_message_flag_after_subcommand() {
     };
     assert_eq!(args.session_id.as_deref(), Some("session-123"));
     assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+}
+
+#[test]
+fn parses_config_isolation_flags() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "summarize",
+    ]);
+
+    assert!(cli.ignore_user_config);
+    assert!(cli.ignore_rules);
 }

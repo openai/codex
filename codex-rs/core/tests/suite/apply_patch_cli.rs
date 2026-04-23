@@ -146,7 +146,7 @@ async fn apply_patch_cli_multiple_operations_integration(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     // Seed workspace state
     harness.write_file("modify.txt", "line1\nline2\n").await?;
@@ -357,6 +357,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "rename without content change".into(),
                 text_elements: Vec::new(),
@@ -761,7 +762,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
     harness.write_file("sub/in_sub.txt", "before\n").await?;
@@ -801,7 +802,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
     );
 
     let harness =
-        apply_patch_harness_with(|builder| builder.with_model("gpt-5.1").with_windows_cmd_shell())
+        apply_patch_harness_with(|builder| builder.with_model("gpt-5.4").with_windows_cmd_shell())
             .await?;
 
     let source_contents = "line1\nnaïve café\nline3\n";
@@ -994,6 +995,7 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "create streamed file".into(),
                 text_elements: Vec::new(),
@@ -1065,7 +1067,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
         "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
     );
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 
@@ -1091,6 +1093,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "apply via shell heredoc with cd".into(),
                 text_elements: Vec::new(),
@@ -1150,7 +1153,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
         "TurnDiffTracker currently reads the test-runner filesystem, not the remote executor filesystem",
     );
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 
@@ -1175,6 +1178,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "apply patch via shell".into(),
                 text_elements: Vec::new(),
@@ -1330,6 +1334,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "emit diff".into(),
                 text_elements: Vec::new(),
@@ -1397,6 +1402,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "rename with change".into(),
                 text_elements: Vec::new(),
@@ -1473,6 +1479,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "aggregate diffs".into(),
                 text_elements: Vec::new(),
@@ -1549,6 +1556,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "apply patch twice with failure".into(),
                 text_elements: Vec::new(),

@@ -9,6 +9,7 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -76,16 +77,49 @@ fn guardian_review_request_includes_patch_context() {
 }
 
 #[test]
+fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
+    let runtime = ApplyPatchRuntime::new();
+    let path = std::env::temp_dir()
+        .join("apply-patch-permission-request-payload.txt")
+        .abs();
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let expected_patch = action.patch.clone();
+    let req = ApplyPatchRequest {
+        action,
+        file_paths: vec![path],
+        changes: HashMap::new(),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+
+    let payload = runtime
+        .permission_request_payload(&req)
+        .expect("permission request payload");
+
+    assert_eq!(payload.tool_name.name(), "apply_patch");
+    assert_eq!(
+        payload.tool_name.matcher_aliases(),
+        &["Write".to_string(), "Edit".to_string()]
+    );
+    assert_eq!(payload.command, expected_patch);
+    assert_eq!(payload.description, None);
+}
+
+#[test]
 fn file_system_sandbox_context_uses_active_attempt() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-attempt.txt")
         .abs();
     let additional_permissions = PermissionProfile {
         network: None,
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(Vec::new()),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(Vec::new()),
+        )),
     };
     let req = ApplyPatchRequest {
         action: ApplyPatchAction::new_add_for_test(&path, "hello".to_string()),
@@ -118,8 +152,17 @@ fn file_system_sandbox_context_uses_active_attempt() {
     let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
         .expect("sandbox context");
 
-    assert_eq!(sandbox.sandbox_policy, sandbox_policy);
-    assert_eq!(sandbox.additional_permissions, Some(additional_permissions));
+    let base_permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let Some(expected_permissions) =
+        merge_permission_profiles(Some(&base_permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    assert_eq!(sandbox.permissions, expected_permissions);
+    assert_eq!(sandbox.cwd, Some(path.clone()));
     assert_eq!(
         sandbox.windows_sandbox_level,
         WindowsSandboxLevel::RestrictedToken

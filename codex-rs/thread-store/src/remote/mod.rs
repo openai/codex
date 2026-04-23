@@ -10,7 +10,6 @@ use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadRecorderParams;
-use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -49,6 +48,10 @@ impl RemoteThreadStore {
 
 #[async_trait]
 impl ThreadStore for RemoteThreadStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn create_thread(
         &self,
         _params: CreateThreadParams,
@@ -80,10 +83,6 @@ impl ThreadStore for RemoteThreadStore {
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
         list_threads::list_threads(self, params).await
-    }
-
-    async fn set_thread_name(&self, _params: SetThreadNameParams) -> ThreadStoreResult<()> {
-        Err(not_implemented("set_thread_name"))
     }
 
     async fn update_thread_metadata(

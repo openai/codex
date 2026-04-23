@@ -1,16 +1,17 @@
 use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::config_loader::ConfigLayerEntry;
-use crate::legacy_core::config_loader::ConfigLayerStack;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
-use crate::legacy_core::config_loader::NetworkConstraints;
-use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
-use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
-use crate::legacy_core::config_loader::RequirementSource;
-use crate::legacy_core::config_loader::ResidencyRequirement;
-use crate::legacy_core::config_loader::SandboxModeRequirement;
-use crate::legacy_core::config_loader::WebSearchModeRequirement;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::ManagedHooksRequirementsToml;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkDomainPermissionToml;
+use codex_config::NetworkUnixSocketPermissionToml;
+use codex_config::RequirementSource;
+use codex_config::ResidencyRequirement;
+use codex_config::SandboxModeRequirement;
+use codex_config::WebSearchModeRequirement;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -144,6 +145,14 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if requirements_toml.guardian_policy_config.is_some() {
+        requirement_lines.push(requirement_line(
+            "guardian_policy_config",
+            "configured".to_string(),
+            requirements.guardian_policy_config_source.as_ref(),
+        ));
+    }
+
     if let Some(feature_requirements) = requirements.feature_requirements.as_ref() {
         let value = join_or_empty(
             feature_requirements
@@ -157,6 +166,17 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             "features",
             value,
             Some(&feature_requirements.source),
+        ));
+    }
+
+    if let Some(hooks) = requirements_toml.hooks.as_ref() {
+        requirement_lines.push(requirement_line(
+            "hooks",
+            format_managed_hooks_requirements(hooks),
+            requirements
+                .managed_hooks
+                .as_ref()
+                .and_then(|managed_hooks| managed_hooks.source.as_ref()),
         ));
     }
 
@@ -247,6 +267,23 @@ fn render_session_flag_details(config: &TomlValue) -> Vec<Line<'static>> {
         .into_iter()
         .map(|(key, value)| format!("     - {key} = {value}").into())
         .collect()
+}
+
+fn format_managed_hooks_requirements(hooks: &ManagedHooksRequirementsToml) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(managed_dir) = hooks.managed_dir.as_ref() {
+        parts.push(format!("managed_dir={}", managed_dir.display()));
+    }
+    if let Some(windows_managed_dir) = hooks.windows_managed_dir.as_ref() {
+        parts.push(format!(
+            "windows_managed_dir={}",
+            windows_managed_dir.display()
+        ));
+    }
+    parts.push(format!("handlers={}", hooks.handler_count()));
+
+    join_or_empty(parts)
 }
 
 fn render_mdm_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
@@ -468,26 +505,30 @@ mod tests {
     use super::render_debug_config_lines;
     use super::session_all_proxy_url;
     use crate::legacy_core::config::Constrained;
-    use crate::legacy_core::config_loader::ConfigLayerEntry;
-    use crate::legacy_core::config_loader::ConfigLayerStack;
-    use crate::legacy_core::config_loader::ConfigRequirements;
-    use crate::legacy_core::config_loader::ConfigRequirementsToml;
-    use crate::legacy_core::config_loader::ConstrainedWithSource;
-    use crate::legacy_core::config_loader::FeatureRequirementsToml;
-    use crate::legacy_core::config_loader::FilesystemConstraints;
-    use crate::legacy_core::config_loader::McpServerIdentity;
-    use crate::legacy_core::config_loader::McpServerRequirement;
-    use crate::legacy_core::config_loader::NetworkConstraints;
-    use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
-    use crate::legacy_core::config_loader::NetworkDomainPermissionsToml;
-    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
-    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use crate::legacy_core::config_loader::RequirementSource;
-    use crate::legacy_core::config_loader::ResidencyRequirement;
-    use crate::legacy_core::config_loader::SandboxModeRequirement;
-    use crate::legacy_core::config_loader::Sourced;
-    use crate::legacy_core::config_loader::WebSearchModeRequirement;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::ConstrainedWithSource;
+    use codex_config::FeatureRequirementsToml;
+    use codex_config::FilesystemConstraints;
+    use codex_config::HookEventsToml;
+    use codex_config::HookHandlerConfig;
+    use codex_config::ManagedHooksRequirementsToml;
+    use codex_config::MatcherGroup;
+    use codex_config::McpServerIdentity;
+    use codex_config::McpServerRequirement;
+    use codex_config::NetworkConstraints;
+    use codex_config::NetworkDomainPermissionToml;
+    use codex_config::NetworkDomainPermissionsToml;
+    use codex_config::NetworkUnixSocketPermissionToml;
+    use codex_config::NetworkUnixSocketPermissionsToml;
+    use codex_config::RequirementSource;
+    use codex_config::ResidencyRequirement;
+    use codex_config::SandboxModeRequirement;
+    use codex_config::Sourced;
+    use codex_config::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;
@@ -578,7 +619,7 @@ mod tests {
                 Some(RequirementSource::CloudRequirements),
             ),
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Constrained::allow_any(ApprovalsReviewer::AutoReview),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             sandbox_policy: ConstrainedWithSource::new(
@@ -633,18 +674,21 @@ mod tests {
                     file: requirements_file.clone(),
                 },
             )),
+            guardian_policy_config_source: Some(RequirementSource::CloudRequirements),
             ..ConfigRequirements::default()
         };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            guardian_policy_config: None,
+            guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
+            hooks: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -680,7 +724,7 @@ mod tests {
             rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
         );
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(
             rendered.contains(
@@ -695,6 +739,9 @@ mod tests {
             rendered.contains(
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
+        );
+        assert!(
+            rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
         );
         assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
@@ -718,13 +765,13 @@ mod tests {
     fn debug_config_output_lists_approvals_reviewer_as_requirement() {
         let requirements = ConfigRequirements {
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Constrained::allow_any(ApprovalsReviewer::AutoReview),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             ..ConfigRequirements::default()
         };
         let requirements_toml = ConfigRequirementsToml {
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             ..ConfigRequirementsToml::default()
         };
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
@@ -732,7 +779,7 @@ mod tests {
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
         ));
         assert!(!rendered.contains("Requirements:\n  <none>"));
     }
@@ -843,9 +890,11 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -861,6 +910,50 @@ approval_policy = "never"
         assert!(
             rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
         );
+    }
+
+    #[test]
+    fn debug_config_output_lists_managed_hooks_requirement() {
+        let requirements = ConfigRequirements {
+            managed_hooks: Some(ConstrainedWithSource::new(
+                Constrained::allow_any(ManagedHooksRequirementsToml {
+                    managed_dir: Some(if cfg!(windows) {
+                        std::path::PathBuf::from(r"C:\enterprise\hooks")
+                    } else {
+                        std::path::PathBuf::from("/enterprise/hooks")
+                    }),
+                    windows_managed_dir: Some(std::path::PathBuf::from(r"C:\enterprise\hooks")),
+                    hooks: HookEventsToml {
+                        pre_tool_use: vec![MatcherGroup {
+                            matcher: Some("^Bash$".to_string()),
+                            hooks: vec![HookHandlerConfig::Command {
+                                command: "python3 /enterprise/hooks/pre.py".to_string(),
+                                timeout_sec: Some(10),
+                                r#async: false,
+                                status_message: Some("checking".to_string()),
+                            }],
+                        }],
+                        ..Default::default()
+                    },
+                }),
+                Some(RequirementSource::CloudRequirements),
+            )),
+            ..ConfigRequirements::default()
+        };
+        let requirements_toml = ConfigRequirementsToml {
+            hooks: requirements
+                .managed_hooks
+                .as_ref()
+                .map(|hooks| hooks.get().clone()),
+            ..ConfigRequirementsToml::default()
+        };
+        let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+            .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains("hooks:"));
+        assert!(rendered.contains("handlers=1"));
+        assert!(rendered.contains("(source: cloud requirements)"));
     }
 
     #[test]
