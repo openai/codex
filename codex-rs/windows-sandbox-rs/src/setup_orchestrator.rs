@@ -58,6 +58,8 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Program Files (x86)",
     r"C:\ProgramData",
 ];
+const WINDOWS_USER_EXECUTABLE_ALIAS_RELATIVE_READ_ROOTS: &[&str] =
+    &[r"Microsoft\WinGet\Links", r"Microsoft\WindowsApps"];
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -343,17 +345,33 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     roots
 }
 
+fn gather_user_platform_default_read_roots(local_app_data: &Path) -> Vec<PathBuf> {
+    WINDOWS_USER_EXECUTABLE_ALIAS_RELATIVE_READ_ROOTS
+        .iter()
+        .map(|relative| local_app_data.join(relative))
+        .collect()
+}
+
+fn gather_windows_platform_default_read_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        roots.extend(gather_user_platform_default_read_roots(Path::new(
+            &local_app_data,
+        )));
+    }
+    roots
+}
+
 fn gather_legacy_full_read_roots(
     command_cwd: &Path,
     policy: &SandboxPolicy,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
-    roots.extend(
-        WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
-            .iter()
-            .map(PathBuf::from),
-    );
+    roots.extend(gather_windows_platform_default_read_roots());
     if let Ok(up) = std::env::var("USERPROFILE") {
         roots.extend(profile_read_roots(Path::new(&up)));
     }
@@ -373,11 +391,7 @@ fn gather_restricted_read_roots(
 ) -> Vec<PathBuf> {
     let mut roots = gather_helper_read_roots(codex_home);
     if policy.include_platform_defaults() {
-        roots.extend(
-            WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
-                .iter()
-                .map(PathBuf::from),
-        );
+        roots.extend(gather_windows_platform_default_read_roots());
     }
     roots.extend(
         policy
@@ -804,6 +818,7 @@ mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::gather_user_platform_default_read_roots;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -824,6 +839,25 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
+    }
+
+    #[test]
+    fn user_platform_default_read_roots_include_windows_alias_dirs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let local_app_data = tmp.path().join("AppData").join("Local");
+        let winget_links = local_app_data
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Links");
+        let windows_apps = local_app_data.join("Microsoft").join("WindowsApps");
+        fs::create_dir_all(&winget_links).expect("create winget links");
+        fs::create_dir_all(&windows_apps).expect("create windows apps");
+
+        let roots = gather_user_platform_default_read_roots(&local_app_data);
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> = [winget_links, windows_apps].into_iter().collect();
+
+        assert_eq!(expected, actual);
     }
 
     #[test]
