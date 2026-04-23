@@ -30,6 +30,8 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -682,7 +684,61 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
+fn bootstrap_windows_helper_dir_on_path() {
+    #[cfg(windows)]
+    {
+        let Some(updated_path) = windows_path_with_current_exe_dir_first(
+            std::env::current_exe().ok().as_deref(),
+            std::env::var_os("PATH").as_deref(),
+        ) else {
+            return;
+        };
+
+        // This runs before the CLI spins up worker threads, so mutating the
+        // process environment is still safe here.
+        unsafe {
+            std::env::set_var("PATH", updated_path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_path_with_current_exe_dir_first(
+    current_exe: Option<&std::path::Path>,
+    current_path: Option<&OsStr>,
+) -> Option<OsString> {
+    let helper_dir = current_exe?.parent()?;
+    let helper_dir_string = helper_dir.as_os_str().to_string_lossy().into_owned();
+    let existing_entries: Vec<PathBuf> = current_path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if existing_entries.first().is_some_and(|entry| {
+        entry
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&helper_dir_string)
+    }) {
+        return None;
+    }
+
+    let mut updated_entries = Vec::with_capacity(existing_entries.len() + 1);
+    updated_entries.push(helper_dir.to_path_buf());
+    updated_entries.extend(existing_entries.into_iter().filter(|entry| {
+        !entry
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&helper_dir_string)
+    }));
+
+    std::env::join_paths(updated_entries).ok()
+}
+
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    bootstrap_windows_helper_dir_on_path();
+
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -1599,6 +1655,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -2379,5 +2436,41 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_bootstrap_prepends_current_exe_dir() {
+        let exe = PathBuf::from(r"C:\Program Files\OpenAI\Codex\bin\codex.exe");
+        let current_path = OsString::from(
+            r"C:\Users\iceweasel\AppData\Local\Microsoft\WinGet\Links;C:\Windows\System32",
+        );
+
+        let updated =
+            windows_path_with_current_exe_dir_first(Some(exe.as_path()), Some(&current_path))
+                .expect("path should be updated");
+        let entries: Vec<PathBuf> = std::env::split_paths(&updated).collect();
+
+        assert_eq!(
+            entries.first(),
+            Some(&PathBuf::from(r"C:\Program Files\OpenAI\Codex\bin"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry == &PathBuf::from(r"C:\Windows\System32"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_bootstrap_skips_when_helper_dir_already_first() {
+        let exe = PathBuf::from(r"C:\Program Files\OpenAI\Codex\bin\codex.exe");
+        let current_path = OsString::from(r"C:\Program Files\OpenAI\Codex\bin;C:\Windows\System32");
+
+        let updated =
+            windows_path_with_current_exe_dir_first(Some(exe.as_path()), Some(&current_path));
+
+        assert_eq!(updated, None);
     }
 }
