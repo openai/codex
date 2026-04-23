@@ -269,7 +269,7 @@ impl App {
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 let mcp_request_id = app_server_request_id_to_mcp_request_id(request_id);
-                if let Some(params) = AppLinkViewParams::from_codex_apps_auth_url_app_server_request(
+                if let Some(params) = AppLinkViewParams::from_auth_url_app_server_request(
                     thread_id,
                     &params.server_name,
                     mcp_request_id.clone(),

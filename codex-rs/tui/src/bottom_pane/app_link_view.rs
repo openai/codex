@@ -76,15 +76,12 @@ pub(crate) struct AppLinkViewParams {
 }
 
 impl AppLinkViewParams {
-    pub(crate) fn from_codex_apps_auth_url_elicitation(
+    pub(crate) fn from_auth_url_elicitation(
         thread_id: ThreadId,
         server_name: &str,
         request_id: McpRequestId,
         request: &ElicitationRequest,
     ) -> Option<Self> {
-        if server_name != MCP_CODEX_APPS_SERVER_NAME {
-            return None;
-        }
         let ElicitationRequest::Url {
             meta,
             message,
@@ -94,7 +91,7 @@ impl AppLinkViewParams {
         else {
             return None;
         };
-        Self::from_codex_apps_auth_url_parts(
+        Some(Self::from_auth_url_parts(
             thread_id,
             server_name,
             request_id,
@@ -102,18 +99,15 @@ impl AppLinkViewParams {
             message,
             url,
             elicitation_id,
-        )
+        ))
     }
 
-    pub(crate) fn from_codex_apps_auth_url_app_server_request(
+    pub(crate) fn from_auth_url_app_server_request(
         thread_id: ThreadId,
         server_name: &str,
         request_id: McpRequestId,
         request: &codex_app_server_protocol::McpServerElicitationRequest,
     ) -> Option<Self> {
-        if server_name != MCP_CODEX_APPS_SERVER_NAME {
-            return None;
-        }
         let codex_app_server_protocol::McpServerElicitationRequest::Url {
             meta,
             message,
@@ -123,7 +117,7 @@ impl AppLinkViewParams {
         else {
             return None;
         };
-        Self::from_codex_apps_auth_url_parts(
+        Some(Self::from_auth_url_parts(
             thread_id,
             server_name,
             request_id,
@@ -131,7 +125,50 @@ impl AppLinkViewParams {
             message,
             url,
             elicitation_id,
-        )
+        ))
+    }
+
+    fn from_auth_url_parts(
+        thread_id: ThreadId,
+        server_name: &str,
+        request_id: McpRequestId,
+        meta: Option<&serde_json::Value>,
+        message: &str,
+        url: &str,
+        elicitation_id: &str,
+    ) -> Self {
+        if server_name == MCP_CODEX_APPS_SERVER_NAME
+            && let Some(params) = Self::from_codex_apps_auth_url_parts(
+                thread_id,
+                server_name,
+                request_id.clone(),
+                meta,
+                message,
+                url,
+                elicitation_id,
+            )
+        {
+            return params;
+        }
+
+        Self {
+            app_id: elicitation_id.to_string(),
+            title: "MCP sign-in required".to_string(),
+            description: Some(format!("Server: {server_name}")),
+            instructions:
+                "Open this URL in your browser, complete the sign-in flow, then return here."
+                    .to_string(),
+            url: url.to_string(),
+            is_installed: true,
+            is_enabled: true,
+            suggest_reason: Some(message.to_string()),
+            suggestion_type: Some(AppLinkSuggestionType::Auth),
+            elicitation_target: Some(AppLinkElicitationTarget {
+                thread_id,
+                server_name: server_name.to_string(),
+                request_id,
+            }),
+        }
     }
 
     fn from_codex_apps_auth_url_parts(
@@ -299,7 +336,7 @@ impl AppLinkView {
         self.complete = true;
     }
 
-    fn open_chatgpt_link(&mut self) {
+    fn open_external_url(&mut self) {
         self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
             url: self.url.clone(),
         });
@@ -312,10 +349,16 @@ impl AppLinkView {
         }
     }
 
-    fn refresh_connectors_and_close(&mut self) {
-        self.app_event_tx.send(AppEvent::RefreshConnectors {
-            force_refetch: true,
-        });
+    fn complete_external_flow_and_close(&mut self) {
+        let should_refresh_connectors = self
+            .elicitation_target
+            .as_ref()
+            .is_none_or(|target| target.server_name == MCP_CODEX_APPS_SERVER_NAME);
+        if should_refresh_connectors {
+            self.app_event_tx.send(AppEvent::RefreshConnectors {
+                force_refetch: true,
+            });
+        }
         if self.is_tool_suggestion() {
             self.resolve_elicitation(ElicitationAction::Accept);
         }
@@ -344,32 +387,32 @@ impl AppLinkView {
             match self.suggestion_type {
                 Some(AppLinkSuggestionType::Enable) => match self.screen {
                     AppLinkScreen::Link => match self.selected_action {
-                        0 => self.open_chatgpt_link(),
+                        0 => self.open_external_url(),
                         1 if self.is_installed => self.toggle_enabled(),
                         _ => self.decline_tool_suggestion(),
                     },
                     AppLinkScreen::InstallConfirmation => match self.selected_action {
-                        0 => self.refresh_connectors_and_close(),
+                        0 => self.complete_external_flow_and_close(),
                         _ => self.decline_tool_suggestion(),
                     },
                 },
                 Some(AppLinkSuggestionType::Auth) => match self.screen {
                     AppLinkScreen::Link => match self.selected_action {
-                        0 => self.open_chatgpt_link(),
+                        0 => self.open_external_url(),
                         _ => self.decline_tool_suggestion(),
                     },
                     AppLinkScreen::InstallConfirmation => match self.selected_action {
-                        0 => self.refresh_connectors_and_close(),
+                        0 => self.complete_external_flow_and_close(),
                         _ => self.decline_tool_suggestion(),
                     },
                 },
                 Some(AppLinkSuggestionType::Install) | None => match self.screen {
                     AppLinkScreen::Link => match self.selected_action {
-                        0 => self.open_chatgpt_link(),
+                        0 => self.open_external_url(),
                         _ => self.decline_tool_suggestion(),
                     },
                     AppLinkScreen::InstallConfirmation => match self.selected_action {
-                        0 => self.refresh_connectors_and_close(),
+                        0 => self.complete_external_flow_and_close(),
                         _ => self.decline_tool_suggestion(),
                     },
                 },
@@ -379,12 +422,12 @@ impl AppLinkView {
 
         match self.screen {
             AppLinkScreen::Link => match self.selected_action {
-                0 => self.open_chatgpt_link(),
+                0 => self.open_external_url(),
                 1 if self.is_installed => self.toggle_enabled(),
                 _ => self.complete = true,
             },
             AppLinkScreen::InstallConfirmation => match self.selected_action {
-                0 => self.refresh_connectors_and_close(),
+                0 => self.complete_external_flow_and_close(),
                 _ => self.back_to_link_screen(),
             },
         }
@@ -475,9 +518,18 @@ impl AppLinkView {
 
         let is_auth_suggestion =
             self.is_tool_suggestion() && self.suggestion_type == Some(AppLinkSuggestionType::Auth);
+        let is_codex_apps_auth = is_auth_suggestion
+            && self
+                .elicitation_target
+                .as_ref()
+                .is_some_and(|target| target.server_name == MCP_CODEX_APPS_SERVER_NAME);
         lines.push(Line::from(
             if is_auth_suggestion {
-                "Finish App Sign In"
+                if is_codex_apps_auth {
+                    "Finish App Sign In"
+                } else {
+                    "Finish MCP Sign In"
+                }
             } else {
                 "Finish App Setup"
             }
@@ -487,7 +539,11 @@ impl AppLinkView {
 
         if is_auth_suggestion {
             for line in wrap(
-                "Sign in to the app on ChatGPT in the browser window that just opened.",
+                if is_codex_apps_auth {
+                    "Sign in to the app on ChatGPT in the browser window that just opened."
+                } else {
+                    "Complete the MCP sign-in flow in the browser window that just opened."
+                },
                 usable_width,
             ) {
                 lines.push(Line::from(line.into_owned()));
@@ -514,7 +570,14 @@ impl AppLinkView {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec!["Setup URL:".dim()]));
+        lines.push(Line::from(vec![
+            if is_auth_suggestion {
+                "Sign-in URL:"
+            } else {
+                "Setup URL:"
+            }
+            .dim(),
+        ]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
         lines.extend(adaptive_wrap_lines(
             vec![url_line],
@@ -763,6 +826,15 @@ mod tests {
         }
     }
 
+    fn generic_auth_target() -> AppLinkElicitationTarget {
+        AppLinkElicitationTarget {
+            thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+                .expect("valid thread id"),
+            server_name: "github_mcp".to_string(),
+            request_id: McpRequestId::String("request-2".to_string()),
+        }
+    }
+
     #[test]
     fn codex_apps_auth_url_elicitation_builds_auth_app_link_params() {
         let target = suggestion_target();
@@ -781,7 +853,7 @@ mod tests {
             elicitation_id: "codex_apps_auth_call_123".to_string(),
         };
 
-        let params = AppLinkViewParams::from_codex_apps_auth_url_elicitation(
+        let params = AppLinkViewParams::from_auth_url_elicitation(
             target.thread_id,
             &target.server_name,
             target.request_id.clone(),
@@ -795,6 +867,32 @@ mod tests {
             params.url,
             "https://chatgpt.com/apps/google-calendar/connector_calendar"
         );
+        assert_eq!(params.suggestion_type, Some(AppLinkSuggestionType::Auth));
+        assert_eq!(params.elicitation_target, Some(target));
+    }
+
+    #[test]
+    fn generic_auth_url_elicitation_builds_auth_app_link_params() {
+        let target = generic_auth_target();
+        let request = ElicitationRequest::Url {
+            meta: None,
+            message: "Sign in to GitHub to continue.".to_string(),
+            url: "https://github.example/login/device".to_string(),
+            elicitation_id: "github-auth-123".to_string(),
+        };
+
+        let params = AppLinkViewParams::from_auth_url_elicitation(
+            target.thread_id,
+            &target.server_name,
+            target.request_id.clone(),
+            &request,
+        )
+        .expect("expected generic auth app link params");
+
+        assert_eq!(params.app_id, "github-auth-123");
+        assert_eq!(params.title, "MCP sign-in required");
+        assert_eq!(params.description, Some("Server: github_mcp".to_string()));
+        assert_eq!(params.url, "https://github.example/login/device");
         assert_eq!(params.suggestion_type, Some(AppLinkSuggestionType::Auth));
         assert_eq!(params.elicitation_target, Some(target));
     }
@@ -1037,6 +1135,58 @@ mod tests {
     }
 
     #[test]
+    fn generic_auth_url_elicitation_resolves_without_connector_refresh() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let target = generic_auth_target();
+        let request = ElicitationRequest::Url {
+            meta: None,
+            message: "Sign in to GitHub to continue.".to_string(),
+            url: "https://github.example/login/device".to_string(),
+            elicitation_id: "github-auth-123".to_string(),
+        };
+        let params = AppLinkViewParams::from_auth_url_elicitation(
+            target.thread_id,
+            &target.server_name,
+            target.request_id.clone(),
+            &request,
+        )
+        .expect("expected generic auth app link params");
+        let mut view = AppLinkView::new(params, tx);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::OpenUrlInBrowser { url }) => {
+                assert_eq!(url, "https://github.example/login/device");
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert_eq!(view.screen, AppLinkScreen::InstallConfirmation);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+                assert_eq!(thread_id, target.thread_id);
+                assert_eq!(
+                    op,
+                    Op::ResolveElicitation {
+                        server_name: "github_mcp".to_string(),
+                        request_id: McpRequestId::String("request-2".to_string()),
+                        decision: ElicitationAction::Accept,
+                        content: None,
+                        meta: None,
+                    }
+                );
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(view.is_complete());
+    }
+
+    #[test]
     fn declined_tool_suggestion_resolves_elicitation_decline() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1237,6 +1387,35 @@ mod tests {
 
         assert_snapshot!(
             "app_link_view_enable_suggestion_with_reason",
+            render_snapshot(
+                &view,
+                Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))
+            )
+        );
+    }
+
+    #[test]
+    fn generic_auth_url_elicitation_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let target = generic_auth_target();
+        let request = ElicitationRequest::Url {
+            meta: None,
+            message: "Sign in to GitHub to continue.".to_string(),
+            url: "https://github.example/login/device".to_string(),
+            elicitation_id: "github-auth-123".to_string(),
+        };
+        let params = AppLinkViewParams::from_auth_url_elicitation(
+            target.thread_id,
+            &target.server_name,
+            target.request_id.clone(),
+            &request,
+        )
+        .expect("expected generic auth app link params");
+        let view = AppLinkView::new(params, tx);
+
+        assert_snapshot!(
+            "app_link_view_generic_auth_url_elicitation",
             render_snapshot(
                 &view,
                 Rect::new(0, 0, 72, view.desired_height(/*width*/ 72))

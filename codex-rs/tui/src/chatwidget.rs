@@ -4936,14 +4936,12 @@ impl ChatWidget {
         });
 
         let thread_id = self.thread_id.unwrap_or_default();
-        if let Some(params) =
-            crate::bottom_pane::AppLinkViewParams::from_codex_apps_auth_url_elicitation(
-                thread_id,
-                &ev.server_name,
-                ev.id.clone(),
-                &ev.request,
-            )
-        {
+        if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_auth_url_elicitation(
+            thread_id,
+            &ev.server_name,
+            ev.id.clone(),
+            &ev.request,
+        ) {
             self.open_app_link_view(params);
         } else if let Some(request) =
             McpServerElicitationFormRequest::from_event(thread_id, ev.clone())

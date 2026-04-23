@@ -29,6 +29,8 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
@@ -2582,6 +2584,45 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
                 Some(vec![test_absolute_path("/tmp/write")]),
             )),
         }
+    );
+}
+
+#[tokio::test]
+async fn inactive_thread_url_elicitation_routes_to_app_link() {
+    let app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let request = ServerRequest::McpServerElicitationRequest {
+        request_id: AppServerRequestId::Integer(9),
+        params: McpServerElicitationRequestParams {
+            thread_id: thread_id.to_string(),
+            turn_id: Some("turn-auth".to_string()),
+            server_name: "github_mcp".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Sign in to GitHub to continue.".to_string(),
+                url: "https://github.example/login/device".to_string(),
+                elicitation_id: "github-auth-123".to_string(),
+            },
+        },
+    };
+
+    let Some(ThreadInteractiveRequest::AppLink(params)) = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await
+    else {
+        panic!("expected app link request");
+    };
+
+    assert_eq!(params.title, "MCP sign-in required");
+    assert_eq!(params.description, Some("Server: github_mcp".to_string()));
+    assert_eq!(params.url, "https://github.example/login/device");
+    assert_eq!(
+        params.elicitation_target,
+        Some(crate::bottom_pane::AppLinkElicitationTarget {
+            thread_id,
+            server_name: "github_mcp".to_string(),
+            request_id: codex_protocol::mcp::RequestId::Integer(9),
+        })
     );
 }
 
