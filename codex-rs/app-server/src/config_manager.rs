@@ -131,7 +131,7 @@ impl ConfigManager {
         }
     }
 
-    pub(crate) fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
+    fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
         self.thread_config_loader
             .read()
             .map(|guard| Arc::clone(&*guard))
