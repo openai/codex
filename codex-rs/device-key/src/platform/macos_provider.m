@@ -8,6 +8,7 @@
 #include <string.h>
 
 static NSTimeInterval const CodexDeviceKeyTouchIdReuseDurationSeconds = 300.0;
+static OSStatus const CodexDeviceKeyErrSecMissingEntitlement = -34018;
 
 static CodexDeviceKeyMacBytesResult CodexDeviceKeyMacResultMake(
     CodexDeviceKeyMacStatus status,
@@ -73,6 +74,12 @@ static NSString *CodexDeviceKeyMacCopyCFError(CFErrorRef error) {
 static BOOL CodexDeviceKeyMacClassIsValid(int32_t keyClass) {
     return keyClass == CodexDeviceKeyMacKeyClassSecureEnclave ||
         keyClass == CodexDeviceKeyMacKeyClassOsProtectedNonextractable;
+}
+
+static BOOL CodexDeviceKeyMacSecureEnclaveUnavailableStatus(OSStatus status) {
+    return status == errSecUnimplemented ||
+        status == errSecParam ||
+        status == CodexDeviceKeyErrSecMissingEntitlement;
 }
 
 static NSData *CodexDeviceKeyMacTagData(NSString *keyTag) {
@@ -178,9 +185,9 @@ static SecKeyRef CodexDeviceKeyMacCreatePrivateKey(
     }
 
     NSError *nsError = createError == NULL ? nil : CFBridgingRelease(createError);
-    NSInteger code = nsError == nil ? 0 : nsError.code;
+    OSStatus code = nsError == nil ? 0 : (OSStatus)nsError.code;
     if (keyClass == CodexDeviceKeyMacKeyClassSecureEnclave &&
-        (code == errSecUnimplemented || code == errSecParam)) {
+        CodexDeviceKeyMacSecureEnclaveUnavailableStatus(code)) {
         *status = CodexDeviceKeyMacStatusHardwareUnavailable;
         return NULL;
     }
