@@ -775,7 +775,7 @@ fn elicitation_capability_enabled_for_custom_servers() {
                 form: Some(FormElicitationCapability {
                     schema_validation: None
                 }),
-                url: None,
+                url: Some(_),
             })
         ));
     }

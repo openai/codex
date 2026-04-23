@@ -1,5 +1,6 @@
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::mcp::RequestId as McpRequestId;
 #[cfg(test)]
 use codex_protocol::protocol::Op;
@@ -34,6 +35,13 @@ use crate::style::user_message_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
+const MCP_CODEX_APPS_SERVER_NAME: &str = "codex_apps";
+const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
+const CONNECTOR_AUTH_FAILURE_META_KEY: &str = "connector_auth_failure";
+const CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY: &str = "is_auth_failure";
+const CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY: &str = "connector_id";
+const CONNECTOR_AUTH_FAILURE_CONNECTOR_NAME_KEY: &str = "connector_name";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppLinkScreen {
     Link,
@@ -44,6 +52,7 @@ enum AppLinkScreen {
 pub(crate) enum AppLinkSuggestionType {
     Install,
     Enable,
+    Auth,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +73,122 @@ pub(crate) struct AppLinkViewParams {
     pub(crate) suggest_reason: Option<String>,
     pub(crate) suggestion_type: Option<AppLinkSuggestionType>,
     pub(crate) elicitation_target: Option<AppLinkElicitationTarget>,
+}
+
+impl AppLinkViewParams {
+    pub(crate) fn from_codex_apps_auth_url_elicitation(
+        thread_id: ThreadId,
+        server_name: &str,
+        request_id: McpRequestId,
+        request: &ElicitationRequest,
+    ) -> Option<Self> {
+        if server_name != MCP_CODEX_APPS_SERVER_NAME {
+            return None;
+        }
+        let ElicitationRequest::Url {
+            meta,
+            message,
+            url,
+            elicitation_id,
+        } = request
+        else {
+            return None;
+        };
+        Self::from_codex_apps_auth_url_parts(
+            thread_id,
+            server_name,
+            request_id,
+            meta.as_ref(),
+            message,
+            url,
+            elicitation_id,
+        )
+    }
+
+    pub(crate) fn from_codex_apps_auth_url_app_server_request(
+        thread_id: ThreadId,
+        server_name: &str,
+        request_id: McpRequestId,
+        request: &codex_app_server_protocol::McpServerElicitationRequest,
+    ) -> Option<Self> {
+        if server_name != MCP_CODEX_APPS_SERVER_NAME {
+            return None;
+        }
+        let codex_app_server_protocol::McpServerElicitationRequest::Url {
+            meta,
+            message,
+            url,
+            elicitation_id,
+        } = request
+        else {
+            return None;
+        };
+        Self::from_codex_apps_auth_url_parts(
+            thread_id,
+            server_name,
+            request_id,
+            meta.as_ref(),
+            message,
+            url,
+            elicitation_id,
+        )
+    }
+
+    fn from_codex_apps_auth_url_parts(
+        thread_id: ThreadId,
+        server_name: &str,
+        request_id: McpRequestId,
+        meta: Option<&serde_json::Value>,
+        message: &str,
+        url: &str,
+        elicitation_id: &str,
+    ) -> Option<Self> {
+        let auth_failure = meta?
+            .as_object()?
+            .get(MCP_TOOL_CODEX_APPS_META_KEY)?
+            .as_object()?
+            .get(CONNECTOR_AUTH_FAILURE_META_KEY)?
+            .as_object()?;
+        if auth_failure
+            .get(CONNECTOR_AUTH_FAILURE_IS_AUTH_FAILURE_KEY)
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        {
+            return None;
+        }
+
+        let app_id = auth_failure
+            .get(CONNECTOR_AUTH_FAILURE_CONNECTOR_ID_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(elicitation_id)
+            .to_string();
+        let title = auth_failure
+            .get(CONNECTOR_AUTH_FAILURE_CONNECTOR_NAME_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(app_id.as_str())
+            .to_string();
+
+        Some(Self {
+            app_id,
+            title,
+            description: None,
+            instructions: "Sign in to this app in your browser, then return here.".to_string(),
+            url: url.to_string(),
+            is_installed: true,
+            is_enabled: true,
+            suggest_reason: Some(message.to_string()),
+            suggestion_type: Some(AppLinkSuggestionType::Auth),
+            elicitation_target: Some(AppLinkElicitationTarget {
+                thread_id,
+                server_name: server_name.to_string(),
+                request_id,
+            }),
+        })
+    }
 }
 
 pub(crate) struct AppLinkView {
@@ -116,6 +241,13 @@ impl AppLinkView {
     }
 
     fn action_labels(&self) -> Vec<&'static str> {
+        if self.is_tool_suggestion() && self.suggestion_type == Some(AppLinkSuggestionType::Auth) {
+            return match self.screen {
+                AppLinkScreen::Link => vec!["Open sign-in URL", "Back"],
+                AppLinkScreen::InstallConfirmation => vec!["I already signed in", "Back"],
+            };
+        }
+
         match self.screen {
             AppLinkScreen::Link => {
                 if self.is_installed {
@@ -171,7 +303,10 @@ impl AppLinkView {
         self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
             url: self.url.clone(),
         });
-        if !self.is_installed {
+        if !self.is_installed
+            || (self.is_tool_suggestion()
+                && self.suggestion_type == Some(AppLinkSuggestionType::Auth))
+        {
             self.screen = AppLinkScreen::InstallConfirmation;
             self.selected_action = 0;
         }
@@ -211,6 +346,16 @@ impl AppLinkView {
                     AppLinkScreen::Link => match self.selected_action {
                         0 => self.open_chatgpt_link(),
                         1 if self.is_installed => self.toggle_enabled(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                    AppLinkScreen::InstallConfirmation => match self.selected_action {
+                        0 => self.refresh_connectors_and_close(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                },
+                Some(AppLinkSuggestionType::Auth) => match self.screen {
+                    AppLinkScreen::Link => match self.selected_action {
+                        0 => self.open_chatgpt_link(),
                         _ => self.decline_tool_suggestion(),
                     },
                     AppLinkScreen::InstallConfirmation => match self.selected_action {
@@ -280,8 +425,18 @@ impl AppLinkView {
             }
             lines.push(Line::from(""));
         }
-        if self.is_installed {
+        let is_auth_suggestion =
+            self.is_tool_suggestion() && self.suggestion_type == Some(AppLinkSuggestionType::Auth);
+        if self.is_installed && !is_auth_suggestion {
             for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            lines.push(Line::from(""));
+        }
+
+        if is_auth_suggestion {
+            lines.push(Line::from("URL".dim()));
+            for line in wrap(&self.url, usable_width) {
                 lines.push(Line::from(line.into_owned()));
             }
             lines.push(Line::from(""));
@@ -292,18 +447,20 @@ impl AppLinkView {
             for line in wrap(instructions, usable_width) {
                 lines.push(Line::from(line.into_owned()));
             }
-            for line in wrap(
-                "Newly installed apps can take a few minutes to appear in /apps.",
-                usable_width,
-            ) {
-                lines.push(Line::from(line.into_owned()));
-            }
-            if !self.is_installed {
+            if !is_auth_suggestion {
                 for line in wrap(
-                    "After installed, use $ to insert this app into the prompt.",
+                    "Newly installed apps can take a few minutes to appear in /apps.",
                     usable_width,
                 ) {
                     lines.push(Line::from(line.into_owned()));
+                }
+                if !self.is_installed {
+                    for line in wrap(
+                        "After installed, use $ to insert this app into the prompt.",
+                        usable_width,
+                    ) {
+                        lines.push(Line::from(line.into_owned()));
+                    }
                 }
             }
             lines.push(Line::from(""));
@@ -316,20 +473,44 @@ impl AppLinkView {
         let usable_width = width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        lines.push(Line::from("Finish App Setup".bold()));
+        let is_auth_suggestion =
+            self.is_tool_suggestion() && self.suggestion_type == Some(AppLinkSuggestionType::Auth);
+        lines.push(Line::from(
+            if is_auth_suggestion {
+                "Finish App Sign In"
+            } else {
+                "Finish App Setup"
+            }
+            .bold(),
+        ));
         lines.push(Line::from(""));
 
-        for line in wrap(
-            "Complete app setup on ChatGPT in the browser window that just opened.",
-            usable_width,
-        ) {
-            lines.push(Line::from(line.into_owned()));
-        }
-        for line in wrap(
-            "Sign in there if needed, then return here and select \"I already Installed it\".",
-            usable_width,
-        ) {
-            lines.push(Line::from(line.into_owned()));
+        if is_auth_suggestion {
+            for line in wrap(
+                "Sign in to the app on ChatGPT in the browser window that just opened.",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            for line in wrap(
+                "Then return here and select \"I already signed in\".",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
+        } else {
+            for line in wrap(
+                "Complete app setup on ChatGPT in the browser window that just opened.",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            for line in wrap(
+                "Sign in there if needed, then return here and select \"I already Installed it\".",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
         }
 
         lines.push(Line::from(""));
@@ -580,6 +761,42 @@ mod tests {
             server_name: "codex_apps".to_string(),
             request_id: McpRequestId::String("request-1".to_string()),
         }
+    }
+
+    #[test]
+    fn codex_apps_auth_url_elicitation_builds_auth_app_link_params() {
+        let target = suggestion_target();
+        let request = ElicitationRequest::Url {
+            meta: Some(serde_json::json!({
+                "_codex_apps": {
+                    "connector_auth_failure": {
+                        "is_auth_failure": true,
+                        "connector_id": "connector_calendar",
+                        "connector_name": "Google Calendar",
+                    },
+                },
+            })),
+            message: "Reconnect Google Calendar on ChatGPT.".to_string(),
+            url: "https://chatgpt.com/apps/google-calendar/connector_calendar".to_string(),
+            elicitation_id: "codex_apps_auth_call_123".to_string(),
+        };
+
+        let params = AppLinkViewParams::from_codex_apps_auth_url_elicitation(
+            target.thread_id,
+            &target.server_name,
+            target.request_id.clone(),
+            &request,
+        )
+        .expect("expected auth app link params");
+
+        assert_eq!(params.app_id, "connector_calendar");
+        assert_eq!(params.title, "Google Calendar");
+        assert_eq!(
+            params.url,
+            "https://chatgpt.com/apps/google-calendar/connector_calendar"
+        );
+        assert_eq!(params.suggestion_type, Some(AppLinkSuggestionType::Auth));
+        assert_eq!(params.elicitation_target, Some(target));
     }
 
     fn render_snapshot(view: &AppLinkView, area: Rect) -> String {

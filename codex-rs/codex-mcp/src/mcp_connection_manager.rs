@@ -77,6 +77,7 @@ use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use rmcp::model::Tool;
+use rmcp::model::UrlElicitationCapability;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -1419,13 +1420,13 @@ impl From<anyhow::Error> for StartupOutcomeError {
 }
 
 fn elicitation_capability_for_server(_server_name: &str) -> Option<ElicitationCapability> {
-    // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-    // indicates this should be an empty object.
+    // https://modelcontextprotocol.io/specification/draft/client/elicitation#capabilities
+    // requires clients to declare each elicitation mode they support.
     Some(ElicitationCapability {
         form: Some(FormElicitationCapability {
             schema_validation: None,
         }),
-        url: None,
+        url: Some(UrlElicitationCapability {}),
     })
 }
 
