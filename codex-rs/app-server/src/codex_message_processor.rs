@@ -10513,7 +10513,7 @@ mod tests {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "failed to load your workspace-managed config",
+            "Failed to load cloud requirements (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -10523,7 +10523,7 @@ mod tests {
             Some(json!({
                 "reason": "cloudRequirements",
                 "errorCode": "RequestFailed",
-                "detail": "failed to load your workspace-managed config",
+                "detail": "Failed to load cloud requirements (workspace-managed policies).",
             }))
         );
     }
