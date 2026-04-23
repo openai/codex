@@ -810,7 +810,9 @@ fn get_service_tier(
 }
 
 fn is_enterprise_default_service_tier_plan(plan_type: AccountPlanType) -> bool {
-    plan_type == AccountPlanType::Enterprise || plan_type.is_business_like()
+    plan_type == AccountPlanType::Enterprise
+        || plan_type.is_business_like()
+        || plan_type.is_team_like()
 }
 
 #[cfg(test)]
