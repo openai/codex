@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn take_consumes_denial_once() {
         let mut denials = RecentAutoReviewDenials::default();
-        denials.push(denied_event(1));
+        denials.push(denied_event(/*id*/ 1));
 
         assert_eq!(
             denials.take("review-1").map(|event| event.id),
