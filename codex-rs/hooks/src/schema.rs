@@ -17,8 +17,12 @@ const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.js
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
 const PERMISSION_REQUEST_INPUT_FIXTURE: &str = "permission-request.command.input.schema.json";
 const PERMISSION_REQUEST_OUTPUT_FIXTURE: &str = "permission-request.command.output.schema.json";
+const POST_COMPACT_INPUT_FIXTURE: &str = "post-compact.command.input.schema.json";
+const POST_COMPACT_OUTPUT_FIXTURE: &str = "post-compact.command.output.schema.json";
 const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json";
 const PRE_TOOL_USE_OUTPUT_FIXTURE: &str = "pre-tool-use.command.output.schema.json";
+const PRE_COMPACT_INPUT_FIXTURE: &str = "pre-compact.command.input.schema.json";
+const PRE_COMPACT_OUTPUT_FIXTURE: &str = "pre-compact.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
@@ -75,6 +79,10 @@ pub(crate) enum HookEventNameWire {
     PermissionRequest,
     #[serde(rename = "PostToolUse")]
     PostToolUse,
+    #[serde(rename = "PreCompact")]
+    PreCompact,
+    #[serde(rename = "PostCompact")]
+    PostCompact,
     #[serde(rename = "SessionStart")]
     SessionStart,
     #[serde(rename = "UserPromptSubmit")]
@@ -122,6 +130,24 @@ pub(crate) struct PermissionRequestCommandOutputWire {
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
     pub hook_specific_output: Option<PermissionRequestHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "pre-compact.command.output")]
+pub(crate) struct PreCompactCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-compact.command.output")]
+pub(crate) struct PostCompactCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -265,6 +291,57 @@ pub(crate) struct PostToolUseCommandInput {
     pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "pre-compact.command.input")]
+pub(crate) struct PreCompactCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "pre_compact_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "compaction_trigger_schema")]
+    pub trigger: String,
+    #[schemars(schema_with = "compaction_reason_schema")]
+    pub reason: String,
+    #[schemars(schema_with = "compaction_phase_schema")]
+    pub phase: String,
+    #[schemars(schema_with = "compaction_implementation_schema")]
+    pub implementation: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-compact.command.input")]
+pub(crate) struct PostCompactCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "post_compact_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "compaction_trigger_schema")]
+    pub trigger: String,
+    #[schemars(schema_with = "compaction_reason_schema")]
+    pub reason: String,
+    #[schemars(schema_with = "compaction_phase_schema")]
+    pub phase: String,
+    #[schemars(schema_with = "compaction_implementation_schema")]
+    pub implementation: String,
+    #[schemars(schema_with = "compaction_status_schema")]
+    pub status: String,
+    pub error: NullableString,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -425,6 +502,22 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<PermissionRequestCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(POST_COMPACT_INPUT_FIXTURE),
+        schema_json::<PostCompactCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(POST_COMPACT_OUTPUT_FIXTURE),
+        schema_json::<PostCompactCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(PRE_COMPACT_INPUT_FIXTURE),
+        schema_json::<PreCompactCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(PRE_COMPACT_OUTPUT_FIXTURE),
+        schema_json::<PreCompactCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(PRE_TOOL_USE_INPUT_FIXTURE),
         schema_json::<PreToolUseCommandInput>()?,
     )?;
@@ -519,6 +612,14 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
 
+fn pre_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PreCompact")
+}
+
+fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PostCompact")
+}
+
 fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PreToolUse")
 }
@@ -547,6 +648,26 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&["startup", "resume", "clear"])
+}
+
+fn compaction_trigger_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["manual", "auto"])
+}
+
+fn compaction_reason_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["user_requested", "context_limit", "model_downshift"])
+}
+
+fn compaction_phase_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["standalone_turn", "pre_turn", "mid_turn"])
+}
+
+fn compaction_implementation_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["responses", "responses_compact"])
+}
+
+fn compaction_status_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["completed", "failed", "interrupted"])
 }
 
 fn string_const_schema(value: &str) -> Schema {
@@ -580,12 +701,18 @@ fn default_continue() -> bool {
 mod tests {
     use super::PERMISSION_REQUEST_INPUT_FIXTURE;
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
+    use super::POST_COMPACT_INPUT_FIXTURE;
+    use super::POST_COMPACT_OUTPUT_FIXTURE;
     use super::POST_TOOL_USE_INPUT_FIXTURE;
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
+    use super::PRE_COMPACT_INPUT_FIXTURE;
+    use super::PRE_COMPACT_OUTPUT_FIXTURE;
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
     use super::PRE_TOOL_USE_OUTPUT_FIXTURE;
     use super::PermissionRequestCommandInput;
+    use super::PostCompactCommandInput;
     use super::PostToolUseCommandInput;
+    use super::PreCompactCommandInput;
     use super::PreToolUseCommandInput;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
@@ -614,6 +741,18 @@ mod tests {
             }
             PERMISSION_REQUEST_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/permission-request.command.output.schema.json")
+            }
+            POST_COMPACT_INPUT_FIXTURE => {
+                include_str!("../schema/generated/post-compact.command.input.schema.json")
+            }
+            POST_COMPACT_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/post-compact.command.output.schema.json")
+            }
+            PRE_COMPACT_INPUT_FIXTURE => {
+                include_str!("../schema/generated/pre-compact.command.input.schema.json")
+            }
+            PRE_COMPACT_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/pre-compact.command.output.schema.json")
             }
             PRE_TOOL_USE_INPUT_FIXTURE => {
                 include_str!("../schema/generated/pre-tool-use.command.input.schema.json")
@@ -658,6 +797,10 @@ mod tests {
             POST_TOOL_USE_OUTPUT_FIXTURE,
             PERMISSION_REQUEST_INPUT_FIXTURE,
             PERMISSION_REQUEST_OUTPUT_FIXTURE,
+            POST_COMPACT_INPUT_FIXTURE,
+            POST_COMPACT_OUTPUT_FIXTURE,
+            PRE_COMPACT_INPUT_FIXTURE,
+            PRE_COMPACT_OUTPUT_FIXTURE,
             PRE_TOOL_USE_INPUT_FIXTURE,
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
@@ -688,6 +831,14 @@ mod tests {
                 .expect("serialize post tool use input schema"),
         )
         .expect("parse post tool use input schema");
+        let pre_compact: Value = serde_json::from_slice(
+            &schema_json::<PreCompactCommandInput>().expect("serialize pre compact input schema"),
+        )
+        .expect("parse pre compact input schema");
+        let post_compact: Value = serde_json::from_slice(
+            &schema_json::<PostCompactCommandInput>().expect("serialize post compact input schema"),
+        )
+        .expect("parse post compact input schema");
         let permission_request: Value = serde_json::from_slice(
             &schema_json::<PermissionRequestCommandInput>()
                 .expect("serialize permission request input schema"),
@@ -707,6 +858,8 @@ mod tests {
             &pre_tool_use,
             &permission_request,
             &post_tool_use,
+            &pre_compact,
+            &post_compact,
             &user_prompt_submit,
             &stop,
         ] {
