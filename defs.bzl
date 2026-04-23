@@ -18,11 +18,11 @@ PLATFORMS = [
 WINDOWS_RUSTC_LINK_FLAGS = select({
     "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
         "-C",
-        "link-arg=-Wl,--stack,8388608",
+        "link-arg=-Wl,--stack,8388608",  # 8 MiB
     ],
     "@rules_rs//rs/experimental/platforms/constraints:windows_msvc": [
         "-C",
-        "link-arg=/STACK:8388608",
+        "link-arg=/STACK:8388608",  # 8 MiB
         "-C",
         "link-arg=/NODEFAULTLIB:libucrt.lib",
         "-C",

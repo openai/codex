@@ -181,6 +181,7 @@ pub(super) async fn make_chatwidget_manual(
     };
     let current_collaboration_mode = base_mode;
     let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
+    let effective_service_tier = cfg.service_tier;
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -188,6 +189,7 @@ pub(super) async fn make_chatwidget_manual(
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
+        effective_service_tier,
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,

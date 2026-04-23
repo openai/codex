@@ -148,7 +148,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
-    command: Vec<String>,
+    hook_command: String,
     tty: bool,
     network_approval_id: Option<String>,
     session: Weak<Session>,

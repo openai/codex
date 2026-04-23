@@ -3,11 +3,15 @@ use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
+use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
@@ -50,6 +54,23 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
+}
+
+/// Turn context overrides that app-server validates before starting a turn.
+#[derive(Clone, Default)]
+pub struct CodexThreadTurnContextOverrides {
+    pub cwd: Option<PathBuf>,
+    pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+    pub permission_profile: Option<PermissionProfile>,
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    pub model: Option<String>,
+    pub effort: Option<Option<ReasoningEffort>>,
+    pub summary: Option<ReasoningSummary>,
+    pub service_tier: Option<Option<ServiceTier>>,
+    pub collaboration_mode: Option<CollaborationMode>,
+    pub personality: Option<Personality>,
 }
 
 pub struct CodexThread {
@@ -172,6 +193,51 @@ impl CodexThread {
         self.codex
             .set_app_server_client_info(app_server_client_name, app_server_client_version)
             .await
+    }
+
+    /// Validate persistent turn context overrides without committing them.
+    pub async fn validate_turn_context_overrides(
+        &self,
+        overrides: CodexThreadTurnContextOverrides,
+    ) -> ConstraintResult<()> {
+        let CodexThreadTurnContextOverrides {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        } = overrides;
+        let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+            collaboration_mode
+        } else {
+            self.codex
+                .session
+                .collaboration_mode()
+                .await
+                .with_updates(model, effort, /*developer_instructions*/ None)
+        };
+
+        let updates = SessionSettingsUpdate {
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            windows_sandbox_level,
+            collaboration_mode: Some(collaboration_mode),
+            reasoning_summary: summary,
+            service_tier,
+            personality,
+            ..Default::default()
+        };
+        self.codex.session.validate_settings(&updates).await
     }
 
     /// Use sparingly: this is intended to be removed soon.

@@ -4,8 +4,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use serde_json::to_value;
+use std::collections::HashSet;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::ExecServerRuntimePaths;
+use crate::client::http_client::PendingReqwestHttpBodyStream;
+use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -22,6 +30,7 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
@@ -31,6 +40,8 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::internal_error;
+use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
@@ -40,6 +51,9 @@ pub(crate) struct ExecServerHandler {
     session_registry: Arc<SessionRegistry>,
     notifications: RpcNotificationSender,
     session: StdMutex<Option<SessionHandle>>,
+    active_body_stream_ids: Mutex<HashSet<String>>,
+    background_task_shutdown: CancellationToken,
+    background_tasks: TaskTracker,
     file_system: FileSystemHandler,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -55,6 +69,9 @@ impl ExecServerHandler {
             session_registry,
             notifications,
             session: StdMutex::new(None),
+            active_body_stream_ids: Mutex::new(HashSet::new()),
+            background_task_shutdown: CancellationToken::new(),
+            background_tasks: TaskTracker::new(),
             file_system: FileSystemHandler::new(runtime_paths),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -62,6 +79,9 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.background_task_shutdown.cancel();
+        self.background_tasks.close();
+        self.background_tasks.wait().await;
         if let Some(session) = self.session() {
             session.detach().await;
         }
@@ -145,6 +165,47 @@ impl ExecServerHandler {
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().terminate(params).await
+    }
+
+    pub(crate) async fn http_request(
+        self: &Arc<Self>,
+        request_id: RequestId,
+        params: HttpRequestParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.require_initialized_for("http")?;
+        let stream_response = params.stream_response;
+        let http_request_id = params.request_id.clone();
+        if stream_response {
+            self.reserve_http_body_stream(&http_request_id).await?;
+        }
+        let response = ReqwestHttpRequestRunner::new(params.timeout_ms)?
+            .run(params)
+            .await;
+        if response.is_err() && stream_response {
+            self.release_http_body_stream(&http_request_id).await;
+        }
+        let (response, mut pending_stream) = response?;
+        let result = match to_value(response) {
+            Ok(result) => result,
+            Err(err) => {
+                if let Some(pending_stream) = pending_stream.take() {
+                    self.release_http_body_stream(&pending_stream.request_id)
+                        .await;
+                }
+                return Err(internal_error(err.to_string()));
+            }
+        };
+        if let Err(error) = self.notifications.response(request_id, result).await {
+            if let Some(pending_stream) = pending_stream.take() {
+                self.release_http_body_stream(&pending_stream.request_id)
+                    .await;
+            }
+            return Err(error);
+        }
+        if let Some(pending_stream) = pending_stream {
+            self.start_http_body_stream(pending_stream).await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn fs_read_file(
@@ -241,6 +302,44 @@ impl ExecServerHandler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    async fn start_http_body_stream(
+        self: &Arc<Self>,
+        pending_stream: PendingReqwestHttpBodyStream,
+    ) {
+        let request_id = pending_stream.request_id.clone();
+        if self.background_task_shutdown.is_cancelled() {
+            self.release_http_body_stream(&request_id).await;
+            return;
+        }
+        let finished_request_id = request_id.clone();
+        let handler = Arc::clone(self);
+        let notifications = self.notifications.clone();
+        let shutdown = self.background_task_shutdown.clone();
+        self.background_tasks.spawn(async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {}
+                _ = ReqwestHttpRequestRunner::stream_body(pending_stream, notifications) => {}
+            }
+            handler.release_http_body_stream(&finished_request_id).await;
+        });
+    }
+
+    async fn release_http_body_stream(&self, request_id: &str) {
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        active_body_stream_ids.remove(request_id);
+    }
+
+    async fn reserve_http_body_stream(&self, request_id: &str) -> Result<(), JSONRPCErrorError> {
+        let mut active_body_stream_ids = self.active_body_stream_ids.lock().await;
+        if active_body_stream_ids.contains(request_id) {
+            return Err(invalid_params(format!(
+                "http/request streamResponse requestId `{request_id}` is already active"
+            )));
+        }
+        active_body_stream_ids.insert(request_id.to_string());
+        Ok(())
     }
 }
 
