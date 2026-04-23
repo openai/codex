@@ -1,8 +1,10 @@
-//! Tracing log export into the state SQLite database.
+//! Tracing log export into a bounded buffered sink.
 //!
-//! This module provides a `tracing_subscriber::Layer` that captures events and
-//! inserts them into the dedicated `logs` SQLite database. The writer runs in a
-//! background task and batches inserts to keep logging overhead low.
+//! This module provides a `tracing_subscriber::Layer` that captures events,
+//! formats each one into a `LogEntry`, and sends entries to one configured
+//! buffered writer. The default writer inserts into the dedicated `logs` SQLite
+//! database from a background task and batches inserts to keep logging overhead
+//! low.
 //!
 //! ## Usage
 //!
@@ -18,6 +20,8 @@
 //! # }
 //! ```
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -45,37 +49,147 @@ use crate::StateRuntime;
 const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 128;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LogSinkQueueConfig {
+    pub queue_capacity: usize,
+    pub batch_size: usize,
+    pub flush_interval: Duration,
+}
+
+impl Default for LogSinkQueueConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: LOG_QUEUE_CAPACITY,
+            batch_size: LOG_BATCH_SIZE,
+            flush_interval: LOG_FLUSH_INTERVAL,
+        }
+    }
+}
+
+impl LogSinkQueueConfig {
+    fn normalized(self) -> Self {
+        Self {
+            queue_capacity: self.queue_capacity.max(1),
+            batch_size: self.batch_size.max(1),
+            flush_interval: if self.flush_interval.is_zero() {
+                LOG_FLUSH_INTERVAL
+            } else {
+                self.flush_interval
+            },
+        }
+    }
+}
+
+/// Destination-specific writer for batches produced by `BufferedLogSink`.
+pub trait LogBatchWriter: Send + 'static {
+    fn write_batch<'a>(
+        &'a mut self,
+        entries: Vec<LogEntry>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+pub struct BufferedLogSink<W> {
+    sender: mpsc::Sender<LogSinkCommand>,
+    _writer: std::marker::PhantomData<fn() -> W>,
+}
+
+impl<W> Clone for BufferedLogSink<W> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            _writer: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<W> BufferedLogSink<W>
+where
+    W: LogBatchWriter,
+{
+    pub fn start(writer: W, config: LogSinkQueueConfig) -> Self {
+        let config = config.normalized();
+        let (sender, receiver) = mpsc::channel(config.queue_capacity);
+        tokio::spawn(run_buffered_sink(writer, receiver, config));
+        Self {
+            sender,
+            _writer: std::marker::PhantomData,
+        }
+    }
+
+    pub fn try_send(&self, entry: LogEntry) {
+        let _ = self.sender.try_send(LogSinkCommand::Entry(Box::new(entry)));
+    }
+
+    pub async fn flush(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self.sender.send(LogSinkCommand::Flush(tx)).await.is_ok() {
+            let _ = rx.await;
+        }
+    }
+
+    #[cfg(test)]
+    fn max_capacity(&self) -> usize {
+        self.sender.max_capacity()
+    }
+}
+
+pub struct SqliteLogWriter {
+    state_db: std::sync::Arc<StateRuntime>,
+}
+
+impl SqliteLogWriter {
+    fn new(state_db: std::sync::Arc<StateRuntime>) -> Self {
+        Self { state_db }
+    }
+}
+
+impl LogBatchWriter for SqliteLogWriter {
+    fn write_batch<'a>(
+        &'a mut self,
+        entries: Vec<LogEntry>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = self.state_db.insert_logs(entries.as_slice()).await;
+        })
+    }
+}
+
 pub struct LogDbLayer {
-    sender: mpsc::Sender<LogDbCommand>,
+    sink: BufferedLogSink<SqliteLogWriter>,
     process_uuid: String,
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
-    let process_uuid = current_process_log_uuid().to_string();
-    let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
-    tokio::spawn(run_inserter(std::sync::Arc::clone(&state_db), receiver));
-
-    LogDbLayer {
-        sender,
-        process_uuid,
-    }
+    LogDbLayer::start(state_db)
 }
 
 impl Clone for LogDbLayer {
     fn clone(&self) -> Self {
         Self {
-            sender: self.sender.clone(),
+            sink: self.sink.clone(),
             process_uuid: self.process_uuid.clone(),
         }
     }
 }
 
 impl LogDbLayer {
-    pub async fn flush(&self) {
-        let (tx, rx) = oneshot::channel();
-        if self.sender.send(LogDbCommand::Flush(tx)).await.is_ok() {
-            let _ = rx.await;
+    pub fn start(state_db: std::sync::Arc<StateRuntime>) -> Self {
+        Self::start_with_config(state_db, LogSinkQueueConfig::default())
+    }
+
+    pub fn start_with_config(
+        state_db: std::sync::Arc<StateRuntime>,
+        config: LogSinkQueueConfig,
+    ) -> Self {
+        Self {
+            sink: BufferedLogSink::start(SqliteLogWriter::new(state_db), config),
+            process_uuid: current_process_log_uuid().to_string(),
         }
+    }
+
+    pub async fn flush(&self) {
+        self.sink.flush().await;
     }
 }
 
@@ -128,6 +242,20 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let entry = self.format_event(event, ctx);
+        self.sink.try_send(entry);
+    }
+}
+
+impl LogDbLayer {
+    fn format_event<S>(
+        &self,
+        event: &Event<'_>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) -> LogEntry
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
         let metadata = event.metadata();
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
@@ -140,7 +268,7 @@ where
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0));
-        let entry = LogEntry {
+        LogEntry {
             ts: now.as_secs() as i64,
             ts_nanos: now.subsec_nanos() as i64,
             level: metadata.level().as_str().to_string(),
@@ -152,15 +280,69 @@ where
             module_path: metadata.module_path().map(ToString::to_string),
             file: metadata.file().map(ToString::to_string),
             line: metadata.line().map(|line| line as i64),
-        };
-
-        let _ = self.sender.try_send(LogDbCommand::Entry(Box::new(entry)));
+        }
     }
 }
 
-enum LogDbCommand {
+enum LogSinkCommand {
     Entry(Box<LogEntry>),
     Flush(oneshot::Sender<()>),
+}
+
+async fn run_buffered_sink<W>(
+    mut writer: W,
+    mut receiver: mpsc::Receiver<LogSinkCommand>,
+    config: LogSinkQueueConfig,
+) where
+    W: LogBatchWriter,
+{
+    let mut buffer = Vec::with_capacity(config.batch_size);
+    let mut ticker = tokio::time::interval(config.flush_interval);
+    loop {
+        tokio::select! {
+            maybe_command = receiver.recv() => {
+                match maybe_command {
+                    Some(LogSinkCommand::Entry(entry)) => {
+                        buffer.push(*entry);
+                        if buffer.len() >= config.batch_size {
+                            flush(&mut writer, &mut buffer).await;
+                        }
+                    }
+                    Some(LogSinkCommand::Flush(reply)) => {
+                        flush(&mut writer, &mut buffer).await;
+                        let _ = reply.send(());
+                    }
+                    None => {
+                        flush(&mut writer, &mut buffer).await;
+                        break;
+                    }
+                }
+            }
+            _ = ticker.tick() => {
+                flush(&mut writer, &mut buffer).await;
+            }
+        }
+    }
+}
+
+async fn flush<W>(writer: &mut W, buffer: &mut Vec<LogEntry>)
+where
+    W: LogBatchWriter,
+{
+    if buffer.is_empty() {
+        return;
+    }
+    let entries = buffer.split_off(0);
+    writer.write_batch(entries).await;
+}
+
+fn current_process_log_uuid() -> &'static str {
+    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
+    PROCESS_LOG_UUID.get_or_init(|| {
+        let pid = std::process::id();
+        let process_uuid = Uuid::new_v4();
+        format!("pid:{pid}:{process_uuid}")
+    })
 }
 
 #[derive(Debug)]
@@ -282,56 +464,6 @@ fn append_fields(fields: &mut String, values: &Record<'_>) {
     *fields = formatted.fields;
 }
 
-fn current_process_log_uuid() -> &'static str {
-    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
-    PROCESS_LOG_UUID.get_or_init(|| {
-        let pid = std::process::id();
-        let process_uuid = Uuid::new_v4();
-        format!("pid:{pid}:{process_uuid}")
-    })
-}
-
-async fn run_inserter(
-    state_db: std::sync::Arc<StateRuntime>,
-    mut receiver: mpsc::Receiver<LogDbCommand>,
-) {
-    let mut buffer = Vec::with_capacity(LOG_BATCH_SIZE);
-    let mut ticker = tokio::time::interval(LOG_FLUSH_INTERVAL);
-    loop {
-        tokio::select! {
-            maybe_command = receiver.recv() => {
-                match maybe_command {
-                    Some(LogDbCommand::Entry(entry)) => {
-                        buffer.push(*entry);
-                        if buffer.len() >= LOG_BATCH_SIZE {
-                            flush(&state_db, &mut buffer).await;
-                        }
-                    }
-                    Some(LogDbCommand::Flush(reply)) => {
-                        flush(&state_db, &mut buffer).await;
-                        let _ = reply.send(());
-                    }
-                    None => {
-                        flush(&state_db, &mut buffer).await;
-                        break;
-                    }
-                }
-            }
-            _ = ticker.tick() => {
-                flush(&state_db, &mut buffer).await;
-            }
-        }
-    }
-}
-
-async fn flush(state_db: &std::sync::Arc<StateRuntime>, buffer: &mut Vec<LogEntry>) {
-    if buffer.is_empty() {
-        return;
-    }
-    let entries = buffer.split_off(0);
-    let _ = state_db.insert_logs(entries.as_slice()).await;
-}
-
 #[derive(Default)]
 struct MessageVisitor {
     message: Option<String>,
@@ -384,6 +516,7 @@ mod tests {
     use std::io;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::MutexGuard;
 
     use pretty_assertions::assert_eq;
     use tracing_subscriber::filter::Targets;
@@ -392,6 +525,67 @@ mod tests {
     use tracing_subscriber::util::SubscriberInitExt;
 
     use super::*;
+
+    #[derive(Default)]
+    struct TestWriter {
+        batches: Arc<Mutex<Vec<Vec<LogEntry>>>>,
+    }
+
+    impl TestWriter {
+        fn batches(&self) -> MutexGuard<'_, Vec<Vec<LogEntry>>> {
+            self.batches.lock().expect("test writer mutex poisoned")
+        }
+    }
+
+    impl LogBatchWriter for TestWriter {
+        fn write_batch<'a>(
+            &'a mut self,
+            entries: Vec<LogEntry>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.batches().push(entries);
+            })
+        }
+    }
+
+    fn temp_codex_home() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()))
+    }
+
+    async fn wait_for_log_count(runtime: &StateRuntime, expected: usize) -> Vec<crate::LogRow> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let rows = runtime
+                .query_logs(&crate::LogQuery::default())
+                .await
+                .expect("query logs");
+            if rows.len() == expected {
+                return rows;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {expected} logs; saw {}",
+                rows.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    fn test_entry(message: &str) -> LogEntry {
+        LogEntry {
+            ts: 1,
+            ts_nanos: 2,
+            level: "INFO".to_string(),
+            target: "test".to_string(),
+            message: Some(message.to_string()),
+            feedback_log_body: Some(message.to_string()),
+            thread_id: Some("thread-1".to_string()),
+            process_uuid: Some("process-1".to_string()),
+            module_path: Some("module".to_string()),
+            file: Some("file.rs".to_string()),
+            line: Some(7),
+        }
+    }
 
     #[derive(Clone, Default)]
     struct SharedWriter {
@@ -435,8 +629,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_feedback_logs_match_feedback_formatter_shape() {
-        let codex_home =
-            std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
+        let codex_home = temp_codex_home();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
@@ -494,8 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn flush_persists_logs_for_query() {
-        let codex_home =
-            std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
+        let codex_home = temp_codex_home();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
@@ -522,5 +714,195 @@ mod tests {
         assert_eq!(after_flush[0].message.as_deref(), Some("buffered-log"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn start_with_config_uses_configured_queue_capacity() {
+        let codex_home = temp_codex_home();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let layer = LogDbLayer::start_with_config(
+            runtime,
+            LogSinkQueueConfig {
+                queue_capacity: 3,
+                batch_size: 2,
+                flush_interval: std::time::Duration::from_secs(60),
+            },
+        );
+
+        assert_eq!(layer.sink.max_capacity(), 3);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn configured_batch_size_flushes_without_explicit_flush() {
+        let codex_home = temp_codex_home();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        let layer = LogDbLayer::start_with_config(
+            runtime.clone(),
+            LogSinkQueueConfig {
+                queue_capacity: 8,
+                batch_size: 2,
+                flush_interval: std::time::Duration::from_secs(60),
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let guard = tracing_subscriber::registry()
+            .with(
+                layer
+                    .clone()
+                    .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
+            )
+            .set_default();
+
+        tracing::info!("first-batch-log");
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert_eq!(
+            runtime
+                .query_logs(&crate::LogQuery::default())
+                .await
+                .expect("query logs before batch fills")
+                .len(),
+            0
+        );
+
+        tracing::info!("second-batch-log");
+        let after_batch = wait_for_log_count(&runtime, 2).await;
+        drop(guard);
+
+        assert_eq!(
+            after_batch
+                .iter()
+                .map(|row| row.message.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("first-batch-log"), Some("second-batch-log")]
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn configured_flush_interval_persists_buffered_logs() {
+        let codex_home = temp_codex_home();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        let layer = LogDbLayer::start_with_config(
+            runtime.clone(),
+            LogSinkQueueConfig {
+                queue_capacity: 8,
+                batch_size: 128,
+                flush_interval: std::time::Duration::from_millis(10),
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let guard = tracing_subscriber::registry()
+            .with(
+                layer
+                    .clone()
+                    .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
+            )
+            .set_default();
+
+        tracing::info!("interval-log");
+        let after_interval = wait_for_log_count(&runtime, 1).await;
+        drop(guard);
+
+        assert_eq!(after_interval[0].message.as_deref(), Some("interval-log"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn event_queue_drops_new_entries_when_full() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let sink = BufferedLogSink::<TestWriter> {
+            sender,
+            _writer: std::marker::PhantomData,
+        };
+
+        sink.try_send(test_entry("first-queued-log"));
+        sink.try_send(test_entry("dropped-log"));
+
+        match receiver.try_recv().expect("first entry queued") {
+            LogSinkCommand::Entry(entry) => {
+                assert_eq!(*entry, test_entry("first-queued-log"));
+            }
+            LogSinkCommand::Flush(_) => panic!("expected queued entry"),
+        }
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn flush_waits_for_queue_capacity_and_receiver_processing() {
+        let writer = TestWriter::default();
+        let batches = Arc::clone(&writer.batches);
+        let sink = BufferedLogSink::start(
+            writer,
+            LogSinkQueueConfig {
+                queue_capacity: 1,
+                batch_size: 8,
+                flush_interval: std::time::Duration::from_secs(60),
+            },
+        );
+
+        sink.try_send(test_entry("queued-before-flush"));
+        let flush_task = tokio::spawn({
+            let sink = sink.clone();
+            async move {
+                sink.flush().await;
+            }
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), flush_task)
+            .await
+            .expect("flush task completes")
+            .expect("flush task succeeds");
+
+        let batches = batches.lock().expect("test writer mutex poisoned");
+        assert_eq!(
+            batches.as_slice(),
+            &[vec![test_entry("queued-before-flush")]]
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_close_drains_buffered_entries() {
+        let writer = TestWriter::default();
+        let batches = Arc::clone(&writer.batches);
+        let sink = BufferedLogSink::start(
+            writer,
+            LogSinkQueueConfig {
+                queue_capacity: 8,
+                batch_size: 8,
+                flush_interval: std::time::Duration::from_secs(60),
+            },
+        );
+
+        sink.try_send(test_entry("drained-on-close"));
+        drop(sink);
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            {
+                let batches = batches.lock().expect("test writer mutex poisoned");
+                if !batches.is_empty() {
+                    assert_eq!(batches.as_slice(), &[vec![test_entry("drained-on-close")]]);
+                    break;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for receiver close drain"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 }
