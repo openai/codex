@@ -662,7 +662,13 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
     match config.experimental_thread_store_endpoint.as_deref() {
-        Some(endpoint) => Arc::new(RemoteThreadStore::new(endpoint)),
+        Some(endpoint) => {
+            #[cfg(any(test, debug_assertions))]
+            if let Some(store) = codex_thread_store::test_thread_store(endpoint) {
+                return store;
+            }
+            Arc::new(RemoteThreadStore::new(endpoint))
+        }
         None => Arc::new(configured_local_thread_store(config)),
     }
 }

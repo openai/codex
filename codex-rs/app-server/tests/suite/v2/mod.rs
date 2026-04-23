@@ -34,6 +34,7 @@ mod plugin_read;
 mod plugin_uninstall;
 mod rate_limits;
 mod realtime_conversation;
+mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
 mod review;
