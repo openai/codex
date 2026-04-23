@@ -26,8 +26,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let rollout_path = match self.thread_manager.get_thread(thread_id).await {
-            Ok(thread) => match thread.rollout_path() {
+        let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
+        let rollout_path = match running_thread.as_ref() {
+            Some(thread) => match thread.rollout_path() {
                 Some(path) => path,
                 None => {
                     self.send_invalid_request_error(
@@ -38,7 +39,7 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            Err(_) => {
+            None => {
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
                     .await
                 {
@@ -79,9 +80,9 @@ impl CodexMessageProcessor {
             thread_state.listener_command_tx()
         };
         let status = params.status.map(thread_goal_status_to_state);
+        let objective = params.objective.as_deref().map(str::trim);
 
-        let goal = if let Some(objective) = params.objective {
-            let objective = objective.trim();
+        if let Some(objective) = objective {
             if objective.is_empty() {
                 self.send_invalid_request_error(
                     request_id,
@@ -94,6 +95,14 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
+        } else if let Some(token_budget) = params.token_budget
+            && let Err(message) = validate_goal_budget(token_budget)
+        {
+            self.send_invalid_request_error(request_id, message).await;
+            return;
+        }
+
+        let goal = if let Some(objective) = objective {
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
                     if let Some(goal) = goal.as_ref().filter(|goal| {
@@ -131,12 +140,6 @@ impl CodexMessageProcessor {
                 Err(err) => Err(err),
             }
         } else {
-            if let Some(token_budget) = params.token_budget
-                && let Err(message) = validate_goal_budget(token_budget)
-            {
-                self.send_invalid_request_error(request_id, message).await;
-                return;
-            }
             state_db
                 .update_thread_goal(
                     thread_id,
