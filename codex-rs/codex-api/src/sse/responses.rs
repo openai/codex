@@ -74,12 +74,6 @@ pub fn spawn_response_stream(
         .get(OPENAI_MODEL_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
-    let model_verifications = stream_response
-        .headers
-        .get(OPENAI_MODEL_VERIFICATION_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(parse_model_verifications)
-        .filter(|verifications| !verifications.is_empty());
     let reasoning_included = stream_response
         .headers
         .get(X_REASONING_INCLUDED_HEADER)
@@ -96,11 +90,6 @@ pub fn spawn_response_stream(
     tokio::spawn(async move {
         if let Some(model) = server_model {
             let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
-        }
-        if let Some(verifications) = model_verifications {
-            let _ = tx_event
-                .send(Ok(ResponseEvent::ModelVerifications(verifications)))
-                .await;
         }
         for snapshot in rate_limit_snapshots {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -1147,79 +1136,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_response_stream_emits_model_verification_header() {
+    async fn spawn_response_stream_ignores_model_verification_header() {
         let mut headers = HeaderMap::new();
         headers.insert(
             OPENAI_MODEL_VERIFICATION_HEADER,
             HeaderValue::from_static(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION),
-        );
-        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
-        let stream_response = StreamResponse {
-            status: StatusCode::OK,
-            headers,
-            bytes: Box::pin(bytes),
-        };
-
-        let mut stream = spawn_response_stream(
-            stream_response,
-            idle_timeout(),
-            /*telemetry*/ None,
-            /*turn_state*/ None,
-        );
-        let event = stream
-            .rx_event
-            .recv()
-            .await
-            .expect("expected model verification event")
-            .expect("expected ok event");
-
-        assert_matches!(
-            event,
-            ResponseEvent::ModelVerifications(verifications)
-                if verifications == vec![ModelVerification::TrustedAccessForCyber]
-        );
-    }
-
-    #[tokio::test]
-    async fn spawn_response_stream_parses_comma_delimited_model_verifications() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            OPENAI_MODEL_VERIFICATION_HEADER,
-            HeaderValue::from_static("trusted_access_for_cyber, unknown"),
-        );
-        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
-        let stream_response = StreamResponse {
-            status: StatusCode::OK,
-            headers,
-            bytes: Box::pin(bytes),
-        };
-
-        let mut stream = spawn_response_stream(
-            stream_response,
-            idle_timeout(),
-            /*telemetry*/ None,
-            /*turn_state*/ None,
-        );
-        let event = stream
-            .rx_event
-            .recv()
-            .await
-            .expect("expected model verification event")
-            .expect("expected ok event");
-
-        assert_matches!(
-            event,
-            ResponseEvent::ModelVerifications(verifications)
-                if verifications == vec![ModelVerification::TrustedAccessForCyber]
-        );
-    }
-
-    #[tokio::test]
-    async fn process_sse_ignores_unknown_model_verification_header() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            OPENAI_MODEL_VERIFICATION_HEADER,
-            HeaderValue::from_static("unknown_recommendation"),
         );
         let completed = json!({
             "type": "response.completed",
