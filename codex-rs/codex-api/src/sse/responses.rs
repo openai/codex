@@ -28,7 +28,6 @@ use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
-const OPENAI_MODEL_VERIFICATION_HEADER: &str = "openai-verification-recommendation";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 /// Streams SSE events from an on-disk fixture for tests.
@@ -216,53 +215,17 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
     })
 }
 
-fn header_model_verifications_from_json(value: &Value) -> Option<Vec<ModelVerification>> {
-    let headers = value.as_object()?;
-    headers.iter().find_map(|(name, value)| {
-        if name.eq_ignore_ascii_case(OPENAI_MODEL_VERIFICATION_HEADER) {
-            model_verifications_from_json_value(value)
-        } else {
-            None
-        }
-    })
-}
-
 pub(crate) fn model_verifications_from_event_value(
     event: &Value,
 ) -> Option<Vec<ModelVerification>> {
+    if event.get("type").and_then(Value::as_str) != Some("response.metadata") {
+        return None;
+    }
+
     event
-        .get("openai_verification_recommendation")
+        .get("metadata")
+        .and_then(|metadata| metadata.get("openai_verification_recommendation"))
         .and_then(model_verifications_from_json_value)
-        .or_else(|| {
-            event
-                .get("metadata")
-                .and_then(|metadata| metadata.get("openai_verification_recommendation"))
-                .and_then(model_verifications_from_json_value)
-        })
-        .or_else(|| {
-            event
-                .get("response")
-                .and_then(|response| response.get("openai_verification_recommendation"))
-                .and_then(model_verifications_from_json_value)
-        })
-        .or_else(|| {
-            event
-                .get("response")
-                .and_then(|response| response.get("headers"))
-                .and_then(header_model_verifications_from_json)
-        })
-        .or_else(|| {
-            event.get("headers").and_then(|headers| {
-                headers
-                    .get("openai_verification_recommendation")
-                    .and_then(model_verifications_from_json_value)
-            })
-        })
-        .or_else(|| {
-            event
-                .get("headers")
-                .and_then(header_model_verifications_from_json)
-        })
 }
 
 fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
@@ -1139,7 +1102,7 @@ mod tests {
     async fn spawn_response_stream_ignores_model_verification_header() {
         let mut headers = HeaderMap::new();
         headers.insert(
-            OPENAI_MODEL_VERIFICATION_HEADER,
+            "openai-verification-recommendation",
             HeaderValue::from_static(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION),
         );
         let completed = json!({
@@ -1319,39 +1282,6 @@ mod tests {
             "response_id": "resp-1",
             "metadata": {
                 "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
-            }
-        });
-
-        assert_eq!(
-            model_verifications_from_event_value(&event),
-            Some(vec![ModelVerification::TrustedAccessForCyber])
-        );
-    }
-
-    #[test]
-    fn responses_stream_event_model_verification_reads_response_headers() {
-        let event = json!({
-            "type": "response.created",
-            "response": {
-                "id": "resp-1",
-                "headers": {
-                    "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
-                }
-            }
-        });
-
-        assert_eq!(
-            model_verifications_from_event_value(&event),
-            Some(vec![ModelVerification::TrustedAccessForCyber])
-        );
-    }
-
-    #[test]
-    fn responses_stream_event_model_verification_reads_top_level_headers() {
-        let event = json!({
-            "type": "response.metadata",
-            "headers": {
-                "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
             }
         });
 
