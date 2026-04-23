@@ -104,7 +104,10 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::SessionStart => matcher,
-        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+        HookEventName::PreCompact
+        | HookEventName::PostCompact
+        | HookEventName::UserPromptSubmit
+        | HookEventName::Stop => None,
     }
 }
 
@@ -249,6 +252,14 @@ mod tests {
         );
         assert_eq!(
             matcher_pattern_for_event(HookEventName::Stop, Some("^done$")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PreCompact, Some("^auto$")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PostCompact, Some("^auto$")),
             None
         );
     }

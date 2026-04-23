@@ -59,12 +59,20 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct StatelessHookOutput {
+    pub universal: UniversalOutput,
+    pub invalid_reason: Option<String>,
+}
+
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PermissionRequestDecisionWire;
+use crate::schema::PostCompactCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
+use crate::schema::PreCompactCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
@@ -188,6 +196,26 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
     })
 }
 
+pub(crate) fn parse_pre_compact(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PreCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_stateless_hook_universal("PreCompact", &universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_post_compact(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PostCompactCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_stateless_hook_universal("PostCompact", &universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason,
+    })
+}
+
 pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitOutput> {
     let wire: UserPromptSubmitCommandOutputWire = parse_json(stdout)?;
     let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
@@ -289,6 +317,25 @@ fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Opti
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
     if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
+fn unsupported_stateless_hook_universal(
+    event_name: &str,
+    universal: &UniversalOutput,
+) -> Option<String> {
+    if !universal.continue_processing {
+        Some(format!(
+            "{event_name} hook returned unsupported continue:false"
+        ))
+    } else if universal.stop_reason.is_some() {
+        Some(format!("{event_name} hook returned unsupported stopReason"))
+    } else if universal.suppress_output {
+        Some(format!(
+            "{event_name} hook returned unsupported suppressOutput"
+        ))
     } else {
         None
     }
