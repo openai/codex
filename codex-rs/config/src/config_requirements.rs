@@ -1231,7 +1231,7 @@ mod tests {
 
         let allowed_approval_policies = vec![AskForApproval::UnlessTrusted, AskForApproval::Never];
         let allowed_approvals_reviewers =
-            vec![ApprovalsReviewer::GuardianSubagent, ApprovalsReviewer::User];
+            vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User];
         let allowed_sandbox_modes = vec![
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
@@ -1740,7 +1740,7 @@ allowed_approvals_reviewers = ["user"]
             Err(ConstraintError::InvalidValue {
                 field_name: "approvals_reviewer",
                 candidate: "User".into(),
-                allowed: "[GuardianSubagent]".into(),
+                allowed: "[AutoReview]".into(),
                 requirement_source: source_location,
             })
         );
@@ -1887,13 +1887,13 @@ allowed_approvals_reviewers = ["user"]
 
         assert_eq!(
             requirements.approvals_reviewer.value(),
-            ApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview,
             "currently, there is no way to specify the default value for approvals reviewer in the toml, so it picks the first allowed value"
         );
         assert!(
             requirements
                 .approvals_reviewer
-                .can_set(&ApprovalsReviewer::GuardianSubagent)
+                .can_set(&ApprovalsReviewer::AutoReview)
                 .is_ok()
         );
         assert!(
@@ -1916,7 +1916,7 @@ allowed_approvals_reviewers = ["user"]
 
         assert_eq!(
             requirements.approvals_reviewer.value(),
-            ApprovalsReviewer::GuardianSubagent
+            ApprovalsReviewer::AutoReview
         );
 
         Ok(())

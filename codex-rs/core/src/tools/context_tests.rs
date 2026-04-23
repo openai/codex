@@ -390,7 +390,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
-        session_command: None,
+        hook_command: None,
     }
     .to_response_item("call-42", &payload);
 

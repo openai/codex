@@ -947,6 +947,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             timezone: None,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
             model: "test-model".to_string(),

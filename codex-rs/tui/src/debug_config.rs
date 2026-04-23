@@ -619,7 +619,7 @@ mod tests {
                 Some(RequirementSource::CloudRequirements),
             ),
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Constrained::allow_any(ApprovalsReviewer::AutoReview),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             sandbox_policy: ConstrainedWithSource::new(
@@ -680,7 +680,7 @@ mod tests {
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
@@ -765,13 +765,13 @@ mod tests {
     fn debug_config_output_lists_approvals_reviewer_as_requirement() {
         let requirements = ConfigRequirements {
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
+                Constrained::allow_any(ApprovalsReviewer::AutoReview),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             ..ConfigRequirements::default()
         };
         let requirements_toml = ConfigRequirementsToml {
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             ..ConfigRequirementsToml::default()
         };
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
