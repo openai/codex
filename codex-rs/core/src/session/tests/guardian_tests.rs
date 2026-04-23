@@ -441,11 +441,11 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(

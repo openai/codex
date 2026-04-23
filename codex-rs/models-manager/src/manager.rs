@@ -17,9 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
+use tracing::Instrument as _;
 use tracing::error;
 use tracing::info;
-use tracing::instrument;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -76,25 +76,44 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
-    async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset>;
+    async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
+        async move {
+            let catalog = self.raw_model_catalog(refresh_strategy).await;
+            build_available_models(self.auth_mode(), catalog.models)
+        }
+        .instrument(tracing::info_span!(
+            "list_models",
+            refresh_strategy = %refresh_strategy
+        ))
+        .await
+    }
 
     /// Return the active raw model catalog, refreshing according to the specified strategy.
     async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse;
+
+    /// Return the current in-memory remote model catalog without refreshing or loading cache state.
+    async fn get_remote_models(&self) -> Vec<ModelInfo>;
+
+    /// Attempt to return the current in-memory remote model catalog without blocking.
+    ///
+    /// Returns an error if the internal lock cannot be acquired.
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError>;
+
+    /// Return the authentication mode used to filter model availability.
+    fn auth_mode(&self) -> Option<AuthMode>;
 
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask>;
 
-    fn list_collaboration_modes_for_config(
-        &self,
-        collaboration_modes_config: CollaborationModesConfig,
-    ) -> Vec<CollaborationModeMask>;
-
     /// Attempt to list models without blocking, using the current cached state.
     ///
     /// Returns an error if the internal lock cannot be acquired.
-    fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError>;
+    fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
+        let remote_models = self.try_get_remote_models()?;
+        Ok(build_available_models(self.auth_mode(), remote_models))
+    }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
@@ -105,11 +124,31 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         &self,
         model: &Option<String>,
         refresh_strategy: RefreshStrategy,
-    ) -> String;
+    ) -> String {
+        async move {
+            if let Some(model) = model.as_ref() {
+                return model.to_string();
+            }
+            default_model_from_available(self.list_models(refresh_strategy).await)
+        }
+        .instrument(tracing::info_span!(
+            "get_default_model",
+            model.provided = model.is_some(),
+            refresh_strategy = %refresh_strategy
+        ))
+        .await
+    }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
-    async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo;
+    async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo {
+        async move {
+            let remote_models = self.get_remote_models().await;
+            construct_model_info_from_candidates(model, &remote_models, config)
+        }
+        .instrument(tracing::info_span!("get_model_info", model = model))
+        .await
+    }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
@@ -134,7 +173,7 @@ pub struct OpenAiModelsManager {
 /// Static model manager backed by an authoritative in-process catalog.
 #[derive(Debug)]
 pub struct StaticModelsManager {
-    remote_models: RwLock<Vec<ModelInfo>>,
+    remote_models: Vec<ModelInfo>,
     collaboration_modes_config: CollaborationModesConfig,
     auth_manager: Option<Arc<AuthManager>>,
 }
@@ -169,7 +208,7 @@ impl StaticModelsManager {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         Self {
-            remote_models: RwLock::new(model_catalog.models),
+            remote_models: model_catalog.models,
             collaboration_modes_config,
             auth_manager,
         }
@@ -178,19 +217,6 @@ impl StaticModelsManager {
 
 #[async_trait]
 impl ModelsManager for OpenAiModelsManager {
-    #[instrument(
-        level = "info",
-        skip(self),
-        fields(refresh_strategy = %refresh_strategy)
-    )]
-    async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
-        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
-            error!("failed to refresh available models: {err}");
-        }
-        let remote_models = self.get_remote_models().await;
-        build_available_models(self.auth_mode(), remote_models)
-    }
-
     async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
@@ -200,49 +226,22 @@ impl ModelsManager for OpenAiModelsManager {
         }
     }
 
+    async fn get_remote_models(&self) -> Vec<ModelInfo> {
+        self.remote_models.read().await.clone()
+    }
+
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
+        Ok(self.remote_models.try_read()?.clone())
+    }
+
+    fn auth_mode(&self) -> Option<AuthMode> {
+        self.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_mode())
+    }
+
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.list_collaboration_modes_for_config(self.collaboration_modes_config)
-    }
-
-    fn list_collaboration_modes_for_config(
-        &self,
-        collaboration_modes_config: CollaborationModesConfig,
-    ) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(collaboration_modes_config)
-    }
-
-    fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        let remote_models = self.try_get_remote_models()?;
-        Ok(build_available_models(self.auth_mode(), remote_models))
-    }
-
-    #[instrument(
-        level = "info",
-        skip(self, model),
-        fields(
-            model.provided = model.is_some(),
-            refresh_strategy = %refresh_strategy
-        )
-    )]
-    async fn get_default_model(
-        &self,
-        model: &Option<String>,
-        refresh_strategy: RefreshStrategy,
-    ) -> String {
-        if let Some(model) = model.as_ref() {
-            return model.to_string();
-        }
-        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
-            error!("failed to refresh available models: {err}");
-        }
-        let remote_models = self.get_remote_models().await;
-        default_model_from_available(build_available_models(self.auth_mode(), remote_models))
-    }
-
-    #[instrument(level = "info", skip(self, config), fields(model = model))]
-    async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo {
-        let remote_models = self.get_remote_models().await;
-        construct_model_info_from_candidates(model, &remote_models, config)
+        builtin_collaboration_mode_presets(self.collaboration_modes_config)
     }
 
     async fn refresh_if_new_etag(&self, etag: String) {
@@ -309,12 +308,6 @@ impl OpenAiModelsManager {
         self.auth_mode() == Some(AuthMode::Chatgpt) || self.endpoint_client.has_command_auth()
     }
 
-    fn auth_mode(&self) -> Option<AuthMode> {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_mode())
-    }
-
     async fn get_etag(&self) -> Option<String> {
         self.etag.read().await.clone()
     }
@@ -341,6 +334,8 @@ impl OpenAiModelsManager {
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
         info!(client_version, "models cache: evaluating cache eligibility");
+        // TODO(celia-oai): Include provider identity in cache eligibility so switching
+        // providers does not reuse a fresh models_cache.json entry from another provider.
         let cache = match self.cache_manager.load_fresh(&client_version).await {
             Some(cache) => cache,
             None => {
@@ -358,101 +353,35 @@ impl OpenAiModelsManager {
         );
         true
     }
-
-    async fn get_remote_models(&self) -> Vec<ModelInfo> {
-        self.remote_models.read().await.clone()
-    }
-
-    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
-        Ok(self.remote_models.try_read()?.clone())
-    }
-
-    #[cfg(test)]
-    async fn manipulate_cache_for_test<F>(&self, f: F) -> std::io::Result<()>
-    where
-        F: FnOnce(&mut chrono::DateTime<chrono::Utc>),
-    {
-        self.cache_manager.manipulate_cache_for_test(f).await
-    }
-
-    #[cfg(test)]
-    async fn mutate_cache_for_test<F>(&self, f: F) -> std::io::Result<()>
-    where
-        F: FnOnce(&mut super::cache::ModelsCache),
-    {
-        self.cache_manager.mutate_cache_for_test(f).await
-    }
-
-    #[cfg(test)]
-    fn set_cache_ttl_for_test(&mut self, ttl: Duration) {
-        self.cache_manager.set_ttl(ttl);
-    }
 }
 
 #[async_trait]
 impl ModelsManager for StaticModelsManager {
-    async fn list_models(&self, _refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
-        build_available_models(self.auth_mode(), self.get_remote_models().await)
-    }
-
     async fn raw_model_catalog(&self, _refresh_strategy: RefreshStrategy) -> ModelsResponse {
         ModelsResponse {
             models: self.get_remote_models().await,
         }
     }
 
-    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.list_collaboration_modes_for_config(self.collaboration_modes_config)
+    async fn get_remote_models(&self) -> Vec<ModelInfo> {
+        self.remote_models.clone()
     }
 
-    fn list_collaboration_modes_for_config(
-        &self,
-        collaboration_modes_config: CollaborationModesConfig,
-    ) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(collaboration_modes_config)
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
+        Ok(self.remote_models.clone())
     }
 
-    fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        let remote_models = self.try_get_remote_models()?;
-        Ok(build_available_models(self.auth_mode(), remote_models))
-    }
-
-    async fn get_default_model(
-        &self,
-        model: &Option<String>,
-        _refresh_strategy: RefreshStrategy,
-    ) -> String {
-        if let Some(model) = model.as_ref() {
-            return model.to_string();
-        }
-        default_model_from_available(build_available_models(
-            self.auth_mode(),
-            self.get_remote_models().await,
-        ))
-    }
-
-    async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo {
-        let remote_models = self.get_remote_models().await;
-        construct_model_info_from_candidates(model, &remote_models, config)
-    }
-
-    async fn refresh_if_new_etag(&self, _etag: String) {}
-}
-
-impl StaticModelsManager {
     fn auth_mode(&self) -> Option<AuthMode> {
         self.auth_manager
             .as_ref()
             .and_then(|auth_manager| auth_manager.auth_mode())
     }
 
-    async fn get_remote_models(&self) -> Vec<ModelInfo> {
-        self.remote_models.read().await.clone()
+    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets(self.collaboration_modes_config)
     }
 
-    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
-        Ok(self.remote_models.try_read()?.clone())
-    }
+    async fn refresh_if_new_etag(&self, _etag: String) {}
 }
 
 fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
