@@ -20,6 +20,7 @@ export type { AppScreenshot } from "./AppScreenshot";
 export type { AppSummary } from "./AppSummary";
 export type { AppToolApproval } from "./AppToolApproval";
 export type { AppToolsConfig } from "./AppToolsConfig";
+export type { ApprovalPolicyConstraint } from "./ApprovalPolicyConstraint";
 export type { ApprovalsReviewer } from "./ApprovalsReviewer";
 export type { AppsConfig } from "./AppsConfig";
 export type { AppsDefaultConfig } from "./AppsDefaultConfig";
@@ -143,6 +144,9 @@ export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsRespons
 export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GitInfo } from "./GitInfo";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
+export type { GranularApprovalConfig } from "./GranularApprovalConfig";
+export type { GranularApprovalConstraint } from "./GranularApprovalConstraint";
+export type { GranularApprovalWildcard } from "./GranularApprovalWildcard";
 export type { GuardianApprovalReview } from "./GuardianApprovalReview";
 export type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewAction";
 export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatus";

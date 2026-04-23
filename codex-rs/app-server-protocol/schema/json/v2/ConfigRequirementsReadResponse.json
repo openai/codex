@@ -1,16 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ApprovalsReviewer": {
-      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
-      "enum": [
-        "user",
-        "auto_review",
-        "guardian_subagent"
-      ],
-      "type": "string"
-    },
-    "AskForApproval": {
+    "ApprovalPolicyConstraint": {
       "oneOf": [
         {
           "enum": [
@@ -25,46 +16,31 @@
           "additionalProperties": false,
           "properties": {
             "granular": {
-              "properties": {
-                "mcp_elicitations": {
-                  "type": "boolean"
-                },
-                "request_permissions": {
-                  "default": false,
-                  "type": "boolean"
-                },
-                "rules": {
-                  "type": "boolean"
-                },
-                "sandbox_approval": {
-                  "type": "boolean"
-                },
-                "skill_approval": {
-                  "default": false,
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "mcp_elicitations",
-                "rules",
-                "sandbox_approval"
-              ],
-              "type": "object"
+              "$ref": "#/definitions/GranularApprovalConstraint"
             }
           },
           "required": [
             "granular"
           ],
-          "title": "GranularAskForApproval",
+          "title": "GranularApprovalPolicyConstraint",
           "type": "object"
         }
       ]
+    },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
+      "enum": [
+        "user",
+        "auto_review",
+        "guardian_subagent"
+      ],
+      "type": "string"
     },
     "ConfigRequirements": {
       "properties": {
         "allowedApprovalPolicies": {
           "items": {
-            "$ref": "#/definitions/AskForApproval"
+            "$ref": "#/definitions/ApprovalPolicyConstraint"
           },
           "type": [
             "array",
@@ -204,6 +180,49 @@
         "hooks"
       ],
       "type": "object"
+    },
+    "GranularApprovalConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rules": {
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
+    },
+    "GranularApprovalConstraint": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GranularApprovalWildcard"
+        },
+        {
+          "$ref": "#/definitions/GranularApprovalConfig"
+        }
+      ]
+    },
+    "GranularApprovalWildcard": {
+      "enum": [
+        "any"
+      ],
+      "type": "string"
     },
     "ManagedHooksRequirements": {
       "properties": {

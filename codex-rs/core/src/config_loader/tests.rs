@@ -681,7 +681,10 @@ personality = true
             .allowed_approval_policies
             .as_deref()
             .cloned(),
-        Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
+        Some(vec![
+            AskForApproval::Never.into(),
+            AskForApproval::OnRequest.into(),
+        ])
     );
     assert_eq!(
         config_requirements_toml
@@ -771,7 +774,7 @@ allowed_approval_policies = ["on-request"]
         loader_overrides,
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -828,7 +831,7 @@ allowed_approval_policies = ["on-request"]
     config_requirements_toml.merge_unset_fields(
         RequirementSource::CloudRequirements,
         ConfigRequirementsToml {
-            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             remote_sandbox_config: None,
@@ -857,7 +860,7 @@ allowed_approval_policies = ["on-request"]
             .allowed_approval_policies
             .as_ref()
             .map(|sourced| sourced.value.clone()),
-        Some(vec![AskForApproval::Never])
+        Some(vec![AskForApproval::Never.into()])
     );
     assert_eq!(
         config_requirements_toml
@@ -1037,7 +1040,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let requirements = ConfigRequirementsToml {
-        allowed_approval_policies: Some(vec![AskForApproval::Never]),
+        allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
         remote_sandbox_config: None,

@@ -606,6 +606,32 @@
     "AppToolsConfig": {
       "type": "object"
     },
+    "ApprovalPolicyConstraint": {
+      "oneOf": [
+        {
+          "enum": [
+            "untrusted",
+            "on-failure",
+            "on-request",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "granular": {
+              "$ref": "#/definitions/GranularApprovalConstraint"
+            }
+          },
+          "required": [
+            "granular"
+          ],
+          "title": "GranularApprovalPolicyConstraint",
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalsReviewer": {
       "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
       "enum": [
@@ -3771,7 +3797,7 @@
       "properties": {
         "allowedApprovalPolicies": {
           "items": {
-            "$ref": "#/definitions/AskForApproval"
+            "$ref": "#/definitions/ApprovalPolicyConstraint"
           },
           "type": [
             "array",
@@ -5866,6 +5892,49 @@
         }
       },
       "type": "object"
+    },
+    "GranularApprovalConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rules": {
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
+    },
+    "GranularApprovalConstraint": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GranularApprovalWildcard"
+        },
+        {
+          "$ref": "#/definitions/GranularApprovalConfig"
+        }
+      ]
+    },
+    "GranularApprovalWildcard": {
+      "enum": [
+        "any"
+      ],
+      "type": "string"
     },
     "GuardianApprovalReview": {
       "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",

@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use codex_config::AppRequirementToml;
+pub use codex_config::ApprovalPolicyConstraint;
 pub use codex_config::AppsRequirementsToml;
 pub use codex_config::CloudRequirementsLoadError;
 pub use codex_config::CloudRequirementsLoadErrorCode;
@@ -45,6 +46,7 @@ pub use codex_config::ConstrainedWithSource;
 pub use codex_config::FeatureRequirementsToml;
 pub use codex_config::FilesystemConstraints;
 pub use codex_config::FilesystemDenyReadPattern;
+pub use codex_config::GranularApprovalConstraint;
 pub use codex_config::HookEventsToml;
 pub use codex_config::HookHandlerConfig;
 pub use codex_config::LoaderOverrides;
@@ -1048,7 +1050,7 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             sandbox_mode,
         } = legacy;
         if let Some(approval_policy) = approval_policy {
-            config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
+            config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy.into()]);
         }
         if let Some(approvals_reviewer) = approvals_reviewer {
             let mut allowed_reviewers = vec![approvals_reviewer];

@@ -270,6 +270,50 @@ pub enum AskForApproval {
     Never,
 }
 
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum ApprovalPolicyConstraint {
+    #[serde(rename = "untrusted")]
+    #[ts(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    #[experimental("askForApproval.granular")]
+    Granular(GranularApprovalConstraint),
+    Never,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum GranularApprovalConstraint {
+    Any(GranularApprovalWildcard),
+    Exact(GranularApprovalConfig),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum GranularApprovalWildcard {
+    Any,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub struct GranularApprovalConfig {
+    pub sandbox_approval: bool,
+    pub rules: bool,
+    #[serde(default)]
+    pub skill_approval: bool,
+    #[serde(default)]
+    pub request_permissions: bool,
+    pub mcp_elicitations: bool,
+}
+
 impl AskForApproval {
     pub fn to_core(self) -> CoreAskForApproval {
         match self {
@@ -944,7 +988,7 @@ pub struct ConfigReadResponse {
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirements {
     #[experimental(nested)]
-    pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_approval_policies: Option<Vec<ApprovalPolicyConstraint>>,
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
@@ -9011,13 +9055,15 @@ mod tests {
     fn config_requirements_granular_allowed_approval_policy_is_marked_experimental() {
         let reason =
             crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
-                allowed_approval_policies: Some(vec![AskForApproval::Granular {
-                    sandbox_approval: true,
-                    rules: true,
-                    skill_approval: false,
-                    request_permissions: false,
-                    mcp_elicitations: false,
-                }]),
+                allowed_approval_policies: Some(vec![ApprovalPolicyConstraint::Granular(
+                    GranularApprovalConstraint::Exact(GranularApprovalConfig {
+                        sandbox_approval: true,
+                        rules: true,
+                        skill_approval: false,
+                        request_permissions: false,
+                        mcp_elicitations: false,
+                    }),
+                )]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
@@ -9028,6 +9074,31 @@ mod tests {
             });
 
         assert_eq!(reason, Some("askForApproval.granular"));
+    }
+
+    #[test]
+    fn approval_policy_constraint_any_granular_uses_granular_any_wire_shape() {
+        let value = serde_json::to_value(ApprovalPolicyConstraint::Granular(
+            GranularApprovalConstraint::Any(GranularApprovalWildcard::Any),
+        ))
+        .expect("approval policy constraint should serialize");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "granular": "any",
+            })
+        );
+
+        let decoded: ApprovalPolicyConstraint =
+            serde_json::from_value(value).expect("approval policy constraint should deserialize");
+
+        assert_eq!(
+            decoded,
+            ApprovalPolicyConstraint::Granular(GranularApprovalConstraint::Any(
+                GranularApprovalWildcard::Any
+            ))
+        );
     }
 
     #[test]
