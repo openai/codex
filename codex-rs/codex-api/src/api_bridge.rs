@@ -56,7 +56,17 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if let Some(message) = cyber_policy_message_from_body(&body_text) {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
+                        && let Some(error) = parsed.get("error")
+                        && error.get("code").and_then(Value::as_str)
+                            == Some(CYBER_POLICY_ERROR_CODE)
+                    {
+                        let message = error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .filter(|message| !message.trim().is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
                         CodexErr::CyberPolicy { message }
                     } else if body_text
                         .contains("The image data you provided does not represent a valid image")
@@ -177,20 +187,4 @@ struct UsageErrorBody {
     error_type: Option<String>,
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
-}
-
-fn cyber_policy_message_from_body(body: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<Value>(body).ok()?;
-    let error = parsed.get("error")?;
-    if error.get("code").and_then(Value::as_str) != Some(CYBER_POLICY_ERROR_CODE) {
-        return None;
-    }
-
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .filter(|message| !message.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
-    Some(message)
 }
