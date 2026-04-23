@@ -32,6 +32,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
             identity_error_code: None,
         }),
         ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ApiError::CyberPolicy { message } => CodexErr::CyberPolicy { message },
         ApiError::Transport(transport) => match transport {
             TransportError::Http {
                 status,
@@ -55,7 +56,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if body_text
+                    if let Some(message) = cyber_policy_message_from_body(&body_text) {
+                        CodexErr::CyberPolicy { message }
+                    } else if body_text
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
@@ -125,6 +128,9 @@ const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 const X_OPENAI_AUTHORIZATION_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
+const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
+const CYBER_POLICY_FALLBACK_MESSAGE: &str =
+    "This request has been flagged for possible cybersecurity risk.";
 
 #[cfg(test)]
 #[path = "api_bridge_tests.rs"]
@@ -171,4 +177,29 @@ struct UsageErrorBody {
     error_type: Option<String>,
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorResponse {
+    error: ApiErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorBody {
+    code: Option<String>,
+    message: Option<String>,
+}
+
+fn cyber_policy_message_from_body(body: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<ApiErrorResponse>(body).ok()?;
+    if parsed.error.code.as_deref() != Some(CYBER_POLICY_ERROR_CODE) {
+        return None;
+    }
+
+    let message = parsed
+        .error
+        .message
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
+    Some(message)
 }

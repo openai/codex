@@ -29,6 +29,26 @@ async fn token_count_none_resets_context_indicator() {
 }
 
 #[tokio::test]
+async fn core_cyber_policy_error_renders_dedicated_notice() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "cyber-policy".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "server fallback message".to_string(),
+            codex_error_info: Some(CodexErrorInfo::CyberPolicy),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
+    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(!rendered.contains("server fallback message"));
+}
+
+#[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 

@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ModelRerouteReason;
 use codex_protocol::protocol::ModelVerification;
@@ -21,11 +22,15 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use wiremock::ResponseTemplate;
 
 const SERVER_MODEL: &str = "gpt-5.2";
 const REQUESTED_MODEL: &str = "gpt-5.3-codex";
 const OPENAI_MODEL_VERIFICATION_HEADER: &str = "OpenAI-Verification-Recommendation";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
+
+const CYBER_POLICY_MESSAGE: &str =
+    "This request has been flagged for potentially high-risk cyber activity.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> Result<()> {
@@ -112,6 +117,57 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cyber_policy_response_emits_typed_error_without_retry() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "error": {
+            "message": CYBER_POLICY_MESSAGE,
+            "type": "invalid_request",
+            "param": null,
+            "code": "cyber_policy"
+        }
+    }));
+    let mock = mount_response_once(&server, response).await;
+
+    let mut builder = test_codex().with_model(REQUESTED_MODEL);
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "trigger cyber policy error".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: REQUESTED_MODEL.to_string(),
+            effort: test.config.model_reasoning_effort,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        panic!("expected error event");
+    };
+    assert_eq!(error.message, CYBER_POLICY_MESSAGE);
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::CyberPolicy));
+
+    mock.single_request();
 
     Ok(())
 }

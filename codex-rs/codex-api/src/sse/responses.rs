@@ -357,6 +357,9 @@ pub fn process_responses_event(
                         response_error = ApiError::QuotaExceeded;
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
+                    } else if is_cyber_policy_error(&error) {
+                        let message = cyber_policy_message(error.message);
+                        response_error = ApiError::CyberPolicy { message };
                     } else if is_invalid_prompt_error(&error) {
                         let message = error
                             .message
@@ -557,9 +560,23 @@ fn is_invalid_prompt_error(error: &Error) -> bool {
     error.code.as_deref() == Some("invalid_prompt")
 }
 
+fn is_cyber_policy_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("cyber_policy")
+}
+
 fn is_server_overloaded_error(error: &Error) -> bool {
     error.code.as_deref() == Some("server_is_overloaded")
         || error.code.as_deref() == Some("slow_down")
+}
+
+fn cyber_policy_fallback_message() -> String {
+    "This request has been flagged for possible cybersecurity risk.".to_string()
+}
+
+fn cyber_policy_message(message: Option<String>) -> String {
+    message
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(cyber_policy_fallback_message)
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {
@@ -908,6 +925,45 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         assert_matches!(events[0], Err(ApiError::QuotaExceeded));
+    }
+
+    #[tokio::test]
+    async fn cyber_policy_error_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_fatal_cyber","object":"response","created_at":1759771626,"status":"failed","background":false,"error":{"code":"cyber_policy","message":"This request was flagged for cyber policy."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::CyberPolicy { message }) => {
+                assert_eq!(message, "This request was flagged for cyber policy.");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cyber_policy_error_uses_fallback_for_empty_message() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_fatal_cyber","object":"response","created_at":1759771626,"status":"failed","background":false,"error":{"code":"cyber_policy","message":"   "},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::CyberPolicy { message }) => {
+                assert_eq!(
+                    message,
+                    "This request has been flagged for possible cybersecurity risk."
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]
