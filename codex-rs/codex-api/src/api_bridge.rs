@@ -1,5 +1,7 @@
 use crate::TransportError;
 use crate::error::ApiError;
+use crate::error::CYBER_SAFETY_BLOCK_ADVICE;
+use crate::error::is_cyber_safety_block;
 use crate::rate_limits::parse_promo_message;
 use crate::rate_limits::parse_rate_limit_for_limit;
 use base64::Engine;
@@ -59,6 +61,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if body_error_code_is_cyber_safety_block(&body_text) {
+                        CodexErr::InvalidRequest(CYBER_SAFETY_BLOCK_ADVICE.to_string())
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
@@ -158,6 +162,17 @@ fn extract_x_error_json_code(headers: Option<&HeaderMap>) -> Option<String> {
         .and_then(|error| error.get("code"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn body_error_code_is_cyber_safety_block(body_text: &str) -> bool {
+    let Ok(body) = serde_json::from_str::<Value>(body_text) else {
+        return false;
+    };
+    let error_code = body
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str);
+    is_cyber_safety_block(error_code)
 }
 
 #[derive(Debug, Deserialize)]

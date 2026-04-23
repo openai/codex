@@ -4,6 +4,12 @@ use http::StatusCode;
 use std::time::Duration;
 use thiserror::Error;
 
+pub(crate) const CYBER_SAFETY_BLOCK_ADVICE: &str = "This request has been flagged for potentially high-risk cyber activity. Apply for trusted access: https://chatgpt.com/cyber to avoid future blocks,\n  /fork or edit the last message and try again, or let us know with /feedback if you think this is a safety check false positive.";
+
+pub(crate) fn is_cyber_safety_block(error_code: Option<&str>) -> bool {
+    error_code.is_some_and(|code| code.to_ascii_lowercase().contains("cyber"))
+}
+
 #[derive(Debug, Error)]
 pub enum ApiError {
     #[error(transparent)]

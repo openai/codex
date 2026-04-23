@@ -27,6 +27,29 @@ fn map_api_error_maps_server_overloaded_from_503_body() {
 }
 
 #[test]
+fn map_api_error_maps_cyber_safety_bad_request_to_guidance() {
+    let body = serde_json::json!({
+        "error": {
+            "code": "cyber_security",
+            "message": "ProtectionClient blocked request",
+        }
+    })
+    .to_string();
+    let err = map_api_error(ApiError::Transport(TransportError::Http {
+        status: http::StatusCode::BAD_REQUEST,
+        url: Some("http://example.com/v1/responses".to_string()),
+        headers: None,
+        body: Some(body),
+    }));
+
+    let CodexErr::InvalidRequest(message) = err else {
+        panic!("expected CodexErr::InvalidRequest, got {err:?}");
+    };
+    assert_eq!(message, CYBER_SAFETY_BLOCK_ADVICE);
+    assert!(!CodexErr::InvalidRequest(message).is_retryable());
+}
+
+#[test]
 fn map_api_error_maps_usage_limit_limit_name_header() {
     let mut headers = HeaderMap::new();
     headers.insert(
