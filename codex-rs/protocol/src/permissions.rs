@@ -37,6 +37,10 @@ pub fn is_preserved_path_name(name: &OsStr) -> bool {
         .any(|preserved| name == OsStr::new(preserved))
 }
 
+pub fn is_preserved_directory_path_name(name: &OsStr) -> bool {
+    name == OsStr::new(PRESERVED_AGENTS_PATH_NAME) || name == OsStr::new(PRESERVED_CODEX_PATH_NAME)
+}
+
 /// Returns the preserved workspace metadata name when an agent write to `path`
 /// should be blocked before execution.
 pub fn forbidden_agent_preserved_path_write(

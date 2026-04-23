@@ -26,6 +26,7 @@ use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::permissions::is_preserved_directory_path_name;
 use codex_protocol::permissions::is_preserved_path_name;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
@@ -122,44 +123,82 @@ impl FileIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SyntheticMountTargetKind {
+    EmptyFile,
+    EmptyDirectory,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SyntheticMountTarget {
     path: PathBuf,
+    kind: SyntheticMountTargetKind,
     // If an empty preserved path was already present, remember its inode so
-    // cleanup does not delete a real pre-existing file.
-    pre_existing_file: Option<FileIdentity>,
+    // cleanup does not delete a real pre-existing file or directory.
+    pre_existing_path: Option<FileIdentity>,
 }
 
 impl SyntheticMountTarget {
     pub(crate) fn missing(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
-            pre_existing_file: None,
+            kind: SyntheticMountTargetKind::EmptyFile,
+            pre_existing_path: None,
+        }
+    }
+
+    pub(crate) fn missing_empty_directory(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            kind: SyntheticMountTargetKind::EmptyDirectory,
+            pre_existing_path: None,
         }
     }
 
     pub(crate) fn existing_empty_file(path: &Path, metadata: &Metadata) -> Self {
         Self {
             path: path.to_path_buf(),
-            pre_existing_file: Some(FileIdentity::from_metadata(metadata)),
+            kind: SyntheticMountTargetKind::EmptyFile,
+            pre_existing_path: Some(FileIdentity::from_metadata(metadata)),
         }
     }
 
-    pub(crate) fn preserves_pre_existing_file(&self) -> bool {
-        self.pre_existing_file.is_some()
+    fn existing_empty_directory(path: &Path, metadata: &Metadata) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            kind: SyntheticMountTargetKind::EmptyDirectory,
+            pre_existing_path: Some(FileIdentity::from_metadata(metadata)),
+        }
+    }
+
+    pub(crate) fn preserves_pre_existing_path(&self) -> bool {
+        self.pre_existing_path.is_some()
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
+    pub(crate) fn kind(&self) -> SyntheticMountTargetKind {
+        self.kind
+    }
+
     pub(crate) fn should_remove_after_bwrap(&self, metadata: &Metadata) -> bool {
-        if !metadata.file_type().is_file() || metadata.len() != 0 {
-            return false;
+        match self.kind {
+            SyntheticMountTargetKind::EmptyFile => {
+                if !metadata.file_type().is_file() || metadata.len() != 0 {
+                    return false;
+                }
+            }
+            SyntheticMountTargetKind::EmptyDirectory => {
+                if !metadata.file_type().is_dir() {
+                    return false;
+                }
+            }
         }
 
-        match self.pre_existing_file {
-            Some(pre_existing_file) => pre_existing_file != FileIdentity::from_metadata(metadata),
+        match self.pre_existing_path {
+            Some(pre_existing_path) => pre_existing_path != FileIdentity::from_metadata(metadata),
             None => true,
         }
     }
@@ -856,13 +895,20 @@ fn append_read_only_subpath_args(
         )));
     }
 
-    if let Some(metadata) = transient_empty_preserved_file_metadata(subpath)
+    if let Some(metadata) = transient_empty_preserved_path_metadata(subpath)
         && is_within_allowed_write_paths(subpath, allowed_write_paths)
     {
-        // Another concurrent bwrap setup can leave a zero-byte mount target at
+        // Another concurrent bwrap setup can leave an empty mount target at
         // a missing preserved path. Treat it like the missing case instead of
         // binding that transient host path as the stable source.
-        append_existing_empty_file_bind_data_args(bwrap_args, subpath, &metadata)?;
+        match metadata {
+            EmptyPreservedPathMetadata::File(metadata) => {
+                append_existing_empty_file_bind_data_args(bwrap_args, subpath, &metadata)?;
+            }
+            EmptyPreservedPathMetadata::Directory(metadata) => {
+                append_existing_empty_directory_args(bwrap_args, subpath, &metadata);
+            }
+        }
         return Ok(());
     }
 
@@ -870,7 +916,7 @@ fn append_read_only_subpath_args(
         if let Some(first_missing_component) = find_first_non_existent_component(subpath)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            append_missing_empty_file_bind_data_args(bwrap_args, &first_missing_component)?;
+            append_missing_read_only_subpath_args(bwrap_args, &first_missing_component)?;
         }
         return Ok(());
     }
@@ -894,6 +940,30 @@ fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> 
     Ok(())
 }
 
+fn append_empty_directory_args(bwrap_args: &mut BwrapArgs, path: &Path) {
+    bwrap_args.args.push("--perms".to_string());
+    bwrap_args.args.push("555".to_string());
+    bwrap_args.args.push("--tmpfs".to_string());
+    bwrap_args.args.push(path_to_string(path));
+    bwrap_args.args.push("--remount-ro".to_string());
+    bwrap_args.args.push(path_to_string(path));
+}
+
+fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
+    if path
+        .file_name()
+        .is_some_and(is_preserved_directory_path_name)
+    {
+        append_empty_directory_args(bwrap_args, path);
+        bwrap_args
+            .synthetic_mount_targets
+            .push(SyntheticMountTarget::missing_empty_directory(path));
+        return Ok(());
+    }
+
+    append_missing_empty_file_bind_data_args(bwrap_args, path)
+}
+
 fn append_missing_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
     append_empty_file_bind_data_args(bwrap_args, path)?;
     bwrap_args
@@ -912,6 +982,19 @@ fn append_existing_empty_file_bind_data_args(
         .synthetic_mount_targets
         .push(SyntheticMountTarget::existing_empty_file(path, metadata));
     Ok(())
+}
+
+fn append_existing_empty_directory_args(
+    bwrap_args: &mut BwrapArgs,
+    path: &Path,
+    metadata: &Metadata,
+) {
+    append_empty_directory_args(bwrap_args, path);
+    bwrap_args
+        .synthetic_mount_targets
+        .push(SyntheticMountTarget::existing_empty_directory(
+            path, metadata,
+        ));
 }
 
 fn append_unreadable_root_args(
@@ -999,17 +1082,33 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
         .any(|root| path.starts_with(root))
 }
 
-fn transient_empty_preserved_file_metadata(path: &Path) -> Option<Metadata> {
+enum EmptyPreservedPathMetadata {
+    File(Metadata),
+    Directory(Metadata),
+}
+
+fn transient_empty_preserved_path_metadata(path: &Path) -> Option<EmptyPreservedPathMetadata> {
     if !path.file_name().is_some_and(is_preserved_path_name) {
         return None;
     }
 
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_file() && metadata.len() == 0 {
-        Some(metadata)
-    } else {
-        None
+        return Some(EmptyPreservedPathMetadata::File(metadata));
     }
+
+    if metadata.file_type().is_dir() && directory_is_empty(path) {
+        return Some(EmptyPreservedPathMetadata::Directory(metadata));
+    }
+
+    None
+}
+
+fn directory_is_empty(path: &Path) -> bool {
+    let Ok(mut entries) = fs::read_dir(path) else {
+        return false;
+    };
+    entries.next().is_none()
 }
 
 fn first_writable_symlink_component_in_path(
@@ -1479,6 +1578,8 @@ mod tests {
                 .expect("filesystem args");
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(args.preserved_files.len(), 1);
         assert_eq!(
             synthetic_mount_target_paths(&args),
@@ -1518,6 +1619,8 @@ mod tests {
         let dot_git_str = path_to_string(&dot_git);
 
         assert_empty_file_bound_without_perms(&args.args, &dot_git);
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
@@ -1656,11 +1759,17 @@ mod tests {
                 "--ro-bind-data".to_string(),
                 null_fd.clone(),
                 "/.git".to_string(),
-                "--ro-bind-data".to_string(),
-                null_fd.clone(),
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
                 "/.agents".to_string(),
-                "--ro-bind-data".to_string(),
-                null_fd.clone(),
+                "--remount-ro".to_string(),
+                "/.agents".to_string(),
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
+                "/.codex".to_string(),
+                "--remount-ro".to_string(),
                 "/.codex".to_string(),
                 // Rebind /dev after the root bind so device nodes remain
                 // writable/usable inside the writable root.
@@ -1668,13 +1777,19 @@ mod tests {
                 "/dev".to_string(),
                 "/dev".to_string(),
                 "--ro-bind-data".to_string(),
-                null_fd.clone(),
-                "/dev/.git".to_string(),
-                "--ro-bind-data".to_string(),
-                null_fd.clone(),
-                "/dev/.agents".to_string(),
-                "--ro-bind-data".to_string(),
                 null_fd,
+                "/dev/.git".to_string(),
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
+                "/dev/.agents".to_string(),
+                "--remount-ro".to_string(),
+                "/dev/.agents".to_string(),
+                "--perms".to_string(),
+                "555".to_string(),
+                "--tmpfs".to_string(),
+                "/dev/.codex".to_string(),
+                "--remount-ro".to_string(),
                 "/dev/.codex".to_string(),
             ]
         );
@@ -2261,6 +2376,20 @@ mod tests {
                     && window[4] == path
             }),
             "missing path bind should not set explicit file perms for {path}: {args:#?}"
+        );
+    }
+
+    fn assert_empty_directory_mounted_read_only(args: &[String], path: &Path) {
+        let path = path_to_string(path);
+        assert!(
+            args.windows(4)
+                .any(|window| window == ["--perms", "555", "--tmpfs", path.as_str()]),
+            "expected empty directory mount for {path}: {args:#?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--remount-ro", path.as_str()]),
+            "expected read-only remount for {path}: {args:#?}"
         );
     }
 

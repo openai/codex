@@ -694,10 +694,19 @@ fn register_synthetic_mount_targets(
                         marker_dir.display()
                     )
                 });
-                let target = if target.preserves_pre_existing_file()
+                let target = if target.preserves_pre_existing_path()
                     && synthetic_mount_marker_dir_has_active_synthetic_owner(&marker_dir)
                 {
-                    crate::bwrap::SyntheticMountTarget::missing(target.path())
+                    match target.kind() {
+                        crate::bwrap::SyntheticMountTargetKind::EmptyFile => {
+                            crate::bwrap::SyntheticMountTarget::missing(target.path())
+                        }
+                        crate::bwrap::SyntheticMountTargetKind::EmptyDirectory => {
+                            crate::bwrap::SyntheticMountTarget::missing_empty_directory(
+                                target.path(),
+                            )
+                        }
+                    }
                 } else {
                     target.clone()
                 };
@@ -721,7 +730,7 @@ fn register_synthetic_mount_targets(
 }
 
 fn synthetic_mount_marker_contents(target: &crate::bwrap::SyntheticMountTarget) -> &'static [u8] {
-    if target.preserves_pre_existing_file() {
+    if target.preserves_pre_existing_path() {
         SYNTHETIC_MOUNT_MARKER_EXISTING
     } else {
         SYNTHETIC_MOUNT_MARKER_SYNTHETIC
@@ -835,13 +844,24 @@ fn remove_synthetic_mount_target(target: &crate::bwrap::SyntheticMountTarget) {
     if !target.should_remove_after_bwrap(&metadata) {
         return;
     }
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => panic!(
-            "failed to remove synthetic bubblewrap mount target {}: {err}",
-            path.display()
-        ),
+    match target.kind() {
+        crate::bwrap::SyntheticMountTargetKind::EmptyFile => match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!(
+                "failed to remove synthetic bubblewrap mount target {}: {err}",
+                path.display()
+            ),
+        },
+        crate::bwrap::SyntheticMountTargetKind::EmptyDirectory => match fs::remove_dir(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(err) => panic!(
+                "failed to remove synthetic bubblewrap mount target {}: {err}",
+                path.display()
+            ),
+        },
     }
 }
 

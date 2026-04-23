@@ -260,22 +260,26 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
 }
 
 #[test]
-fn cleanup_synthetic_mount_targets_removes_only_empty_files() {
+fn cleanup_synthetic_mount_targets_removes_only_empty_mount_targets() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
-    let empty_file = temp_dir.path().join(".agents");
-    let non_empty_file = temp_dir.path().join(".codex");
+    let empty_file = temp_dir.path().join(".git");
+    let empty_dir = temp_dir.path().join(".agents");
+    let non_empty_file = temp_dir.path().join("non-empty");
     let missing_file = temp_dir.path().join(".missing");
     std::fs::write(&empty_file, "").expect("write empty file");
+    std::fs::create_dir(&empty_dir).expect("create empty dir");
     std::fs::write(&non_empty_file, "keep").expect("write nonempty file");
 
     let registrations = register_synthetic_mount_targets(&[
         crate::bwrap::SyntheticMountTarget::missing(&empty_file),
+        crate::bwrap::SyntheticMountTarget::missing_empty_directory(&empty_dir),
         crate::bwrap::SyntheticMountTarget::missing(&non_empty_file),
         crate::bwrap::SyntheticMountTarget::missing(&missing_file),
     ]);
     cleanup_synthetic_mount_targets(&registrations);
 
     assert!(!empty_file.exists());
+    assert!(!empty_dir.exists());
     assert_eq!(
         std::fs::read_to_string(&non_empty_file).expect("read nonempty file"),
         "keep"
