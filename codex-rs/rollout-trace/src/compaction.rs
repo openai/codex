@@ -206,11 +206,11 @@ impl CompactionTraceAttempt {
     /// inference streams: traces are evidence, while normal ResponseItem
     /// serialization is shaped for future request construction.
     pub fn record_completed(&self, output_items: &[ResponseItem]) {
-        let response_payload = TracedCompactionCompleted {
-            output_items: output_items.iter().map(trace_response_item_json).collect(),
-        };
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
+        };
+        let response_payload = TracedCompactionCompleted {
+            output_items: output_items.iter().map(trace_response_item_json).collect(),
         };
         let Some(response_payload) = write_json_payload_best_effort(
             &attempt.context.writer,

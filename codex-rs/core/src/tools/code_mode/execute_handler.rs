@@ -9,6 +9,7 @@ use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::build_enabled_tools;
 use super::handle_runtime_response;
+use super::is_exec_tool_name;
 
 pub struct CodeModeExecuteHandler;
 
@@ -30,12 +31,23 @@ impl CodeModeExecuteHandler {
             .code_mode_service
             .stored_values()
             .await;
+        // Allocate before starting V8 so the trace can create the parent
+        // CodeCell before model-authored JavaScript issues nested tool calls.
+        let runtime_cell_id = exec.session.services.code_mode_service.allocate_cell_id();
+        let code_cell_trace = exec.session.services.rollout_trace.start_code_cell_trace(
+            exec.session.conversation_id,
+            exec.turn.sub_id.as_str(),
+            runtime_cell_id.as_str(),
+            call_id.as_str(),
+            args.code.as_str(),
+        );
         let started_at = std::time::Instant::now();
         let response = exec
             .session
             .services
             .code_mode_service
             .execute(codex_code_mode::ExecuteRequest {
+                cell_id: runtime_cell_id,
                 tool_call_id: call_id,
                 enabled_tools,
                 source: args.code,
@@ -45,6 +57,15 @@ impl CodeModeExecuteHandler {
             })
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        // Record the raw runtime boundary. The model-visible custom-tool output
+        // is produced by `handle_runtime_response` and later linked through
+        // `CodeCell.output_item_ids` in the reduced trace.
+        code_cell_trace.record_initial_response(&response);
+        // Yielded cells keep running, so terminal lifecycle is only emitted
+        // here when the first response also ended the runtime.
+        if !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
+            code_cell_trace.record_ended(&response);
+        }
         handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
             .await
             .map_err(FunctionCallError::RespondToModel)
@@ -73,9 +94,7 @@ impl ToolHandler for CodeModeExecuteHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Custom { input }
-                if tool_name.namespace.is_none() && tool_name.name.as_str() == PUBLIC_TOOL_NAME =>
-            {
+            ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => {
                 self.execute(session, turn, call_id, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
