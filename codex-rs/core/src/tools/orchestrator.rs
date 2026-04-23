@@ -291,7 +291,8 @@ impl ToolOrchestrator {
                         build_denial_reason_from_output(output.as_ref())
                     };
 
-                // Ask for approval before retrying with the escalated sandbox.
+                // Strict auto-review approval covers the sandboxed attempt only;
+                // retrying without the sandbox requires a fresh guardian review.
                 let bypass_retry_approval = !strict_auto_review
                     && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();

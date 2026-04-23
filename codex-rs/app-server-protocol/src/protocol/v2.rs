@@ -6996,6 +6996,7 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    /// Review every subsequent command in this turn before normal sandboxed execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub strict_auto_review: Option<bool>,
