@@ -62,6 +62,7 @@ const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const OAUTH_TOKEN_PATH: &str = "/oauth/token";
 
 #[derive(Clone, Default)]
 struct SessionFailureState {
@@ -116,6 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(bound_addr_file, actual_bind_addr.to_string())?;
     }
     eprintln!("starting rmcp streamable http test server on http://{actual_bind_addr}/mcp");
+    let refreshed_access_token = std::env::var("MCP_REFRESHED_ACCESS_TOKEN")
+        .unwrap_or_else(|_| "refreshed-access-token".to_string());
 
     let router = Router::new()
         .route(
@@ -143,6 +146,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             })).expect("failed to serialize metadata"),
                         ))
                         .expect("valid metadata response")
+                }
+            }),
+        )
+        .route(
+            OAUTH_TOKEN_PATH,
+            post({
+                move || async move {
+                    let refreshed_access_token = refreshed_access_token.clone();
+                    #[expect(clippy::expect_used)]
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&json!({
+                                "access_token": refreshed_access_token,
+                                "token_type": "Bearer",
+                                "expires_in": 3600_u64,
+                                "refresh_token": "refreshed-refresh-token",
+                            }))
+                            .expect("failed to serialize token response"),
+                        ))
+                        .expect("valid token response")
                 }
             }),
         )
@@ -386,7 +411,8 @@ async fn require_bearer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path().contains("/.well-known/") {
+    if request.uri().path().contains("/.well-known/") || request.uri().path().starts_with("/oauth/")
+    {
         return Ok(next.run(request).await);
     }
     if request

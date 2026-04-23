@@ -933,6 +933,10 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
+    // `create_oauth_http_setup` returns both the initialized RMCP
+    // `AuthorizationManager` and the proxy bridge that keeps later token
+    // refresh requests on the selected `HttpClient`. Keep both pieces together
+    // here so the transport and persistor share the same OAuth runtime.
     let oauth_http_setup = create_oauth_http_setup(
         url,
         &default_headers,
