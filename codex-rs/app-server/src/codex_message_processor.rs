@@ -2945,7 +2945,7 @@ impl CodexMessageProcessor {
             .thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
-                include_archived: false,
+                include_archived: true,
                 include_history: false,
             })
             .await

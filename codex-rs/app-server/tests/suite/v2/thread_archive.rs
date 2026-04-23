@@ -166,6 +166,89 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_archive_is_idempotent_for_already_archived_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "parent",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = find_thread_path_by_id_str(codex_home.path(), &thread_id)
+        .await?
+        .expect("active rollout path");
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let archive_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
+    )
+    .await??;
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
+
+    let archive_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/archived"),
+    )
+    .await??;
+    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
+        archive_notification
+            .params
+            .expect("thread/archived notification params"),
+    )?;
+    assert_eq!(archived_notification.thread_id, thread_id);
+
+    let archived_rollout_path = find_archived_thread_path_by_id_str(codex_home.path(), &thread_id)
+        .await?
+        .expect("archived rollout path");
+    assert_paths_match_on_disk(
+        &archived_rollout_path,
+        &codex_home
+            .path()
+            .join(ARCHIVED_SESSIONS_SUBDIR)
+            .join(rollout_path.file_name().expect("rollout file name")),
+    )?;
+    assert!(
+        find_thread_path_by_id_str(codex_home.path(), &thread_id)
+            .await?
+            .is_none(),
+        "thread should no longer have an active rollout"
+    );
+
+    let archive_again_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let archive_again_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_again_id)),
+    )
+    .await??;
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_again_resp)?;
+
+    let archived_rollout_path_after =
+        find_archived_thread_path_by_id_str(codex_home.path(), &thread_id)
+            .await?
+            .expect("archived rollout path after second archive");
+    assert_paths_match_on_disk(&archived_rollout_path_after, &archived_rollout_path)?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
