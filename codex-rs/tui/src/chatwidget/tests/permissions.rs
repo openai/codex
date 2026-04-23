@@ -386,7 +386,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() {
+async fn permissions_selection_hides_auto_review_when_feature_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -406,7 +406,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_even_if_auto_review_is_active()
+async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_auto_review_is_active()
  {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
@@ -416,7 +416,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
     }
     chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
     chat.config.notices.hide_full_access_warning = Some(true);
-    chat.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    chat.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     chat.config
         .permissions
         .approval_policy
@@ -438,7 +438,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_guardian_approvals_current_after_session_configured() {
+async fn permissions_selection_marks_auto_review_current_after_session_configured() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -461,7 +461,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             cwd: test_project_path().abs(),
             reasoning_effort: None,
@@ -483,8 +483,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_guardian_approvals_current_with_custom_workspace_write_details()
- {
+async fn permissions_selection_marks_auto_review_current_with_custom_workspace_write_details() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -509,7 +508,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![extra_root],
                 read_only_access: ReadOnlyAccess::FullAccess,
@@ -537,7 +536,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
 }
 
 #[tokio::test]
-async fn permissions_selection_can_disable_guardian_approvals() {
+async fn permissions_selection_can_disable_auto_review() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -630,7 +629,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
             permission_profile: None,
             windows_sandbox_level: None,
