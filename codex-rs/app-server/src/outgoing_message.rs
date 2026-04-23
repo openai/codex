@@ -402,14 +402,11 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, entry)) => {
-                if !entry
+                if entry
                     .tracked_request_connection_ids
                     .contains(&connection_id)
+                    && let Ok(response) = entry.request.response_from_result(&result)
                 {
-                    self.analytics_events_client
-                        .track_server_request(connection_id.0, entry.request.clone());
-                }
-                if let Ok(response) = entry.request.response_from_result(&result) {
                     self.analytics_events_client
                         .track_server_response(connection_id.0, response);
                 }
