@@ -130,12 +130,15 @@ pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use supports_color::Stream;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::error;
 use tracing::field;
@@ -150,6 +153,8 @@ use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
+const THREAD_UNSUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(1);
+const TURN_COMPLETED_BACKFILL_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum InitialOperation {
     UserTurn {
@@ -1164,9 +1169,9 @@ async fn maybe_backfill_turn_completed_items(
     notification: &mut ServerNotification,
 ) {
     // In-process delivery may drop non-terminal item notifications under backpressure while still
-    // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
-    // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
-    // the final message and reconcile any still-running items before shutdown.
+    // guaranteeing `turn/completed`. App-server now tries to include terminal turn items directly
+    // on that notification, but exec keeps this bounded `thread/read` fallback for older or
+    // degraded paths that still arrive with an empty `turn.items`.
     if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
         return;
     }
@@ -1175,16 +1180,23 @@ async fn maybe_backfill_turn_completed_items(
         return;
     };
 
-    let response = send_request_with_response::<ThreadReadResponse>(
-        client,
-        ClientRequest::ThreadRead {
-            request_id: request_ids.next(),
-            params: ThreadReadParams {
-                thread_id: payload.thread_id.clone(),
-                include_turns: true,
-            },
-        },
+    // This runs inline on exec's event loop immediately after `TurnCompleted`.
+    // Bound the request so a backpressured in-process event queue cannot deadlock
+    // shutdown by blocking `thread/read` forever behind unrelated lossless events.
+    let response = await_request_with_timeout(
         "thread/read",
+        TURN_COMPLETED_BACKFILL_TIMEOUT,
+        send_request_with_response::<ThreadReadResponse>(
+            client,
+            ClientRequest::ThreadRead {
+                request_id: request_ids.next(),
+                params: ThreadReadParams {
+                    thread_id: payload.thread_id.clone(),
+                    include_turns: true,
+                },
+            },
+            "thread/read",
+        ),
     )
     .await;
 
@@ -1195,7 +1207,11 @@ async fn maybe_backfill_turn_completed_items(
             }
         }
         Err(err) => {
-            warn!("thread/read failed while backfilling turn items for turn completion: {err}");
+            warn!(
+                thread_id = %payload.thread_id,
+                turn_id = %payload.turn.id,
+                "thread/read failed while backfilling turn items for turn completion: {err}"
+            );
         }
     }
 }
@@ -1411,9 +1427,30 @@ async fn request_shutdown(
             thread_id: thread_id.to_string(),
         },
     };
-    send_request_with_response::<ThreadUnsubscribeResponse>(client, request, "thread/unsubscribe")
-        .await
-        .map(|_| ())
+    await_request_with_timeout(
+        "thread/unsubscribe",
+        THREAD_UNSUBSCRIBE_TIMEOUT,
+        send_request_with_response::<ThreadUnsubscribeResponse>(
+            client,
+            request,
+            "thread/unsubscribe",
+        ),
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn await_request_with_timeout<T>(
+    request_name: &str,
+    timeout_duration: Duration,
+    request: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match timeout(timeout_duration, request).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "{request_name} timed out after {timeout_duration:?}"
+        )),
+    }
 }
 
 async fn resolve_server_request(

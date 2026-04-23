@@ -252,6 +252,7 @@ impl AgentControl {
             (None, _) => state.spawn_new_thread(config, self.clone()).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
+        let spawn_cleanup = SpawnAgentCancellationCleanup::new(self.clone(), new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
 
         if let Some(SessionSource::SubAgent(
@@ -325,6 +326,7 @@ impl AgentControl {
             );
         }
 
+        spawn_cleanup.disarm();
         Ok(LiveAgent {
             thread_id: new_thread.thread_id,
             metadata: agent_metadata,
@@ -685,6 +687,56 @@ impl AgentControl {
         };
         let _ = state.remove_thread(&agent_id).await;
         self.state.release_spawned_thread(agent_id);
+        result
+    }
+
+    /// Submit a shutdown request for a live agent while keeping the thread tracked until the
+    /// session loop actually terminates.
+    ///
+    /// The spawned-agent slot is released only after a background waiter observes shutdown
+    /// completion and removes the thread from [`ThreadManagerState`]. Keeping the thread tracked
+    /// and counted until then ensures later global shutdown paths can still await or abort the
+    /// underlying session loop instead of leaving an orphaned task alive on the runtime.
+    pub(crate) async fn request_live_agent_shutdown_preserving_thread(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let thread = match state.get_thread(agent_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.state.release_spawned_thread(agent_id);
+                return Ok(String::new());
+            }
+        };
+        thread.codex.session.ensure_rollout_materialized().await;
+        let _ = thread.codex.session.flush_rollout().await;
+        let result = if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+            Ok(String::new())
+        } else {
+            state.send_op(agent_id, Op::Shutdown {}).await
+        };
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        } else if result.is_ok() {
+            let registry = self.state.clone();
+            tokio::spawn(async move {
+                match thread.shutdown_and_wait().await {
+                    Ok(()) | Err(CodexErr::InternalAgentDied) => {
+                        let _ = state.remove_thread(&agent_id).await;
+                        registry.release_spawned_thread(agent_id);
+                    }
+                    Err(err) => {
+                        warn!(
+                            thread_id = %agent_id,
+                            error = %err,
+                            "failed to wait for live agent shutdown; keeping thread tracked"
+                        );
+                    }
+                }
+            });
+        }
         result
     }
 
@@ -1168,6 +1220,58 @@ impl AgentControl {
         }
 
         Ok(descendants)
+    }
+}
+
+struct SpawnAgentCancellationCleanup {
+    control: AgentControl,
+    thread_id: ThreadId,
+    armed: bool,
+}
+
+impl SpawnAgentCancellationCleanup {
+    fn new(control: AgentControl, thread_id: ThreadId) -> Self {
+        Self {
+            control,
+            thread_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SpawnAgentCancellationCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let control = self.control.clone();
+        let thread_id = self.thread_id;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                thread_id = %thread_id,
+                "spawn_agent was cancelled without a Tokio runtime available for cleanup"
+            );
+            return;
+        };
+        handle.spawn(async move {
+            if let Err(err) = control
+                .request_live_agent_shutdown_preserving_thread(thread_id)
+                .await
+                && let Ok(state) = control.upgrade()
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to shut down thread from cancelled spawn_agent; removing tracking entry"
+                );
+                let _ = state.remove_thread(&thread_id).await;
+            }
+        });
     }
 }
 

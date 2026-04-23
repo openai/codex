@@ -14,20 +14,71 @@ pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+use tokio::sync::OnceCell;
 use tracing::warn;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct StateDbCacheKey {
+    sqlite_home: PathBuf,
+    default_provider: String,
+}
+
+type StateDbRuntimeCell = Arc<OnceCell<StateDbHandle>>;
+
+static STATE_DB_RUNTIME_CACHE: LazyLock<Mutex<HashMap<StateDbCacheKey, StateDbRuntimeCell>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key(sqlite_home: &Path, default_provider: &str) -> StateDbCacheKey {
+    StateDbCacheKey {
+        sqlite_home: normalize_for_path_comparison(sqlite_home)
+            .unwrap_or_else(|_| sqlite_home.to_path_buf()),
+        default_provider: default_provider.to_string(),
+    }
+}
+
+fn cached_runtime_cell(sqlite_home: &Path, default_provider: &str) -> StateDbRuntimeCell {
+    let key = cache_key(sqlite_home, default_provider);
+    let mut cache = STATE_DB_RUNTIME_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cell) = cache.get(&key) {
+        return Arc::clone(cell);
+    }
+
+    let cell = Arc::new(OnceCell::new());
+    cache.insert(key, Arc::clone(&cell));
+    cell
+}
+
+async fn shared_state_db_runtime(
+    sqlite_home: &Path,
+    default_provider: &str,
+) -> anyhow::Result<StateDbHandle> {
+    let cell = cached_runtime_cell(sqlite_home, default_provider);
+    let runtime = cell
+        .get_or_try_init(|| async {
+            codex_state::StateRuntime::init(sqlite_home.to_path_buf(), default_provider.to_string())
+                .await
+        })
+        .await?;
+    Ok(Arc::clone(runtime))
+}
+
 /// Initialize the state runtime for thread state persistence and backfill checks.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
-    let runtime = match codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+    let runtime = match shared_state_db_runtime(
+        config.sqlite_home.as_path(),
+        config.model_provider_id.as_str(),
     )
     .await
     {
@@ -66,12 +117,9 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home().to_path_buf(),
-        config.model_provider_id().to_string(),
-    )
-    .await
-    .ok()?;
+    let runtime = shared_state_db_runtime(config.sqlite_home(), config.model_provider_id())
+        .await
+        .ok()?;
     require_backfill_complete(runtime, config.sqlite_home()).await
 }
 
@@ -83,10 +131,9 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
+    let runtime = shared_state_db_runtime(codex_home, default_provider)
+        .await
+        .ok()?;
     require_backfill_complete(runtime, codex_home).await
 }
 

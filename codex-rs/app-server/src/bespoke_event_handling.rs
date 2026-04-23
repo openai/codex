@@ -2039,20 +2039,31 @@ struct TurnCompletionMetadata {
 async fn emit_turn_completed_with_status(
     conversation_id: ThreadId,
     event_turn_id: String,
+    turn_snapshot: Option<Turn>,
     turn_completion_metadata: TurnCompletionMetadata,
     analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let turn = turn_snapshot.unwrap_or_else(|| Turn {
+        id: event_turn_id.clone(),
+        items: vec![],
+        error: None,
+        status: turn_completion_metadata.status.clone(),
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    });
+    let turn = compact_turn_completed_turn(turn);
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_turn_id,
-            items: vec![],
-            error: turn_completion_metadata.error,
+            items: turn.items,
+            error: turn_completion_metadata.error.or(turn.error),
             status: turn_completion_metadata.status,
-            started_at: turn_completion_metadata.started_at,
-            completed_at: turn_completion_metadata.completed_at,
-            duration_ms: turn_completion_metadata.duration_ms,
+            started_at: turn_completion_metadata.started_at.or(turn.started_at),
+            completed_at: turn_completion_metadata.completed_at.or(turn.completed_at),
+            duration_ms: turn_completion_metadata.duration_ms.or(turn.duration_ms),
         },
     };
     if let Some(analytics_events_client) = analytics_events_client {
@@ -2062,6 +2073,96 @@ async fn emit_turn_completed_with_status(
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
+}
+
+fn compact_turn_completed_turn(turn: Turn) -> Turn {
+    let Turn {
+        id,
+        items,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    } = turn;
+    Turn {
+        id,
+        items: items.into_iter().map(compact_turn_completed_item).collect(),
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    }
+}
+
+fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
+    match item {
+        ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: _,
+            exit_code,
+            duration_ms,
+        } => ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: None,
+            exit_code,
+            duration_ms,
+        },
+        ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: _,
+            error,
+            duration_ms,
+        } => ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: None,
+            error,
+            duration_ms,
+        },
+        ThreadItem::DynamicToolCall {
+            id,
+            namespace,
+            tool,
+            arguments,
+            status,
+            content_items: _,
+            success,
+            duration_ms,
+        } => ThreadItem::DynamicToolCall {
+            id,
+            namespace,
+            tool,
+            arguments,
+            status,
+            content_items: None,
+            success,
+            duration_ms,
+        },
+        other => other,
+    }
 }
 
 async fn complete_file_change_item(
@@ -2242,12 +2343,23 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
         .await;
 }
 
+#[cfg(test)]
 async fn find_and_remove_turn_summary(
     _conversation_id: ThreadId,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) -> TurnSummary {
     let mut state = thread_state.lock().await;
     std::mem::take(&mut state.turn_summary)
+}
+
+async fn find_turn_completion_state(
+    event_turn_id: &str,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) -> (TurnSummary, Option<Turn>) {
+    let mut state = thread_state.lock().await;
+    let turn_summary = std::mem::take(&mut state.turn_summary);
+    let turn_snapshot = state.completion_turn_snapshot(event_turn_id);
+    (turn_summary, turn_snapshot)
 }
 
 async fn handle_turn_complete(
@@ -2258,7 +2370,8 @@ async fn handle_turn_complete(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let (turn_summary, turn_snapshot) =
+        find_turn_completion_state(&event_turn_id, thread_state).await;
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
@@ -2268,6 +2381,7 @@ async fn handle_turn_complete(
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
+        turn_snapshot,
         TurnCompletionMetadata {
             status,
             error,
@@ -2289,11 +2403,13 @@ async fn handle_turn_interrupted(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let (turn_summary, turn_snapshot) =
+        find_turn_completion_state(&event_turn_id, thread_state).await;
 
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
+        turn_snapshot,
         TurnCompletionMetadata {
             status: TurnStatus::Interrupted,
             error: None,
@@ -3086,6 +3202,7 @@ mod tests {
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::MessagePhase;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
@@ -4187,6 +4304,13 @@ mod tests {
                     collaboration_mode_kind: Default::default(),
                 },
             ));
+            state.track_current_turn_event(&EventMsg::AgentMessage(
+                codex_protocol::protocol::AgentMessageEvent {
+                    message: "done".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ));
             state.track_current_turn_event(&EventMsg::TurnComplete(turn_complete_event(
                 &event_turn_id,
             )));
@@ -4205,17 +4329,138 @@ mod tests {
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
-                assert_eq!(n.turn.id, event_turn_id);
-                assert_eq!(n.turn.status, TurnStatus::Completed);
-                assert_eq!(n.turn.error, None);
-                assert_eq!(n.turn.started_at, Some(42));
-                assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));
-                assert_eq!(n.turn.duration_ms, Some(TEST_TURN_DURATION_MS));
+                assert_eq!(
+                    n.turn,
+                    Turn {
+                        id: event_turn_id,
+                        items: vec![ThreadItem::AgentMessage {
+                            id: "item-1".to_string(),
+                            text: "done".to_string(),
+                            phase: Some(MessagePhase::FinalAnswer),
+                            memory_citation: None,
+                        }],
+                        status: TurnStatus::Completed,
+                        error: None,
+                        started_at: Some(42),
+                        completed_at: Some(TEST_TURN_COMPLETED_AT),
+                        duration_ms: Some(TEST_TURN_DURATION_MS),
+                    }
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
+    }
+
+    #[test]
+    fn compact_turn_completed_turn_elides_bulky_command_and_tool_outputs() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            items: vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: Some("large output".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: Some(Box::new(McpToolCallResult {
+                        content: vec![json!({"text":"large tool output"})],
+                        structured_content: Some(json!({"rows":[{"value":"large"}]})),
+                        meta: None,
+                    })),
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "large tool output".to_string(),
+                    }]),
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ],
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: Some(1),
+            completed_at: Some(2),
+            duration_ms: Some(3),
+        };
+
+        let compact = compact_turn_completed_turn(turn);
+
+        assert_eq!(
+            compact.items,
+            vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: None,
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: None,
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    namespace: Some("custom-tools".to_string()),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: None,
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ]
+        );
     }
 
     #[tokio::test]

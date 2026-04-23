@@ -319,15 +319,14 @@ WHERE id = ?
         let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
-UPDATE agent_job_items
-SET
-    status = ?,
-    assigned_thread_id = NULL,
-    attempt_count = attempt_count + 1,
-    updated_at = ?,
-    last_error = NULL
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
+	UPDATE agent_job_items
+	SET
+	    status = ?,
+	    assigned_thread_id = NULL,
+	    updated_at = ?,
+	    last_error = NULL
+	WHERE job_id = ? AND item_id = ? AND status = ?
+	            "#,
         )
         .bind(AgentJobItemStatus::Running.as_str())
         .bind(now)
@@ -407,10 +406,10 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         let now = Utc::now().timestamp();
         let result = sqlx::query(
             r#"
-UPDATE agent_job_items
-SET assigned_thread_id = ?, updated_at = ?
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
+	UPDATE agent_job_items
+	SET assigned_thread_id = ?, attempt_count = attempt_count + 1, updated_at = ?
+	WHERE job_id = ? AND item_id = ? AND status = ?
+	            "#,
         )
         .bind(thread_id)
         .bind(now)
@@ -460,6 +459,68 @@ WHERE
         .bind(reporting_thread_id)
         .execute(self.pool.as_ref())
         .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn report_agent_job_item_result_and_cancel_job(
+        &self,
+        job_id: &str,
+        item_id: &str,
+        reporting_thread_id: &str,
+        result_json: &Value,
+        cancel_reason: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let serialized = serde_json::to_string(result_json)?;
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    result_json = ?,
+    reported_at = ?,
+    completed_at = ?,
+    updated_at = ?,
+    last_error = NULL,
+    assigned_thread_id = NULL
+WHERE
+    job_id = ?
+    AND item_id = ?
+    AND status = ?
+    AND assigned_thread_id = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Completed.as_str())
+        .bind(serialized)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .bind(job_id)
+        .bind(item_id)
+        .bind(AgentJobItemStatus::Running.as_str())
+        .bind(reporting_thread_id)
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() > 0 {
+            sqlx::query(
+                r#"
+UPDATE agent_jobs
+SET status = ?, updated_at = ?, completed_at = ?, last_error = ?
+WHERE id = ? AND status IN (?, ?)
+                "#,
+            )
+            .bind(AgentJobStatus::Cancelled.as_str())
+            .bind(now)
+            .bind(now)
+            .bind(cancel_reason)
+            .bind(job_id)
+            .bind(AgentJobStatus::Pending.as_str())
+            .bind(AgentJobStatus::Running.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -679,6 +740,101 @@ mod tests {
         assert_eq!(item.status, AgentJobItemStatus::Failed);
         assert_eq!(item.result_json, None);
         assert_eq!(item.last_error, Some("missing report".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_and_cancel_job_is_atomic() -> anyhow::Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let accepted = runtime
+            .report_agent_job_item_result_and_cancel_job(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": true}),
+                "cancelled by worker request",
+            )
+            .await?;
+        assert!(accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Completed);
+        assert_eq!(item.result_json, Some(json!({"ok": true})));
+        assert_eq!(item.assigned_thread_id, None);
+
+        let job = runtime
+            .get_agent_job(job_id.as_str())
+            .await?
+            .expect("job should exist");
+        assert_eq!(job.status, AgentJobStatus::Cancelled);
+        assert_eq!(
+            job.last_error,
+            Some("cancelled by worker request".to_string())
+        );
+        assert!(job.completed_at.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_agent_job_item_thread_increments_attempt_count_after_claim() -> anyhow::Result<()>
+    {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let job_id = "job-1".to_string();
+        let item_id = "item-1".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running(job_id.as_str()).await?;
+
+        let claimed = runtime
+            .mark_agent_job_item_running(job_id.as_str(), item_id.as_str())
+            .await?;
+        assert!(claimed);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.attempt_count, 0);
+        assert_eq!(item.assigned_thread_id, None);
+
+        let assigned = runtime
+            .set_agent_job_item_thread(job_id.as_str(), item_id.as_str(), "thread-1")
+            .await?;
+        assert!(assigned);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.attempt_count, 1);
+        assert_eq!(item.assigned_thread_id, Some("thread-1".to_string()));
         Ok(())
     }
 }
