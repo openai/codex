@@ -4569,6 +4569,8 @@ impl CodexMessageProcessor {
                 .await;
                 if self.config.features.enabled(Feature::Goals) {
                     self.emit_thread_goal_snapshot(thread_id).await;
+                    // App-server owns resume response and snapshot ordering, so wait
+                    // until those are sent before letting core start goal continuation.
                     if let Err(err) = codex_thread.continue_active_goal_if_idle().await {
                         tracing::warn!("failed to continue active goal after resume: {err}");
                     }
@@ -8676,6 +8678,8 @@ async fn handle_pending_thread_resume_request(
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
+    // App-server owns resume response and snapshot ordering, so wait until
+    // replay completes before letting core start goal continuation.
     if pending.emit_thread_goal_update
         && let Err(err) = conversation.continue_active_goal_if_idle().await
     {
