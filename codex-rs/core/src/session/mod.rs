@@ -2627,12 +2627,8 @@ impl Session {
             }
         }
         if turn_context.config.include_skill_instructions {
-            let implicit_skills = turn_context
-                .turn_skills
-                .outcome
-                .allowed_skills_for_implicit_invocation();
             let available_skills = build_available_skills(
-                &implicit_skills,
+                &turn_context.turn_skills.outcome,
                 default_skill_metadata_budget(turn_context.model_info.context_window),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,

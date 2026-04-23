@@ -5194,17 +5194,19 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![SkillMetadata {
+        name: "repo-skill".to_string(),
+        description: "desc".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+        scope: SkillScope::Repo,
+    }];
     let rendered = build_available_skills(
-        &[SkillMetadata {
-            name: "repo-skill".to_string(),
-            description: "desc".to_string(),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
-            scope: SkillScope::Repo,
-        }],
+        &outcome,
         SkillMetadataBudget::Characters(1),
         SkillRenderSideEffects::ThreadStart {
             session_telemetry: &session_telemetry,
@@ -5264,9 +5266,11 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
             .count()
     };
     let minimum_budget = minimum_skill_line_cost(&alpha) + minimum_skill_line_cost(&beta);
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![alpha, beta];
 
     let rendered = build_available_skills(
-        &[alpha, beta],
+        &outcome,
         SkillMetadataBudget::Characters(minimum_budget + 6),
         SkillRenderSideEffects::ThreadStart {
             session_telemetry: &session_telemetry,
