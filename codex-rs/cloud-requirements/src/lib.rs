@@ -50,10 +50,8 @@ const CLOUD_REQUIREMENTS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const CLOUD_REQUIREMENTS_FETCH_ATTEMPT_METRIC: &str = "codex.cloud_requirements.fetch_attempt";
 const CLOUD_REQUIREMENTS_FETCH_FINAL_METRIC: &str = "codex.cloud_requirements.fetch_final";
 const CLOUD_REQUIREMENTS_LOAD_METRIC: &str = "codex.cloud_requirements.load";
-const CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE: &str = concat!(
-    "Failed to load cloud requirements ",
-    "(workspace-managed policies)."
-);
+const CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE: &str =
+    "Failed to load cloud requirements (workspace-managed policies).";
 const CLOUD_REQUIREMENTS_PARSE_FAILED_MESSAGE: &str = concat!(
     "Cloud requirements (workspace-managed policies) are invalid and could not be parsed. ",
     "Please contact your workspace admin."
