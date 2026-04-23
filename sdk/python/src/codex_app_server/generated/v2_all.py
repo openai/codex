@@ -146,6 +146,7 @@ class AppToolsConfig(BaseModel):
 
 class ApprovalsReviewer(Enum):
     user = "user"
+    auto_review = "auto_review"
     guardian_subagent = "guardian_subagent"
 
 

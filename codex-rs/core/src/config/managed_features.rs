@@ -204,6 +204,11 @@ fn parse_feature_requirements(
             continue;
         }
 
+        if key == "auto_review" {
+            pinned_features.insert(Feature::GuardianApproval, enabled);
+            continue;
+        }
+
         if let Some(feature) = feature_for_key(&key) {
             push_feature_requirement_warning(
                 &mut startup_warnings,

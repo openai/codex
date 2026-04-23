@@ -351,6 +351,9 @@
             "apps": {
               "type": "boolean"
             },
+            "auto_review": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -2506,6 +2509,9 @@
           "type": "boolean"
         },
         "apps": {
+          "type": "boolean"
+        },
+        "auto_review": {
           "type": "boolean"
         },
         "browser_use": {

@@ -90,8 +90,13 @@ fn code_mode_only_requires_code_mode() {
 fn guardian_approval_is_stable_and_enabled_by_default() {
     let spec = Feature::GuardianApproval.info();
 
+    assert_eq!(spec.key, "guardian_approval");
     assert_eq!(spec.stage, Stage::Stable);
     assert_eq!(Feature::GuardianApproval.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("auto_review"),
+        Some(Feature::GuardianApproval)
+    );
 }
 
 #[test]
