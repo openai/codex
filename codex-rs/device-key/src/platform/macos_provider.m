@@ -78,8 +78,7 @@ static BOOL CodexDeviceKeyMacClassIsValid(int32_t keyClass) {
 
 static BOOL CodexDeviceKeyMacSecureEnclaveUnavailableStatus(OSStatus status) {
     return status == errSecUnimplemented ||
-        status == errSecParam ||
-        status == CodexDeviceKeyErrSecMissingEntitlement;
+        status == errSecParam;
 }
 
 static NSData *CodexDeviceKeyMacTagData(NSString *keyTag) {
@@ -186,6 +185,13 @@ static SecKeyRef CodexDeviceKeyMacCreatePrivateKey(
 
     NSError *nsError = createError == NULL ? nil : CFBridgingRelease(createError);
     OSStatus code = nsError == nil ? 0 : (OSStatus)nsError.code;
+    // Missing Keychain entitlements affect both Secure Enclave and OS-protected permanent keys, so
+    // do not classify this as degraded hardware availability and retry with the fallback class.
+    if (code == CodexDeviceKeyErrSecMissingEntitlement) {
+        *status = CodexDeviceKeyMacStatusPlatformError;
+        *errorMessage = @"macOS Keychain entitlements are required to create persistent device keys";
+        return NULL;
+    }
     if (keyClass == CodexDeviceKeyMacKeyClassSecureEnclave &&
         CodexDeviceKeyMacSecureEnclaveUnavailableStatus(code)) {
         *status = CodexDeviceKeyMacStatusHardwareUnavailable;
