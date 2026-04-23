@@ -158,6 +158,13 @@ async fn run_command_under_sandbox(params: RunCommandUnderSandboxParams<'_>) -> 
         allow_lsopen,
         allow_unix_sockets,
     } = params;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (
+        allow_mach_services,
+        allow_appleevent_bundle_ids,
+        allow_lsopen,
+        allow_unix_sockets,
+    );
     let config = load_debug_sandbox_config(
         config_overrides
             .parse_overrides()
