@@ -164,6 +164,9 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &[],
     });
 
@@ -230,6 +233,9 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &[],
     });
 
@@ -573,6 +579,9 @@ fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
     let policy = seatbelt_policy_arg(&args);
@@ -631,6 +640,9 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: Some(&network_proxy),
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
 
@@ -672,6 +684,9 @@ fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths()
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
     let policy = seatbelt_policy_arg(&args);
@@ -713,6 +728,134 @@ fn unix_socket_policy_non_empty_output_is_newline_terminated() {
         allow_all_policy.ends_with('\n'),
         "allow-all unix socket policy should end with a newline:\n{allow_all_policy}"
     );
+}
+
+#[test]
+fn create_seatbelt_args_allowlists_extra_mach_services() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let extra_mach_services = vec![
+        "com.apple.beta".to_string(),
+        "com.apple.alpha".to_string(),
+        "com.apple.beta".to_string(),
+    ];
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_mach_services: &extra_mach_services,
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: false,
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains(
+            "(allow mach-lookup\n  (global-name \"com.apple.alpha\")\n  (global-name \"com.apple.beta\")\n)"
+        ),
+        "policy should allow the requested Mach services in stable order:\n{policy}"
+    );
+    assert_eq!(
+        policy.matches("(global-name \"com.apple.alpha\")").count(),
+        1
+    );
+    assert_eq!(
+        policy.matches("(global-name \"com.apple.beta\")").count(),
+        1
+    );
+}
+
+#[test]
+fn create_seatbelt_args_allowlists_appleevent_destinations() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let extra_appleevent_bundle_ids = vec![
+        "com.apple.mail".to_string(),
+        "com.apple.finder".to_string(),
+        "com.apple.mail".to_string(),
+    ];
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &extra_appleevent_bundle_ids,
+        allow_lsopen: false,
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains(
+            "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))"
+        ),
+        "policy should allow lookup of the AppleEvents service:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(allow appleevent-send\n  (appleevent-destination \"com.apple.finder\")\n  (appleevent-destination \"com.apple.mail\")\n)"
+        ),
+        "policy should allow the requested AppleEvent destinations in stable order:\n{policy}"
+    );
+    assert_eq!(
+        policy
+            .matches("(global-name \"com.apple.coreservices.appleevents\")")
+            .count(),
+        1
+    );
+    assert_eq!(
+        policy
+            .matches("(appleevent-destination \"com.apple.finder\")")
+            .count(),
+        1
+    );
+    assert_eq!(
+        policy
+            .matches("(appleevent-destination \"com.apple.mail\")")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn create_seatbelt_args_allows_lsopen_when_requested() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_mach_services: &[],
+        extra_appleevent_bundle_ids: &[],
+        allow_lsopen: true,
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains("(allow lsopen)"),
+        "policy should allow lsopen when requested:\n{policy}"
+    );
+    assert_eq!(policy.matches("(allow lsopen)").count(), 1);
 }
 
 #[test]

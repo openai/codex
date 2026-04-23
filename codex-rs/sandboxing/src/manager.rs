@@ -215,6 +215,9 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
+                    extra_mach_services: &[],
+                    extra_appleevent_bundle_ids: &[],
+                    allow_lsopen: false,
                     extra_allow_unix_sockets: &[],
                 });
                 let mut full_command = Vec::with_capacity(1 + args.len());

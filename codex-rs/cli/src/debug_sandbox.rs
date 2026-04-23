@@ -42,6 +42,9 @@ pub async fn run_command_under_seatbelt(
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
+        allow_mach_services,
+        allow_appleevent_bundle_ids,
+        allow_lsopen,
         allow_unix_sockets,
         log_denials,
         config_overrides,
@@ -54,6 +57,9 @@ pub async fn run_command_under_seatbelt(
         codex_linux_sandbox_exe,
         SandboxType::Seatbelt,
         log_denials,
+        &allow_mach_services,
+        &allow_appleevent_bundle_ids,
+        allow_lsopen,
         &allow_unix_sockets,
     )
     .await
@@ -84,6 +90,9 @@ pub async fn run_command_under_landlock(
         SandboxType::Landlock,
         /*log_denials*/ false,
         &[],
+        &[],
+        false,
+        &[],
     )
     .await
 }
@@ -105,6 +114,9 @@ pub async fn run_command_under_windows(
         SandboxType::Windows,
         /*log_denials*/ false,
         &[],
+        &[],
+        false,
+        &[],
     )
     .await
 }
@@ -123,6 +135,10 @@ async fn run_command_under_sandbox(
     codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
     log_denials: bool,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] allow_mach_services: &[String],
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    allow_appleevent_bundle_ids: &[String],
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] allow_lsopen: bool,
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     allow_unix_sockets: &[AbsolutePathBuf],
 ) -> anyhow::Result<()> {
@@ -196,6 +212,9 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
+                extra_mach_services: allow_mach_services,
+                extra_appleevent_bundle_ids: allow_appleevent_bundle_ids,
+                allow_lsopen,
                 extra_allow_unix_sockets: allow_unix_sockets,
             });
             let network_policy = config.permissions.network_sandbox_policy;
