@@ -6596,11 +6596,8 @@ fn post_goal_token_usage() -> TokenUsage {
 
 async fn goal_test_state_db(sess: &Session) -> anyhow::Result<crate::StateDbHandle> {
     let config = sess.get_config().await;
-    codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await
+    codex_state::StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+        .await
 }
 
 #[tokio::test]
@@ -6851,7 +6848,7 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
                     "update_goal",
                     r#"{"status":"complete"}"#,
                 ),
-                ev_completed_with_tokens("resp-2", 580),
+                ev_completed_with_tokens("resp-2", /*total_tokens*/ 580),
             ]),
             sse(vec![
                 ev_assistant_message("msg-1", "Goal complete."),
