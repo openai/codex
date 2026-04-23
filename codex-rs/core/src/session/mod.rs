@@ -3089,11 +3089,10 @@ impl Session {
 
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        let has_active_turn = { self.active_turn.lock().await.is_some() };
-        // Even when no task is active, abort lifecycle hooks may still need to
-        // react to the interrupt for session-level work.
-        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        if !has_active_turn {
+        if self.active_turn.lock().await.is_some() {
+            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        } else {
+            self.apply_idle_interrupt_runtime_effects().await;
             self.cancel_mcp_startup().await;
         }
     }
