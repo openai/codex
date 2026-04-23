@@ -179,27 +179,18 @@ struct UsageErrorBody {
     resets_at: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ApiErrorResponse {
-    error: ApiErrorBody,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorBody {
-    code: Option<String>,
-    message: Option<String>,
-}
-
 fn cyber_policy_message_from_body(body: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<ApiErrorResponse>(body).ok()?;
-    if parsed.error.code.as_deref() != Some(CYBER_POLICY_ERROR_CODE) {
+    let parsed = serde_json::from_str::<Value>(body).ok()?;
+    let error = parsed.get("error")?;
+    if error.get("code").and_then(Value::as_str) != Some(CYBER_POLICY_ERROR_CODE) {
         return None;
     }
 
-    let message = parsed
-        .error
-        .message
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| CYBER_POLICY_FALLBACK_MESSAGE.to_string());
     Some(message)
 }
