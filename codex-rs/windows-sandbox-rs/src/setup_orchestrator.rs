@@ -345,16 +345,9 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
 }
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        roots.push(dir.to_path_buf());
-    }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
-    roots.push(helper_dir);
-    roots
+    vec![helper_dir]
 }
 
 fn gather_legacy_full_read_roots(
