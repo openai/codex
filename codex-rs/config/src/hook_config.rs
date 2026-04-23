@@ -101,10 +101,7 @@ impl HookEventsToml {
             (HookEventName::PreCompact, self.pre_compact),
             (HookEventName::PostCompact, self.post_compact),
             (HookEventName::PreModelRequest, self.pre_model_request),
-            (
-                HookEventName::PostModelResponse,
-                self.post_model_response,
-            ),
+            (HookEventName::PostModelResponse, self.post_model_response),
             (HookEventName::SessionStart, self.session_start),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
             (HookEventName::Stop, self.stop),

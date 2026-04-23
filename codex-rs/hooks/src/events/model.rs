@@ -419,6 +419,7 @@ mod tests {
     fn handler(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            is_managed: false,
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 5,

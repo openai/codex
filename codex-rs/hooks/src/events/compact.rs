@@ -426,6 +426,7 @@ mod tests {
     fn handler(event_name: HookEventName) -> ConfiguredHandler {
         ConfiguredHandler {
             event_name,
+            is_managed: false,
             matcher: None,
             command: "python3 compact_hook.py".to_string(),
             timeout_sec: 5,
