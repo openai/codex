@@ -310,12 +310,19 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(committed_history, /*turn_id*/ None).get_rollout_items()
+            append_interrupted_boundary(
+                committed_history,
+                /*turn_id*/ None,
+                /*multi_agent_v2_enabled*/ false,
+            )
+            .get_rollout_items()
         )
         .expect("serialize interrupted fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(user_msg("hello")),
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::ResponseItem(interrupted_turn_history_marker(
+                /*multi_agent_v2_enabled*/ false,
+            )),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
                 reason: TurnAbortReason::Interrupted,
@@ -327,11 +334,18 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     );
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(InitialHistory::New, /*turn_id*/ None).get_rollout_items()
+            append_interrupted_boundary(
+                InitialHistory::New,
+                /*turn_id*/ None,
+                /*multi_agent_v2_enabled*/ false,
+            )
+            .get_rollout_items()
         )
         .expect("serialize interrupted empty fork history"),
         serde_json::to_value(vec![
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::ResponseItem(interrupted_turn_history_marker(
+                /*multi_agent_v2_enabled*/ false,
+            )),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
                 reason: TurnAbortReason::Interrupted,
@@ -348,7 +362,9 @@ fn interrupted_snapshot_is_not_mid_turn() {
     let interrupted_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::ResponseItem(assistant_msg("partial")),
-        RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+        RolloutItem::ResponseItem(interrupted_turn_history_marker(
+            /*multi_agent_v2_enabled*/ false,
+        )),
         RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
@@ -364,6 +380,24 @@ fn interrupted_snapshot_is_not_mid_turn() {
             active_turn_id: None,
             active_turn_start_index: None,
         },
+    );
+}
+
+#[test]
+fn multi_agent_v2_interrupted_marker_uses_assistant_output_message() {
+    let marker = interrupted_turn_history_marker(/*multi_agent_v2_enabled*/ true);
+
+    let ResponseItem::Message { role, content, .. } = marker else {
+        panic!("expected interrupted marker to be a message");
+    };
+    assert_eq!(role, "assistant");
+    assert!(
+        matches!(
+            content.as_slice(),
+            [ContentItem::OutputText { text }]
+                if text.contains(crate::context::TurnAborted::INTERRUPTED_GUIDANCE)
+        ),
+        "expected interrupted marker to use assistant OutputText content"
     );
 }
 
@@ -482,9 +516,10 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
-    let interrupted_marker_json =
-        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
-            .expect("serialize interrupted marker");
+    let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
+        interrupted_turn_history_marker(/*multi_agent_v2_enabled*/ false),
+    ))
+    .expect("serialize interrupted marker");
     let interrupted_abort_json = serde_json::to_value(RolloutItem::EventMsg(
         EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: expected_turn_id,
@@ -673,9 +708,10 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
-    let interrupted_marker_json =
-        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
-            .expect("serialize interrupted marker");
+    let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
+        interrupted_turn_history_marker(/*multi_agent_v2_enabled*/ false),
+    ))
+    .expect("serialize interrupted marker");
     assert_eq!(
         forked_rollout_items
             .iter()

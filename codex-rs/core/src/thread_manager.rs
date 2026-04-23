@@ -19,6 +19,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_exec_server::EnvironmentManager;
+use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -685,6 +686,7 @@ impl ThreadManager {
         let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let snapshot_state = snapshot_turn_state(&history);
+        let multi_agent_v2_enabled = config.features.enabled(Feature::MultiAgentV2);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
                 truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
@@ -697,7 +699,11 @@ impl ThreadManager {
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
                 if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
+                    append_interrupted_boundary(
+                        history,
+                        snapshot_state.active_turn_id,
+                        multi_agent_v2_enabled,
+                    )
                 } else {
                     history
                 }
@@ -1096,7 +1102,11 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
 /// Append the same persisted interrupt boundary used by the live interrupt path
 /// to an existing fork snapshot after the source thread has been confirmed to
 /// be mid-turn.
-fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>) -> InitialHistory {
+fn append_interrupted_boundary(
+    history: InitialHistory,
+    turn_id: Option<String>,
+    multi_agent_v2_enabled: bool,
+) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
@@ -1106,18 +1116,22 @@ fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>)
 
     match history {
         InitialHistory::New | InitialHistory::Cleared => InitialHistory::Forked(vec![
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::ResponseItem(interrupted_turn_history_marker(multi_agent_v2_enabled)),
             aborted_event,
         ]),
         InitialHistory::Forked(mut history) => {
-            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker(
+                multi_agent_v2_enabled,
+            )));
             history.push(aborted_event);
             InitialHistory::Forked(history)
         }
         InitialHistory::Resumed(mut resumed) => {
             resumed
                 .history
-                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker(
+                    multi_agent_v2_enabled,
+                )));
             resumed.history.push(aborted_event);
             InitialHistory::Forked(resumed.history)
         }

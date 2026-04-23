@@ -3,6 +3,7 @@ use crate::CodexThread;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
+use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
 use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
@@ -1565,6 +1566,39 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
     }));
 
     wait_for_turn_aborted(&thread, &interrupted_turn_id, TurnAbortReason::Interrupted).await;
+    let history_items = thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .to_vec();
+    assert!(
+        history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::OutputText { text }
+                            if text.contains(TurnAborted::INTERRUPTED_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should be recorded as an assistant output message"
+    );
+    assert!(
+        !history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::InputText { text } | ContentItem::OutputText { text }
+                            if text.contains(TurnAborted::INTERRUPTED_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should not be recorded as a user message"
+    );
     wait_for_redirected_envelope_in_history(
         &thread,
         &InterAgentCommunication::new(

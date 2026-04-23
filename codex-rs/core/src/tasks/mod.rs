@@ -50,6 +50,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -63,10 +64,22 @@ const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
-pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
-    ContextualUserFragment::into(crate::context::TurnAborted::new(
-        crate::context::TurnAborted::INTERRUPTED_GUIDANCE,
-    ))
+pub(crate) fn interrupted_turn_history_marker(multi_agent_v2_enabled: bool) -> ResponseItem {
+    let marker =
+        crate::context::TurnAborted::new(crate::context::TurnAborted::INTERRUPTED_GUIDANCE);
+    if multi_agent_v2_enabled {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: marker.render(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    } else {
+        ContextualUserFragment::into(marker)
+    }
 }
 
 fn emit_turn_network_proxy_metric(
@@ -675,7 +688,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = interrupted_turn_history_marker();
+            let marker = interrupted_turn_history_marker(self.enabled(Feature::MultiAgentV2));
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
