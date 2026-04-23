@@ -870,15 +870,13 @@ impl CodexMessageProcessor {
             }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
-                // Keep the large thread-start setup future off this request
-                // wrapper's stack on Windows.
-                Box::pin(self.thread_start(
+                self.thread_start(
                     to_connection_request_id(request_id),
                     params,
                     app_server_client_name.clone(),
                     app_server_client_version.clone(),
                     request_context,
-                ))
+                )
                 .await;
             }
             ClientRequest::ThreadUnsubscribe { request_id, params } => {
@@ -2401,23 +2399,24 @@ impl CodexMessageProcessor {
         };
         let request_trace = request_context.request_trace();
         let config_manager = self.config_manager.clone();
-        // Heap-allocate the spawned task future so constructing it here does
-        // not inline the full thread-start state machine on the caller stack.
-        let thread_start_task = Box::pin(Self::thread_start_task(
-            listener_task_context,
-            config_manager,
-            request_id,
-            app_server_client_name,
-            app_server_client_version,
-            config,
-            typesafe_overrides,
-            dynamic_tools,
-            session_start_source,
-            persist_extended_history,
-            service_name,
-            experimental_raw_events,
-            request_trace,
-        ));
+        let thread_start_task = async move {
+            Self::thread_start_task(
+                listener_task_context,
+                config_manager,
+                request_id,
+                app_server_client_name,
+                app_server_client_version,
+                config,
+                typesafe_overrides,
+                dynamic_tools,
+                session_start_source,
+                persist_extended_history,
+                service_name,
+                experimental_raw_events,
+                request_trace,
+            )
+            .await;
+        };
         self.background_tasks
             .spawn(thread_start_task.instrument(request_context.span()));
     }
