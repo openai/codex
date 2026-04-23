@@ -5976,6 +5976,34 @@ async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
 }
 
 #[tokio::test]
+async fn abort_empty_active_turn_preserves_pending_input() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let pending_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "late pending input".to_string(),
+        }],
+    };
+    let turn_state = {
+        let mut active = sess.active_turn.lock().await;
+        let active_turn = active.get_or_insert_with(ActiveTurn::default);
+        Arc::clone(&active_turn.turn_state)
+    };
+    turn_state
+        .lock()
+        .await
+        .push_pending_input(pending_item.clone());
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+
+    assert!(sess.active_turn.lock().await.is_none());
+    assert_eq!(
+        turn_state.lock().await.take_pending_input(),
+        vec![pending_item]
+    );
+}
+
+#[tokio::test]
 async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(

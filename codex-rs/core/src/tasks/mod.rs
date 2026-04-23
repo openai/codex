@@ -408,26 +408,26 @@ impl Session {
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         let mut aborted_turn = false;
         if let Some(mut active_turn) = self.take_active_turn().await {
-            aborted_turn = true;
-            let turn_context = active_turn
-                .tasks
-                .first()
-                .map(|(_, task)| Arc::clone(&task.turn_context));
-            for task in active_turn.drain_tasks() {
+            let tasks = active_turn.drain_tasks();
+            aborted_turn = !tasks.is_empty();
+            let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
+            for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }
-            if let Err(err) = self
-                .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
-                    turn_context: turn_context.as_deref(),
-                    reason: reason.clone(),
-                })
-                .await
-            {
-                warn!("failed to apply goal runtime abort event: {err}");
+            if aborted_turn {
+                if let Err(err) = self
+                    .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+                        turn_context: turn_context.as_deref(),
+                        reason: reason.clone(),
+                    })
+                    .await
+                {
+                    warn!("failed to apply goal runtime abort event: {err}");
+                }
+                // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+                // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+                active_turn.clear_pending().await;
             }
-            // Let interrupted tasks observe cancellation before dropping pending approvals, or an
-            // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
             if aborted_turn {
