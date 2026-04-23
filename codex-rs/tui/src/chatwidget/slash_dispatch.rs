@@ -301,7 +301,7 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
-            SlashCommand::AutoReviewDenials => {
+            SlashCommand::AutoReview => {
                 self.open_auto_review_denials_popup();
             }
             SlashCommand::Memories => {
@@ -867,7 +867,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::AutoReviewDenials
+            | SlashCommand::AutoReview
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
