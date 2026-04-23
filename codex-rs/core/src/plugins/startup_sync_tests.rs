@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
+use crate::plugins::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
@@ -695,7 +696,7 @@ enabled = false
     assert!(
         tmp.path()
             .join(format!(
-                "plugins/cache/openai-curated/linear/{TEST_CURATED_PLUGIN_SHA}"
+                "plugins/cache/openai-curated/linear/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
             ))
             .is_dir()
     );
