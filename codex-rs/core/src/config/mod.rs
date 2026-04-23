@@ -121,6 +121,8 @@ pub(crate) use permissions::resolve_permission_profile;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
+const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_DISABLE_MANAGED_CONFIG";
+
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -539,12 +541,11 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. When set, app-server uses a remote thread
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_chatgpt_workspace_id: Option<String>,
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -643,7 +644,7 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
-    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
     }
 
@@ -740,7 +741,9 @@ impl ConfigBuilder {
         };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
-        let loader_overrides = loader_overrides.unwrap_or_default();
+        let loader_overrides = loader_overrides
+            .map(apply_debug_loader_overrides)
+            .unwrap_or_else(|| apply_debug_loader_overrides(LoaderOverrides::default()));
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
@@ -795,6 +798,42 @@ impl ConfigBuilder {
     pub(crate) fn without_managed_config_for_tests() -> Self {
         Self::default().loader_overrides(LoaderOverrides::without_managed_config_for_tests())
     }
+}
+
+fn apply_debug_loader_overrides(mut loader_overrides: LoaderOverrides) -> LoaderOverrides {
+    #[cfg(debug_assertions)]
+    if disable_managed_config_from_debug_env() {
+        if loader_overrides.managed_config_path.is_none() {
+            loader_overrides.managed_config_path = Some(
+                std::env::temp_dir()
+                    .join("codex-config-tests")
+                    .join("managed_config.toml"),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if loader_overrides.managed_preferences_base64.is_none() {
+            loader_overrides.managed_preferences_base64 = Some(String::new());
+        }
+        if loader_overrides
+            .macos_managed_config_requirements_base64
+            .is_none()
+        {
+            loader_overrides.macos_managed_config_requirements_base64 = Some(String::new());
+        }
+    }
+
+    loader_overrides
+}
+
+fn disable_managed_config_from_debug_env() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(value) = std::env::var(DISABLE_MANAGED_CONFIG_ENV_VAR) {
+            return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+        }
+    }
+
+    false
 }
 
 impl Config {
@@ -2029,15 +2068,18 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id =
-            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
+        let forced_chatgpt_workspace_id = cfg
+            .forced_chatgpt_workspace_id
+            .clone()
+            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 

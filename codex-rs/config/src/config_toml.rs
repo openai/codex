@@ -57,6 +57,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -64,6 +65,76 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
+
+/// Backward-compatible shape for workspace restrictions in config.toml.
+#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
+impl Serialize for ForcedChatgptWorkspaceIds {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Single(value) => vec![value.clone()].serialize(serializer),
+            Self::Multiple(values) => values.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_legacy_string_and_serializes_as_list() {
+        let config: ConfigToml = toml::from_str(r#"forced_chatgpt_workspace_id = "workspace-1""#)
+            .expect("legacy workspace string should parse");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .clone()
+                .map(ForcedChatgptWorkspaceIds::into_vec),
+            Some(vec!["workspace-1".to_string()])
+        );
+        assert_eq!(
+            serde_json::to_value(&config)
+                .expect("config should serialize")
+                .get("forced_chatgpt_workspace_id"),
+            Some(&json!(["workspace-1"]))
+        );
+    }
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_workspace_list() {
+        let config: ConfigToml =
+            toml::from_str(r#"forced_chatgpt_workspace_id = ["workspace-1", "workspace-2"]"#)
+                .expect("workspace list should parse");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_vec),
+            Some(vec!["workspace-1".to_string(), "workspace-2".to_string()])
+        );
+    }
+}
 
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -156,9 +227,9 @@ pub struct ConfigToml {
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
 
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
@@ -427,7 +498,9 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_chatgpt_workspace_id: config_toml
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_vec),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
