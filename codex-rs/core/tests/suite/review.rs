@@ -721,6 +721,7 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
@@ -838,6 +839,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

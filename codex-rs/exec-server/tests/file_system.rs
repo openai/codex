@@ -22,9 +22,12 @@ use codex_exec_server::LocalFileSystem;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -79,26 +82,60 @@ fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
 }
 
 fn read_only_sandbox(readable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![absolute_path(readable_root)],
+    let readable_root = absolute_path(readable_root);
+    sandbox_context(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: readable_root,
         },
-        network_access: false,
-    })
+        access: FileSystemAccessMode::Read,
+    }])
 }
 
 fn workspace_write_sandbox(writable_root: std::path::PathBuf) -> FileSystemSandboxContext {
-    FileSystemSandboxContext::new(SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![absolute_path(writable_root)],
-        read_only_access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
+    let writable_root = absolute_path(writable_root);
+    sandbox_context(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Path {
+            path: writable_root,
         },
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
+        access: FileSystemAccessMode::Write,
+    }])
+}
+
+fn sandbox_context(entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandboxContext {
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(false),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries,
+            glob_scan_max_depth: None,
+        }),
     })
+}
+
+#[test]
+fn sandbox_context_from_profile_preserves_workspace_write_read_only_subpaths() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let writable_dir = tmp.path().join("writable");
+    let git_dir = writable_dir.join(".git");
+    std::fs::create_dir_all(&git_dir)?;
+
+    let sandbox = workspace_write_sandbox(writable_dir.clone());
+    let policy = sandbox.permissions.file_system_sandbox_policy();
+    let cwd = absolute_path(writable_dir.clone());
+    let writable_roots = policy.get_writable_roots_with_cwd(cwd.as_path());
+    let writable_dir = absolute_path(std::fs::canonicalize(writable_dir)?);
+    let git_dir = absolute_path(std::fs::canonicalize(git_dir)?);
+    let Some(writable_root) = writable_roots
+        .iter()
+        .find(|writable_root| writable_root.root == writable_dir)
+    else {
+        panic!("writable root should be preserved");
+    };
+
+    assert!(writable_root.read_only_subpaths.contains(&git_dir));
+
+    Ok(())
 }
 
 fn assert_sandbox_denied(error: &std::io::Error) {
@@ -567,13 +604,19 @@ async fn file_system_sandboxed_write_allows_additional_write_root(use_remote: bo
     std::fs::create_dir_all(&writable_dir)?;
 
     let mut sandbox = read_only_sandbox(readable_dir);
-    sandbox.additional_permissions = Some(PermissionProfile {
+    let additional_permissions = PermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             /*read*/ None,
             Some(vec![absolute_path(writable_dir)]),
         )),
-    });
+    };
+    let Some(permissions) =
+        merge_permission_profiles(Some(&sandbox.permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    sandbox.permissions = permissions;
 
     file_system
         .write_file(

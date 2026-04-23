@@ -47,6 +47,8 @@ mod fork_thread;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
+#[cfg(not(target_os = "windows"))]
+mod hooks_mcp;
 mod image_rollout;
 mod items;
 mod js_repl;
@@ -67,6 +69,7 @@ mod personality;
 mod personality_migration;
 mod plugins;
 mod prompt_caching;
+mod prompt_debug_tests;
 mod quota_exceeded;
 mod realtime_conversation;
 mod remote_env;

@@ -323,8 +323,11 @@ impl LocalProcess {
                 )
             };
 
+            let has_new_terminal_event =
+                response.exited && after_seq < response.next_seq.saturating_sub(1);
             if !response.chunks.is_empty()
-                || response.exited
+                || response.closed
+                || has_new_terminal_event
                 || tokio::time::Instant::now() >= deadline
             {
                 let _total_bytes: usize = response

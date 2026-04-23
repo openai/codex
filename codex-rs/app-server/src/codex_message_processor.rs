@@ -32,6 +32,7 @@ use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -102,6 +103,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PermissionProfile as ApiPermissionProfile;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -132,6 +134,8 @@ use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
+use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -149,6 +153,7 @@ use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -214,6 +219,7 @@ use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
+use codex_core::CodexThreadTurnContextOverrides;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
@@ -260,6 +266,11 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::remote::RemoteMarketplace;
+use codex_core_plugins::remote::RemotePluginCatalogError;
+use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
+use codex_core_plugins::remote::RemotePluginSummary as RemoteCatalogPluginSummary;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
@@ -299,6 +310,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -318,6 +331,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -373,6 +387,7 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod plugins;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
@@ -394,8 +409,9 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    cwd: Option<PathBuf>,
+    cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
+    use_state_db_only: bool,
 }
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -943,6 +959,13 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
                     .await;
+            }
+            ClientRequest::ThreadApproveGuardianDeniedAction { request_id, params } => {
+                self.thread_approve_guardian_denied_action(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
@@ -1774,7 +1797,9 @@ impl CodexMessageProcessor {
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) =
-                        if include_token && permanent_refresh_failure {
+                        if matches!(auth, CodexAuth::AgentIdentity(_))
+                            || include_token && permanent_refresh_failure
+                        {
                             (Some(auth_mode), None)
                         } else {
                             match auth.get_token() {
@@ -1826,7 +1851,9 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                CoreAuthMode::Chatgpt
+                | CoreAuthMode::ChatgptAuthTokens
+                | CoreAuthMode::AgentIdentity => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -2048,7 +2075,16 @@ impl CodexMessageProcessor {
             env: env_overrides,
             size,
             sandbox_policy,
+            permission_profile,
         } = params;
+        if sandbox_policy.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -2160,7 +2196,11 @@ impl CodexMessageProcessor {
         } else {
             ExecCapturePolicy::ShellTool
         };
-        let sandbox_cwd = self.config.cwd.clone();
+        let sandbox_cwd = if permission_profile.is_some() {
+            cwd.clone()
+        } else {
+            self.config.cwd.clone()
+        };
         let exec_params = ExecParams {
             command,
             cwd: cwd.clone(),
@@ -2180,13 +2220,56 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
         let (
             effective_policy,
             effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+        ) = if let Some(permission_profile) = permission_profile {
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from(permission_profile);
+            let sandbox_policy = match permission_profile.to_legacy_sandbox_policy(&sandbox_cwd) {
+                Ok(sandbox_policy) => sandbox_policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            };
+            match self
+                .config
+                .permissions
+                .sandbox_policy
+                .can_set(&sandbox_policy)
+            {
+                Ok(()) => {
+                    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                        permission_profile.to_runtime_permissions();
+                    Self::preserve_configured_deny_read_restrictions(
+                        &mut file_system_sandbox_policy,
+                        &self.config.permissions.file_system_sandbox_policy,
+                    );
+                    (
+                        sandbox_policy,
+                        file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    )
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            }
+        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+            match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
@@ -2203,12 +2286,13 @@ impl CodexMessageProcessor {
                     self.outgoing.send_error(request, error).await;
                     return;
                 }
-            },
-            None => (
+            }
+        } else {
+            (
                 self.config.permissions.sandbox_policy.get().clone(),
                 self.config.permissions.file_system_sandbox_policy.clone(),
                 self.config.permissions.network_sandbox_policy,
-            ),
+            )
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
@@ -2261,6 +2345,30 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request, error).await;
+            }
+        }
+    }
+
+    fn preserve_configured_deny_read_restrictions(
+        file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+        configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    ) {
+        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
+            file_system_sandbox_policy.glob_scan_max_depth =
+                configured_file_system_sandbox_policy.glob_scan_max_depth;
+        }
+
+        for deny_entry in configured_file_system_sandbox_policy
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !file_system_sandbox_policy
+                .entries
+                .iter()
+                .any(|entry| entry == deny_entry)
+            {
+                file_system_sandbox_policy.entries.push(deny_entry.clone());
             }
         }
     }
@@ -2326,6 +2434,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config,
             service_name,
             base_instructions,
@@ -2338,6 +2447,14 @@ impl CodexMessageProcessor {
             session_start_source,
             persist_extended_history,
         } = params;
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2346,6 +2463,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             personality,
@@ -2475,17 +2593,12 @@ impl CodexMessageProcessor {
         // could be downgraded to ReadOnly (perhaps there is no sandbox
         // available on Windows or the enterprise config disallows it). The cwd
         // should still be considered "trusted" in this case.
-        let requested_sandbox_trusts_project = matches!(
-            typesafe_overrides.sandbox_mode,
-            Some(
-                codex_protocol::config_types::SandboxMode::WorkspaceWrite
-                    | codex_protocol::config_types::SandboxMode::DangerFullAccess
-            )
-        );
+        let requested_permissions_trust_project =
+            requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
 
         if requested_cwd.is_some()
             && !config.active_project.is_trusted()
-            && (requested_sandbox_trusts_project
+            && (requested_permissions_trust_project
                 || matches!(
                     config.permissions.sandbox_policy.get(),
                     codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -2679,6 +2792,11 @@ impl CodexMessageProcessor {
                     /*has_in_progress_turn*/ false,
                 );
 
+                let permission_profile = thread_response_permission_profile(
+                    &config_snapshot.sandbox_policy,
+                    config_snapshot.permission_profile,
+                );
+
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
                     model: config_snapshot.model,
@@ -2689,6 +2807,7 @@ impl CodexMessageProcessor {
                     approval_policy: config_snapshot.approval_policy.into(),
                     approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
+                    permission_profile,
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
                 if listener_task_context.general_analytics_enabled {
@@ -2746,6 +2865,7 @@ impl CodexMessageProcessor {
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
+        permission_profile: Option<ApiPermissionProfile>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
         personality: Option<Personality>,
@@ -2760,6 +2880,7 @@ impl CodexMessageProcessor {
             approvals_reviewer: approvals_reviewer
                 .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
+            permission_profile: permission_profile.map(Into::into),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
@@ -3694,6 +3815,59 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_approve_guardian_denied_action(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadApproveGuardianDeniedActionParams,
+    ) {
+        let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
+        let event = match serde_json::from_value(event) {
+            Ok(event) => event,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid Guardian denial event: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::ApproveGuardianDeniedAction { event },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadApproveGuardianDeniedActionResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to approve Guardian denial: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
@@ -3704,10 +3878,11 @@ impl CodexMessageProcessor {
             source_kinds,
             archived,
             cwd,
+            use_state_db_only,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd) {
-            Ok(cwd) => cwd,
+        let cwd_filters = match normalize_thread_list_cwd_filters(cwd) {
+            Ok(cwd_filters) => cwd_filters,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -3733,8 +3908,9 @@ impl CodexMessageProcessor {
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
-                    cwd,
+                    cwd_filters,
                     search_term,
+                    use_state_db_only,
                 },
             )
             .await;
@@ -4257,6 +4433,15 @@ impl CodexMessageProcessor {
             return;
         }
 
+        if params.sandbox.is_some() && params.permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
+
         if self
             .resume_running_thread(request_id.clone(), &params)
             .await
@@ -4275,6 +4460,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config: mut request_overrides,
             base_instructions,
             developer_instructions,
@@ -4309,6 +4495,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             personality,
@@ -4411,6 +4598,10 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
+                let permission_profile = thread_response_permission_profile(
+                    &session_configured.sandbox_policy,
+                    codex_thread.config_snapshot().await.permission_profile,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -4422,6 +4613,7 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
+                    permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
                 };
                 if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -4805,12 +4997,21 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             config: cli_overrides,
             base_instructions,
             developer_instructions,
             ephemeral,
             persist_extended_history,
         } = params;
+        if sandbox.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4887,6 +5088,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
+            permission_profile,
             base_instructions,
             developer_instructions,
             /*personality*/ None,
@@ -5056,6 +5258,10 @@ impl CodexMessageProcessor {
                 .await,
             /*has_in_progress_turn*/ false,
         );
+        let permission_profile = thread_response_permission_profile(
+            &session_configured.sandbox_policy,
+            forked_thread.config_snapshot().await.permission_profile,
+        );
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5067,6 +5273,7 @@ impl CodexMessageProcessor {
             approval_policy: session_configured.approval_policy.into(),
             approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
+            permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
         };
         if self.config.features.enabled(Feature::GeneralAnalytics) {
@@ -5189,8 +5396,9 @@ impl CodexMessageProcessor {
             model_providers,
             source_kinds,
             archived,
-            cwd,
+            cwd_filters,
             search_term,
+            use_state_db_only,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -5227,28 +5435,27 @@ impl CodexMessageProcessor {
                     sort_direction: store_sort_direction,
                     allowed_sources: allowed_sources.to_vec(),
                     model_providers: model_provider_filter.clone(),
+                    cwd_filters: cwd_filters.clone(),
                     archived,
                     search_term: search_term.clone(),
+                    use_state_db_only,
                 })
                 .await
                 .map_err(thread_store_list_error)?;
 
-            let mut candidate_summaries = Vec::with_capacity(page.items.len());
+            let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
                 let Some(summary) = summary_from_stored_thread(it, fallback_provider.as_str())
                 else {
                     continue;
                 };
-                candidate_summaries.push(summary);
-            }
-
-            let mut filtered = Vec::with_capacity(candidate_summaries.len());
-            for summary in candidate_summaries {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd.as_ref().is_none_or(|expected_cwd| {
-                        path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                    && cwd_filters.as_ref().is_none_or(|expected_cwds| {
+                        expected_cwds.iter().any(|expected_cwd| {
+                            path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                        })
                     })
                 {
                     filtered.push(summary);
@@ -5260,25 +5467,22 @@ impl CodexMessageProcessor {
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
-            let next_cursor_value = page.next_cursor.clone();
-            next_cursor = next_cursor_value.clone();
+            next_cursor = page.next_cursor;
             if remaining == 0 {
                 break;
             }
 
-            match next_cursor_value {
-                Some(cursor_val) if remaining > 0 => {
-                    // Break if our pagination would reuse the same cursor again; this avoids
-                    // an infinite loop when filtering drops everything on the page.
-                    if last_cursor.as_ref() == Some(&cursor_val) {
-                        next_cursor = None;
-                        break;
-                    }
-                    last_cursor = Some(cursor_val.clone());
-                    cursor_obj = Some(cursor_val);
-                }
-                _ => break,
+            let Some(cursor_val) = next_cursor.clone() else {
+                break;
+            };
+            // Break if our pagination would reuse the same cursor again; this avoids
+            // an infinite loop when filtering drops everything on the page.
+            if last_cursor.as_ref() == Some(&cursor_val) {
+                next_cursor = None;
+                break;
             }
+            last_cursor = Some(cursor_val.clone());
+            cursor_obj = Some(cursor_val);
         }
 
         Ok((items, next_cursor))
@@ -5681,8 +5885,8 @@ impl CodexMessageProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         let runtime_environment = match environment_manager.default_environment() {
             Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
+                // Status listing has no turn cwd. This fallback is used by
+                // stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
             None => McpRuntimeEnvironment::new(
@@ -6522,7 +6726,6 @@ impl CodexMessageProcessor {
             .send_response(request_id, SkillsListResponse { data })
             .await;
     }
-
     async fn marketplace_remove(
         &self,
         request_id: ConnectionRequestId,
@@ -6556,120 +6759,6 @@ impl CodexMessageProcessor {
             }
         }
     }
-
-    async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginListParams { cwds } = params;
-        let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
-
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
-        let auth = self.auth_manager.auth().await;
-
-        let config_for_marketplace_listing = config.clone();
-        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-        let (data, marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager_for_marketplace_listing
-                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
-            Ok::<
-                (
-                    Vec<PluginMarketplaceEntry>,
-                    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
-                ),
-                MarketplaceError,
-            >((
-                outcome
-                    .marketplaces
-                    .into_iter()
-                    .map(|marketplace| PluginMarketplaceEntry {
-                        name: marketplace.name,
-                        path: Some(marketplace.path),
-                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
-                            display_name: interface.display_name,
-                        }),
-                        plugins: marketplace
-                            .plugins
-                            .into_iter()
-                            .map(|plugin| PluginSummary {
-                                id: plugin.id,
-                                installed: plugin.installed,
-                                enabled: plugin.enabled,
-                                name: plugin.name,
-                                source: marketplace_plugin_source_to_info(plugin.source),
-                                install_policy: plugin.policy.installation.into(),
-                                auth_policy: plugin.policy.authentication.into(),
-                                interface: plugin.interface.map(local_plugin_interface_to_info),
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-                outcome
-                    .errors
-                    .into_iter()
-                    .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
-                        marketplace_path: err.path,
-                        message: err.message,
-                    })
-                    .collect(),
-            ))
-        })
-        .await
-        {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
-                self.send_marketplace_error(request_id, err, "list marketplace plugins")
-                    .await;
-                return;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to list marketplace plugins: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let featured_plugin_ids = if data
-            .iter()
-            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-        {
-            match plugins_manager
-                .featured_plugin_ids_for_config(&config, auth.as_ref())
-                .await
-            {
-                Ok(featured_plugin_ids) => featured_plugin_ids,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "plugin/list featured plugin fetch failed; returning empty featured ids"
-                    );
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
-        self.outgoing
-            .send_response(
-                request_id,
-                PluginListResponse {
-                    marketplaces: data,
-                    marketplace_load_errors,
-                    featured_plugin_ids,
-                },
-            )
-            .await;
-    }
-
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
@@ -6701,111 +6790,6 @@ impl CodexMessageProcessor {
                 self.send_internal_error(request_id, message).await;
             }
         }
-    }
-
-    async fn plugin_read(&self, request_id: ConnectionRequestId, params: PluginReadParams) {
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginReadParams {
-            marketplace_path,
-            remote_marketplace_name,
-            plugin_name,
-        } = params;
-        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
-            (Some(marketplace_path), None) => marketplace_path,
-            (None, Some(remote_marketplace_name)) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "remote plugin read is not supported yet for marketplace {remote_marketplace_name}"
-                            ),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-            (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-
-        let config = match self.load_latest_config(config_cwd).await {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
-
-        let request = PluginReadRequest {
-            plugin_name,
-            marketplace_path,
-        };
-        let outcome = match plugins_manager
-            .read_plugin_for_config(&config, &request)
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                self.send_marketplace_error(request_id, err, "read plugin details")
-                    .await;
-                return;
-            }
-        };
-        let environment_manager = self.thread_manager.environment_manager();
-        let app_summaries = plugin_app_helpers::load_plugin_app_summaries(
-            &config,
-            &outcome.plugin.apps,
-            &environment_manager,
-        )
-        .await;
-        let visible_skills = outcome
-            .plugin
-            .skills
-            .iter()
-            .filter(|skill| {
-                skill.matches_product_restriction_for_product(
-                    self.thread_manager.session_source().restriction_product(),
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let plugin = PluginDetail {
-            marketplace_name: outcome.marketplace_name,
-            marketplace_path: outcome.marketplace_path,
-            summary: PluginSummary {
-                id: outcome.plugin.id,
-                name: outcome.plugin.name,
-                source: marketplace_plugin_source_to_info(outcome.plugin.source),
-                installed: outcome.plugin.installed,
-                enabled: outcome.plugin.enabled,
-                install_policy: outcome.plugin.policy.installation.into(),
-                auth_policy: outcome.plugin.policy.authentication.into(),
-                interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
-            },
-            description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
-            apps: app_summaries,
-            mcp_servers: outcome.plugin.mcp_server_names,
-        };
-
-        self.outgoing
-            .send_response(request_id, PluginReadResponse { plugin })
-            .await;
     }
 
     async fn skills_config_write(
@@ -6866,260 +6850,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
-        let PluginInstallParams {
-            marketplace_path,
-            remote_marketplace_name,
-            plugin_name,
-        } = params;
-        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
-            (Some(marketplace_path), None) => marketplace_path,
-            (None, Some(remote_marketplace_name)) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "remote plugin install is not supported yet for marketplace {remote_marketplace_name}"
-                            ),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-            (Some(_), Some(_)) | (None, None) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
-
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let request = PluginInstallRequest {
-            plugin_name,
-            marketplace_path,
-        };
-
-        let install_result = plugins_manager.install_plugin(request).await;
-
-        match install_result {
-            Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
-                    Ok(config) => config,
-                    Err(err) => {
-                        warn!(
-                            "failed to reload config after plugin install, using current config: {err:?}"
-                        );
-                        self.config.as_ref().clone()
-                    }
-                };
-
-                self.clear_plugin_related_caches();
-
-                let plugin_mcp_servers =
-                    load_plugin_mcp_servers(result.installed_path.as_path()).await;
-
-                if !plugin_mcp_servers.is_empty() {
-                    if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "failed to queue MCP refresh after plugin install: {err:?}"
-                        );
-                    }
-                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                        .await;
-                }
-
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path()).await;
-                let auth = self.auth_manager.auth().await;
-                let apps_needing_auth = if plugin_apps.is_empty()
-                    || !config.features.apps_enabled_for_auth(
-                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
-                    ) {
-                    Vec::new()
-                } else {
-                    let environment_manager = self.thread_manager.environment_manager();
-                    let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                        connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-                            &config, /*force_refetch*/ true, &environment_manager
-                        ),
-                    );
-
-                    let all_connectors = match all_connectors_result {
-                        Ok(connectors) => connectors,
-                        Err(err) => {
-                            warn!(
-                                plugin = result.plugin_id.as_key(),
-                                "failed to load app metadata after plugin install: {err:#}"
-                            );
-                            connectors::list_cached_all_connectors(&config)
-                                .await
-                                .unwrap_or_default()
-                        }
-                    };
-                    let all_connectors =
-                        connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps);
-                    let (accessible_connectors, codex_apps_ready) =
-                        match accessible_connectors_result {
-                            Ok(status) => (status.connectors, status.codex_apps_ready),
-                            Err(err) => {
-                                warn!(
-                                    plugin = result.plugin_id.as_key(),
-                                    "failed to load accessible apps after plugin install: {err:#}"
-                                );
-                                (
-                                    connectors::list_cached_accessible_connectors_from_mcp_tools(
-                                        &config,
-                                    )
-                                    .await
-                                    .unwrap_or_default(),
-                                    false,
-                                )
-                            }
-                        };
-                    if !codex_apps_ready {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "codex_apps MCP not ready after plugin install; skipping appsNeedingAuth check"
-                        );
-                    }
-
-                    plugin_app_helpers::plugin_apps_needing_auth(
-                        &all_connectors,
-                        &accessible_connectors,
-                        &plugin_apps,
-                        codex_apps_ready,
-                    )
-                };
-
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        PluginInstallResponse {
-                            auth_policy: result.auth_policy.into(),
-                            apps_needing_auth,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-
-                match err {
-                    CorePluginInstallError::Marketplace(err) => {
-                        self.send_marketplace_error(request_id, err, "install plugin")
-                            .await;
-                    }
-                    CorePluginInstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to persist installed plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to enable remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginInstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to install plugin: {err}"),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn plugin_uninstall(
-        &self,
-        request_id: ConnectionRequestId,
-        params: PluginUninstallParams,
-    ) {
-        let PluginUninstallParams { plugin_id } = params;
-        let plugins_manager = self.thread_manager.plugins_manager();
-
-        let uninstall_result = plugins_manager.uninstall_plugin(plugin_id).await;
-
-        match uninstall_result {
-            Ok(()) => {
-                self.clear_plugin_related_caches();
-                self.outgoing
-                    .send_response(request_id, PluginUninstallResponse {})
-                    .await;
-            }
-            Err(err) => {
-                if err.is_invalid_request() {
-                    self.send_invalid_request_error(request_id, err.to_string())
-                        .await;
-                    return;
-                }
-
-                match err {
-                    CorePluginUninstallError::Config(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to clear plugin config: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Remote(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall remote plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Join(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::Store(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("failed to uninstall plugin: {err}"),
-                        )
-                        .await;
-                    }
-                    CorePluginUninstallError::InvalidPluginId(_) => {
-                        unreachable!("invalid plugin ids are handled above");
-                    }
-                }
-            }
-        }
-    }
-
     async fn turn_start(
         &self,
         request_id: ConnectionRequestId,
@@ -7162,6 +6892,15 @@ impl CodexMessageProcessor {
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
+        let environments = params.environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect()
+        });
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -7174,6 +6913,7 @@ impl CodexMessageProcessor {
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
+            || params.permission_profile.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
             || params.effort.is_some()
@@ -7181,42 +6921,88 @@ impl CodexMessageProcessor {
             || collaboration_mode.is_some()
             || params.personality.is_some();
 
-        // If any overrides are provided, update the session turn context first.
+        if params.sandbox_policy.is_some() && params.permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let cwd = params.cwd;
+        let approval_policy = params.approval_policy.map(AskForApproval::to_core);
+        let approvals_reviewer = params
+            .approvals_reviewer
+            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
+        let permission_profile = params.permission_profile.map(Into::into);
+        let model = params.model;
+        let effort = params.effort.map(Some);
+        let summary = params.summary;
+        let service_tier = params.service_tier;
+        let personality = params.personality;
+
+        // If any overrides are provided, validate them synchronously so the
+        // request can fail before accepting user input. The actual update is
+        // still queued together with the input below to preserve submission order.
         if has_any_overrides {
-            let _ = self
-                .submit_core_op(
-                    &request_id,
-                    thread.as_ref(),
-                    Op::OverrideTurnContext {
-                        cwd: params.cwd,
-                        approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                        approvals_reviewer: params
-                            .approvals_reviewer
-                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-                        sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                        windows_sandbox_level: None,
-                        model: params.model,
-                        effort: params.effort.map(Some),
-                        summary: params.summary,
-                        service_tier: params.service_tier,
-                        collaboration_mode,
-                        personality: params.personality,
-                    },
+            let result = thread
+                .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
+                    cwd: cwd.clone(),
+                    approval_policy,
+                    approvals_reviewer,
+                    sandbox_policy: sandbox_policy.clone(),
+                    permission_profile: permission_profile.clone(),
+                    windows_sandbox_level: None,
+                    model: model.clone(),
+                    effort,
+                    summary,
+                    service_tier,
+                    collaboration_mode: collaboration_mode.clone(),
+                    personality,
+                })
+                .await;
+            if let Err(err) = result {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("invalid turn context override: {err}"),
                 )
                 .await;
+                return;
+            }
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
+        let turn_op = if has_any_overrides {
+            Op::UserInputWithTurnContext {
+                items: mapped_items,
+                environments,
+                final_output_json_schema: params.output_schema,
+                responsesapi_client_metadata: params.responsesapi_client_metadata,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                windows_sandbox_level: None,
+                model,
+                effort,
+                summary,
+                service_tier,
+                collaboration_mode,
+                personality,
+            }
+        } else {
+            Op::UserInput {
+                items: mapped_items,
+                environments,
+                final_output_json_schema: params.output_schema,
+                responsesapi_client_metadata: params.responsesapi_client_metadata,
+            }
+        };
         let turn_id = self
-            .submit_core_op(
-                &request_id,
-                thread.as_ref(),
-                Op::UserInput {
-                    items: mapped_items,
-                    final_output_json_schema: params.output_schema,
-                    responsesapi_client_metadata: params.responsesapi_client_metadata,
-                },
-            )
+            .submit_core_op(&request_id, thread.as_ref(), turn_op)
             .await;
 
         match turn_id {
@@ -8709,25 +8495,36 @@ impl CodexMessageProcessor {
     }
 }
 
-fn normalize_thread_list_cwd_filter(
-    cwd: Option<String>,
-) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+fn normalize_thread_list_cwd_filters(
+    cwd: Option<ThreadListCwdFilter>,
+) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
-    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
-        .map(AbsolutePathBuf::into_path_buf)
-        .map(Some)
-        .map_err(|err| JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-            data: None,
-        })
+
+    let cwds = match cwd {
+        ThreadListCwdFilter::One(cwd) => vec![cwd],
+        ThreadListCwdFilter::Many(cwds) => cwds,
+    };
+    let mut normalized_cwds = Vec::with_capacity(cwds.len());
+    for cwd in cwds {
+        let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+            .map(AbsolutePathBuf::into_path_buf)
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+                data: None,
+            })?;
+        normalized_cwds.push(cwd);
+    }
+
+    Ok(Some(normalized_cwds))
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
-    use super::normalize_thread_list_cwd_filter;
+    use super::normalize_thread_list_cwd_filters;
+    use codex_app_server_protocol::ThreadListCwdFilter;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -8741,8 +8538,9 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
-            Some(PathBuf::from(cwd))
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::One(cwd.clone())))
+                .expect("cwd filter should parse"),
+            Some(vec![PathBuf::from(cwd)])
         );
     }
 
@@ -8752,9 +8550,11 @@ mod thread_list_cwd_filter_tests {
         let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
-                .expect("cwd filter should parse"),
-            Some(expected)
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::Many(vec![String::from(
+                "repo-b"
+            ),])))
+            .expect("cwd filter should parse"),
+            Some(vec![expected])
         );
         Ok(())
     }
@@ -8908,11 +8708,15 @@ async fn handle_pending_thread_resume_request(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile,
         cwd,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
+    let permission_profile =
+        thread_response_permission_profile(&sandbox_policy, permission_profile);
+
     let response = ThreadResumeResponse {
         thread,
         model,
@@ -8923,6 +8727,7 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
+        permission_profile,
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
@@ -9107,6 +8912,16 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
+    if let Some(requested_permission_profile) = request.permission_profile.as_ref() {
+        let requested_permission_profile =
+            codex_protocol::models::PermissionProfile::from(requested_permission_profile.clone());
+        if requested_permission_profile != config_snapshot.permission_profile {
+            mismatch_details.push(format!(
+                "permission_profile requested={requested_permission_profile:?} active={:?}",
+                config_snapshot.permission_profile
+            ));
+        }
+    }
     if let Some(requested_personality) = request.personality.as_ref()
         && config_snapshot.personality.as_ref() != Some(requested_personality)
     {
@@ -9234,7 +9049,7 @@ fn plugin_skills_to_info(
                     default_prompt: interface.default_prompt,
                 }
             }),
-            path: skill.path_to_skills_md.clone(),
+            path: Some(skill.path_to_skills_md.clone()),
             enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
@@ -10025,6 +9840,48 @@ fn with_thread_spawn_agent_metadata(
     }
 }
 
+fn thread_response_permission_profile(
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    permission_profile: codex_protocol::models::PermissionProfile,
+) -> Option<codex_app_server_protocol::PermissionProfile> {
+    match sandbox_policy {
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
+        | codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
+            Some(permission_profile.into())
+        }
+        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
+    }
+}
+
+fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) -> bool {
+    if matches!(
+        overrides.sandbox_mode,
+        Some(
+            codex_protocol::config_types::SandboxMode::WorkspaceWrite
+                | codex_protocol::config_types::SandboxMode::DangerFullAccess
+        )
+    ) {
+        return true;
+    }
+
+    overrides
+        .permission_profile
+        .as_ref()
+        .is_some_and(|profile| {
+            profile
+                .to_legacy_sandbox_policy(cwd)
+                .is_ok_and(|sandbox_policy| {
+                    matches!(
+                        sandbox_policy,
+                        codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                            | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                            | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+                    )
+                })
+        })
+}
+
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -10311,6 +10168,8 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
@@ -10514,6 +10373,101 @@ mod tests {
     }
 
     #[test]
+    fn thread_response_permission_profile_omits_external_sandbox() {
+        let cwd = test_path_buf("/tmp").abs();
+        let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::DangerFullAccess,
+            cwd.as_path(),
+        );
+
+        assert_eq!(
+            thread_response_permission_profile(
+                &SandboxPolicy::ExternalSandbox {
+                    network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+                },
+                profile.clone(),
+            ),
+            None
+        );
+        assert_eq!(
+            thread_response_permission_profile(&SandboxPolicy::DangerFullAccess, profile.clone()),
+            Some(profile.into())
+        );
+    }
+
+    #[test]
+    fn requested_permissions_trust_project_uses_permission_profile_intent() {
+        let cwd = test_path_buf("/tmp/project").abs();
+        let full_access_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::DangerFullAccess,
+                cwd.as_path(),
+            );
+        let workspace_write_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::new_workspace_write_policy(),
+                cwd.as_path(),
+            );
+        let read_only_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::new_read_only_policy(),
+                cwd.as_path(),
+            );
+
+        assert!(requested_permissions_trust_project(
+            &ConfigOverrides {
+                permission_profile: Some(full_access_profile),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+        assert!(requested_permissions_trust_project(
+            &ConfigOverrides {
+                permission_profile: Some(workspace_write_profile),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+        assert!(!requested_permissions_trust_project(
+            &ConfigOverrides {
+                permission_profile: Some(read_only_profile),
+                ..Default::default()
+            },
+            cwd.as_path()
+        ));
+    }
+
+    #[test]
+    fn command_profile_preserves_configured_deny_read_restrictions() {
+        let readable_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: test_path_buf("/tmp/project").abs(),
+            },
+            access: FileSystemAccessMode::Read,
+        };
+        let deny_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "/tmp/project/**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        };
+        let mut file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![readable_entry.clone()]);
+        let mut configured_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
+        configured_file_system_sandbox_policy.glob_scan_max_depth = Some(2);
+
+        CodexMessageProcessor::preserve_configured_deny_read_restrictions(
+            &mut file_system_sandbox_policy,
+            &configured_file_system_sandbox_policy,
+        );
+
+        let mut expected = FileSystemSandboxPolicy::restricted(vec![readable_entry, deny_entry]);
+        expected.glob_scan_max_depth = Some(2);
+        assert_eq!(file_system_sandbox_policy, expected);
+    }
+
+    #[test]
     fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::Auth,
@@ -10559,7 +10513,7 @@ mod tests {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "failed to load your workspace-managed config",
+            "Failed to load cloud requirements (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -10569,7 +10523,7 @@ mod tests {
             Some(json!({
                 "reason": "cloudRequirements",
                 "errorCode": "RequestFailed",
-                "detail": "failed to load your workspace-managed config",
+                "detail": "Failed to load cloud requirements (workspace-managed policies).",
             }))
         );
     }
@@ -10639,6 +10593,7 @@ mod tests {
 
     #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {
+        let cwd = test_path_buf("/tmp").abs();
         let request = ThreadResumeParams {
             thread_id: "thread-1".to_string(),
             history: None,
@@ -10650,6 +10605,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox: None,
+            permission_profile: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,
@@ -10663,7 +10619,12 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            cwd: test_path_buf("/tmp").abs(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    cwd.as_path(),
+                ),
+            cwd,
             ephemeral: false,
             reasoning_effort: None,
             personality: None,

@@ -654,6 +654,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
             last_agent_message: Some("Final response.".into()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -699,6 +700,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -766,6 +768,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -846,6 +849,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -1001,6 +1005,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -1072,6 +1077,7 @@ async fn user_message_during_user_shell_command_is_queued_not_steered() {
             last_agent_message: Some("done".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -1411,6 +1417,7 @@ async fn turn_complete_keeps_unified_exec_processes() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 

@@ -807,6 +807,7 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
             last_agent_message: Some("Final reply **markdown**".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -839,6 +840,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -925,6 +927,7 @@ async fn slash_copy_state_is_preserved_during_running_task() {
             last_agent_message: Some("Previous completed reply".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     chat.on_task_started();
@@ -955,6 +958,7 @@ async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omit
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -992,6 +996,7 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -1545,7 +1550,7 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
 }
 
 #[tokio::test]
-async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
+async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
@@ -1555,7 +1560,24 @@ async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
     let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
 
     chat.dispatch_command_with_args(SlashCommand::Fast, "off".to_string(), Vec::new());
-    let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(None),
+                ..
+            })
+        )),
+        "expected fast-mode off override app event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistServiceTierSelection { service_tier: None }
+        )),
+        "expected fast-mode opt-out persistence app event; events: {events:?}"
+    );
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
@@ -1566,7 +1588,7 @@ async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
             service_tier: Some(None),
             ..
         } => {}
-        other => panic!("expected Op::UserTurn to clear service tier, got {other:?}"),
+        other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
     }
 }
 

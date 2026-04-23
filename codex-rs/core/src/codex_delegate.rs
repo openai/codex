@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
@@ -91,6 +92,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
+        inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
     }))
@@ -182,6 +184,7 @@ pub(crate) async fn run_codex_thread_one_shot(
 
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
+        environments: None,
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
@@ -470,6 +473,7 @@ async fn handle_exec_approval(
                 justification: None,
             },
             reason,
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         await_approval_with_cancel(
@@ -572,6 +576,7 @@ async fn handle_patch_approval(
                 patch,
             },
             reason.clone(),
+            GuardianApprovalRequestSource::DelegatedSubagent,
             review_cancel.clone(),
         );
         Some(
@@ -688,6 +693,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         new_guardian_review_id(),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::DelegatedSubagent,
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
@@ -798,6 +804,7 @@ where
             let empty = RequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             };
             parent_session
                 .notify_request_permissions_response(call_id, empty.clone())
@@ -807,6 +814,7 @@ where
         response = fut => response.unwrap_or_else(|| RequestPermissionsResponse {
             permissions: Default::default(),
             scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
         }),
     }
 }

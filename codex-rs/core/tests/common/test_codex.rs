@@ -35,6 +35,7 @@ use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -481,12 +482,12 @@ impl TestCodexBuilder {
             ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd_override;
-        config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
+        let mut config = load_default_config_for_test(home).await;
+        config.cwd = cwd_override;
+        config.model_provider = model_provider;
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_self_exe = Some(path);
         } else if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-exec") {
@@ -605,6 +606,7 @@ impl TestCodex {
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
             Some(service_tier),
+            /*environments*/ None,
         )
         .await
     }
@@ -620,6 +622,22 @@ impl TestCodex {
             approval_policy,
             sandbox_policy,
             /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_environments(
+        &self,
+        prompt: &str,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            /*service_tier*/ None,
+            environments,
         )
         .await
     }
@@ -630,10 +648,12 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
         service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
+                environments,
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),

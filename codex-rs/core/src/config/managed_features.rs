@@ -32,12 +32,36 @@ impl ManagedFeatures {
         configured_features: Features,
         feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     ) -> std::io::Result<Self> {
+        Self::from_configured_with_optional_warnings(
+            configured_features,
+            feature_requirements,
+            /*startup_warnings*/ None,
+        )
+    }
+
+    pub(crate) fn from_configured_with_warnings(
+        configured_features: Features,
+        feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+        startup_warnings: &mut Vec<String>,
+    ) -> std::io::Result<Self> {
+        Self::from_configured_with_optional_warnings(
+            configured_features,
+            feature_requirements,
+            Some(startup_warnings),
+        )
+    }
+
+    fn from_configured_with_optional_warnings(
+        configured_features: Features,
+        feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+        startup_warnings: Option<&mut Vec<String>>,
+    ) -> std::io::Result<Self> {
         let (pinned_features, source) = match feature_requirements {
             Some(Sourced {
                 value: feature_requirements,
                 source,
             }) => (
-                parse_feature_requirements(feature_requirements, &source)?,
+                parse_feature_requirements(feature_requirements, &source, startup_warnings),
                 Some(source),
             ),
             None => (BTreeMap::new(), None),
@@ -171,31 +195,49 @@ fn feature_requirements_display(feature_requirements: &BTreeMap<Feature, bool>) 
 fn parse_feature_requirements(
     feature_requirements: FeatureRequirementsToml,
     source: &RequirementSource,
-) -> std::io::Result<BTreeMap<Feature, bool>> {
+    mut startup_warnings: Option<&mut Vec<String>>,
+) -> BTreeMap<Feature, bool> {
     let mut pinned_features = BTreeMap::new();
     for (key, enabled) in feature_requirements.entries {
+        if key == "auto_review" {
+            pinned_features.insert(Feature::GuardianApproval, enabled);
+            continue;
+        }
+
         if let Some(feature) = canonical_feature_for_key(&key) {
             pinned_features.insert(feature, enabled);
             continue;
         }
 
         if let Some(feature) = feature_for_key(&key) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            push_feature_requirement_warning(
+                &mut startup_warnings,
                 format!(
-                    "invalid `features` requirement `{key}` from {source}: use canonical feature key `{}`",
+                    "Using legacy `features` requirement `{key}` from {source}; prefer canonical feature key `{}`",
                     feature.key()
                 ),
-            ));
+            );
+            pinned_features.insert(feature, enabled);
+            continue;
         }
 
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("invalid `features` requirement `{key}` from {source}"),
-        ));
+        push_feature_requirement_warning(
+            &mut startup_warnings,
+            format!("Ignoring unknown `features` requirement `{key}` from {source}"),
+        );
     }
 
-    Ok(pinned_features)
+    pinned_features
+}
+
+fn push_feature_requirement_warning(
+    startup_warnings: &mut Option<&mut Vec<String>>,
+    message: String,
+) {
+    tracing::warn!("{message}");
+    if let Some(startup_warnings) = startup_warnings.as_deref_mut() {
+        startup_warnings.push(message);
+    }
 }
 
 fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature, bool)> {
@@ -272,7 +314,11 @@ pub(crate) fn validate_explicit_feature_settings_in_config_toml(
         return Ok(());
     };
 
-    let pinned_features = parse_feature_requirements(feature_requirements.clone(), source)?;
+    let pinned_features = parse_feature_requirements(
+        feature_requirements.clone(),
+        source,
+        /*startup_warnings*/ None,
+    );
     if pinned_features.is_empty() {
         return Ok(());
     }

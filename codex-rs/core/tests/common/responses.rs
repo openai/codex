@@ -632,6 +632,17 @@ pub fn ev_response_created(id: &str) -> Value {
     })
 }
 
+pub fn ev_model_verification_metadata(id: &str, verifications: Vec<&str>) -> Value {
+    serde_json::json!({
+        "type": "response.metadata",
+        "sequence_number": 1,
+        "response_id": id,
+        "metadata": {
+            "openai_verification_recommendation": verifications,
+        }
+    })
+}
+
 pub fn ev_completed_with_tokens(id: &str, total_tokens: i64) -> Value {
     serde_json::json!({
         "type": "response.completed",
