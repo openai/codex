@@ -20,6 +20,7 @@ use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -284,6 +285,16 @@ pub(crate) fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32)
         let _ = config.features.disable(Feature::SpawnCsv);
         let _ = config.features.disable(Feature::Collab);
     }
+}
+
+pub(crate) fn turn_environment_selections(turn: &TurnContext) -> Vec<TurnEnvironmentSelection> {
+    turn.environments
+        .iter()
+        .map(|environment| TurnEnvironmentSelection {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd.clone(),
+        })
+        .collect()
 }
 
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(

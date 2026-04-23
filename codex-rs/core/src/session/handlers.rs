@@ -127,7 +127,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, environments) = match op {
+    let (items, updates, responsesapi_client_metadata) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -166,12 +166,12 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
+                    environments: environments.into(),
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
                 },
                 None,
-                environments,
             )
         }
         Op::UserInputWithTurnContext {
@@ -216,12 +216,12 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
+                    environments: environments.into(),
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
                 },
                 responsesapi_client_metadata,
-                environments,
             )
         }
         Op::UserInput {
@@ -233,18 +233,15 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             SessionSettingsUpdate {
                 final_output_json_schema: Some(final_output_json_schema),
+                environments: environments.into(),
                 ..Default::default()
             },
             responsesapi_client_metadata,
-            environments,
         ),
         _ => unreachable!(),
     };
 
-    let Ok(current_context) = sess
-        .new_turn_with_sub_id(sub_id.clone(), updates, environments.into())
-        .await
-    else {
+    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };

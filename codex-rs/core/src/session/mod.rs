@@ -29,6 +29,7 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
+use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
@@ -472,8 +473,8 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
         validate_environment_selections(environment_manager.as_ref(), &environments)?;
-
-        let environment = environment_manager.default_environment();
+        let environment =
+            selected_primary_environment(environment_manager.as_ref(), &environments)?;
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());

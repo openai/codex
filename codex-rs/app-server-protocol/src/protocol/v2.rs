@@ -3300,10 +3300,10 @@ pub struct ThreadStartParams {
     pub session_start_source: Option<ThreadStartSource>,
     /// Optional sticky environments for this thread.
     ///
-    /// Omitted selects the default local environment when environment access is
-    /// enabled. Empty disables environment access for turns that do not provide
-    /// a turn override. Non-empty selects the first environment as the current
-    /// turn environment.
+    /// Omitted selects the default environment when environment access is
+    /// enabled. Empty disables environment access for turns that do not
+    /// provide a turn override. Non-empty selects the first environment as the
+    /// current turn environment.
     #[experimental("thread/start.environments")]
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,

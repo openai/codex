@@ -3,7 +3,6 @@ use crate::config::test_config;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
-use crate::session::turn_context::TurnEnvironmentOverride;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
@@ -383,11 +382,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .thread
         .codex
         .session
-        .new_turn_with_sub_id(
-            "resume-turn".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Inherit,
-        )
+        .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build resumed turn context");
     assert_eq!(resumed_turn.environments.len(), 1);
@@ -408,11 +403,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .thread
         .codex
         .session
-        .new_turn_with_sub_id(
-            "fork-turn".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Inherit,
-        )
+        .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
         .await
         .expect("build forked turn context");
     assert_eq!(forked_turn.environments.len(), 1);

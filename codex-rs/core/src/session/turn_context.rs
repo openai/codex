@@ -30,11 +30,14 @@ impl TurnSkillsContext {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnEnvironment {
+    pub(crate) environment_id: String,
     pub(crate) environment: Arc<Environment>,
     pub(crate) cwd: AbsolutePathBuf,
 }
 
+#[derive(Clone, Default)]
 pub(crate) enum TurnEnvironmentOverride {
+    #[default]
     Inherit,
     Explicit(Vec<TurnEnvironmentSelection>),
 }
@@ -500,13 +503,12 @@ impl Session {
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
-        environments: TurnEnvironmentOverride,
     ) -> CodexResult<Arc<TurnContext>> {
         let update_result: CodexResult<_> = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let effective_environments = match environments {
+                    let effective_environments = match updates.environments.clone() {
                         TurnEnvironmentOverride::Inherit => next.environments.clone(),
                         TurnEnvironmentOverride::Explicit(environments) => environments,
                     };
@@ -582,18 +584,22 @@ impl Session {
     ) -> CodexResult<Vec<TurnEnvironment>> {
         let mut turn_environments = Vec::with_capacity(environments.len());
         for selected_environment in environments {
+            let environment_id = selected_environment.environment_id;
             let environment = self
                 .services
                 .environment_manager
-                .get_environment(&selected_environment.environment_id)
+                .get_environment(&environment_id)
                 .ok_or_else(|| {
                     CodexErr::InvalidRequest(format!(
-                        "unknown turn environment id `{}`",
-                        selected_environment.environment_id
+                        "unknown turn environment id `{environment_id}`"
                     ))
                 })?;
             let cwd = selected_environment.cwd;
-            turn_environments.push(TurnEnvironment { environment, cwd });
+            turn_environments.push(TurnEnvironment {
+                environment_id,
+                environment,
+                cwd,
+            });
         }
 
         Ok(turn_environments)

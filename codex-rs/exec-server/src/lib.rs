@@ -30,6 +30,7 @@ pub use environment::Environment;
 pub use environment::EnvironmentManager;
 pub use environment::EnvironmentManagerArgs;
 pub use environment::LOCAL_ENVIRONMENT_ID;
+pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use file_system::CopyOptions;
 pub use file_system::CreateDirectoryOptions;
 pub use file_system::ExecutorFileSystem;

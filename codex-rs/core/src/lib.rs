@@ -117,7 +117,6 @@ pub mod review_prompts;
 mod thread_manager;
 pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
-pub use environment_selection::default_thread_environment_selections;
 pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
 pub use thread_manager::StartThreadWithToolsOptions;

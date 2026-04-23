@@ -237,7 +237,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::project_trust_key;
-use codex_core::default_thread_environment_selections;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
@@ -406,6 +405,20 @@ const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
+
+fn default_thread_environment_selections(
+    environment_manager: &EnvironmentManager,
+    cwd: &AbsolutePathBuf,
+) -> Vec<TurnEnvironmentSelection> {
+    environment_manager
+        .default_environment_id()
+        .map(|environment_id| TurnEnvironmentSelection {
+            environment_id: environment_id.to_string(),
+            cwd: cwd.clone(),
+        })
+        .into_iter()
+        .collect()
+}
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -2465,7 +2478,7 @@ impl CodexMessageProcessor {
                     environment_id: environment.environment_id,
                     cwd: environment.cwd,
                 })
-                .collect()
+                .collect::<Vec<_>>()
         });
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -6943,15 +6956,35 @@ impl CodexMessageProcessor {
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
-        let environments = params.environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
-                })
-                .collect()
-        });
+        let environments: Option<Vec<TurnEnvironmentSelection>> =
+            params.environments.map(|environments| {
+                environments
+                    .into_iter()
+                    .map(|environment| TurnEnvironmentSelection {
+                        environment_id: environment.environment_id,
+                        cwd: environment.cwd,
+                    })
+                    .collect()
+            });
+        if let Some(environments) = environments.as_ref() {
+            let environment_manager = self.thread_manager.environment_manager();
+            for environment in environments {
+                if environment_manager
+                    .get_environment(&environment.environment_id)
+                    .is_none()
+                {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "unknown turn environment id `{}`",
+                            environment.environment_id
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params

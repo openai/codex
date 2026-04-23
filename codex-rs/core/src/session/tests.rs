@@ -783,7 +783,6 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
                 sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
                 ..Default::default()
             },
-            TurnEnvironmentOverride::Inherit,
         )
         .await?;
 
@@ -2816,6 +2815,7 @@ fn turn_environments_for_tests(
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
 ) -> Vec<TurnEnvironment> {
     vec![TurnEnvironment {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         environment: Arc::clone(environment),
         cwd: cwd.clone(),
     }]
@@ -4094,11 +4094,13 @@ async fn turn_environments_set_primary_environment() {
     let turn_context = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
-                environment_id: "local".to_string(),
-                cwd: selected_cwd.clone(),
-            }]),
+            SessionSettingsUpdate {
+                environments: TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: selected_cwd.clone(),
+                }]),
+                ..Default::default()
+            },
         )
         .await
         .expect("turn should start");
@@ -4176,17 +4178,19 @@ async fn multiple_turn_environments_use_first_as_primary_environment() {
     let turn_context = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Explicit(vec![
-                TurnEnvironmentSelection {
-                    environment_id: "local".to_string(),
-                    cwd: first_cwd.clone(),
-                },
-                TurnEnvironmentSelection {
-                    environment_id: "local".to_string(),
-                    cwd: second_cwd.clone(),
-                },
-            ]),
+            SessionSettingsUpdate {
+                environments: TurnEnvironmentOverride::Explicit(vec![
+                    TurnEnvironmentSelection {
+                        environment_id: "local".to_string(),
+                        cwd: first_cwd.clone(),
+                    },
+                    TurnEnvironmentSelection {
+                        environment_id: "local".to_string(),
+                        cwd: second_cwd.clone(),
+                    },
+                ]),
+                ..Default::default()
+            },
         )
         .await
         .expect("turn should start");
@@ -4213,8 +4217,10 @@ async fn empty_turn_environments_clear_primary_environment() {
     let turn_context = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Explicit(vec![]),
+            SessionSettingsUpdate {
+                environments: TurnEnvironmentOverride::Explicit(vec![]),
+                ..Default::default()
+            },
         )
         .await
         .expect("turn should start");
@@ -4232,11 +4238,13 @@ async fn unknown_turn_environment_returns_error() {
     let err = session
         .new_turn_with_sub_id(
             "sub-1".to_string(),
-            SessionSettingsUpdate::default(),
-            TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
-                environment_id: "missing".to_string(),
-                cwd: session.get_config().await.cwd.clone(),
-            }]),
+            SessionSettingsUpdate {
+                environments: TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
+                    environment_id: "missing".to_string(),
+                    cwd: session.get_config().await.cwd.clone(),
+                }]),
+                ..Default::default()
+            },
         )
         .await
         .expect_err("unknown environment should fail");
