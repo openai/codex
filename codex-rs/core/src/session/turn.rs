@@ -25,6 +25,8 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_post_model_response_hooks;
+use crate::hook_runtime::run_pre_model_request_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::injection::ToolMentionKind;
 use crate::injection::app_id_from_path;
@@ -107,6 +109,7 @@ use codex_utils_stream_parser::strip_citations;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::error;
@@ -1881,7 +1884,24 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let mut stream = client_session
+    let hook_prompt_input = match serde_json::to_value(&prompt.input) {
+        Ok(input) => input,
+        Err(_) => Value::Null,
+    };
+    let hook_prompt_tools = match serde_json::to_value(&prompt.tools) {
+        Ok(tools) => tools,
+        Err(_) => Value::Null,
+    };
+    run_pre_model_request_hooks(
+        &sess,
+        &turn_context,
+        hook_prompt_input,
+        hook_prompt_tools,
+        prompt.parallel_tool_calls,
+    )
+    .await;
+
+    let stream_result = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1894,9 +1914,39 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await;
+    let mut stream = match stream_result {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            run_post_model_response_hooks(
+                &sess,
+                &turn_context,
+                "failed".to_string(),
+                Some(err.to_string()),
+                Value::Array(Vec::new()),
+                /*needs_follow_up*/ None,
+                /*last_assistant_message*/ None,
+            )
+            .await;
+            return Err(err);
+        }
+        Err(codex_async_utils::CancelErr::Cancelled) => {
+            run_post_model_response_hooks(
+                &sess,
+                &turn_context,
+                "interrupted".to_string(),
+                Some(CodexErr::TurnAborted.to_string()),
+                Value::Array(Vec::new()),
+                /*needs_follow_up*/ None,
+                /*last_assistant_message*/ None,
+            )
+            .await;
+            return Err(CodexErr::TurnAborted);
+        }
+    };
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
+    let mut completed_response_items: Vec<ResponseItem> = Vec::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -1947,6 +1997,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                completed_response_items.push(item.clone());
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Some(event) = consumer.flush_on_complete()
                 {
@@ -2255,13 +2306,50 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
-
-    if cancellation_token.is_cancelled() {
-        return Err(CodexErr::TurnAborted);
+    let mut outcome = outcome;
+    if let Err(err) = drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await {
+        outcome = Err(err);
     }
 
-    if should_emit_turn_diff {
+    if cancellation_token.is_cancelled() {
+        outcome = Err(CodexErr::TurnAborted);
+    }
+
+    let hook_output = match serde_json::to_value(&completed_response_items) {
+        Ok(output) => output,
+        Err(_) => Value::Null,
+    };
+    let (hook_status, hook_error, hook_needs_follow_up, hook_last_assistant_message) =
+        match outcome.as_ref() {
+            Ok(result) => (
+                "completed".to_string(),
+                None,
+                Some(result.needs_follow_up),
+                result.last_agent_message.clone(),
+            ),
+            Err(err) => (
+                if matches!(err, CodexErr::TurnAborted) {
+                    "interrupted".to_string()
+                } else {
+                    "failed".to_string()
+                },
+                Some(err.to_string()),
+                /*needs_follow_up*/ None,
+                /*last_assistant_message*/ None,
+            ),
+        };
+    run_post_model_response_hooks(
+        &sess,
+        &turn_context,
+        hook_status,
+        hook_error,
+        hook_output,
+        hook_needs_follow_up,
+        hook_last_assistant_message,
+    )
+    .await;
+
+    if should_emit_turn_diff && outcome.is_ok() {
         let unified_diff = {
             let mut tracker = turn_diff_tracker.lock().await;
             tracker.get_unified_diff()

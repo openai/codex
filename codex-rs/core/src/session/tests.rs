@@ -114,6 +114,7 @@ use core_test_support::PathExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -7019,6 +7020,107 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     );
 
     pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn model_lifecycle_hooks_wrap_model_stream() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let home = Arc::new(tempfile::tempdir()?);
+    let pre_hook_path = home.path().join("pre-model-request.json");
+    let post_hook_path = home.path().join("post-model-response.json");
+    let pre_command = format!("cat > '{}'", pre_hook_path.display());
+    let post_command = format!("cat > '{}'", post_hook_path.display());
+    std::fs::write(
+        home.path().join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "PreModelRequest": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": pre_command,
+                    }]
+                }],
+                "PostModelResponse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": post_command,
+                    }]
+                }],
+            }
+        })
+        .to_string(),
+    )?;
+
+    let test = test_codex()
+        .with_home(home)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("enable codex hooks");
+        })
+        .build(&server)
+        .await?;
+    let expected_model = test.session_configured.model.clone();
+
+    test.codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let pre_hook: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(pre_hook_path)?)?;
+    assert_eq!(pre_hook["hook_event_name"], "PreModelRequest");
+    assert_eq!(pre_hook["model"].as_str(), Some(expected_model.as_str()));
+    assert_eq!(pre_hook["parallel_tool_calls"], true);
+    assert!(
+        pre_hook["input"]
+            .as_array()
+            .expect("input array")
+            .iter()
+            .any(|item| item["role"] == "user" && item.to_string().contains("hello")),
+        "model input should include the submitted user message"
+    );
+    assert!(
+        !pre_hook["tools"]
+            .as_array()
+            .expect("tools array")
+            .is_empty(),
+        "model-visible tools should be captured"
+    );
+
+    let post_hook: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(post_hook_path)?)?;
+    assert_eq!(post_hook["hook_event_name"], "PostModelResponse");
+    assert_eq!(post_hook["model"].as_str(), Some(expected_model.as_str()));
+    assert_eq!(post_hook["status"], "completed");
+    assert_eq!(post_hook["error"], serde_json::Value::Null);
+    assert_eq!(post_hook["needs_follow_up"], false);
+    assert_eq!(post_hook["last_assistant_message"], "done");
+    assert_eq!(
+        post_hook["output"][0]["type"], "message",
+        "completed model output items should be captured"
+    );
+
+    Ok(())
 }
 
 #[tokio::test]

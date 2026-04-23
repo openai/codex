@@ -313,6 +313,60 @@ pub(crate) async fn run_post_compact_hooks(
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
 }
 
+pub(crate) async fn run_pre_model_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: Value,
+    tools: Value,
+    parallel_tool_calls: bool,
+) {
+    let request = codex_hooks::PreModelRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        input,
+        tools,
+        parallel_tool_calls,
+    };
+    let preview_runs = sess.hooks().preview_pre_model_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_pre_model_request(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+}
+
+pub(crate) async fn run_post_model_response_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    status: String,
+    error: Option<String>,
+    output: Value,
+    needs_follow_up: Option<bool>,
+    last_assistant_message: Option<String>,
+) {
+    let request = codex_hooks::PostModelResponseRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        status,
+        error,
+        output,
+        needs_follow_up,
+        last_assistant_message,
+    };
+    let preview_runs = sess.hooks().preview_post_model_response(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_post_model_response(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+}
+
 pub(crate) async fn run_user_prompt_submit_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
