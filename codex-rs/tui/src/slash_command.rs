@@ -21,6 +21,7 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
+    #[strum(to_string = "denials")]
     AutoReviewDenials,
     Memories,
     Skills,
@@ -241,5 +242,14 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn auto_review_denials_command_is_denials() {
+        assert_eq!(SlashCommand::AutoReviewDenials.command(), "denials");
+        assert_eq!(
+            SlashCommand::from_str("denials"),
+            Ok(SlashCommand::AutoReviewDenials)
+        );
     }
 }
