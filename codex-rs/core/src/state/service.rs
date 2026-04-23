@@ -8,6 +8,7 @@ use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
+use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
@@ -26,6 +27,7 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_rollout_trace::RolloutTraceRecorder;
 use codex_thread_store::LocalThreadStore;
 use std::path::PathBuf;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
@@ -52,6 +54,8 @@ pub(crate) struct SessionServices {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) guardian_rejections: Mutex<HashMap<String, GuardianRejection>>,
+    pub(crate) guardian_rejection_circuit_breaker: Mutex<GuardianRejectionCircuitBreaker>,
+    pub(crate) runtime_handle: Handle,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,

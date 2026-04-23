@@ -1,5 +1,4 @@
 use super::*;
-use codex_plugin::validate_plugin_segment;
 
 impl CodexMessageProcessor {
     pub(super) async fn plugin_list(
@@ -289,20 +288,24 @@ impl CodexMessageProcessor {
                 let remote_plugin_service_config = RemotePluginServiceConfig {
                     chatgpt_base_url: config.chatgpt_base_url.clone(),
                 };
-                if let Err(err) = validate_plugin_segment(&plugin_name, "plugin name") {
+                if plugin_name.is_empty()
+                    || !plugin_name
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
+                {
                     self.send_invalid_request_error(
                         request_id,
-                        format!("invalid remote plugin id: {err}"),
+                        "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed"
+                            .to_string(),
                     )
                     .await;
                     return;
                 }
-                let remote_plugin_id = format!("{plugin_name}@{remote_marketplace_name}");
                 let remote_detail = match codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
                     auth.as_ref(),
                     &remote_marketplace_name,
-                    &remote_plugin_id,
+                    &plugin_name,
                 )
                 .await
                 {

@@ -28,7 +28,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
     });
     chat.handle_codex_event(Event {
         id: "guardian-warning".into(),
-        msg: EventMsg::Warning(WarningEvent {
+        msg: EventMsg::GuardianWarning(WarningEvent {
             message: "Automatic approval review denied (risk: high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.".into(),
         }),
     });
@@ -228,7 +228,7 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
     });
     chat.handle_codex_event(Event {
         id: "guardian-warning".into(),
-        msg: EventMsg::Warning(WarningEvent {
+        msg: EventMsg::GuardianWarning(WarningEvent {
             message: "Automatic approval review timed out while evaluating the requested approval."
                 .into(),
         }),

@@ -229,7 +229,7 @@ impl Session {
             &mcp_servers,
             store_mode,
             auth_statuses,
-            &turn_context.config.permissions.approval_policy,
+            &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.sandbox_policy.get().clone(),
