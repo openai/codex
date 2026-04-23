@@ -6611,6 +6611,28 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
 }
 
 #[tokio::test]
+async fn feature_requirements_auto_review_disables_guardian_approval() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                    entries: BTreeMap::from([("auto_review".to_string(), false)]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
