@@ -63,7 +63,7 @@ use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
-use crate::oauth_http_client::create_oauth_http_setup;
+use crate::oauth_http_client::create_oauth_authorization_manager;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
@@ -933,9 +933,9 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
-    let oauth_http_setup = create_oauth_http_setup(
+    let manager = create_oauth_authorization_manager(
         url,
-        &default_headers,
+        default_headers.clone(),
         http_client.clone(),
         Some(StoredCredentials {
             client_id: initial_tokens.client_id.clone(),
@@ -943,7 +943,6 @@ async fn create_oauth_transport_and_runtime(
         }),
     )
     .await?;
-    let manager = oauth_http_setup.authorization_manager;
 
     let auth_client = AuthClient::new(
         StreamableHttpClientAdapter::new(http_client, default_headers),
@@ -960,7 +959,6 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
-        oauth_http_setup.proxy,
         credentials_store,
         Some(initial_tokens),
     );

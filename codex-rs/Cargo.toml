@@ -478,8 +478,7 @@ ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c459
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 
-# Uncomment to debug local changes.
-# rmcp = { path = "../../rust-sdk/crates/rmcp" }
+rmcp = { path = "vendor/rmcp" }
 
 [patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }

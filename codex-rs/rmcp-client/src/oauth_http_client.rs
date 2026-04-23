@@ -1,278 +1,121 @@
-//! OAuth bootstrap helpers that route non-browser HTTP through the shared
-//! `HttpClient` capability.
+//! OAuth bootstrap helpers built on the shared `HttpClient` capability.
 //!
-//! The browser-facing part of MCP OAuth stays on the orchestrator, but the
-//! HTTP requests used for discovery, registration, token exchange, and refresh
-//! need to follow the selected MCP placement. This module discovers OAuth
-//! metadata through `HttpClient` and exposes token/registration endpoints
-//! through a small localhost proxy so RMCP's OAuth manager can keep using its
-//! existing `reqwest`-based internals.
+//! Browser launch, callback handling, and token persistence remain
+//! orchestrator-owned. This module covers the non-browser OAuth HTTP work
+//! needed for discovery, registration, token exchange, and refresh so those
+//! requests follow the same local-or-remote placement as the MCP transport.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::thread;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use async_trait::async_trait;
 use codex_exec_server::HttpClient;
 use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestParams;
+use oauth2::HttpRequest;
+use oauth2::HttpResponse;
+use oauth2::http::HeaderName as OAuthHeaderName;
+use oauth2::http::HeaderValue as OAuthHeaderValue;
 use reqwest::Method;
-use reqwest::StatusCode;
 use reqwest::Url;
 use reqwest::header::HeaderMap;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
-use rmcp::transport::auth::AuthorizationMetadata;
-use rmcp::transport::auth::CredentialStore;
+use rmcp::transport::auth::OAuthHttpClient;
 use rmcp::transport::auth::StoredCredentials;
-use tiny_http::Header;
-use tiny_http::Response;
-use tiny_http::Server;
 
-const DISCOVERY_TIMEOUT_MS: u64 = 30_000;
-const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
-const TOKEN_PROXY_PATH: &str = "/oauth/token";
-const REGISTRATION_PROXY_PATH: &str = "/oauth/register";
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
-pub(crate) struct OAuthHttpSetup {
-    pub(crate) authorization_manager: AuthorizationManager,
-    pub(crate) proxy: Option<OAuthHttpProxy>,
-}
-
-pub(crate) async fn create_oauth_http_setup(
+pub(crate) async fn create_oauth_authorization_manager(
     url: &str,
-    default_headers: &HeaderMap,
+    default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
     initial_credentials: Option<StoredCredentials>,
-) -> Result<OAuthHttpSetup> {
-    let metadata = discover_authorization_metadata(url, default_headers, Arc::clone(&http_client))
-        .await
-        .map_err(|error| anyhow!(error))?;
-    let proxy = OAuthHttpProxy::new(Arc::clone(&http_client), default_headers, &metadata)?;
-
+) -> Result<AuthorizationManager> {
     let mut authorization_manager = AuthorizationManager::new(url)
         .await
         .map_err(|error| anyhow!(error))?;
-    authorization_manager.set_metadata(proxy.rewrite_metadata(&metadata)?);
+    authorization_manager
+        .with_oauth_http_client(HttpClientOAuthAdapter::new(http_client, default_headers))
+        .map_err(|error| anyhow!(error))?;
 
     if let Some(initial_credentials) = initial_credentials {
-        let client_id = initial_credentials.client_id.clone();
         authorization_manager.set_credential_store(StaticCredentialStore::new(initial_credentials));
         authorization_manager
-            .configure_client_id(&client_id)
+            .initialize_from_store()
+            .await
             .map_err(|error| anyhow!(error))?;
     }
 
-    Ok(OAuthHttpSetup {
-        authorization_manager,
-        proxy: Some(proxy),
-    })
+    Ok(authorization_manager)
 }
 
-async fn discover_authorization_metadata(
-    url: &str,
-    default_headers: &HeaderMap,
+#[derive(Clone)]
+struct HttpClientOAuthAdapter {
     http_client: Arc<dyn HttpClient>,
-) -> Result<AuthorizationMetadata, AuthError> {
-    let base_url = Url::parse(url).map_err(|error| AuthError::OAuthError(error.to_string()))?;
+    default_headers: HeaderMap,
+}
 
-    for discovery_url in generate_discovery_urls(&base_url) {
-        let response = http_client
+impl HttpClientOAuthAdapter {
+    fn new(http_client: Arc<dyn HttpClient>, default_headers: HeaderMap) -> Self {
+        Self {
+            http_client,
+            default_headers,
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthHttpClient for HttpClientOAuthAdapter {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, AuthError> {
+        let method = Method::from_bytes(request.method().as_str().as_bytes())
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        let url = Url::parse(&request.uri().to_string()).map_err(AuthError::UrlError)?;
+        let mut headers = protocol_headers(&self.default_headers);
+        for (name, value) in request.headers() {
+            headers.push(HttpHeader {
+                name: name.as_str().to_string(),
+                value: value
+                    .to_str()
+                    .map_err(|error| AuthError::InternalError(error.to_string()))?
+                    .to_string(),
+            });
+        }
+
+        let response = self
+            .http_client
             .http_request(HttpRequestParams {
-                method: Method::GET.as_str().to_string(),
-                url: discovery_url.to_string(),
-                headers: discovery_headers(default_headers)?,
-                body: None,
-                timeout_ms: Some(DISCOVERY_TIMEOUT_MS),
-                request_id: next_request_id("oauth-discovery"),
+                method: method.as_str().to_string(),
+                url: url.to_string(),
+                headers,
+                body: Some(request.body().clone().into()),
+                timeout_ms: Some(DEFAULT_TIMEOUT_MS),
+                request_id: next_request_id("oauth-http"),
                 stream_response: false,
             })
             .await
             .map_err(|error| AuthError::OAuthError(error.to_string()))?;
 
-        if response.status != StatusCode::OK.as_u16() {
-            continue;
+        let mut http_response = HttpResponse::new(response.body.into_inner());
+        *http_response.status_mut() = reqwest::StatusCode::from_u16(response.status)
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        for header in response.headers {
+            let header_name = header
+                .name
+                .parse::<OAuthHeaderName>()
+                .map_err(|error| AuthError::InternalError(error.to_string()))?;
+            let header_value = header
+                .value
+                .parse::<OAuthHeaderValue>()
+                .map_err(|error| AuthError::InternalError(error.to_string()))?;
+            http_response
+                .headers_mut()
+                .insert(header_name, header_value);
         }
-
-        let metadata = serde_json::from_slice::<AuthorizationMetadata>(&response.body.into_inner())
-            .map_err(|error| AuthError::OAuthError(error.to_string()))?;
-        return Ok(metadata);
-    }
-
-    Err(AuthError::NoAuthorizationSupport)
-}
-
-fn generate_discovery_urls(base_url: &Url) -> Vec<Url> {
-    let mut candidates = Vec::new();
-    let trimmed = base_url
-        .path()
-        .trim_start_matches('/')
-        .trim_end_matches('/');
-    let mut push_candidate = |discovery_path: String| {
-        let mut discovery_url = base_url.clone();
-        discovery_url.set_query(None);
-        discovery_url.set_fragment(None);
-        discovery_url.set_path(&discovery_path);
-        candidates.push(discovery_url);
-    };
-
-    if trimmed.is_empty() {
-        push_candidate("/.well-known/oauth-authorization-server".to_string());
-        push_candidate("/.well-known/openid-configuration".to_string());
-    } else {
-        push_candidate(format!("/.well-known/oauth-authorization-server/{trimmed}"));
-        push_candidate(format!("/.well-known/openid-configuration/{trimmed}"));
-        push_candidate(format!("/{trimmed}/.well-known/openid-configuration"));
-        push_candidate("/.well-known/oauth-authorization-server".to_string());
-    }
-
-    candidates
-}
-
-fn discovery_headers(default_headers: &HeaderMap) -> Result<Vec<HttpHeader>, AuthError> {
-    let mut headers = protocol_headers(default_headers);
-    headers.push(HttpHeader {
-        name: MCP_PROTOCOL_VERSION_HEADER.to_string(),
-        value: MCP_PROTOCOL_VERSION.to_string(),
-    });
-    Ok(headers)
-}
-
-pub(crate) struct OAuthHttpProxy {
-    server: Arc<Server>,
-    base_url: String,
-    routes: Arc<HashMap<String, String>>,
-}
-
-impl OAuthHttpProxy {
-    fn new(
-        http_client: Arc<dyn HttpClient>,
-        default_headers: &HeaderMap,
-        metadata: &AuthorizationMetadata,
-    ) -> Result<Self> {
-        let server = Arc::new(Server::http("127.0.0.1:0").map_err(|error| anyhow!(error))?);
-        let address = match server.server_addr() {
-            tiny_http::ListenAddr::IP(address) => address,
-            #[cfg(not(target_os = "windows"))]
-            _ => return Err(anyhow!("unable to determine OAuth HTTP proxy bind address")),
-        };
-        let base_url = format!("http://{address}");
-
-        let mut routes = HashMap::new();
-        routes.insert(
-            TOKEN_PROXY_PATH.to_string(),
-            metadata.token_endpoint.clone(),
-        );
-        if let Some(registration_endpoint) = metadata.registration_endpoint.clone() {
-            routes.insert(REGISTRATION_PROXY_PATH.to_string(), registration_endpoint);
-        }
-        let routes = Arc::new(routes);
-
-        let server_for_thread = Arc::clone(&server);
-        let routes_for_thread = Arc::clone(&routes);
-        let default_headers = default_headers.clone();
-        let runtime = tokio::runtime::Handle::current();
-        thread::spawn(move || {
-            while let Ok(mut request) = server_for_thread.recv() {
-                let request_url = request.url().to_string();
-                let route_key = request_url
-                    .split_once('?')
-                    .map(|(path, _)| path)
-                    .unwrap_or(request_url.as_str())
-                    .to_string();
-                let Some(target_url) = routes_for_thread.get(&route_key).cloned() else {
-                    let _ = request.respond(Response::empty(StatusCode::NOT_FOUND.as_u16()));
-                    continue;
-                };
-
-                let mut target = target_url;
-                if let Some((_, query)) = request_url.split_once('?') {
-                    target.push('?');
-                    target.push_str(query);
-                }
-
-                let method = request.method().as_str().to_string();
-                let mut body = Vec::new();
-                if request.as_reader().read_to_end(&mut body).is_err() {
-                    let _ = request.respond(Response::empty(StatusCode::BAD_REQUEST.as_u16()));
-                    continue;
-                }
-
-                let mut headers = protocol_headers(&default_headers);
-                for header in request.headers() {
-                    let field = header.field.as_str().to_string();
-                    if field.eq_ignore_ascii_case("host")
-                        || field.eq_ignore_ascii_case("content-length")
-                    {
-                        continue;
-                    }
-                    headers.push(HttpHeader {
-                        name: field,
-                        value: header.value.to_string(),
-                    });
-                }
-
-                let response = runtime.block_on(http_client.http_request(HttpRequestParams {
-                    method,
-                    url: target,
-                    headers,
-                    body: Some(body.into()),
-                    timeout_ms: Some(DISCOVERY_TIMEOUT_MS),
-                    request_id: next_request_id("oauth-proxy"),
-                    stream_response: false,
-                }));
-
-                let response = match response {
-                    Ok(response) => response,
-                    Err(_) => {
-                        let _ = request.respond(Response::empty(StatusCode::BAD_GATEWAY.as_u16()));
-                        continue;
-                    }
-                };
-
-                let mut proxy_response = Response::from_data(response.body.into_inner())
-                    .with_status_code(response.status);
-                for header in response.headers {
-                    if let Ok(header) = Header::from_bytes(header.name.as_bytes(), header.value) {
-                        proxy_response.add_header(header);
-                    }
-                }
-                let _ = request.respond(proxy_response);
-            }
-        });
-
-        Ok(Self {
-            server,
-            base_url,
-            routes,
-        })
-    }
-
-    fn rewrite_metadata(&self, metadata: &AuthorizationMetadata) -> Result<AuthorizationMetadata> {
-        let mut rewritten = metadata.clone();
-        rewritten.token_endpoint = self.proxied_url(TOKEN_PROXY_PATH)?;
-        rewritten.registration_endpoint = if self.routes.contains_key(REGISTRATION_PROXY_PATH) {
-            Some(self.proxied_url(REGISTRATION_PROXY_PATH)?)
-        } else {
-            None
-        };
-        Ok(rewritten)
-    }
-
-    fn proxied_url(&self, path: &str) -> Result<String> {
-        let mut url = Url::parse(&self.base_url).map_err(|error| anyhow!(error))?;
-        url.set_path(path);
-        Ok(url.to_string())
-    }
-}
-
-impl Drop for OAuthHttpProxy {
-    fn drop(&mut self) {
-        self.server.unblock();
+        Ok(http_response)
     }
 }
 
@@ -289,8 +132,8 @@ impl StaticCredentialStore {
     }
 }
 
-#[async_trait::async_trait]
-impl CredentialStore for StaticCredentialStore {
+#[async_trait]
+impl rmcp::transport::auth::CredentialStore for StaticCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
         Ok(self.stored.lock().await.clone())
     }
@@ -333,6 +176,9 @@ mod tests {
     use codex_exec_server::HttpRequestResponse;
     use futures::FutureExt;
     use futures::future::BoxFuture;
+    use oauth2::http::Method as OAuthMethod;
+    use oauth2::http::Uri;
+    use oauth2::http::header::CONTENT_TYPE;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -385,84 +231,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_authorization_metadata_uses_http_client() -> Result<()> {
+    async fn oauth_http_adapter_uses_http_client() -> Result<()> {
         let http_client = TestHttpClient::default();
         http_client.push_response(Ok(HttpRequestResponse {
-            status: StatusCode::OK.as_u16(),
-            headers: Vec::new(),
-            body: serde_json::to_vec(&AuthorizationMetadata {
-                authorization_endpoint: "https://example.com/authorize".to_string(),
-                token_endpoint: "https://example.com/token".to_string(),
-                registration_endpoint: None,
-                issuer: None,
-                jwks_uri: None,
-                scopes_supported: None,
-                response_types_supported: None,
-                additional_fields: HashMap::new(),
-            })?
-            .into(),
-        }));
-
-        let metadata = discover_authorization_metadata(
-            "https://example.com/mcp",
-            &HeaderMap::new(),
-            Arc::new(http_client.clone()),
-        )
-        .await?;
-
-        assert_eq!(
-            metadata.authorization_endpoint,
-            "https://example.com/authorize"
-        );
-        assert_eq!(metadata.token_endpoint, "https://example.com/token");
-        assert_eq!(
-            http_client.requests()[0].url,
-            "https://example.com/.well-known/oauth-authorization-server/mcp"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn oauth_http_proxy_forwards_token_requests() -> Result<()> {
-        let http_client = TestHttpClient::default();
-        http_client.push_response(Ok(HttpRequestResponse {
-            status: StatusCode::OK.as_u16(),
+            status: reqwest::StatusCode::OK.as_u16(),
             headers: vec![HttpHeader {
                 name: "content-type".to_string(),
                 value: "application/json".to_string(),
             }],
-            body: br#"{"access_token":"abc","token_type":"Bearer"}"#.to_vec().into(),
+            body: br#"{"ok":true}"#.to_vec().into(),
         }));
 
-        let proxy = OAuthHttpProxy::new(
-            Arc::new(http_client.clone()),
-            &HeaderMap::new(),
-            &AuthorizationMetadata {
-                authorization_endpoint: "https://example.com/authorize".to_string(),
-                token_endpoint: "https://remote.example.com/token".to_string(),
-                registration_endpoint: None,
-                issuer: None,
-                jwks_uri: None,
-                scopes_supported: None,
-                response_types_supported: None,
-                additional_fields: HashMap::new(),
-            },
-        )?;
+        let adapter = HttpClientOAuthAdapter::new(Arc::new(http_client.clone()), HeaderMap::new());
+        let mut request = HttpRequest::new(b"grant_type=refresh_token".to_vec());
+        *request.method_mut() = OAuthMethod::POST;
+        *request.uri_mut() = "https://example.com/token"
+            .parse::<Uri>()
+            .map_err(|error| anyhow!(error))?;
+        request.headers_mut().insert(
+            CONTENT_TYPE,
+            OAuthHeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
 
-        let response = reqwest::Client::new()
-            .post(proxy.proxied_url(TOKEN_PROXY_PATH)?)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body("grant_type=refresh_token")
-            .send()
-            .await?;
+        let response = adapter.execute(request).await?;
 
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let requests = http_client.requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url, "https://remote.example.com/token");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.body().as_slice(), br#"{"ok":true}"#);
+        assert_eq!(http_client.requests().len(), 1);
+        assert_eq!(http_client.requests()[0].url, "https://example.com/token");
         assert_eq!(
-            String::from_utf8(requests[0].body.clone().unwrap().into_inner())?,
+            String::from_utf8(http_client.requests()[0].body.clone().unwrap().into_inner())?,
             "grant_type=refresh_token"
         );
         Ok(())
