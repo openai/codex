@@ -35,6 +35,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::fs::File;
+use std::fs::read_dir;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -243,6 +244,187 @@ fn read_mask_allows_or_log(
             Ok(false)
         }
     }
+}
+
+fn repair_existing_write_descendants(
+    root: &Path,
+    sid_specs: &[(&str, &str)],
+    write_mask: u32,
+    refresh_errors: &mut Vec<String>,
+    log: &mut File,
+) -> Result<()> {
+    let mut sid_ptrs: Vec<(&str, *mut c_void)> = Vec::with_capacity(sid_specs.len());
+    for (label, sid_str) in sid_specs {
+        let Some(psid) = (unsafe { convert_string_sid_to_sid(sid_str) }) else {
+            refresh_errors.push(format!(
+                "convert SID failed while repairing descendants of {} for {label}",
+                root.display()
+            ));
+            log_line(
+                log,
+                &format!(
+                    "convert SID failed while repairing descendants of {} for {label}",
+                    root.display()
+                ),
+            )?;
+            continue;
+        };
+        sid_ptrs.push((label, psid));
+    }
+    if sid_ptrs.is_empty() {
+        return Ok(());
+    }
+
+    let mut repaired_entries = 0usize;
+    let mut pending = vec![root.to_path_buf()];
+
+    while let Some(dir) = pending.pop() {
+        let entries = match read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "read_dir failed while repairing descendants of {} under {}: {}",
+                    root.display(),
+                    dir.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "read_dir failed while repairing descendants of {} under {}: {}; continuing",
+                        root.display(),
+                        dir.display(),
+                        err
+                    ),
+                )?;
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "directory entry read failed while repairing descendants of {}: {}",
+                        root.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "directory entry read failed while repairing descendants of {}: {}; continuing",
+                            root.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "file_type failed while repairing descendants of {} on {}: {}",
+                        root.display(),
+                        path.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "file_type failed while repairing descendants of {} on {}: {}; continuing",
+                            root.display(),
+                            path.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let mut needs_repair = false;
+            for (label, psid) in &sid_ptrs {
+                match path_mask_allows(&path, &[*psid], write_mask, /*require_all_bits*/ true) {
+                    Ok(true) => {}
+                    Ok(false) => needs_repair = true,
+                    Err(err) => {
+                        refresh_errors.push(format!(
+                            "write mask check failed while repairing descendants of {} on {} for {}: {}",
+                            root.display(),
+                            path.display(),
+                            label,
+                            err
+                        ));
+                        log_line(
+                            log,
+                            &format!(
+                                "write mask check failed while repairing descendants of {} on {} for {}: {}; continuing",
+                                root.display(),
+                                path.display(),
+                                label,
+                                err
+                            ),
+                        )?;
+                        needs_repair = true;
+                    }
+                }
+            }
+
+            if needs_repair {
+                let psids: Vec<*mut c_void> = sid_ptrs.iter().map(|(_, psid)| *psid).collect();
+                match unsafe { ensure_allow_write_aces(&path, &psids) } {
+                    Ok(_) => repaired_entries += 1,
+                    Err(err) => {
+                        refresh_errors.push(format!(
+                            "write ACE repair failed on descendant {} under {}: {}",
+                            path.display(),
+                            root.display(),
+                            err
+                        ));
+                        log_line(
+                            log,
+                            &format!(
+                                "write ACE repair failed on descendant {} under {}: {}; continuing",
+                                path.display(),
+                                root.display(),
+                                err
+                            ),
+                        )?;
+                    }
+                }
+            }
+
+            if file_type.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+
+    for (_, psid) in sid_ptrs {
+        unsafe {
+            LocalFree(psid as HLOCAL);
+        }
+    }
+
+    if repaired_entries > 0 {
+        log_line(
+            log,
+            &format!(
+                "repaired write ACEs on {} existing descendants under {}",
+                repaired_entries,
+                root.display()
+            ),
+        )?;
+    }
+
+    Ok(())
 }
 
 fn lock_sandbox_dir(
@@ -759,6 +941,28 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             }
         }
     });
+
+    for root in &payload.write_roots {
+        if !root.exists() {
+            continue;
+        }
+        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
+        let capability_sid = if is_command_cwd {
+            workspace_sid_str.as_str()
+        } else {
+            cap_sid_str.as_str()
+        };
+        repair_existing_write_descendants(
+            root,
+            &[
+                ("sandbox_group", sandbox_group_sid_str.as_str()),
+                ("capability", capability_sid),
+            ],
+            write_mask,
+            &mut refresh_errors,
+            log,
+        )?;
+    }
 
     for path in &payload.deny_write_paths {
         if !seen_deny_paths.insert(path.clone()) {
