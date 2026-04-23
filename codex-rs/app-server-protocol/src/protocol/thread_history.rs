@@ -3098,6 +3098,7 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             }),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-a".into(),

@@ -136,6 +136,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             }],
             end_turn: None,
             phase: None,
+            exclude_from_compaction: false,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),

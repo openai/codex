@@ -1097,6 +1097,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                 }],
                 end_turn: None,
                 phase: None,
+                exclude_from_compaction: false,
             }]),
             ..Default::default()
         })
@@ -1926,6 +1927,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         }],
         end_turn: None,
         phase: None,
+        exclude_from_compaction: false,
     }];
 
     // Resume with explicit history and override the model.
