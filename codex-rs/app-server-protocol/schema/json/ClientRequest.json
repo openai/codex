@@ -4651,6 +4651,30 @@
         },
         "method": {
           "enum": [
+            "thread/approveAutoReviewDeniedAction"
+          ],
+          "title": "Thread/approveAutoReviewDeniedActionRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadApproveGuardianDeniedActionParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/approveAutoReviewDeniedActionRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/approveGuardianDeniedAction"
           ],
           "title": "Thread/approveGuardianDeniedActionRequestMethod",

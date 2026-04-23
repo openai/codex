@@ -264,6 +264,18 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
+fn auto_review_is_legacy_alias_for_guardian_approval() {
+    assert_eq!(
+        feature_for_key("guardian_approval"),
+        Some(Feature::GuardianApproval)
+    );
+    assert_eq!(
+        feature_for_key("auto_review"),
+        Some(Feature::GuardianApproval)
+    );
+}
+
+#[test]
 fn multi_agent_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::Collab.stage(), Stage::Stable);
     assert_eq!(Feature::Collab.default_enabled(), true);

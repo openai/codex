@@ -311,6 +311,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadApproveAutoReviewDeniedAction => "thread/approveAutoReviewDeniedAction" {
+        params: v2::ThreadApproveGuardianDeniedActionParams,
+        response: v2::ThreadApproveGuardianDeniedActionResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         response: v2::ThreadApproveGuardianDeniedActionResponse,
@@ -1231,6 +1235,48 @@ mod tests {
                 },
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_denied_action_accepts_guardian_and_auto_review_methods() -> Result<()> {
+        let params = v2::ThreadApproveGuardianDeniedActionParams {
+            thread_id: "thread-1".to_string(),
+            event: json!({ "id": "event-1" }),
+        };
+
+        let guardian: ClientRequest = serde_json::from_value(json!({
+            "method": "thread/approveGuardianDeniedAction",
+            "id": 42,
+            "params": params.clone(),
+        }))?;
+        assert_eq!(
+            guardian,
+            ClientRequest::ThreadApproveGuardianDeniedAction {
+                request_id: RequestId::Integer(42),
+                params: v2::ThreadApproveGuardianDeniedActionParams {
+                    thread_id: "thread-1".to_string(),
+                    event: json!({ "id": "event-1" }),
+                },
+            }
+        );
+
+        let auto_review: ClientRequest = serde_json::from_value(json!({
+            "method": "thread/approveAutoReviewDeniedAction",
+            "id": 42,
+            "params": params,
+        }))?;
+        assert_eq!(
+            auto_review,
+            ClientRequest::ThreadApproveAutoReviewDeniedAction {
+                request_id: RequestId::Integer(42),
+                params: v2::ThreadApproveGuardianDeniedActionParams {
+                    thread_id: "thread-1".to_string(),
+                    event: json!({ "id": "event-1" }),
+                },
+            }
+        );
+
         Ok(())
     }
 

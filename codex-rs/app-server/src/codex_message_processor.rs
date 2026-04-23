@@ -958,7 +958,8 @@ impl CodexMessageProcessor {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::ThreadApproveGuardianDeniedAction { request_id, params } => {
+            ClientRequest::ThreadApproveAutoReviewDeniedAction { request_id, params }
+            | ClientRequest::ThreadApproveGuardianDeniedAction { request_id, params } => {
                 self.thread_approve_guardian_denied_action(
                     to_connection_request_id(request_id),
                     params,

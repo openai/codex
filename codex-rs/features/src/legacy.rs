@@ -49,6 +49,10 @@ const ALIASES: &[Alias] = &[
         legacy_key: "telepathy",
         feature: Feature::Chronicle,
     },
+    Alias {
+        legacy_key: "auto_review",
+        feature: Feature::GuardianApproval,
+    },
 ];
 
 pub fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
