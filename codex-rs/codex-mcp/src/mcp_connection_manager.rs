@@ -37,6 +37,8 @@ use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -1538,7 +1540,14 @@ async fn make_rmcp_client(
     } = config;
     let remote_environment = match experimental_environment.as_deref() {
         None | Some("local") => false,
-        Some("remote") => true,
+        Some("remote") => {
+            if !runtime_environment.environment().is_remote() {
+                return Err(StartupOutcomeError::from(anyhow!(
+                    "remote MCP server `{server_name}` requires a remote environment"
+                )));
+            }
+            true
+        }
         Some(environment) => {
             return Err(StartupOutcomeError::from(anyhow!(
                 "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
@@ -1562,14 +1571,8 @@ async fn make_rmcp_client(
                     .collect::<HashMap<_, _>>()
             });
             let launcher = if remote_environment {
-                let exec_environment = runtime_environment.environment();
-                if !exec_environment.is_remote() {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server `{server_name}` requires a remote executor environment"
-                    )));
-                }
                 Arc::new(ExecutorStdioServerLauncher::new(
-                    exec_environment.get_exec_backend(),
+                    runtime_environment.environment().get_exec_backend(),
                     runtime_environment.fallback_cwd(),
                 ))
             } else {
@@ -1589,11 +1592,11 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            if remote_environment && !runtime_environment.environment().is_remote() {
-                return Err(StartupOutcomeError::from(anyhow!(
-                    "remote MCP server `{server_name}` requires a remote environment"
-                )));
-            }
+            let http_client: Arc<dyn HttpClient> = if remote_environment {
+                runtime_environment.environment().get_http_client()
+            } else {
+                Arc::new(ReqwestHttpClient)
+            };
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
@@ -1606,7 +1609,7 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
-                runtime_environment.environment().get_http_client(),
+                http_client,
             )
             .await
             .map_err(StartupOutcomeError::from)

@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
-use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
@@ -41,7 +40,6 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
@@ -54,14 +52,9 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
-use reqwest::Client;
-use reqwest::StatusCode;
 use serde_json::Value;
 use serde_json::json;
 use serial_test::serial;
-use tempfile::tempdir;
-use tokio::process::Child;
-use tokio::process::Command;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::MockServer;
@@ -115,12 +108,9 @@ fn remote_aware_experimental_environment() -> Option<String> {
 /// container and return that in-container path instead.
 fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
     let bin = stdio_server_bin()?;
-    let Some(container_name) = std::env::var_os(remote_env_env_var()) else {
+    let Some(container_name) = remote_env_container_name()? else {
         return Ok(bin);
     };
-    let container_name = container_name
-        .into_string()
-        .map_err(|value| anyhow::anyhow!("remote env container name must be utf-8: {value:?}"))?;
 
     // Keep the Docker path rewrite scoped to tests that use `build_remote_aware`.
     // Other MCP tests still start their stdio server from the orchestrator test
@@ -131,38 +121,87 @@ fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
     // path instead of the host build artifact path.
     // Several remote-aware MCP tests can run in parallel; give each copied
     // binary its own path so one test cannot replace another test's executable.
+    copy_binary_to_remote_env(&container_name, Path::new(&bin), "test_stdio_server")
+}
+
+/// Returns the Docker container used by remote-aware MCP tests, when active.
+fn remote_env_container_name() -> anyhow::Result<Option<String>> {
+    let Some(container_name) = std::env::var_os(remote_env_env_var()) else {
+        return Ok(None);
+    };
+    Ok(Some(container_name.into_string().map_err(|value| {
+        anyhow::anyhow!("remote env container name must be utf-8: {value:?}")
+    })?))
+}
+
+/// Builds a collision-resistant in-container path for copied test binaries.
+fn unique_remote_path(binary_name: &str) -> anyhow::Result<String> {
     let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let remote_path = format!(
-        "/tmp/codex-remote-env/test_stdio_server-{}-{unique_suffix}",
+    Ok(format!(
+        "/tmp/codex-remote-env/{binary_name}-{}-{unique_suffix}",
         std::process::id()
+    ))
+}
+
+/// Copies a host-built helper binary into the remote test container.
+fn copy_binary_to_remote_env(
+    container_name: &str,
+    host_path: &Path,
+    binary_name: &str,
+) -> anyhow::Result<String> {
+    let remote_path = unique_remote_path(binary_name)?;
+    let mkdir_output = StdCommand::new("docker")
+        .args([
+            "exec",
+            container_name,
+            "mkdir",
+            "-p",
+            "/tmp/codex-remote-env",
+        ])
+        .output()
+        .context("create remote MCP test binary directory")?;
+    ensure!(
+        mkdir_output.status.success(),
+        "docker mkdir remote MCP test binary directory failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&mkdir_output.stdout).trim(),
+        String::from_utf8_lossy(&mkdir_output.stderr).trim()
     );
+
     let container_target = format!("{container_name}:{remote_path}");
     let copy_output = StdCommand::new("docker")
         .arg("cp")
-        .arg(&bin)
+        .arg(host_path)
         .arg(&container_target)
         .output()
-        .with_context(|| format!("copy {bin} to remote MCP test env"))?;
+        .with_context(|| {
+            format!(
+                "copy {} to remote MCP test env",
+                host_path.to_string_lossy()
+            )
+        })?;
     ensure!(
         copy_output.status.success(),
-        "docker cp test_stdio_server failed: stdout={} stderr={}",
+        "docker cp {binary_name} failed: stdout={} stderr={}",
         String::from_utf8_lossy(&copy_output.stdout).trim(),
         String::from_utf8_lossy(&copy_output.stderr).trim()
     );
 
     let chmod_output = StdCommand::new("docker")
-        .args(["exec", &container_name, "chmod", "+x", remote_path.as_str()])
+        .args(["exec", container_name, "chmod", "+x", remote_path.as_str()])
         .output()
-        .context("mark remote test_stdio_server executable")?;
+        .with_context(|| format!("mark remote {binary_name} executable"))?;
     ensure!(
         chmod_output.status.success(),
-        "docker chmod test_stdio_server failed: stdout={} stderr={}",
+        "docker chmod {binary_name} failed: stdout={} stderr={}",
         String::from_utf8_lossy(&chmod_output.stdout).trim(),
         String::from_utf8_lossy(&chmod_output.stderr).trim()
     );
 
     Ok(remote_path)
 }
+
+#[path = "rmcp_client/streamable_http_tests.rs"]
+mod streamable_http_tests;
 
 async fn wait_for_mcp_tool(fixture: &TestCodex, tool_name: &str) -> anyhow::Result<()> {
     let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
@@ -1805,442 +1844,6 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     server.verify().await;
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-
-    let call_id = "call-456";
-    let server_name = "rmcp_http";
-    let namespace = format!("mcp__{server_name}__");
-
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(
-                call_id,
-                &namespace,
-                "echo",
-                "{\"message\":\"ping\"}",
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_assistant_message(
-                "msg-1",
-                "rmcp streamable http echo tool completed successfully.",
-            ),
-            responses::ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    let expected_env_value = "propagated-env-http";
-    let rmcp_http_server_bin = match cargo_bin("test_streamable_http_server") {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("test_streamable_http_server binary not available, skipping test: {err}");
-            return Ok(());
-        }
-    };
-
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    let bind_addr = format!("127.0.0.1:{port}");
-    let server_url = format!("http://{bind_addr}/mcp");
-
-    let mut http_server_child = Command::new(&rmcp_http_server_bin)
-        .kill_on_drop(true)
-        .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
-        .env("MCP_TEST_VALUE", expected_env_value)
-        .spawn()?;
-
-    wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))
-        .await?;
-
-    let fixture = test_codex()
-        .with_config(move |config| {
-            insert_mcp_server(
-                config,
-                server_name,
-                McpServerTransportConfig::StreamableHttp {
-                    url: server_url,
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                TestMcpServerOptions::default(),
-            );
-        })
-        .build(&server)
-        .await?;
-    let session_model = fixture.session_configured.model.clone();
-
-    fixture
-        .codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "call the rmcp streamable http echo tool".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: fixture.cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-            environments: None,
-        })
-        .await?;
-
-    let begin_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallBegin(_))
-    })
-    .await;
-
-    let EventMsg::McpToolCallBegin(begin) = begin_event else {
-        unreachable!("event guard guarantees McpToolCallBegin");
-    };
-    assert_eq!(begin.invocation.server, server_name);
-    assert_eq!(begin.invocation.tool, "echo");
-
-    let end_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallEnd(_))
-    })
-    .await;
-    let EventMsg::McpToolCallEnd(end) = end_event else {
-        unreachable!("event guard guarantees McpToolCallEnd");
-    };
-
-    let result = end
-        .result
-        .as_ref()
-        .expect("rmcp echo tool should return success");
-    assert_eq!(result.is_error, Some(false));
-    assert!(
-        result.content.is_empty(),
-        "content should default to an empty array"
-    );
-
-    let structured = result
-        .structured_content
-        .as_ref()
-        .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
-    let echo_value = map
-        .get("echo")
-        .and_then(Value::as_str)
-        .expect("echo payload present");
-    assert_eq!(echo_value, "ECHOING: ping");
-    let env_value = map
-        .get("env")
-        .and_then(Value::as_str)
-        .expect("env snapshot inserted");
-    assert_eq!(env_value, expected_env_value);
-
-    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    server.verify().await;
-
-    match http_server_child.try_wait() {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            let _ = http_server_child.kill().await;
-        }
-        Err(error) => {
-            eprintln!("failed to check streamable http server status: {error}");
-            let _ = http_server_child.kill().await;
-        }
-    }
-    if let Err(error) = http_server_child.wait().await {
-        eprintln!("failed to await streamable http server shutdown: {error}");
-    }
-
-    Ok(())
-}
-
-/// This test writes to a fallback credentials file in CODEX_HOME.
-/// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
-#[test]
-#[serial(codex_home)]
-fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
-    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
-
-    let handle = std::thread::Builder::new()
-        .name("streamable_http_with_oauth_round_trip".to_string())
-        .stack_size(TEST_STACK_SIZE_BYTES)
-        .spawn(|| -> anyhow::Result<()> {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()?;
-            runtime.block_on(streamable_http_with_oauth_round_trip_impl())
-        })?;
-
-    match handle.join() {
-        Ok(result) => result,
-        Err(_) => Err(anyhow::anyhow!(
-            "streamable_http_with_oauth_round_trip thread panicked"
-        )),
-    }
-}
-
-#[allow(clippy::expect_used)]
-async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-
-    let call_id = "call-789";
-    let server_name = "rmcp_http_oauth";
-    let tool_name = format!("mcp__{server_name}__echo");
-    let namespace = format!("mcp__{server_name}__");
-
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_function_call_with_namespace(
-                call_id,
-                &namespace,
-                "echo",
-                "{\"message\":\"ping\"}",
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_assistant_message(
-                "msg-1",
-                "rmcp streamable http oauth echo tool completed successfully.",
-            ),
-            responses::ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    let expected_env_value = "propagated-env-http-oauth";
-    let expected_token = "initial-access-token";
-    let client_id = "test-client-id";
-    let refresh_token = "initial-refresh-token";
-    let rmcp_http_server_bin = match cargo_bin("test_streamable_http_server") {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("test_streamable_http_server binary not available, skipping test: {err}");
-            return Ok(());
-        }
-    };
-
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    let bind_addr = format!("127.0.0.1:{port}");
-    let server_url = format!("http://{bind_addr}/mcp");
-
-    let mut http_server_child = Command::new(&rmcp_http_server_bin)
-        .kill_on_drop(true)
-        .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
-        .env("MCP_EXPECT_BEARER", expected_token)
-        .env("MCP_TEST_VALUE", expected_env_value)
-        .spawn()?;
-
-    wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))
-        .await?;
-
-    let temp_home = Arc::new(tempdir()?);
-    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
-    write_fallback_oauth_tokens(
-        temp_home.path(),
-        server_name,
-        &server_url,
-        client_id,
-        expected_token,
-        refresh_token,
-    )?;
-
-    let fixture = test_codex()
-        .with_home(temp_home.clone())
-        .with_config(move |config| {
-            // Keep OAuth credentials isolated to this test home because Bazel
-            // runs the full core suite in one process.
-            config.mcp_oauth_credentials_store_mode = serde_json::from_value(json!("file"))
-                .expect("`file` should deserialize as OAuthCredentialsStoreMode");
-            insert_mcp_server(
-                config,
-                server_name,
-                McpServerTransportConfig::StreamableHttp {
-                    url: server_url,
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                TestMcpServerOptions::default(),
-            );
-        })
-        .build(&server)
-        .await?;
-    let session_model = fixture.session_configured.model.clone();
-
-    wait_for_mcp_tool(&fixture, &tool_name).await?;
-
-    fixture
-        .codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "call the rmcp streamable http oauth echo tool".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: fixture.cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-            environments: None,
-        })
-        .await?;
-
-    let begin_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallBegin(_))
-    })
-    .await;
-
-    let EventMsg::McpToolCallBegin(begin) = begin_event else {
-        unreachable!("event guard guarantees McpToolCallBegin");
-    };
-    assert_eq!(begin.invocation.server, server_name);
-    assert_eq!(begin.invocation.tool, "echo");
-
-    let end_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallEnd(_))
-    })
-    .await;
-    let EventMsg::McpToolCallEnd(end) = end_event else {
-        unreachable!("event guard guarantees McpToolCallEnd");
-    };
-
-    let result = end
-        .result
-        .as_ref()
-        .expect("rmcp echo tool should return success");
-    assert_eq!(result.is_error, Some(false));
-    assert!(
-        result.content.is_empty(),
-        "content should default to an empty array"
-    );
-
-    let structured = result
-        .structured_content
-        .as_ref()
-        .expect("structured content");
-    let Value::Object(map) = structured else {
-        panic!("structured content should be an object: {structured:?}");
-    };
-    let echo_value = map
-        .get("echo")
-        .and_then(Value::as_str)
-        .expect("echo payload present");
-    assert_eq!(echo_value, "ECHOING: ping");
-    let env_value = map
-        .get("env")
-        .and_then(Value::as_str)
-        .expect("env snapshot inserted");
-    assert_eq!(env_value, expected_env_value);
-
-    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    server.verify().await;
-
-    match http_server_child.try_wait() {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            let _ = http_server_child.kill().await;
-        }
-        Err(error) => {
-            eprintln!("failed to check streamable http oauth server status: {error}");
-            let _ = http_server_child.kill().await;
-        }
-    }
-    if let Err(error) = http_server_child.wait().await {
-        eprintln!("failed to await streamable http oauth server shutdown: {error}");
-    }
-
-    Ok(())
-}
-
-async fn wait_for_streamable_http_server(
-    server_child: &mut Child,
-    address: &str,
-    timeout: Duration,
-) -> anyhow::Result<()> {
-    let deadline = Instant::now() + timeout;
-    let metadata_url = format!("http://{address}/.well-known/oauth-authorization-server/mcp");
-    let client = Client::builder().no_proxy().build()?;
-    loop {
-        if let Some(status) = server_child.try_wait()? {
-            return Err(anyhow::anyhow!(
-                "streamable HTTP server exited early with status {status}"
-            ));
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-
-        if remaining.is_zero() {
-            return Err(anyhow::anyhow!(
-                "timed out waiting for streamable HTTP server metadata at {metadata_url}: deadline reached"
-            ));
-        }
-
-        match tokio::time::timeout(remaining, client.get(&metadata_url).send()).await {
-            Ok(Ok(response)) if response.status() == StatusCode::OK => return Ok(()),
-            Ok(Ok(response)) => {
-                if Instant::now() >= deadline {
-                    return Err(anyhow::anyhow!(
-                        "timed out waiting for streamable HTTP server metadata at {metadata_url}: HTTP {}",
-                        response.status()
-                    ));
-                }
-            }
-            Ok(Err(error)) => {
-                if Instant::now() >= deadline {
-                    return Err(anyhow::anyhow!(
-                        "timed out waiting for streamable HTTP server metadata at {metadata_url}: {error}"
-                    ));
-                }
-            }
-            Err(_) => {
-                return Err(anyhow::anyhow!(
-                    "timed out waiting for streamable HTTP server metadata at {metadata_url}: request timed out"
-                ));
-            }
-        }
-
-        sleep(Duration::from_millis(50)).await;
-    }
 }
 
 fn write_fallback_oauth_tokens(
