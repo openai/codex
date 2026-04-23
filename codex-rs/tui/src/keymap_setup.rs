@@ -892,6 +892,40 @@ mod tests {
     }
 
     #[test]
+    fn picker_approval_tab_lists_all_approval_actions() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let approval_tab = selection_tab(&params, "approval-shortcuts");
+        let actions = approval_tab
+            .items
+            .iter()
+            .map(|item| {
+                item.search_value
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                "Approval.open_fullscreen",
+                "Approval.open_thread",
+                "Approval.approve",
+                "Approval.approve_for_session",
+                "Approval.approve_for_prefix",
+                "Approval.deny",
+                "Approval.decline",
+                "Approval.cancel",
+            ]
+        );
+    }
+
+    #[test]
     fn picker_content_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
