@@ -201,6 +201,7 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::TrackUsageLimitBannerResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -1207,6 +1208,17 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SendAddCreditsNudgeEmail { request_id, params } => {
                 self.send_add_credits_nudge_email(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::TrackUsageLimitBanner {
+                request_id,
+                params: _,
+            } => {
+                self.outgoing
+                    .send_response(
+                        to_connection_request_id(request_id),
+                        TrackUsageLimitBannerResponse {},
+                    )
                     .await;
             }
             ClientRequest::FeedbackUpload { request_id, params } => {

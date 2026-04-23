@@ -1489,6 +1489,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
+- `account/usageLimitBanner/track` — record that the CLI workspace-owner nudge prompt was shown or its CTA was clicked.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 - `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes for a loaded thread; payload includes `{ name, status, error }` where `status` is `starting`, `ready`, `failed`, or `cancelled`.
 
@@ -1600,6 +1601,15 @@ Field notes:
 ```
 
 Use `creditType: "credits"` when workspace credits are depleted, or `creditType: "usage_limit"` when the workspace usage limit has been reached. If the owner was already notified recently, the response status is `cooldown_active`.
+
+### 9) Track the workspace-owner nudge prompt
+
+```json
+{ "method": "account/usageLimitBanner/track", "id": 9, "params": { "action": "shown", "creditType": "usage_limit" } }
+{ "id": 9, "result": {} }
+```
+
+Use `action: "shown"` when the prompt is displayed, and `action: "cta_clicked"` when the user confirms the prompt.
 
 ## Experimental API Opt-in
 

@@ -28,6 +28,7 @@ use crate::events::plugin_state_event_type;
 use crate::events::subagent_parent_thread_id;
 use crate::events::subagent_source_name;
 use crate::events::subagent_thread_started_event_request;
+use crate::events::usage_limit_banner_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppMentionedInput;
@@ -176,7 +177,7 @@ impl AnalyticsReducer {
                 request_id,
                 request,
             } => {
-                self.ingest_request(connection_id, request_id, *request);
+                self.ingest_request(connection_id, request_id, *request, out);
             }
             AnalyticsFact::Response {
                 connection_id,
@@ -309,6 +310,7 @@ impl AnalyticsReducer {
         connection_id: u64,
         request_id: RequestId,
         request: ClientRequest,
+        out: &mut Vec<TrackEventRequest>,
     ) {
         match request {
             ClientRequest::TurnStart { params, .. } => {
@@ -330,6 +332,11 @@ impl AnalyticsReducer {
                         created_at: now_unix_seconds(),
                     }),
                 );
+            }
+            ClientRequest::TrackUsageLimitBanner { params, .. } => {
+                out.push(TrackEventRequest::UsageLimitBanner(
+                    usage_limit_banner_event_request(params),
+                ));
             }
             _ => {}
         }

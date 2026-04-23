@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AddCreditsNudgeCreditType": {
+      "enum": [
+        "credits",
+        "usage_limit"
+      ],
+      "type": "string"
+    },
+    "TrackUsageLimitBannerAction": {
+      "enum": [
+        "shown",
+        "cta_clicked"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/TrackUsageLimitBannerAction"
+    },
+    "creditType": {
+      "$ref": "#/definitions/AddCreditsNudgeCreditType"
+    }
+  },
+  "required": [
+    "action",
+    "creditType"
+  ],
+  "title": "TrackUsageLimitBannerParams",
+  "type": "object"
+}

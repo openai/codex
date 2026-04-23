@@ -2166,6 +2166,22 @@ pub struct SendAddCreditsNudgeEmailParams {
     pub credit_type: AddCreditsNudgeCreditType,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TrackUsageLimitBannerParams {
+    pub action: TrackUsageLimitBannerAction,
+    pub credit_type: AddCreditsNudgeCreditType,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum TrackUsageLimitBannerAction {
+    Shown,
+    CtaClicked,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/", rename_all = "snake_case")]
@@ -2180,6 +2196,11 @@ pub enum AddCreditsNudgeCreditType {
 pub struct SendAddCreditsNudgeEmailResponse {
     pub status: AddCreditsNudgeEmailStatus,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TrackUsageLimitBannerResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
