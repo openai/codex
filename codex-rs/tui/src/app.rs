@@ -1175,7 +1175,6 @@ impl App {
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
-                        self.maybe_disable_slow_resize_reflow_flush(stats);
                         self.maybe_finish_initial_history_replay_measurement(stats);
                     } else {
                         tui.draw(desired_height, |frame| {

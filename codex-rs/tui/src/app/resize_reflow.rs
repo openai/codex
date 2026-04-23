@@ -23,7 +23,6 @@ use super::InitialHistoryReplayMetrics;
 use super::trailing_run_start;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-use crate::transcript_reflow::ResizeReflowDisableReason;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::transcript_reflow::TranscriptReflowKind;
 use crate::tui;
@@ -92,7 +91,7 @@ impl App {
     }
 
     pub(super) fn terminal_resize_reflow_active(&self) -> bool {
-        self.terminal_resize_reflow_enabled() && !self.transcript_reflow.is_runtime_disabled()
+        self.terminal_resize_reflow_enabled()
     }
 
     pub(super) fn begin_initial_history_replay_measurement(&mut self) {
@@ -211,11 +210,9 @@ impl App {
             return;
         }
 
-        let metrics = self
-            .initial_history_replay_metrics
-            .take()
-            .expect("metrics checked above");
-        self.show_initial_history_replay_measurement(metrics);
+        if let Some(metrics) = self.initial_history_replay_metrics.take() {
+            self.show_initial_history_replay_measurement(metrics);
+        }
     }
 
     fn show_initial_history_replay_measurement(&mut self, metrics: InitialHistoryReplayMetrics) {
@@ -252,67 +249,8 @@ impl App {
             .schedule_debounced(kind, target_width)
     }
 
-    fn resize_reflow_slow_threshold(&self) -> Option<Duration> {
-        self.config.terminal_resize_reflow.slow_threshold
-    }
-
     fn resize_reflow_max_rows(&self) -> Option<usize> {
         self.config.terminal_resize_reflow.max_rows
-    }
-
-    pub(super) fn maybe_disable_slow_resize_reflow_flush(
-        &mut self,
-        stats: tui::ResizeReflowDrawStats,
-    ) {
-        let Some(threshold) = self.resize_reflow_slow_threshold() else {
-            return;
-        };
-        if !stats.flushed_reflow_history
-            || !self.transcript_reflow.record_elapsed(
-                ResizeReflowDisableReason::FlushSlow,
-                stats.reflow_flush_elapsed,
-                threshold,
-            )
-        {
-            return;
-        }
-
-        tracing::warn!(
-            elapsed_ms = stats.reflow_flush_elapsed.as_millis(),
-            threshold_ms = threshold.as_millis(),
-            reason = ?self.transcript_reflow.runtime_disabled_reason(),
-            "terminal resize reflow disabled for current transcript after slow terminal flush"
-        );
-        self.maybe_show_slow_resize_reflow_disabled_warning(stats.reflow_flush_elapsed, threshold);
-    }
-
-    fn maybe_disable_slow_resize_reflow_render(
-        &mut self,
-        elapsed: Duration,
-        stats: ResizeReflowRunStats,
-    ) {
-        let Some(threshold) = self.resize_reflow_slow_threshold() else {
-            return;
-        };
-        if !self.transcript_reflow.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            elapsed,
-            threshold,
-        ) {
-            return;
-        }
-
-        tracing::warn!(
-            elapsed_ms = elapsed.as_millis(),
-            threshold_ms = threshold.as_millis(),
-            kind = ?stats.kind,
-            width = stats.width,
-            cell_count = stats.cell_count,
-            rendered_line_count = stats.rendered_line_count,
-            reason = ?self.transcript_reflow.runtime_disabled_reason(),
-            "terminal resize reflow disabled for current transcript after slow render"
-        );
-        self.maybe_show_slow_resize_reflow_disabled_warning(elapsed, threshold);
     }
 
     fn maybe_note_row_cap_limited_reflow(&mut self, stats: ResizeReflowRunStats) {
@@ -334,23 +272,6 @@ impl App {
         self.maybe_show_row_cap_resize_reflow_trimmed_warning(stats.rendered_line_count, max_rows);
     }
 
-    fn maybe_show_slow_resize_reflow_disabled_warning(
-        &mut self,
-        elapsed: Duration,
-        threshold: Duration,
-    ) {
-        if self.transcript_reflow.take_runtime_disable_warning_needed() {
-            self.chat_widget.add_info_message(
-                format!(
-                    "Terminal resize reflow paused for this session because resizing took {}ms, above the {}ms limit. Future resizes will use legacy terminal behavior until the transcript is cleared.",
-                    elapsed.as_millis(),
-                    threshold.as_millis()
-                ),
-                /*hint*/ None,
-            );
-        }
-    }
-
     fn maybe_show_row_cap_resize_reflow_trimmed_warning(
         &mut self,
         kept_line_count: usize,
@@ -359,8 +280,7 @@ impl App {
         if self.transcript_reflow.take_row_cap_trim_warning_needed() {
             self.chat_widget.add_info_message(
                 format!(
-                    "Terminal resize reflow limited scrollback to the most recent {kept_line_count} rows before rendering because the row cap is {}.",
-                    max_rows,
+                    "Terminal resize reflow limited scrollback to the most recent {kept_line_count} rows before rendering because the row cap is {max_rows}.",
                 ),
                 /*hint*/ None,
             );
@@ -590,19 +510,16 @@ impl App {
         };
         let elapsed = started.elapsed();
         self.show_resize_reflow_timing_debug_message(elapsed, stats);
-        self.maybe_disable_slow_resize_reflow_render(elapsed, stats);
         self.transcript_reflow.mark_reflowed_width(stats.width);
 
-        if reflow_ran_during_stream && !self.transcript_reflow.is_runtime_disabled() {
+        if reflow_ran_during_stream {
             self.transcript_reflow.mark_ran_during_stream();
         }
-        if !self.transcript_reflow.is_runtime_disabled() {
-            // Some terminals settle their final reported width after the repaint that handled the
-            // last resize event. Request one cheap follow-up draw so `handle_draw_pre_render` can
-            // sample that width and schedule a final reflow if needed.
-            tui.frame_requester()
-                .schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
-        }
+        // Some terminals settle their final reported width after the repaint that handled the
+        // last resize event. Request one cheap follow-up draw so `handle_draw_pre_render` can
+        // sample that width and schedule a final reflow if needed.
+        tui.frame_requester()
+            .schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
 
         Ok(())
     }

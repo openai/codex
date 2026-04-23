@@ -26,8 +26,6 @@ pub(crate) struct TranscriptReflowState {
     pending_kind: Option<TranscriptReflowKind>,
     ran_during_stream: bool,
     resize_requested_during_stream: bool,
-    runtime_disabled: Option<ResizeReflowDisableReason>,
-    runtime_disable_warning_shown: bool,
     row_cap_trim_warning_shown: bool,
 }
 
@@ -38,15 +36,6 @@ pub(crate) enum TranscriptReflowKind {
     VisibleRows,
     /// Purge and rebuild Codex-owned scrollback from source-backed transcript cells.
     Full,
-}
-
-/// Describes why resize reflow was disabled for the current transcript lifetime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResizeReflowDisableReason {
-    /// Re-rendering transcript cells exceeded the slow-reflow threshold.
-    RenderSlow,
-    /// Writing reflowed rows back into the terminal exceeded the slow-reflow threshold.
-    FlushSlow,
 }
 
 impl TranscriptReflowState {
@@ -95,7 +84,6 @@ impl TranscriptReflowState {
         kind: TranscriptReflowKind,
         target_width: Option<u16>,
     ) -> bool {
-        debug_assert!(!self.is_runtime_disabled());
         let now = Instant::now();
         if matches!(kind, TranscriptReflowKind::Full) {
             self.pending_full_reflow_width = target_width;
@@ -110,7 +98,6 @@ impl TranscriptReflowState {
     /// This is used after stream consolidation when waiting for the debounce interval would leave
     /// visible terminal-wrapped stream rows in the finalized transcript.
     pub(crate) fn schedule_immediate(&mut self, kind: TranscriptReflowKind) {
-        debug_assert!(!self.is_runtime_disabled());
         if matches!(kind, TranscriptReflowKind::Full) {
             self.pending_full_reflow_width = None;
         }
@@ -163,26 +150,8 @@ impl TranscriptReflowState {
         self.last_reflow_width.replace(width) != Some(width)
     }
 
-    pub(crate) fn clear_runtime_disable(&mut self) {
-        self.runtime_disabled = None;
-        self.runtime_disable_warning_shown = false;
+    pub(crate) fn clear_row_cap_trim_warning(&mut self) {
         self.row_cap_trim_warning_shown = false;
-    }
-
-    pub(crate) fn is_runtime_disabled(&self) -> bool {
-        self.runtime_disabled.is_some()
-    }
-
-    pub(crate) fn runtime_disabled_reason(&self) -> Option<ResizeReflowDisableReason> {
-        self.runtime_disabled
-    }
-
-    pub(crate) fn take_runtime_disable_warning_needed(&mut self) -> bool {
-        if self.runtime_disabled.is_none() || self.runtime_disable_warning_shown {
-            return false;
-        }
-        self.runtime_disable_warning_shown = true;
-        true
     }
 
     pub(crate) fn take_row_cap_trim_warning_needed(&mut self) -> bool {
@@ -190,22 +159,6 @@ impl TranscriptReflowState {
             return false;
         }
         self.row_cap_trim_warning_shown = true;
-        true
-    }
-
-    pub(crate) fn record_elapsed(
-        &mut self,
-        reason: ResizeReflowDisableReason,
-        elapsed: Duration,
-        threshold: Duration,
-    ) -> bool {
-        if elapsed <= threshold || self.runtime_disabled.is_some() {
-            return false;
-        }
-
-        self.runtime_disabled = Some(reason);
-        self.clear_pending_reflow();
-        self.clear_stream_flags();
         true
     }
 
@@ -406,69 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn below_threshold_measurement_keeps_reflow_active() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(!state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 249),
-            Duration::from_millis(/*millis*/ 250),
-        ));
-
-        assert!(!state.is_runtime_disabled());
-        assert_eq!(state.runtime_disabled_reason(), None);
-    }
-
-    #[test]
-    fn slow_render_measurement_disables_reflow() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        ));
-
-        assert!(state.is_runtime_disabled());
-        assert_eq!(
-            state.runtime_disabled_reason(),
-            Some(ResizeReflowDisableReason::RenderSlow)
-        );
-    }
-
-    #[test]
-    fn runtime_disable_warning_is_reported_once() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(!state.take_runtime_disable_warning_needed());
-        assert!(state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        ));
-
-        assert!(state.take_runtime_disable_warning_needed());
-        assert!(!state.take_runtime_disable_warning_needed());
-    }
-
-    #[test]
-    fn slow_flush_measurement_disables_reflow() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(state.record_elapsed(
-            ResizeReflowDisableReason::FlushSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        ));
-
-        assert!(state.is_runtime_disabled());
-        assert_eq!(
-            state.runtime_disabled_reason(),
-            Some(ResizeReflowDisableReason::FlushSlow)
-        );
-    }
-
-    #[test]
     fn row_cap_trim_warning_is_reported_once() {
         let mut state = TranscriptReflowState::default();
 
@@ -477,52 +367,12 @@ mod tests {
     }
 
     #[test]
-    fn clear_resets_runtime_disable() {
+    fn clear_row_cap_trim_warning_allows_reporting_again() {
         let mut state = TranscriptReflowState::default();
-        state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        );
 
-        state.clear();
+        assert!(state.take_row_cap_trim_warning_needed());
+        state.clear_row_cap_trim_warning();
 
-        assert!(!state.is_runtime_disabled());
-        assert_eq!(state.runtime_disabled_reason(), None);
-    }
-
-    #[test]
-    fn clear_runtime_disable_preserves_pending_reflow() {
-        let mut state = TranscriptReflowState::default();
-        state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        );
-        state.pending_until = Some(Instant::now());
-        state.pending_kind = Some(TranscriptReflowKind::Full);
-
-        state.clear_runtime_disable();
-
-        assert!(!state.is_runtime_disabled());
-        assert!(state.has_pending_reflow());
-    }
-
-    #[test]
-    fn clear_pending_reflow_preserves_runtime_disable() {
-        let mut state = TranscriptReflowState::default();
-        state.record_elapsed(
-            ResizeReflowDisableReason::RenderSlow,
-            Duration::from_millis(/*millis*/ 251),
-            Duration::from_millis(/*millis*/ 250),
-        );
-
-        state.clear_pending_reflow();
-
-        assert!(state.is_runtime_disabled());
-        assert_eq!(
-            state.runtime_disabled_reason(),
-            Some(ResizeReflowDisableReason::RenderSlow)
-        );
+        assert!(state.take_row_cap_trim_warning_needed());
     }
 }

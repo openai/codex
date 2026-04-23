@@ -1943,13 +1943,6 @@
           "format": "uint",
           "minimum": 0.0,
           "type": "integer"
-        },
-        "slow_threshold_ms": {
-          "default": null,
-          "description": "Disable resize reflow for the current transcript when a reflow operation exceeds this many milliseconds. Omit or set to `0` to disable the slow-reflow time limit.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
         }
       },
       "type": "object"
@@ -2091,8 +2084,7 @@
             }
           ],
           "default": {
-            "max_rows": null,
-            "slow_threshold_ms": null
+            "max_rows": null
           },
           "description": "Experimental terminal resize-reflow tuning knobs."
         },

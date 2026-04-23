@@ -93,7 +93,6 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -626,19 +625,9 @@ impl Default for MultiAgentV2Config {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerminalResizeReflowConfig {
-    pub slow_threshold: Option<Duration>,
     pub max_rows: Option<usize>,
-}
-
-impl Default for TerminalResizeReflowConfig {
-    fn default() -> Self {
-        Self {
-            slow_threshold: None,
-            max_rows: None,
-        }
-    }
 }
 
 impl AuthManagerConfig for Config {
@@ -1505,11 +1494,6 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
     };
 
     TerminalResizeReflowConfig {
-        slow_threshold: tui
-            .terminal_resize_reflow
-            .slow_threshold_ms
-            .and_then(|millis| (millis > 0).then(|| Duration::from_millis(millis)))
-            .or(defaults.slow_threshold),
         max_rows: tui
             .terminal_resize_reflow
             .max_rows

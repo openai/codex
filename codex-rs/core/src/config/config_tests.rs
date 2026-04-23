@@ -507,7 +507,6 @@ fn config_toml_deserializes_model_availability_nux() {
 fn config_toml_deserializes_terminal_resize_reflow_config() {
     let toml = r#"
 [tui.terminal_resize_reflow]
-slow_threshold_ms = 350
 max_rows = 9000
 "#;
     let cfg: ConfigToml =
@@ -518,7 +517,6 @@ max_rows = 9000
             .expect("tui config should deserialize")
             .terminal_resize_reflow,
         TerminalResizeReflowToml {
-            slow_threshold_ms: Some(350),
             max_rows: Some(9000),
         }
     );
@@ -1342,7 +1340,6 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
         ConfigToml {
             tui: Some(Tui {
                 terminal_resize_reflow: TerminalResizeReflowToml {
-                    slow_threshold_ms: Some(350),
                     max_rows: Some(9000),
                 },
                 ..Default::default()
@@ -1355,19 +1352,12 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     .await
     .expect("load overridden config");
 
-    assert_eq!(
-        cfg.terminal_resize_reflow.slow_threshold,
-        Some(Duration::from_millis(/*millis*/ 350))
-    );
     assert_eq!(cfg.terminal_resize_reflow.max_rows, Some(9000));
 
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
             tui: Some(Tui {
-                terminal_resize_reflow: TerminalResizeReflowToml {
-                    slow_threshold_ms: Some(0),
-                    max_rows: Some(0),
-                },
+                terminal_resize_reflow: TerminalResizeReflowToml { max_rows: Some(0) },
                 ..Default::default()
             }),
             ..Default::default()
@@ -1378,7 +1368,6 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     .await
     .expect("load config with disabled resize reflow limits");
 
-    assert_eq!(cfg.terminal_resize_reflow.slow_threshold, None);
     assert_eq!(cfg.terminal_resize_reflow.max_rows, None);
 }
 
