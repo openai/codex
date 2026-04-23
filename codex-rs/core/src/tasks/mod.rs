@@ -468,8 +468,19 @@ impl Session {
             return false;
         };
 
-        for task in active_turn.drain_tasks() {
+        let tasks = active_turn.drain_tasks();
+        let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
+        for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
+        }
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+                turn_context: turn_context.as_deref(),
+                reason: reason.clone(),
+            })
+            .await
+        {
+            warn!("failed to apply goal runtime abort event: {err}");
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
