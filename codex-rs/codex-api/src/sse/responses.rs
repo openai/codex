@@ -220,18 +220,31 @@ impl ResponsesStreamEvent {
     pub fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
         self.openai_model_verification
             .as_ref()
+            .and_then(model_verifications_from_json_value)
             .or_else(|| {
                 self.response
                     .as_ref()
                     .and_then(|response| response.get("openai_verification_recommendation"))
+                    .and_then(model_verifications_from_json_value)
+            })
+            .or_else(|| {
+                self.response
+                    .as_ref()
+                    .and_then(|response| response.get("headers"))
+                    .and_then(header_model_verifications_from_json)
+            })
+            .or_else(|| {
+                self.headers.as_ref().and_then(|headers| {
+                    headers
+                        .get("openai_verification_recommendation")
+                        .and_then(model_verifications_from_json_value)
+                })
             })
             .or_else(|| {
                 self.headers
                     .as_ref()
-                    .and_then(|headers| headers.get("openai_verification_recommendation"))
+                    .and_then(header_model_verifications_from_json)
             })
-            .map(json_value_as_model_verifications)
-            .filter(|verifications| !verifications.is_empty())
     }
 }
 
@@ -245,6 +258,26 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
             None
         }
     })
+}
+
+fn header_model_verifications_from_json(value: &Value) -> Option<Vec<ModelVerification>> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(OPENAI_MODEL_VERIFICATION_HEADER) {
+            model_verifications_from_json_value(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn model_verifications_from_json_value(value: &Value) -> Option<Vec<ModelVerification>> {
+    let verifications = json_value_as_model_verifications(value);
+    if verifications.is_empty() {
+        None
+    } else {
+        Some(verifications)
+    }
 }
 
 fn json_value_as_model_verifications(value: &Value) -> Vec<ModelVerification> {
@@ -1345,6 +1378,41 @@ mod tests {
         let ev: ResponsesStreamEvent = serde_json::from_value(json!({
             "type": "codex.response.metadata",
             "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.model_verifications(),
+            Some(vec![ModelVerification::TrustedAccessForCyber])
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_model_verification_reads_response_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "response": {
+                "id": "resp-1",
+                "headers": {
+                    "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+                }
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.model_verifications(),
+            Some(vec![ModelVerification::TrustedAccessForCyber])
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_model_verification_reads_top_level_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+            }
         }))
         .expect("expected event to deserialize");
 
