@@ -1,4 +1,5 @@
 use super::*;
+use crate::goals::GoalRuntimeState;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
