@@ -1735,6 +1735,8 @@ pub enum HookEventName {
     PostToolUse,
     PreCompact,
     PostCompact,
+    PreModelRequest,
+    PostModelResponse,
     SessionStart,
     UserPromptSubmit,
     Stop,

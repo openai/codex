@@ -19,10 +19,14 @@ const PERMISSION_REQUEST_INPUT_FIXTURE: &str = "permission-request.command.input
 const PERMISSION_REQUEST_OUTPUT_FIXTURE: &str = "permission-request.command.output.schema.json";
 const POST_COMPACT_INPUT_FIXTURE: &str = "post-compact.command.input.schema.json";
 const POST_COMPACT_OUTPUT_FIXTURE: &str = "post-compact.command.output.schema.json";
+const POST_MODEL_RESPONSE_INPUT_FIXTURE: &str = "post-model-response.command.input.schema.json";
+const POST_MODEL_RESPONSE_OUTPUT_FIXTURE: &str = "post-model-response.command.output.schema.json";
 const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json";
 const PRE_TOOL_USE_OUTPUT_FIXTURE: &str = "pre-tool-use.command.output.schema.json";
 const PRE_COMPACT_INPUT_FIXTURE: &str = "pre-compact.command.input.schema.json";
 const PRE_COMPACT_OUTPUT_FIXTURE: &str = "pre-compact.command.output.schema.json";
+const PRE_MODEL_REQUEST_INPUT_FIXTURE: &str = "pre-model-request.command.input.schema.json";
+const PRE_MODEL_REQUEST_OUTPUT_FIXTURE: &str = "pre-model-request.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
@@ -83,6 +87,10 @@ pub(crate) enum HookEventNameWire {
     PreCompact,
     #[serde(rename = "PostCompact")]
     PostCompact,
+    #[serde(rename = "PreModelRequest")]
+    PreModelRequest,
+    #[serde(rename = "PostModelResponse")]
+    PostModelResponse,
     #[serde(rename = "SessionStart")]
     SessionStart,
     #[serde(rename = "UserPromptSubmit")]
@@ -146,6 +154,24 @@ pub(crate) struct PreCompactCommandOutputWire {
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "post-compact.command.output")]
 pub(crate) struct PostCompactCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "pre-model-request.command.output")]
+pub(crate) struct PreModelRequestCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-model-response.command.output")]
+pub(crate) struct PostModelResponseCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
 }
@@ -344,6 +370,47 @@ pub(crate) struct PostCompactCommandInput {
     pub error: NullableString,
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "pre-model-request.command.input")]
+pub(crate) struct PreModelRequestCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "pre_model_request_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub input: Value,
+    pub tools: Value,
+    pub parallel_tool_calls: bool,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "post-model-response.command.input")]
+pub(crate) struct PostModelResponseCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "post_model_response_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "model_response_status_schema")]
+    pub status: String,
+    pub error: NullableString,
+    pub output: Value,
+    pub needs_follow_up: Option<bool>,
+    pub last_assistant_message: NullableString,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -510,12 +577,28 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<PostCompactCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(POST_MODEL_RESPONSE_INPUT_FIXTURE),
+        schema_json::<PostModelResponseCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(POST_MODEL_RESPONSE_OUTPUT_FIXTURE),
+        schema_json::<PostModelResponseCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(PRE_COMPACT_INPUT_FIXTURE),
         schema_json::<PreCompactCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(PRE_COMPACT_OUTPUT_FIXTURE),
         schema_json::<PreCompactCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(PRE_MODEL_REQUEST_INPUT_FIXTURE),
+        schema_json::<PreModelRequestCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(PRE_MODEL_REQUEST_OUTPUT_FIXTURE),
+        schema_json::<PreModelRequestCommandOutputWire>()?,
     )?;
     write_schema(
         &generated_dir.join(PRE_TOOL_USE_INPUT_FIXTURE),
@@ -620,6 +703,14 @@ fn post_compact_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostCompact")
 }
 
+fn pre_model_request_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PreModelRequest")
+}
+
+fn post_model_response_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("PostModelResponse")
+}
+
 fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PreToolUse")
 }
@@ -670,6 +761,10 @@ fn compaction_status_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&["completed", "failed", "interrupted"])
 }
 
+fn model_response_status_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["completed", "failed", "interrupted"])
+}
+
 fn string_const_schema(value: &str) -> Schema {
     let mut schema = SchemaObject {
         instance_type: Some(InstanceType::String.into()),
@@ -703,16 +798,22 @@ mod tests {
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
     use super::POST_COMPACT_INPUT_FIXTURE;
     use super::POST_COMPACT_OUTPUT_FIXTURE;
+    use super::POST_MODEL_RESPONSE_INPUT_FIXTURE;
+    use super::POST_MODEL_RESPONSE_OUTPUT_FIXTURE;
     use super::POST_TOOL_USE_INPUT_FIXTURE;
     use super::POST_TOOL_USE_OUTPUT_FIXTURE;
     use super::PRE_COMPACT_INPUT_FIXTURE;
     use super::PRE_COMPACT_OUTPUT_FIXTURE;
+    use super::PRE_MODEL_REQUEST_INPUT_FIXTURE;
+    use super::PRE_MODEL_REQUEST_OUTPUT_FIXTURE;
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
     use super::PRE_TOOL_USE_OUTPUT_FIXTURE;
     use super::PermissionRequestCommandInput;
     use super::PostCompactCommandInput;
+    use super::PostModelResponseCommandInput;
     use super::PostToolUseCommandInput;
     use super::PreCompactCommandInput;
+    use super::PreModelRequestCommandInput;
     use super::PreToolUseCommandInput;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
@@ -748,11 +849,23 @@ mod tests {
             POST_COMPACT_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/post-compact.command.output.schema.json")
             }
+            POST_MODEL_RESPONSE_INPUT_FIXTURE => {
+                include_str!("../schema/generated/post-model-response.command.input.schema.json")
+            }
+            POST_MODEL_RESPONSE_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/post-model-response.command.output.schema.json")
+            }
             PRE_COMPACT_INPUT_FIXTURE => {
                 include_str!("../schema/generated/pre-compact.command.input.schema.json")
             }
             PRE_COMPACT_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/pre-compact.command.output.schema.json")
+            }
+            PRE_MODEL_REQUEST_INPUT_FIXTURE => {
+                include_str!("../schema/generated/pre-model-request.command.input.schema.json")
+            }
+            PRE_MODEL_REQUEST_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/pre-model-request.command.output.schema.json")
             }
             PRE_TOOL_USE_INPUT_FIXTURE => {
                 include_str!("../schema/generated/pre-tool-use.command.input.schema.json")
@@ -799,8 +912,12 @@ mod tests {
             PERMISSION_REQUEST_OUTPUT_FIXTURE,
             POST_COMPACT_INPUT_FIXTURE,
             POST_COMPACT_OUTPUT_FIXTURE,
+            POST_MODEL_RESPONSE_INPUT_FIXTURE,
+            POST_MODEL_RESPONSE_OUTPUT_FIXTURE,
             PRE_COMPACT_INPUT_FIXTURE,
             PRE_COMPACT_OUTPUT_FIXTURE,
+            PRE_MODEL_REQUEST_INPUT_FIXTURE,
+            PRE_MODEL_REQUEST_OUTPUT_FIXTURE,
             PRE_TOOL_USE_INPUT_FIXTURE,
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
@@ -839,6 +956,16 @@ mod tests {
             &schema_json::<PostCompactCommandInput>().expect("serialize post compact input schema"),
         )
         .expect("parse post compact input schema");
+        let pre_model_request: Value = serde_json::from_slice(
+            &schema_json::<PreModelRequestCommandInput>()
+                .expect("serialize pre model request input schema"),
+        )
+        .expect("parse pre model request input schema");
+        let post_model_response: Value = serde_json::from_slice(
+            &schema_json::<PostModelResponseCommandInput>()
+                .expect("serialize post model response input schema"),
+        )
+        .expect("parse post model response input schema");
         let permission_request: Value = serde_json::from_slice(
             &schema_json::<PermissionRequestCommandInput>()
                 .expect("serialize permission request input schema"),
@@ -860,6 +987,8 @@ mod tests {
             &post_tool_use,
             &pre_compact,
             &post_compact,
+            &pre_model_request,
+            &post_model_response,
             &user_prompt_submit,
             &stop,
         ] {

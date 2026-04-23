@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "pre-model-request.command.output",
+  "type": "object"
+}

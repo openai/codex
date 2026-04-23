@@ -12,6 +12,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactRequest;
 use crate::events::compact::StatelessHookOutcome;
+use crate::events::model::PostModelResponseRequest;
+use crate::events::model::PreModelRequestRequest;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -61,6 +63,8 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
+            codex_protocol::protocol::HookEventName::PreModelRequest => "pre-model-request",
+            codex_protocol::protocol::HookEventName::PostModelResponse => "post-model-response",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
@@ -170,6 +174,34 @@ impl ClaudeHooksEngine {
         request: PostCompactRequest,
     ) -> StatelessHookOutcome {
         crate::events::compact::run_post(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn preview_pre_model_request(
+        &self,
+        request: &PreModelRequestRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::model::preview_pre(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_pre_model_request(
+        &self,
+        request: PreModelRequestRequest,
+    ) -> StatelessHookOutcome {
+        crate::events::model::run_pre(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn preview_post_model_response(
+        &self,
+        request: &PostModelResponseRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::model::preview_post(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_post_model_response(
+        &self,
+        request: PostModelResponseRequest,
+    ) -> StatelessHookOutcome {
+        crate::events::model::run_post(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(

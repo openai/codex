@@ -10,10 +10,14 @@ pub(crate) struct GeneratedHookSchemas {
     pub permission_request_command_output: Value,
     pub post_compact_command_input: Value,
     pub post_compact_command_output: Value,
+    pub post_model_response_command_input: Value,
+    pub post_model_response_command_output: Value,
     pub pre_tool_use_command_input: Value,
     pub pre_tool_use_command_output: Value,
     pub pre_compact_command_input: Value,
     pub pre_compact_command_output: Value,
+    pub pre_model_request_command_input: Value,
+    pub pre_model_request_command_output: Value,
     pub session_start_command_input: Value,
     pub session_start_command_output: Value,
     pub user_prompt_submit_command_input: Value,
@@ -49,6 +53,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
             "post-compact.command.output",
             include_str!("../../schema/generated/post-compact.command.output.schema.json"),
         ),
+        post_model_response_command_input: parse_json_schema(
+            "post-model-response.command.input",
+            include_str!("../../schema/generated/post-model-response.command.input.schema.json"),
+        ),
+        post_model_response_command_output: parse_json_schema(
+            "post-model-response.command.output",
+            include_str!("../../schema/generated/post-model-response.command.output.schema.json"),
+        ),
         pre_tool_use_command_input: parse_json_schema(
             "pre-tool-use.command.input",
             include_str!("../../schema/generated/pre-tool-use.command.input.schema.json"),
@@ -64,6 +76,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
         pre_compact_command_output: parse_json_schema(
             "pre-compact.command.output",
             include_str!("../../schema/generated/pre-compact.command.output.schema.json"),
+        ),
+        pre_model_request_command_input: parse_json_schema(
+            "pre-model-request.command.input",
+            include_str!("../../schema/generated/pre-model-request.command.input.schema.json"),
+        ),
+        pre_model_request_command_output: parse_json_schema(
+            "pre-model-request.command.output",
+            include_str!("../../schema/generated/pre-model-request.command.output.schema.json"),
         ),
         session_start_command_input: parse_json_schema(
             "session-start.command.input",
@@ -112,10 +132,14 @@ mod tests {
         assert_eq!(schemas.permission_request_command_output["type"], "object");
         assert_eq!(schemas.post_compact_command_input["type"], "object");
         assert_eq!(schemas.post_compact_command_output["type"], "object");
+        assert_eq!(schemas.post_model_response_command_input["type"], "object");
+        assert_eq!(schemas.post_model_response_command_output["type"], "object");
         assert_eq!(schemas.pre_tool_use_command_input["type"], "object");
         assert_eq!(schemas.pre_tool_use_command_output["type"], "object");
         assert_eq!(schemas.pre_compact_command_input["type"], "object");
         assert_eq!(schemas.pre_compact_command_output["type"], "object");
+        assert_eq!(schemas.pre_model_request_command_input["type"], "object");
+        assert_eq!(schemas.pre_model_request_command_output["type"], "object");
         assert_eq!(schemas.session_start_command_input["type"], "object");
         assert_eq!(schemas.session_start_command_output["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_input["type"], "object");

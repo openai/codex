@@ -24,6 +24,10 @@ pub struct HookEventsToml {
     pub pre_compact: Vec<MatcherGroup>,
     #[serde(rename = "PostCompact", default)]
     pub post_compact: Vec<MatcherGroup>,
+    #[serde(rename = "PreModelRequest", default)]
+    pub pre_model_request: Vec<MatcherGroup>,
+    #[serde(rename = "PostModelResponse", default)]
+    pub post_model_response: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
@@ -40,6 +44,8 @@ impl HookEventsToml {
             post_tool_use,
             pre_compact,
             post_compact,
+            pre_model_request,
+            post_model_response,
             session_start,
             user_prompt_submit,
             stop,
@@ -49,6 +55,8 @@ impl HookEventsToml {
             && post_tool_use.is_empty()
             && pre_compact.is_empty()
             && post_compact.is_empty()
+            && pre_model_request.is_empty()
+            && post_model_response.is_empty()
             && session_start.is_empty()
             && user_prompt_submit.is_empty()
             && stop.is_empty()
@@ -61,6 +69,8 @@ impl HookEventsToml {
             post_tool_use,
             pre_compact,
             post_compact,
+            pre_model_request,
+            post_model_response,
             session_start,
             user_prompt_submit,
             stop,
@@ -71,6 +81,8 @@ impl HookEventsToml {
             post_tool_use,
             pre_compact,
             post_compact,
+            pre_model_request,
+            post_model_response,
             session_start,
             user_prompt_submit,
             stop,
@@ -81,13 +93,18 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 8] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 10] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
             (HookEventName::PostToolUse, self.post_tool_use),
             (HookEventName::PreCompact, self.pre_compact),
             (HookEventName::PostCompact, self.post_compact),
+            (HookEventName::PreModelRequest, self.pre_model_request),
+            (
+                HookEventName::PostModelResponse,
+                self.post_model_response,
+            ),
             (HookEventName::SessionStart, self.session_start),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
             (HookEventName::Stop, self.stop),

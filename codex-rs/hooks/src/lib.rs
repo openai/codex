@@ -8,6 +8,8 @@ mod types;
 pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactRequest;
 pub use events::compact::StatelessHookOutcome;
+pub use events::model::PostModelResponseRequest;
+pub use events::model::PreModelRequestRequest;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;

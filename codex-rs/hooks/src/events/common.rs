@@ -106,6 +106,8 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::SessionStart => matcher,
         HookEventName::PreCompact
         | HookEventName::PostCompact
+        | HookEventName::PreModelRequest
+        | HookEventName::PostModelResponse
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => None,
     }
@@ -260,6 +262,14 @@ mod tests {
         );
         assert_eq!(
             matcher_pattern_for_event(HookEventName::PostCompact, Some("^auto$")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PreModelRequest, Some("^input$")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PostModelResponse, Some("^output$")),
             None
         );
     }

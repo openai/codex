@@ -9,6 +9,8 @@
         "PostToolUse",
         "PreCompact",
         "PostCompact",
+        "PreModelRequest",
+        "PostModelResponse",
         "SessionStart",
         "UserPromptSubmit",
         "Stop"

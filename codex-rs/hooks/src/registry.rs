@@ -6,6 +6,8 @@ use crate::engine::CommandShell;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactRequest;
 use crate::events::compact::StatelessHookOutcome;
+use crate::events::model::PostModelResponseRequest;
+use crate::events::model::PreModelRequestRequest;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -165,6 +167,34 @@ impl Hooks {
 
     pub async fn run_post_compact(&self, request: PostCompactRequest) -> StatelessHookOutcome {
         self.engine.run_post_compact(request).await
+    }
+
+    pub fn preview_pre_model_request(
+        &self,
+        request: &PreModelRequestRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_pre_model_request(request)
+    }
+
+    pub async fn run_pre_model_request(
+        &self,
+        request: PreModelRequestRequest,
+    ) -> StatelessHookOutcome {
+        self.engine.run_pre_model_request(request).await
+    }
+
+    pub fn preview_post_model_response(
+        &self,
+        request: &PostModelResponseRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_post_model_response(request)
+    }
+
+    pub async fn run_post_model_response(
+        &self,
+        request: PostModelResponseRequest,
+    ) -> StatelessHookOutcome {
+        self.engine.run_post_model_response(request).await
     }
 
     pub fn preview_user_prompt_submit(

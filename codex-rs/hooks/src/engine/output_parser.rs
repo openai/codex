@@ -71,8 +71,10 @@ use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
 use crate::schema::PermissionRequestDecisionWire;
 use crate::schema::PostCompactCommandOutputWire;
+use crate::schema::PostModelResponseCommandOutputWire;
 use crate::schema::PostToolUseCommandOutputWire;
 use crate::schema::PreCompactCommandOutputWire;
+use crate::schema::PreModelRequestCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
@@ -210,6 +212,26 @@ pub(crate) fn parse_post_compact(stdout: &str) -> Option<StatelessHookOutput> {
     let wire: PostCompactCommandOutputWire = parse_json(stdout)?;
     let universal = UniversalOutput::from(wire.universal);
     let invalid_reason = unsupported_stateless_hook_universal("PostCompact", &universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_pre_model_request(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PreModelRequestCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_stateless_hook_universal("PreModelRequest", &universal);
+    Some(StatelessHookOutput {
+        universal,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_post_model_response(stdout: &str) -> Option<StatelessHookOutput> {
+    let wire: PostModelResponseCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_stateless_hook_universal("PostModelResponse", &universal);
     Some(StatelessHookOutput {
         universal,
         invalid_reason,

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "PreModelRequest",
+      "type": "string"
+    },
+    "input": true,
+    "model": {
+      "type": "string"
+    },
+    "parallel_tool_calls": {
+      "type": "boolean"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tools": true,
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "input",
+    "model",
+    "parallel_tool_calls",
+    "permission_mode",
+    "session_id",
+    "tools",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "pre-model-request.command.input",
+  "type": "object"
+}

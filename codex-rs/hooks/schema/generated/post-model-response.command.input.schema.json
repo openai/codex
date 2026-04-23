@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "error": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "hook_event_name": {
+      "const": "PostModelResponse",
+      "type": "string"
+    },
+    "last_assistant_message": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "model": {
+      "type": "string"
+    },
+    "needs_follow_up": {
+      "type": "boolean"
+    },
+    "output": true,
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "error",
+    "hook_event_name",
+    "last_assistant_message",
+    "model",
+    "output",
+    "permission_mode",
+    "session_id",
+    "status",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "post-model-response.command.input",
+  "type": "object"
+}

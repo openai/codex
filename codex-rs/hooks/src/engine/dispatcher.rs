@@ -57,6 +57,8 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             }
             HookEventName::PreCompact
             | HookEventName::PostCompact
+            | HookEventName::PreModelRequest
+            | HookEventName::PostModelResponse
             | HookEventName::UserPromptSubmit
             | HookEventName::Stop => true,
         })
@@ -137,6 +139,8 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
         | HookEventName::PostToolUse
         | HookEventName::PreCompact
         | HookEventName::PostCompact
+        | HookEventName::PreModelRequest
+        | HookEventName::PostModelResponse
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop => HookScope::Turn,
     }
