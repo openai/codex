@@ -326,9 +326,24 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_newly_installed_marketplace", popup);
     assert!(
-        popup.contains("Debug Marketplace.") && popup.contains("Debug Plugin"),
+        popup.contains("Debug Marketplace installed successfully.")
+            && popup.contains("Debug Plugin"),
         "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.add_plugins_output();
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let reopened_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        reopened_popup.contains("Installed 0 of 1 Debug Marketplace plugins.")
+            && !reopened_popup.contains("installed successfully"),
+        "expected reopening the marketplace tab later to use the normal header, got:\n{reopened_popup}"
     );
 }
 
