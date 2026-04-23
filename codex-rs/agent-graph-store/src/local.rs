@@ -155,9 +155,9 @@ mod tests {
         let fixture = state_runtime().await;
         let state_db = fixture.state_db;
         let store = LocalAgentGraphStore::new(state_db.clone());
-        let parent_thread_id = thread_id(1);
-        let first_child_thread_id = thread_id(2);
-        let second_child_thread_id = thread_id(3);
+        let parent_thread_id = thread_id(/*suffix*/ 1);
+        let first_child_thread_id = thread_id(/*suffix*/ 2);
+        let second_child_thread_id = thread_id(/*suffix*/ 3);
 
         store
             .upsert_thread_spawn_edge(
@@ -177,7 +177,7 @@ mod tests {
             .expect("open child edge should insert");
 
         let all_children = store
-            .list_thread_spawn_children(parent_thread_id, None)
+            .list_thread_spawn_children(parent_thread_id, /*status_filter*/ None)
             .await
             .expect("all children should load");
         assert_eq!(
@@ -211,8 +211,8 @@ mod tests {
         let fixture = state_runtime().await;
         let state_db = fixture.state_db;
         let store = LocalAgentGraphStore::new(state_db);
-        let parent_thread_id = thread_id(10);
-        let child_thread_id = thread_id(11);
+        let parent_thread_id = thread_id(/*suffix*/ 10);
+        let child_thread_id = thread_id(/*suffix*/ 11);
 
         store
             .upsert_thread_spawn_edge(
@@ -245,13 +245,13 @@ mod tests {
         let fixture = state_runtime().await;
         let state_db = fixture.state_db;
         let store = LocalAgentGraphStore::new(state_db.clone());
-        let root_thread_id = thread_id(20);
-        let later_child_thread_id = thread_id(22);
-        let earlier_child_thread_id = thread_id(21);
-        let closed_grandchild_thread_id = thread_id(23);
-        let open_grandchild_thread_id = thread_id(24);
-        let closed_child_thread_id = thread_id(25);
-        let closed_great_grandchild_thread_id = thread_id(26);
+        let root_thread_id = thread_id(/*suffix*/ 20);
+        let later_child_thread_id = thread_id(/*suffix*/ 22);
+        let earlier_child_thread_id = thread_id(/*suffix*/ 21);
+        let closed_grandchild_thread_id = thread_id(/*suffix*/ 23);
+        let open_grandchild_thread_id = thread_id(/*suffix*/ 24);
+        let closed_child_thread_id = thread_id(/*suffix*/ 25);
+        let closed_great_grandchild_thread_id = thread_id(/*suffix*/ 26);
 
         for (parent_thread_id, child_thread_id, status) in [
             (
@@ -292,7 +292,7 @@ mod tests {
         }
 
         let all_descendants = store
-            .list_thread_spawn_descendants(root_thread_id, None)
+            .list_thread_spawn_descendants(root_thread_id, /*status_filter*/ None)
             .await
             .expect("all descendants should load");
         assert_eq!(
