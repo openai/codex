@@ -65,13 +65,17 @@ const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker(multi_agent_v2_enabled: bool) -> ResponseItem {
-    let marker =
-        crate::context::TurnAborted::new(crate::context::TurnAborted::INTERRUPTED_GUIDANCE);
+    let guidance = if multi_agent_v2_enabled {
+        crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+    } else {
+        crate::context::TurnAborted::INTERRUPTED_GUIDANCE
+    };
+    let marker = crate::context::TurnAborted::new(guidance);
     if multi_agent_v2_enabled {
         ResponseItem::Message {
             id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
                 text: marker.render(),
             }],
             end_turn: None,

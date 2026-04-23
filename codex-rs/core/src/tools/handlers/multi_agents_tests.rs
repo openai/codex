@@ -1577,14 +1577,14 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         history_items.iter().any(|item| matches!(
             item,
             ResponseItem::Message { role, content, .. }
-                if role == "assistant"
+                if role == "developer"
                     && content.iter().any(|content_item| matches!(
                         content_item,
-                        ContentItem::OutputText { text }
-                            if text.contains(TurnAborted::INTERRUPTED_GUIDANCE)
+                        ContentItem::InputText { text }
+                            if text.contains(TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
                     ))
         )),
-        "v2 interrupted-turn marker should be recorded as an assistant output message"
+        "v2 interrupted-turn marker should be recorded as a developer input message"
     );
     assert!(
         !history_items.iter().any(|item| matches!(
@@ -1598,6 +1598,19 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
                     ))
         )),
         "v2 interrupted-turn marker should not be recorded as a user message"
+    );
+    assert!(
+        !history_items.iter().any(|item| matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "assistant"
+                    && content.iter().any(|content_item| matches!(
+                        content_item,
+                        ContentItem::InputText { text } | ContentItem::OutputText { text }
+                            if text.contains(TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
+                    ))
+        )),
+        "v2 interrupted-turn marker should not be recorded as an assistant message"
     );
     wait_for_redirected_envelope_in_history(
         &thread,

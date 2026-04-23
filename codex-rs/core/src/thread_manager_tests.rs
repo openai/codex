@@ -384,20 +384,20 @@ fn interrupted_snapshot_is_not_mid_turn() {
 }
 
 #[test]
-fn multi_agent_v2_interrupted_marker_uses_assistant_output_message() {
+fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
     let marker = interrupted_turn_history_marker(/*multi_agent_v2_enabled*/ true);
 
     let ResponseItem::Message { role, content, .. } = marker else {
         panic!("expected interrupted marker to be a message");
     };
-    assert_eq!(role, "assistant");
+    assert_eq!(role, "developer");
     assert!(
         matches!(
             content.as_slice(),
-            [ContentItem::OutputText { text }]
-                if text.contains(crate::context::TurnAborted::INTERRUPTED_GUIDANCE)
+            [ContentItem::InputText { text }]
+                if text.contains(crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
         ),
-        "expected interrupted marker to use assistant OutputText content"
+        "expected interrupted marker to use developer InputText content"
     );
 }
 
