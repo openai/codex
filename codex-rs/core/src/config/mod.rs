@@ -79,6 +79,7 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -221,7 +222,8 @@ impl Permissions {
     /// Effective runtime permissions after config requirements and runtime
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
             &self.file_system_sandbox_policy,
             self.network_sandbox_policy,
         )
@@ -1773,9 +1775,9 @@ impl Config {
                     })?;
                     let profile = resolve_permission_profile(permissions, default_permissions)?;
 
-                    // PermissionProfile only carries the network enabled bit today. Keep the
-                    // configured proxy/allowlist policy so active profiles can round-trip without
-                    // broadening network behavior.
+                    // PermissionProfile carries the active network sandbox bit, not the configured
+                    // proxy/allowlist policy. Keep that config so active profiles can round-trip
+                    // without broadening network behavior.
                     network_proxy_config_from_profile_network(profile.network.as_ref())
                 } else {
                     NetworkProxyConfig::default()

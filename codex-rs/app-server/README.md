@@ -837,7 +837,8 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
     "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names
     "size": { "rows": 40, "cols": 120 },           // optional; PTY size in character cells, only valid with tty=true
     "permissionProfile": {                         // optional; defaults to user config
-        "fileSystem": { "entries": [
+        "type": "managed",
+        "fileSystem": { "type": "restricted", "entries": [
             { "path": { "type": "special", "value": { "kind": "root" } }, "access": "read" },
             { "path": { "type": "special", "value": { "kind": "current_working_directory" } }, "access": "write" }
         ] },

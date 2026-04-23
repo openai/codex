@@ -41,6 +41,7 @@ use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
+use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -3062,7 +3063,8 @@ impl TurnContextItem {
                         &self.cwd,
                     )
                 });
-            PermissionProfile::from_runtime_permissions(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::from(&self.sandbox_policy),
             )

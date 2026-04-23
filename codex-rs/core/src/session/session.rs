@@ -92,7 +92,8 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
             &self.file_system_sandbox_policy,
             self.network_sandbox_policy,
         )
@@ -175,26 +176,8 @@ impl SessionConfiguration {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-                file_system_sandbox_policy.glob_scan_max_depth =
-                    self.file_system_sandbox_policy.glob_scan_max_depth;
-            }
-            for deny_entry in self
-                .file_system_sandbox_policy
-                .entries
-                .iter()
-                .filter(|entry| {
-                    entry.access == codex_protocol::permissions::FileSystemAccessMode::None
-                })
-            {
-                if !file_system_sandbox_policy
-                    .entries
-                    .iter()
-                    .any(|entry| entry == deny_entry)
-                {
-                    file_system_sandbox_policy.entries.push(deny_entry.clone());
-                }
-            }
+            file_system_sandbox_policy
+                .preserve_deny_read_restrictions_from(&self.file_system_sandbox_policy);
             next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
             next_configuration.network_sandbox_policy = network_sandbox_policy;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
@@ -814,14 +797,6 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
-            let permission_profile = if matches!(
-                session_configuration.file_system_sandbox_policy.kind,
-                FileSystemSandboxKind::ExternalSandbox
-            ) {
-                None
-            } else {
-                Some(session_configuration.permission_profile())
-            };
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -834,7 +809,7 @@ impl Session {
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
                     sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-                    permission_profile,
+                    permission_profile: Some(session_configuration.permission_profile()),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     history_log_id,

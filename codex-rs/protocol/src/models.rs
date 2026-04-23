@@ -266,43 +266,272 @@ impl NetworkPermissions {
     }
 }
 
+/// Partial permission overlay used for per-command requests and approved
+/// session/turn grants.
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct PermissionProfile {
+pub struct AdditionalPermissionProfile {
     pub network: Option<NetworkPermissions>,
     pub file_system: Option<FileSystemPermissions>,
 }
 
-impl PermissionProfile {
+impl AdditionalPermissionProfile {
     pub fn is_empty(&self) -> bool {
         self.network.is_none() && self.file_system.is_none()
     }
+}
 
+#[derive(
+    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxEnforcement {
+    /// Codex owns sandbox construction for this profile.
+    #[default]
+    Managed,
+    /// No outer filesystem sandbox should be applied.
+    Disabled,
+    /// Filesystem isolation is enforced by an external caller.
+    External,
+}
+
+impl SandboxEnforcement {
+    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy) -> Self {
+        match sandbox_policy {
+            SandboxPolicy::DangerFullAccess => Self::Disabled,
+            SandboxPolicy::ExternalSandbox { .. } => Self::External,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Self::Managed,
+        }
+    }
+}
+
+/// Filesystem permissions for profiles where Codex owns sandbox construction.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum ManagedFileSystemPermissions {
+    /// Apply a managed filesystem sandbox from the listed entries.
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    Restricted {
+        entries: Vec<FileSystemSandboxEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        glob_scan_max_depth: Option<NonZeroUsize>,
+    },
+    /// Apply a managed sandbox that allows all filesystem access.
+    Unrestricted,
+}
+
+impl ManagedFileSystemPermissions {
+    fn from_sandbox_policy(file_system_sandbox_policy: &FileSystemSandboxPolicy) -> Self {
+        match file_system_sandbox_policy.kind {
+            FileSystemSandboxKind::Restricted => Self::Restricted {
+                entries: file_system_sandbox_policy.entries.clone(),
+                glob_scan_max_depth: file_system_sandbox_policy
+                    .glob_scan_max_depth
+                    .and_then(NonZeroUsize::new),
+            },
+            FileSystemSandboxKind::Unrestricted => Self::Unrestricted,
+            FileSystemSandboxKind::ExternalSandbox => unreachable!(
+                "external filesystem policies are represented by PermissionProfile::External"
+            ),
+        }
+    }
+
+    pub fn to_sandbox_policy(&self) -> FileSystemSandboxPolicy {
+        match self {
+            Self::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => FileSystemSandboxPolicy {
+                kind: FileSystemSandboxKind::Restricted,
+                glob_scan_max_depth: glob_scan_max_depth.map(usize::from),
+                entries: entries.clone(),
+            },
+            Self::Unrestricted => FileSystemSandboxPolicy::unrestricted(),
+        }
+    }
+}
+
+/// Canonical active runtime permissions for a conversation, turn, or command.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+pub enum PermissionProfile {
+    /// Codex owns sandbox construction for this profile.
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    Managed {
+        file_system: ManagedFileSystemPermissions,
+        network: NetworkSandboxPolicy,
+    },
+    /// Do not apply an outer sandbox.
+    Disabled,
+    /// Filesystem isolation is enforced by an external caller.
+    #[serde(rename_all = "snake_case")]
+    #[ts(rename_all = "snake_case")]
+    External { network: NetworkSandboxPolicy },
+}
+
+impl Default for PermissionProfile {
+    fn default() -> Self {
+        Self::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: Vec::new(),
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        }
+    }
+}
+
+impl PermissionProfile {
     pub fn from_runtime_permissions(
         file_system_sandbox_policy: &FileSystemSandboxPolicy,
         network_sandbox_policy: NetworkSandboxPolicy,
     ) -> Self {
-        Self {
-            network: Some(network_sandbox_policy.into()),
-            file_system: Some(file_system_sandbox_policy.into()),
+        let enforcement = match file_system_sandbox_policy.kind {
+            FileSystemSandboxKind::Restricted | FileSystemSandboxKind::Unrestricted => {
+                SandboxEnforcement::Managed
+            }
+            FileSystemSandboxKind::ExternalSandbox => SandboxEnforcement::External,
+        };
+        Self::from_runtime_permissions_with_enforcement(
+            enforcement,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        )
+    }
+
+    pub fn from_runtime_permissions_with_enforcement(
+        enforcement: SandboxEnforcement,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+    ) -> Self {
+        match file_system_sandbox_policy.kind {
+            FileSystemSandboxKind::ExternalSandbox => Self::External {
+                network: network_sandbox_policy,
+            },
+            FileSystemSandboxKind::Unrestricted
+                if enforcement == SandboxEnforcement::Disabled
+                    && network_sandbox_policy.is_enabled() =>
+            {
+                Self::Disabled
+            }
+            FileSystemSandboxKind::Restricted | FileSystemSandboxKind::Unrestricted => {
+                Self::Managed {
+                    file_system: ManagedFileSystemPermissions::from_sandbox_policy(
+                        file_system_sandbox_policy,
+                    ),
+                    network: network_sandbox_policy,
+                }
+            }
         }
     }
 
     pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
-        Self::from_runtime_permissions(
+        Self::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
             &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd),
             NetworkSandboxPolicy::from(sandbox_policy),
         )
     }
 
+    pub fn enforcement(&self) -> SandboxEnforcement {
+        match self {
+            Self::Managed { .. } => SandboxEnforcement::Managed,
+            Self::Disabled => SandboxEnforcement::Disabled,
+            Self::External { .. } => SandboxEnforcement::External,
+        }
+    }
+
     pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.file_system.as_ref().map_or_else(
-            || FileSystemSandboxPolicy::restricted(Vec::new()),
-            FileSystemSandboxPolicy::from,
-        )
+        match self {
+            Self::Managed { file_system, .. } => file_system.to_sandbox_policy(),
+            Self::Disabled => FileSystemSandboxPolicy::unrestricted(),
+            Self::External { .. } => FileSystemSandboxPolicy::external_sandbox(),
+        }
     }
 
     pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
-        if self
+        match self {
+            Self::Managed { network, .. } | Self::External { network } => *network,
+            Self::Disabled => NetworkSandboxPolicy::Enabled,
+        }
+    }
+
+    pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => file_system
+                .to_sandbox_policy()
+                .to_legacy_sandbox_policy(*network, cwd),
+            Self::Disabled => Ok(SandboxPolicy::DangerFullAccess),
+            Self::External { network } => Ok(SandboxPolicy::ExternalSandbox {
+                network_access: if network.is_enabled() {
+                    crate::protocol::NetworkAccess::Enabled
+                } else {
+                    crate::protocol::NetworkAccess::Restricted
+                },
+            }),
+        }
+    }
+
+    pub fn to_runtime_permissions(&self) -> (FileSystemSandboxPolicy, NetworkSandboxPolicy) {
+        (
+            self.file_system_sandbox_policy(),
+            self.network_sandbox_policy(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TaggedPermissionProfile {
+    #[serde(rename_all = "snake_case")]
+    Managed {
+        file_system: ManagedFileSystemPermissions,
+        network: NetworkSandboxPolicy,
+    },
+    Disabled,
+    #[serde(rename_all = "snake_case")]
+    External {
+        network: NetworkSandboxPolicy,
+    },
+}
+
+impl From<TaggedPermissionProfile> for PermissionProfile {
+    fn from(value: TaggedPermissionProfile) -> Self {
+        match value {
+            TaggedPermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system,
+                network,
+            },
+            TaggedPermissionProfile::Disabled => Self::Disabled,
+            TaggedPermissionProfile::External { network } => Self::External { network },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPermissionProfile {
+    network: Option<NetworkPermissions>,
+    file_system: Option<FileSystemPermissions>,
+}
+
+impl From<LegacyPermissionProfile> for PermissionProfile {
+    fn from(value: LegacyPermissionProfile) -> Self {
+        let file_system_sandbox_policy = value.file_system.as_ref().map_or_else(
+            || FileSystemSandboxPolicy::restricted(Vec::new()),
+            FileSystemSandboxPolicy::from,
+        );
+        let network_sandbox_policy = if value
             .network
             .as_ref()
             .and_then(|network| network.enabled)
@@ -311,19 +540,27 @@ impl PermissionProfile {
             NetworkSandboxPolicy::Enabled
         } else {
             NetworkSandboxPolicy::Restricted
-        }
+        };
+        Self::from_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy)
     }
+}
 
-    pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
-        self.file_system_sandbox_policy()
-            .to_legacy_sandbox_policy(self.network_sandbox_policy(), cwd)
-    }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PermissionProfileDe {
+    Tagged(TaggedPermissionProfile),
+    Legacy(LegacyPermissionProfile),
+}
 
-    pub fn to_runtime_permissions(&self) -> (FileSystemSandboxPolicy, NetworkSandboxPolicy) {
-        (
-            self.file_system_sandbox_policy(),
-            self.network_sandbox_policy(),
-        )
+impl<'de> Deserialize<'de> for PermissionProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match PermissionProfileDe::deserialize(deserializer)? {
+            PermissionProfileDe::Tagged(tagged) => tagged.into(),
+            PermissionProfileDe::Legacy(legacy) => legacy.into(),
+        })
     }
 }
 
@@ -977,7 +1214,7 @@ pub struct ShellToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1003,7 +1240,7 @@ pub struct ShellCommandToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1448,13 +1685,13 @@ mod tests {
     }
 
     #[test]
-    fn permission_profile_is_empty_when_all_fields_are_none() {
-        assert_eq!(PermissionProfile::default().is_empty(), true);
+    fn additional_permission_profile_is_empty_when_all_fields_are_none() {
+        assert_eq!(AdditionalPermissionProfile::default().is_empty(), true);
     }
 
     #[test]
-    fn permission_profile_is_not_empty_when_field_is_present_but_nested_empty() {
-        let permission_profile = PermissionProfile {
+    fn additional_permission_profile_is_not_empty_when_field_is_present_but_nested_empty() {
+        let permission_profile = AdditionalPermissionProfile {
             network: Some(NetworkPermissions { enabled: None }),
             file_system: None,
         };
@@ -1481,6 +1718,146 @@ mod tests {
             permission_profile.file_system_sandbox_policy(),
             file_system_sandbox_policy
         );
+    }
+
+    #[test]
+    fn permission_profile_deserializes_legacy_rollout_shape() -> Result<()> {
+        let legacy = serde_json::json!({
+            "network": {
+                "enabled": true,
+            },
+            "file_system": {
+                "entries": [{
+                    "path": {
+                        "type": "special",
+                        "value": {
+                            "kind": "root",
+                        },
+                    },
+                    "access": "write",
+                }],
+                "glob_scan_max_depth": 2,
+            },
+        });
+
+        let permission_profile: PermissionProfile = serde_json::from_value(legacy)?;
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Restricted {
+                    entries: vec![FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    }],
+                    glob_scan_max_depth: NonZeroUsize::new(2),
+                },
+                network: NetworkSandboxPolicy::Enabled,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permission_profile_round_trip_preserves_disabled_sandbox() -> Result<()> {
+        let cwd = tempdir()?;
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::DangerFullAccess,
+            cwd.path(),
+        );
+
+        assert_eq!(permission_profile, PermissionProfile::Disabled);
+        assert_eq!(
+            permission_profile.to_legacy_sandbox_policy(cwd.path())?,
+            SandboxPolicy::DangerFullAccess
+        );
+        assert_eq!(
+            permission_profile.to_runtime_permissions(),
+            (
+                FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Enabled
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permission_profile_from_runtime_permissions_preserves_external_sandbox() {
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::external_sandbox(),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            }
+        );
+        assert_eq!(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::Managed,
+                &FileSystemSandboxPolicy::external_sandbox(),
+                NetworkSandboxPolicy::Restricted,
+            ),
+            permission_profile,
+        );
+    }
+
+    #[test]
+    fn permission_profile_from_runtime_permissions_preserves_unrestricted_managed_network() {
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::External,
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Restricted,
+        );
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                network: NetworkSandboxPolicy::Restricted,
+            },
+            "the legacy ExternalSandbox projection must not hide a split unrestricted filesystem policy"
+        );
+        assert_eq!(
+            permission_profile.to_runtime_permissions(),
+            (
+                FileSystemSandboxPolicy::unrestricted(),
+                NetworkSandboxPolicy::Restricted,
+            )
+        );
+    }
+
+    #[test]
+    fn permission_profile_round_trip_preserves_external_sandbox() -> Result<()> {
+        let cwd = tempdir()?;
+        let sandbox_policy = SandboxPolicy::ExternalSandbox {
+            network_access: crate::protocol::NetworkAccess::Restricted,
+        };
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd.path());
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            }
+        );
+        assert_eq!(
+            permission_profile.to_legacy_sandbox_policy(cwd.path())?,
+            sandbox_policy
+        );
+        assert_eq!(
+            permission_profile.to_runtime_permissions(),
+            (
+                FileSystemSandboxPolicy::external_sandbox(),
+                NetworkSandboxPolicy::Restricted
+            )
+        );
+        Ok(())
     }
 
     #[test]
