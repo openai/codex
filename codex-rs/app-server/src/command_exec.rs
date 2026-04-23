@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::CommandExecOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecOutputStream;
 use codex_app_server_protocol::CommandExecResizeParams;
@@ -209,11 +210,11 @@ impl CommandExecManager {
                         outgoing
                             .send_response(
                                 request_id,
-                                CommandExecResponse {
+                                ClientResponsePayload::OneOffCommandExec(CommandExecResponse {
                                     exit_code: output.exit_code,
                                     stdout: output.stdout.text,
                                     stderr: output.stderr.text,
-                                },
+                                }),
                             )
                             .await;
                     }
@@ -554,11 +555,11 @@ async fn run_command(params: RunCommandParams) {
     outgoing
         .send_response(
             request_id,
-            CommandExecResponse {
+            ClientResponsePayload::OneOffCommandExec(CommandExecResponse {
                 exit_code,
                 stdout,
                 stderr,
-            },
+            }),
         )
         .await;
 }
@@ -757,7 +758,11 @@ mod tests {
         let manager = CommandExecManager::default();
         let err = manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                    /*general_analytics_enabled*/ false,
+                )),
                 request_id: ConnectionRequestId {
                     connection_id: ConnectionId(1),
                     request_id: codex_app_server_protocol::RequestId::Integer(42),
@@ -793,7 +798,11 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                    /*general_analytics_enabled*/ false,
+                )),
                 request_id: request_id.clone(),
                 process_id: Some("proc-99".to_string()),
                 exec_request: windows_sandbox_exec_request(),
@@ -843,7 +852,11 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
+                outgoing: Arc::new(OutgoingMessageSender::new(
+                    tx,
+                    codex_analytics::AnalyticsEventsClient::disabled(),
+                    /*general_analytics_enabled*/ false,
+                )),
                 request_id: request_id.clone(),
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest::new(
