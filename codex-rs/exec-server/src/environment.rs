@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::HttpClient;
 use crate::client::LazyRemoteExecServerClient;
+use crate::client::http_client::ReqwestHttpClient;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -136,6 +138,7 @@ pub struct Environment {
     exec_server_url: Option<String>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
+    http_client: Arc<dyn HttpClient>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
@@ -146,6 +149,7 @@ impl Environment {
             exec_server_url: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
+            http_client: Arc::new(ReqwestHttpClient),
             local_runtime_paths: None,
         }
     }
@@ -202,6 +206,7 @@ impl Environment {
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
             )),
+            http_client: Arc::new(ReqwestHttpClient),
             local_runtime_paths: Some(local_runtime_paths),
         }
     }
@@ -216,12 +221,14 @@ impl Environment {
     ) -> Self {
         let client = LazyRemoteExecServerClient::new(exec_server_url.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
-        let filesystem: Arc<dyn ExecutorFileSystem> = Arc::new(RemoteFileSystem::new(client));
+        let filesystem: Arc<dyn ExecutorFileSystem> =
+            Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
             exec_server_url: Some(exec_server_url),
             exec_backend,
             filesystem,
+            http_client: Arc::new(client),
             local_runtime_paths,
         }
     }
@@ -241,6 +248,10 @@ impl Environment {
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
+    }
+
+    pub fn get_http_client(&self) -> Arc<dyn HttpClient> {
+        Arc::clone(&self.http_client)
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
