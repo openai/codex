@@ -1559,20 +1559,19 @@ impl Session {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
             return;
         }
-        let Some(message) = trace_message else {
-            return;
-        };
-        self.services
-            .rollout_thread_trace
-            .record_agent_result_interaction(
-                turn_context.sub_id.as_str(),
-                parent_thread_id,
-                &AgentResultTracePayload {
-                    child_agent_path: child_agent_path.as_str(),
-                    message: &message,
-                    status: &status,
-                },
-            );
+        if let Some(message) = trace_message {
+            self.services
+                .rollout_thread_trace
+                .record_agent_result_interaction(
+                    turn_context.sub_id.as_str(),
+                    parent_thread_id,
+                    &AgentResultTracePayload {
+                        child_agent_path: child_agent_path.as_str(),
+                        message: &message,
+                        status: &status,
+                    },
+                );
+        }
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
