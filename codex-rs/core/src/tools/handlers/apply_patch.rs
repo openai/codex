@@ -27,10 +27,9 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchArgs;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::Hunk;
-use codex_apply_patch::parse_patch_streaming;
+use codex_apply_patch::StreamingPatchParser;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
@@ -48,8 +47,7 @@ pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
-    input: String,
-    last_progress: Option<Vec<Hunk>>,
+    parser: StreamingPatchParser,
 }
 
 impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
@@ -70,18 +68,8 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
 
 impl ApplyPatchArgumentDiffConsumer {
     fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
-        self.input.push_str(delta);
-
-        let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
-        if hunks.is_empty() {
-            return None;
-        }
-        if self.last_progress.as_ref() == Some(&hunks) {
-            return None;
-        }
-
+        let hunks = self.parser.push_delta(delta).ok()??;
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
-        self.last_progress = Some(hunks);
         Some(PatchApplyUpdatedEvent { call_id, changes })
     }
 }

@@ -48,7 +48,7 @@ fn diff_consumer_streams_apply_patch_changes() {
             HashMap::from([(
                 PathBuf::from("hello.txt"),
                 FileChange::Add {
-                    content: "hello\n".to_string(),
+                    content: String::new(),
                 },
             )]),
         )
@@ -56,6 +56,22 @@ fn diff_consumer_streams_apply_patch_changes() {
 
     let event = consumer
         .push_delta("call-1".to_string(), "\n+world")
+        .expect("progress event");
+    assert_eq!(
+        (event.call_id, event.changes),
+        (
+            "call-1".to_string(),
+            HashMap::from([(
+                PathBuf::from("hello.txt"),
+                FileChange::Add {
+                    content: "hello\n".to_string(),
+                },
+            )]),
+        )
+    );
+
+    let event = consumer
+        .push_delta("call-1".to_string(), "\n")
         .expect("progress event");
     assert_eq!(
         (event.call_id, event.changes),
