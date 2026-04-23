@@ -2292,6 +2292,7 @@ dependencies = [
  "libc",
  "multimap",
  "pretty_assertions",
+ "prost 0.14.3",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2300,8 +2301,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "wildmatch",
  "winapi-util",
@@ -3375,6 +3380,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tracing",
  "uuid",
 ]
 

@@ -7,18 +7,6 @@
         "string",
         "null"
       ]
-    },
-    "PreToolUseToolInput": {
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
     }
   },
   "properties": {
@@ -45,9 +33,7 @@
     "session_id": {
       "type": "string"
     },
-    "tool_input": {
-      "$ref": "#/definitions/PreToolUseToolInput"
-    },
+    "tool_input": true,
     "tool_name": {
       "type": "string"
     },

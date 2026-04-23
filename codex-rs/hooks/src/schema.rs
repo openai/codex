@@ -211,13 +211,6 @@ pub(crate) enum PreToolUseDecisionWire {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PreToolUseToolInput {
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "pre-tool-use.command.input")]
 pub(crate) struct PreToolUseCommandInput {
@@ -232,17 +225,8 @@ pub(crate) struct PreToolUseCommandInput {
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub tool_name: String,
-    pub tool_input: PreToolUseToolInput,
+    pub tool_input: Value,
     pub tool_use_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestToolInput {
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -260,14 +244,7 @@ pub(crate) struct PermissionRequestCommandInput {
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub tool_name: String,
-    pub tool_input: PermissionRequestToolInput,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PostToolUseToolInput {
-    pub command: String,
+    pub tool_input: Value,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -285,7 +262,7 @@ pub(crate) struct PostToolUseCommandInput {
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub tool_name: String,
-    pub tool_input: PostToolUseToolInput,
+    pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
 }

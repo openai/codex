@@ -5298,6 +5298,7 @@
             ]
           },
           "read": {
+            "description": "This will be removed in favor of `entries`.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
@@ -5307,6 +5308,7 @@
             ]
           },
           "write": {
+            "description": "This will be removed in favor of `entries`.",
             "items": {
               "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
@@ -14354,6 +14356,10 @@
           "ephemeral": {
             "type": "boolean"
           },
+          "excludeTurns": {
+            "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
+            "type": "boolean"
+          },
           "model": {
             "description": "Configuration overrides for the forked thread, if any.",
             "type": [
@@ -15782,6 +15788,10 @@
               "string",
               "null"
             ]
+          },
+          "excludeTurns": {
+            "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+            "type": "boolean"
           },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",

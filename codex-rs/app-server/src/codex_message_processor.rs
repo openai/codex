@@ -4465,8 +4465,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -4522,7 +4524,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
@@ -4572,8 +4573,8 @@ impl CodexMessageProcessor {
                         codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
-                        fallback_model_provider.as_str(),
                         persisted_resume_metadata.as_ref(),
+                        include_turns,
                     )
                     .await
                 {
@@ -4627,24 +4628,28 @@ impl CodexMessageProcessor {
                 }
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = response.thread.clone();
-                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                    &response_history.get_rollout_items(),
-                    &token_usage_thread,
-                );
+                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
-                // The client needs restored usage before it starts another turn.
-                // Sending after the response preserves JSON-RPC request ordering while
-                // still filling the status line before the next turn lifecycle begins.
-                send_thread_token_usage_update_to_connection(
-                    &self.outgoing,
-                    connection_id,
-                    thread_id,
-                    &token_usage_thread,
-                    codex_thread.as_ref(),
-                    token_usage_turn_id,
-                )
-                .await;
+                // `excludeTurns` is explicitly the cheap resume path, so avoid
+                // rebuilding history only to attribute a replayed usage update.
+                if let Some(token_usage_thread) = token_usage_thread {
+                    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                        &response_history.get_rollout_items(),
+                        token_usage_thread.turns.as_slice(),
+                    );
+                    // The client needs restored usage before it starts another turn.
+                    // Sending after the response preserves JSON-RPC request ordering while
+                    // still filling the status line before the next turn lifecycle begins.
+                    send_thread_token_usage_update_to_connection(
+                        &self.outgoing,
+                        connection_id,
+                        thread_id,
+                        &token_usage_thread,
+                        codex_thread.as_ref(),
+                        token_usage_turn_id,
+                    )
+                    .await;
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4835,6 +4840,7 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
+                    include_turns: !params.exclude_turns,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4938,22 +4944,22 @@ impl CodexMessageProcessor {
         thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
-        fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
+        include_turns: bool,
     ) -> std::result::Result<Thread, String> {
+        let config_snapshot = thread.config_snapshot().await;
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
                     &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
-                    fallback_provider,
+                    config_snapshot.model_provider_id.as_str(),
                     persisted_resume_metadata,
                 )
                 .await
             }
             InitialHistory::Forked(items) => {
-                let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -4969,13 +4975,15 @@ impl CodexMessageProcessor {
         let mut thread = thread?;
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
-        let history_items = thread_history.get_rollout_items();
-        populate_thread_turns(
-            &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
-            /*active_turn*/ None,
-        )
-        .await?;
+        if include_turns {
+            let history_items = thread_history.get_rollout_items();
+            populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                /*active_turn*/ None,
+            )
+            .await?;
+        }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
@@ -5002,8 +5010,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             ephemeral,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
         if sandbox.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
                 request_id,
@@ -5223,12 +5233,13 @@ impl CodexMessageProcessor {
                     })
                 })
                 .map(|id| id.to_string());
-            if let Err(message) = populate_thread_turns(
-                &mut thread,
-                ThreadTurnSource::HistoryItems(&history_items),
-                /*active_turn*/ None,
-            )
-            .await
+            if include_turns
+                && let Err(message) = populate_thread_turns(
+                    &mut thread,
+                    ThreadTurnSource::HistoryItems(&history_items),
+                    /*active_turn*/ None,
+                )
+                .await
             {
                 self.send_internal_error(request_id, message).await;
                 return;
@@ -5237,6 +5248,7 @@ impl CodexMessageProcessor {
         };
 
         if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref()
+            && include_turns
             && let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
@@ -5287,30 +5299,34 @@ impl CodexMessageProcessor {
         }
 
         let connection_id = request_id.connection_id;
-        let token_usage_thread = response.thread.clone();
-        let token_usage_turn_id = if let Some(turn_id) =
-            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
-        {
-            Some(turn_id)
-        } else {
-            latest_token_usage_turn_id_from_rollout_path(
-                rollout_path.as_path(),
-                &token_usage_thread,
-            )
-            .await
-        };
+        let token_usage_thread = include_turns.then(|| response.thread.clone());
         self.outgoing.send_response(request_id, response).await;
-        // Mirror the resume contract for forks: the new thread is usable as soon
-        // as the response arrives, so restored usage must follow immediately.
-        send_thread_token_usage_update_to_connection(
-            &self.outgoing,
-            connection_id,
-            thread_id,
-            &token_usage_thread,
-            forked_thread.as_ref(),
-            token_usage_turn_id,
-        )
-        .await;
+        // `excludeTurns` is the cheap fork path, so skip restored usage replay
+        // instead of rebuilding history only to attribute a historical update.
+        if let Some(token_usage_thread) = token_usage_thread {
+            let token_usage_turn_id = if let Some(turn_id) =
+                latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+            {
+                Some(turn_id)
+            } else {
+                latest_token_usage_turn_id_from_rollout_path(
+                    rollout_path.as_path(),
+                    token_usage_thread.turns.as_slice(),
+                )
+                .await
+            };
+            // Mirror the resume contract for forks: the new thread is usable as soon
+            // as the response arrives, so restored usage must follow immediately.
+            send_thread_token_usage_update_to_connection(
+                &self.outgoing,
+                connection_id,
+                thread_id,
+                &token_usage_thread,
+                forked_thread.as_ref(),
+                token_usage_turn_id,
+            )
+            .await;
+        }
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -8640,12 +8656,13 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
+    if pending.include_turns
+        && let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
+            active_turn.as_ref(),
+        )
+        .await
     {
         outgoing
             .send_error(
@@ -8730,24 +8747,28 @@ async fn handle_pending_thread_resume_request(
         permission_profile,
         reasoning_effort,
     };
-    let token_usage_thread = response.thread.clone();
-    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
-        pending.rollout_path.as_path(),
-        &token_usage_thread,
-    )
-    .await;
+    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
-    // Rejoining a loaded thread has the same UI contract as a cold resume, but
-    // uses the live conversation state instead of reconstructing a new session.
-    send_thread_token_usage_update_to_connection(
-        outgoing,
-        connection_id,
-        conversation_id,
-        &token_usage_thread,
-        conversation.as_ref(),
-        token_usage_turn_id,
-    )
-    .await;
+    // Match cold resume: metadata-only resume should attach the listener without
+    // paying the cost of turn reconstruction for historical usage replay.
+    if let Some(token_usage_thread) = token_usage_thread {
+        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+            pending.rollout_path.as_path(),
+            token_usage_thread.turns.as_slice(),
+        )
+        .await;
+        // Rejoining a loaded thread has the same UI contract as a cold resume, but
+        // uses the live conversation state instead of reconstructing a new session.
+        send_thread_token_usage_update_to_connection(
+            outgoing,
+            connection_id,
+            conversation_id,
+            &token_usage_thread,
+            conversation.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
+    }
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
@@ -10513,7 +10534,7 @@ mod tests {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "failed to load your workspace-managed config",
+            "Failed to load cloud requirements (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -10523,7 +10544,7 @@ mod tests {
             Some(json!({
                 "reason": "cloudRequirements",
                 "errorCode": "RequestFailed",
-                "detail": "failed to load your workspace-managed config",
+                "detail": "Failed to load cloud requirements (workspace-managed policies).",
             }))
         );
     }
@@ -10610,6 +10631,7 @@ mod tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            exclude_turns: false,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

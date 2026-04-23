@@ -562,7 +562,20 @@ mod tests {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
                         glob_scan_max_depth: None,
-                        entries: None,
+                        entries: Some(vec![
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(read_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Read,
+                            },
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(write_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                            },
+                        ]),
                     }),
                 },
                 scope: PermissionGrantScope::Session,

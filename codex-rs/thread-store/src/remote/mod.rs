@@ -2,6 +2,7 @@ mod helpers;
 mod list_threads;
 
 use async_trait::async_trait;
+use codex_protocol::ThreadId;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -9,11 +10,10 @@ use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadParams;
-use crate::ResumeThreadRecorderParams;
+use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
-use crate::ThreadRecorder;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -52,22 +52,32 @@ impl ThreadStore for RemoteThreadStore {
         self
     }
 
-    async fn create_thread(
-        &self,
-        _params: CreateThreadParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>> {
+    async fn create_thread(&self, _params: CreateThreadParams) -> ThreadStoreResult<()> {
         Err(not_implemented("create_thread"))
     }
 
-    async fn resume_thread_recorder(
-        &self,
-        _params: ResumeThreadRecorderParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>> {
-        Err(not_implemented("resume_thread_recorder"))
+    async fn resume_thread(&self, _params: ResumeThreadParams) -> ThreadStoreResult<()> {
+        Err(not_implemented("resume_thread"))
     }
 
     async fn append_items(&self, _params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
         Err(not_implemented("append_items"))
+    }
+
+    async fn persist_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
+        Err(not_implemented("persist_thread"))
+    }
+
+    async fn flush_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
+        Err(not_implemented("flush_thread"))
+    }
+
+    async fn shutdown_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
+        Err(not_implemented("shutdown_thread"))
+    }
+
+    async fn discard_thread(&self, _thread_id: ThreadId) -> ThreadStoreResult<()> {
+        Err(not_implemented("discard_thread"))
     }
 
     async fn load_history(

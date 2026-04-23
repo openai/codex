@@ -84,6 +84,7 @@
           ]
         },
         "read": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -93,6 +94,7 @@
           ]
         },
         "write": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },

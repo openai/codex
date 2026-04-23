@@ -234,7 +234,7 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
         }),
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: "bash -lc 'printf hi'".to_string(),
+            tool_input: json!({ "command": "bash -lc 'printf hi'" }),
         })
     );
 }
@@ -261,13 +261,13 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         }),
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: "printf shell command".to_string(),
+            tool_input: json!({ "command": "printf shell command" }),
         })
     );
 }
 
-#[test]
-fn build_post_tool_use_payload_uses_tool_output_wire_value() {
+#[tokio::test]
+async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
@@ -279,13 +279,22 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let handler = ShellCommandHandler {
         backend: super::ShellCommandBackend::Classic,
     };
-
+    let (session, turn) = make_session_and_context().await;
+    let invocation = ToolInvocation {
+        session: session.into(),
+        turn: turn.into(),
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-42".to_string(),
+        tool_name: codex_tools::ToolName::plain("shell_command"),
+        payload,
+    };
     assert_eq!(
-        handler.post_tool_use_payload("call-42", &payload, &output),
+        handler.post_tool_use_payload(&invocation, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_use_id: "call-42".to_string(),
-            command: "printf shell command".to_string(),
+            tool_input: json!({ "command": "printf shell command" }),
             tool_response: json!("shell output"),
         })
     );
