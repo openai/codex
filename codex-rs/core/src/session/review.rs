@@ -111,7 +111,6 @@ pub(super) async fn spawn_review_thread(
         reasoning_summary,
         session_source,
         environment: parent_turn_context.environment.clone(),
-        environment_selections: parent_turn_context.environment_selections.clone(),
         environments: parent_turn_context.environments.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),

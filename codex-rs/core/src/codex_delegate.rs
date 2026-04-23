@@ -47,6 +47,7 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_protocol::error::CodexErr;
@@ -93,7 +94,11 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
         parent_trace: None,
-        environments: parent_ctx.environment_selections.clone(),
+        environments: parent_ctx
+            .environments
+            .iter()
+            .map(TurnEnvironment::selection)
+            .collect(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
     }))

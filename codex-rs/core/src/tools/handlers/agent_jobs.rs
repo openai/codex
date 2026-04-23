@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -637,7 +638,12 @@ async fn run_agent_job_loop(
                             "agent_job:{job_id}"
                         )))),
                         SpawnAgentOptions {
-                            environments: Some(turn.environment_selections.clone()),
+                            environments: Some(
+                                turn.environments
+                                    .iter()
+                                    .map(TurnEnvironment::selection)
+                                    .collect(),
+                            ),
                             ..Default::default()
                         },
                     )
