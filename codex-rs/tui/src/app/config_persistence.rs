@@ -21,17 +21,11 @@ impl App {
     }
 
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
-        let previous_resize_reflow_config = self.config.terminal_resize_reflow;
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
-        let resize_reflow_config_changed =
-            previous_resize_reflow_config != config.terminal_resize_reflow;
         self.config = config;
-        if resize_reflow_config_changed {
-            self.transcript_reflow.clear_row_cap_trim_warning();
-        }
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }

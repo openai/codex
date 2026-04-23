@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -482,13 +481,6 @@ pub struct Tui {
     alt_screen_enabled: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct ResizeReflowDrawStats {
-    pub(crate) history_flush_elapsed: Duration,
-    pub(crate) history_flush_line_count: usize,
-    pub(crate) flushed_history: bool,
-}
-
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -916,7 +908,7 @@ impl Tui {
         &mut self,
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<ResizeReflowDrawStats> {
+    ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -925,7 +917,6 @@ impl Tui {
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
         stdout().sync_update(|_| {
-            let mut stats = ResizeReflowDrawStats::default();
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -934,16 +925,11 @@ impl Tui {
             let terminal = &mut self.terminal;
             let mut needs_full_repaint =
                 Self::update_inline_viewport_for_resize_reflow(terminal, height, self.is_zellij)?;
-            let history_flush_line_count = self.pending_history_lines.len();
-            let history_flush_start = Instant::now();
             let flushed_history = Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
-            stats.history_flush_elapsed = history_flush_start.elapsed();
-            stats.history_flush_line_count = history_flush_line_count;
-            stats.flushed_history = history_flush_line_count > 0;
             needs_full_repaint |= flushed_history;
             let flushed_reflow_history = Self::flush_pending_reflow_history_lines(
                 terminal,
@@ -972,9 +958,7 @@ impl Tui {
 
             terminal.draw(|frame| {
                 draw_fn(frame);
-            })?;
-
-            Ok(stats)
+            })
         })?
     }
 

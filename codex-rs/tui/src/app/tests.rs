@@ -3570,7 +3570,7 @@ async fn make_test_app() -> App {
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
-        initial_history_replay_metrics: None,
+        initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
         commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3629,7 +3629,7 @@ async fn make_test_app_with_channels() -> (
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
-            initial_history_replay_metrics: None,
+            initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3712,11 +3712,6 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 
-    assert!(rendered.row_cap_limited);
-    assert!(
-        rendered.rendered_cell_count < app.transcript_cells.len(),
-        "row-capped reflow should not render the whole transcript"
-    );
     assert_eq!(rendered.lines.len(), 5);
     assert_eq!(
         rendered
@@ -3744,8 +3739,9 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 
-    assert!(!rendered.row_cap_limited);
-    assert_eq!(rendered.rendered_cell_count, app.transcript_cells.len());
+    assert_eq!(rendered.lines.len(), 39);
+    assert_eq!(rendered_line_text(&rendered.lines[0]), "cell 0");
+    assert_eq!(rendered_line_text(&rendered.lines[38]), "cell 19");
 }
 
 #[tokio::test]
@@ -3758,8 +3754,6 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
 
-    assert!(!rendered.row_cap_limited);
-    assert_eq!(rendered.rendered_cell_count, app.transcript_cells.len());
     assert_eq!(
         rendered
             .lines
@@ -3777,30 +3771,28 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
 }
 
 #[tokio::test]
-async fn initial_replay_measurement_buffers_recent_rows_when_row_cap_present() {
+async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
     app.config.terminal_resize_reflow.max_rows = Some(3);
 
-    app.begin_initial_history_replay_measurement();
+    app.begin_initial_history_replay_buffer();
     for index in 0..5 {
         App::buffer_initial_history_replay_display_lines(
-            app.initial_history_replay_metrics
+            app.initial_history_replay_buffer
                 .as_mut()
-                .expect("measurement active"),
+                .expect("initial replay buffer active"),
             vec![Line::from(format!("line {index}"))],
             /*max_rows*/ 3,
         );
     }
 
-    let metrics = app
-        .initial_history_replay_metrics
+    let buffer = app
+        .initial_history_replay_buffer
         .as_ref()
-        .expect("measurement should remain active");
-    assert_eq!(metrics.retained_line_count, 3);
-    assert_eq!(metrics.trimmed_line_count, 2);
+        .expect("initial replay buffer should remain active");
     assert_eq!(
-        metrics
+        buffer
             .retained_lines
             .iter()
             .map(rendered_line_text)

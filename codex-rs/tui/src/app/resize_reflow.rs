@@ -11,7 +11,6 @@
 //! from the finalized source.
 
 use std::collections::VecDeque;
-use std::time::Duration;
 use std::time::Instant;
 
 use codex_features::Feature;
@@ -19,22 +18,13 @@ use color_eyre::eyre::Result;
 use ratatui::text::Line;
 
 use super::App;
-use super::InitialHistoryReplayMetrics;
+use super::InitialHistoryReplayBuffer;
 use super::trailing_run_start;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::transcript_reflow::TranscriptReflowKind;
 use crate::tui;
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ResizeReflowRunStats {
-    kind: TranscriptReflowKind,
-    width: u16,
-    cell_count: usize,
-    rendered_line_count: usize,
-    row_cap_limited: bool,
-}
 
 struct ReflowCellDisplay {
     lines: Vec<Line<'static>>,
@@ -43,8 +33,6 @@ struct ReflowCellDisplay {
 
 pub(super) struct ReflowRenderResult {
     pub(super) lines: Vec<Line<'static>>,
-    pub(super) rendered_cell_count: usize,
-    pub(super) row_cap_limited: bool,
 }
 
 impl App {
@@ -94,149 +82,58 @@ impl App {
         self.terminal_resize_reflow_enabled()
     }
 
-    pub(super) fn begin_initial_history_replay_measurement(&mut self) {
+    pub(super) fn begin_initial_history_replay_buffer(&mut self) {
         if self.terminal_resize_reflow_active() && self.overlay.is_none() {
-            self.initial_history_replay_metrics = Some(Default::default());
+            self.initial_history_replay_buffer = Some(Default::default());
         }
     }
 
-    pub(super) fn finish_initial_history_replay_measurement(
-        &mut self,
-        tui: &mut tui::Tui,
-        replay_elapsed: Duration,
-    ) {
-        let row_cap = self.resize_reflow_max_rows();
-        let Some(metrics) = &mut self.initial_history_replay_metrics else {
+    pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
+        let Some(buffer) = self.initial_history_replay_buffer.take() else {
             return;
         };
-        metrics.replay_elapsed = Some(replay_elapsed);
-        metrics.replay_finished = true;
 
-        let Some(max_rows) = row_cap else {
-            return;
-        };
-        if metrics.retained_lines.is_empty() {
+        if buffer.retained_lines.is_empty() {
             return;
         }
 
-        let enqueue_started = Instant::now();
-        let retained_lines = metrics.retained_lines.drain(..).collect::<Vec<_>>();
-        metrics.retained_line_count = retained_lines.len();
+        let retained_lines = buffer.retained_lines.into_iter().collect::<Vec<_>>();
         tui.insert_history_lines(retained_lines);
-        metrics.enqueue_elapsed += enqueue_started.elapsed();
-
-        if metrics.trimmed_line_count > 0 {
-            self.chat_widget.add_info_message(
-                format!(
-                    "Initial transcript replay limited scrollback to the most recent {} rows because replay produced {} rows, above the {} row limit.",
-                    metrics.retained_line_count,
-                    metrics.rendered_line_count,
-                    max_rows,
-                ),
-                /*hint*/ None,
-            );
-        }
     }
 
-    pub(super) fn insert_history_cell_lines_with_initial_replay_measurement(
+    pub(super) fn insert_history_cell_lines_with_initial_replay_buffer(
         &mut self,
         tui: &mut tui::Tui,
         cell: &dyn HistoryCell,
         width: u16,
     ) {
-        let render_started = Instant::now();
         let display = self.display_lines_for_history_insert(cell, width);
-        let render_elapsed = render_started.elapsed();
-        let rendered_line_count = display.len();
-
-        if let Some(metrics) = &mut self.initial_history_replay_metrics {
-            metrics.cell_count += 1;
-            metrics.rendered_line_count += rendered_line_count;
-            metrics.render_elapsed += render_elapsed;
-        }
 
         if display.is_empty() {
             return;
         }
 
-        let enqueue_started = Instant::now();
         let max_rows = self.resize_reflow_max_rows();
-        if let Some(metrics) = &mut self.initial_history_replay_metrics {
+        if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
-                Self::buffer_initial_history_replay_display_lines(metrics, display, max_rows);
+                Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
             } else if self.overlay.is_some() {
                 self.deferred_history_lines.extend(display);
             } else {
                 tui.insert_history_lines(display);
             }
-            metrics.enqueue_elapsed += enqueue_started.elapsed();
         }
     }
 
     pub(super) fn buffer_initial_history_replay_display_lines(
-        metrics: &mut InitialHistoryReplayMetrics,
+        buffer: &mut InitialHistoryReplayBuffer,
         display: Vec<Line<'static>>,
         max_rows: usize,
     ) {
-        metrics.retained_lines.extend(display);
-        while metrics.retained_lines.len() > max_rows {
-            metrics.retained_lines.pop_front();
-            metrics.trimmed_line_count += 1;
+        buffer.retained_lines.extend(display);
+        while buffer.retained_lines.len() > max_rows {
+            buffer.retained_lines.pop_front();
         }
-        metrics.retained_line_count = metrics.retained_lines.len();
-    }
-
-    pub(super) fn maybe_finish_initial_history_replay_measurement(
-        &mut self,
-        draw_stats: tui::ResizeReflowDrawStats,
-    ) {
-        let row_cap = self.resize_reflow_max_rows();
-        let Some(metrics) = &mut self.initial_history_replay_metrics else {
-            return;
-        };
-        if draw_stats.flushed_history {
-            metrics.flush_elapsed += draw_stats.history_flush_elapsed;
-            metrics.flushed_line_count += draw_stats.history_flush_line_count;
-        }
-        let expected_flushed_line_count = if row_cap.is_some() {
-            metrics.retained_line_count
-        } else {
-            metrics.rendered_line_count
-        };
-        if !metrics.replay_finished
-            || (expected_flushed_line_count > 0
-                && metrics.flushed_line_count < expected_flushed_line_count)
-        {
-            return;
-        }
-
-        if let Some(metrics) = self.initial_history_replay_metrics.take() {
-            self.show_initial_history_replay_measurement(metrics);
-        }
-    }
-
-    fn show_initial_history_replay_measurement(&mut self, metrics: InitialHistoryReplayMetrics) {
-        let replay_ms = metrics.replay_elapsed.unwrap_or_default().as_millis();
-        let retained_line_count =
-            if metrics.retained_line_count == 0 && metrics.trimmed_line_count == 0 {
-                metrics.rendered_line_count
-            } else {
-                metrics.retained_line_count
-            };
-        self.chat_widget.add_info_message(
-            format!(
-                "Initial transcript replay took {replay_ms}ms to queue, {}ms to render, {}ms to enqueue, and {}ms to flush ({} rows from {} cells; {} rows retained; {} rows trimmed; {} rows flushed).",
-                metrics.render_elapsed.as_millis(),
-                metrics.enqueue_elapsed.as_millis(),
-                metrics.flush_elapsed.as_millis(),
-                metrics.rendered_line_count,
-                metrics.cell_count,
-                retained_line_count,
-                metrics.trimmed_line_count,
-                metrics.flushed_line_count,
-            ),
-            /*hint*/ None,
-        );
     }
 
     fn schedule_resize_reflow(
@@ -251,60 +148,6 @@ impl App {
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
         self.config.terminal_resize_reflow.max_rows
-    }
-
-    fn maybe_note_row_cap_limited_reflow(&mut self, stats: ResizeReflowRunStats) {
-        if !stats.row_cap_limited {
-            return;
-        }
-
-        let Some(max_rows) = self.resize_reflow_max_rows() else {
-            return;
-        };
-        tracing::warn!(
-            max_rows,
-            kind = ?stats.kind,
-            width = stats.width,
-            cell_count = stats.cell_count,
-            rendered_line_count = stats.rendered_line_count,
-            "terminal resize reflow limited scrollback with rendered row cap"
-        );
-        self.maybe_show_row_cap_resize_reflow_trimmed_warning(stats.rendered_line_count, max_rows);
-    }
-
-    fn maybe_show_row_cap_resize_reflow_trimmed_warning(
-        &mut self,
-        kept_line_count: usize,
-        max_rows: usize,
-    ) {
-        if self.transcript_reflow.take_row_cap_trim_warning_needed() {
-            self.chat_widget.add_info_message(
-                format!(
-                    "Terminal resize reflow limited scrollback to the most recent {kept_line_count} rows before rendering because the row cap is {max_rows}.",
-                ),
-                /*hint*/ None,
-            );
-        }
-    }
-
-    fn show_resize_reflow_timing_debug_message(
-        &mut self,
-        elapsed: Duration,
-        stats: ResizeReflowRunStats,
-    ) {
-        let kind = match stats.kind {
-            TranscriptReflowKind::VisibleRows => "visible-row",
-            TranscriptReflowKind::Full => "full",
-        };
-        self.chat_widget.add_info_message(
-            format!(
-                "Terminal resize reflow {kind} pass took {}ms ({} rows from {} cells).",
-                elapsed.as_millis(),
-                stats.rendered_line_count,
-                stats.cell_count
-            ),
-            /*hint*/ None,
-        );
     }
 
     /// Finish stream consolidation by repairing any resize work that happened during streaming.
@@ -501,16 +344,11 @@ impl App {
         let reflow_ran_during_stream =
             !self.transcript_cells.is_empty() && self.should_mark_reflow_as_stream_time();
 
-        let started = Instant::now();
-        let stats = match reflow_kind {
-            TranscriptReflowKind::Full => self.reflow_transcript_now(tui, reflow_kind)?,
-            TranscriptReflowKind::VisibleRows => {
-                self.repaint_visible_transcript_rows(tui, reflow_kind)?
-            }
+        let width = match reflow_kind {
+            TranscriptReflowKind::Full => self.reflow_transcript_now(tui)?,
+            TranscriptReflowKind::VisibleRows => self.repaint_visible_transcript_rows(tui)?,
         };
-        let elapsed = started.elapsed();
-        self.show_resize_reflow_timing_debug_message(elapsed, stats);
-        self.transcript_reflow.mark_reflowed_width(stats.width);
+        self.transcript_reflow.mark_reflowed_width(width);
 
         if reflow_ran_during_stream {
             self.transcript_reflow.mark_ran_during_stream();
@@ -524,36 +362,17 @@ impl App {
         Ok(())
     }
 
-    fn reflow_transcript_now(
-        &mut self,
-        tui: &mut tui::Tui,
-        kind: TranscriptReflowKind,
-    ) -> Result<ResizeReflowRunStats> {
+    fn reflow_transcript_now(&mut self, tui: &mut tui::Tui) -> Result<u16> {
         let width = tui.terminal.size()?.width;
-        let cell_count = self.transcript_cells.len();
         if self.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
             tui.clear_pending_history_lines();
             self.reset_history_emission_state();
-            return Ok(ResizeReflowRunStats {
-                kind,
-                width,
-                cell_count,
-                rendered_line_count: 0,
-                row_cap_limited: false,
-            });
+            return Ok(width);
         }
 
         let reflow_result = self.render_transcript_lines_for_reflow(width);
         let reflowed_lines = reflow_result.lines;
-        let stats = ResizeReflowRunStats {
-            kind,
-            width,
-            cell_count: reflow_result.rendered_cell_count,
-            rendered_line_count: reflowed_lines.len(),
-            row_cap_limited: reflow_result.row_cap_limited,
-        };
-        self.maybe_note_row_cap_limited_reflow(stats);
 
         // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
         tui.clear_pending_history_lines();
@@ -568,38 +387,19 @@ impl App {
             tui.insert_reflowed_history_lines(reflowed_lines);
         }
 
-        Ok(stats)
+        Ok(width)
     }
 
-    fn repaint_visible_transcript_rows(
-        &mut self,
-        tui: &mut tui::Tui,
-        kind: TranscriptReflowKind,
-    ) -> Result<ResizeReflowRunStats> {
+    fn repaint_visible_transcript_rows(&mut self, tui: &mut tui::Tui) -> Result<u16> {
         let width = tui.terminal.size()?.width;
-        let cell_count = self.transcript_cells.len();
         if self.transcript_cells.is_empty() {
             tui.clear_pending_history_lines();
             self.reset_history_emission_state();
-            return Ok(ResizeReflowRunStats {
-                kind,
-                width,
-                cell_count,
-                rendered_line_count: 0,
-                row_cap_limited: false,
-            });
+            return Ok(width);
         }
 
         let reflow_result = self.render_transcript_lines_for_reflow(width);
         let reflowed_lines = reflow_result.lines;
-        let stats = ResizeReflowRunStats {
-            kind,
-            width,
-            cell_count: reflow_result.rendered_cell_count,
-            rendered_line_count: reflowed_lines.len(),
-            row_cap_limited: reflow_result.row_cap_limited,
-        };
-        self.maybe_note_row_cap_limited_reflow(stats);
 
         tui.clear_pending_history_lines();
         tui.terminal.clear_visible_screen()?;
@@ -608,7 +408,7 @@ impl App {
             tui.insert_reflowed_history_lines(reflowed_lines);
         }
 
-        Ok(stats)
+        Ok(width)
     }
 
     pub(super) fn render_transcript_lines_for_reflow(&mut self, width: u16) -> ReflowRenderResult {
@@ -645,7 +445,6 @@ impl App {
             });
         }
 
-        let rendered_cell_count = cell_displays.len();
         let mut has_emitted_history_lines = false;
         let mut reflowed_lines = Vec::new();
         for display in cell_displays {
@@ -658,8 +457,6 @@ impl App {
             }
             reflowed_lines.extend(display.lines);
         }
-        let row_cap_limited =
-            row_cap.is_some_and(|max_rows| start > 0 || reflowed_lines.len() > max_rows);
         if let Some(max_rows) = row_cap
             && reflowed_lines.len() > max_rows
         {
@@ -670,8 +467,6 @@ impl App {
 
         ReflowRenderResult {
             lines: reflowed_lines,
-            rendered_cell_count,
-            row_cap_limited,
         }
     }
 

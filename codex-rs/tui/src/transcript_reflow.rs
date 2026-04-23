@@ -26,7 +26,6 @@ pub(crate) struct TranscriptReflowState {
     pending_kind: Option<TranscriptReflowKind>,
     ran_during_stream: bool,
     resize_requested_during_stream: bool,
-    row_cap_trim_warning_shown: bool,
 }
 
 /// Describes how much terminal history repair is needed for a pending resize.
@@ -148,18 +147,6 @@ impl TranscriptReflowState {
     /// confusing "seen during a draw" with "scrollback has been repaired at this width".
     pub(crate) fn mark_reflowed_width(&mut self, width: u16) -> bool {
         self.last_reflow_width.replace(width) != Some(width)
-    }
-
-    pub(crate) fn clear_row_cap_trim_warning(&mut self) {
-        self.row_cap_trim_warning_shown = false;
-    }
-
-    pub(crate) fn take_row_cap_trim_warning_needed(&mut self) -> bool {
-        if self.row_cap_trim_warning_shown {
-            return false;
-        }
-        self.row_cap_trim_warning_shown = true;
-        true
     }
 
     /// Remember that a reflow actually rebuilt history before stream consolidation completed.
@@ -356,23 +343,5 @@ mod tests {
         state.clear();
 
         assert!(!state.take_stream_finish_reflow_needed());
-    }
-
-    #[test]
-    fn row_cap_trim_warning_is_reported_once() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(state.take_row_cap_trim_warning_needed());
-        assert!(!state.take_row_cap_trim_warning_needed());
-    }
-
-    #[test]
-    fn clear_row_cap_trim_warning_allows_reporting_again() {
-        let mut state = TranscriptReflowState::default();
-
-        assert!(state.take_row_cap_trim_warning_needed());
-        state.clear_row_cap_trim_warning();
-
-        assert!(state.take_row_cap_trim_warning_needed());
     }
 }

@@ -176,8 +176,8 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::BeginInitialHistoryReplayMeasurement => {
-                self.begin_initial_history_replay_measurement();
+            AppEvent::BeginInitialHistoryReplayBuffer => {
+                self.begin_initial_history_replay_buffer();
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -186,12 +186,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                if self
-                    .initial_history_replay_metrics
-                    .as_ref()
-                    .is_some_and(|metrics| !metrics.replay_finished)
-                {
-                    self.insert_history_cell_lines_with_initial_replay_measurement(
+                if self.initial_history_replay_buffer.as_ref().is_some() {
+                    self.insert_history_cell_lines_with_initial_replay_buffer(
                         tui,
                         cell.as_ref(),
                         tui.terminal.last_known_screen_size.width,
@@ -204,8 +200,8 @@ impl App {
                     );
                 }
             }
-            AppEvent::EndInitialHistoryReplayMeasurement { replay_elapsed } => {
-                self.finish_initial_history_replay_measurement(tui, replay_elapsed);
+            AppEvent::EndInitialHistoryReplayBuffer => {
+                self.finish_initial_history_replay_buffer(tui);
             }
             AppEvent::ConsolidateAgentMessage { source, cwd } => {
                 if !self.terminal_resize_reflow_enabled() {
@@ -216,16 +212,9 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 let end = self.transcript_cells.len();
-                tracing::debug!(
-                    "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
-                    source.len()
-                );
                 let start =
                     trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
                 if start < end {
-                    tracing::debug!(
-                        "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
-                    );
                     let consolidated: Arc<dyn HistoryCell> =
                         Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
                     self.transcript_cells
@@ -238,9 +227,6 @@ impl App {
 
                     self.maybe_finish_stream_reflow(tui)?;
                 } else {
-                    tracing::debug!(
-                        "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
-                    );
                     self.maybe_finish_stream_reflow(tui)?;
                 }
             }

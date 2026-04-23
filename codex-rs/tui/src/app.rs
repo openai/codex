@@ -511,18 +511,8 @@ struct SessionSummary {
 }
 
 #[derive(Debug, Default)]
-struct InitialHistoryReplayMetrics {
-    replay_elapsed: Option<Duration>,
-    render_elapsed: Duration,
-    enqueue_elapsed: Duration,
-    flush_elapsed: Duration,
+struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<Line<'static>>,
-    cell_count: usize,
-    rendered_line_count: usize,
-    retained_line_count: usize,
-    trimmed_line_count: usize,
-    flushed_line_count: usize,
-    replay_finished: bool,
 }
 
 pub(crate) struct App {
@@ -547,7 +537,7 @@ pub(crate) struct App {
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
-    initial_history_replay_metrics: Option<InitialHistoryReplayMetrics>,
+    initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -934,7 +924,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
-            initial_history_replay_metrics: None,
+            initial_history_replay_buffer: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
@@ -1169,13 +1159,12 @@ impl App {
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
                     if terminal_resize_reflow_active {
-                        let stats = tui.draw_with_resize_reflow(desired_height, |frame| {
+                        tui.draw_with_resize_reflow(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
                         })?;
-                        self.maybe_finish_initial_history_replay_measurement(stats);
                     } else {
                         tui.draw(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
