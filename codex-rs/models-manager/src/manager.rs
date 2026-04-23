@@ -5,6 +5,7 @@ use crate::config::ModelsManagerConfig;
 use crate::model_info;
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
+use codex_login::AuthManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
@@ -30,9 +31,6 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// this endpoint only when it decides a remote refresh should happen.
 #[async_trait]
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
-    /// Returns the auth mode used to filter picker visibility.
-    fn auth_mode(&self) -> Option<AuthMode>;
-
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -127,6 +125,7 @@ pub struct OpenAiModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     endpoint_client: SharedModelsEndpointClient,
+    auth_manager: Option<Arc<AuthManager>>,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -134,7 +133,7 @@ pub struct OpenAiModelsManager {
 pub struct StaticModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
     collaboration_modes_config: CollaborationModesConfig,
-    auth_mode: Option<AuthMode>,
+    auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl OpenAiModelsManager {
@@ -142,6 +141,7 @@ impl OpenAiModelsManager {
     pub fn new(
         codex_home: PathBuf,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
@@ -153,6 +153,7 @@ impl OpenAiModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             endpoint_client,
+            auth_manager,
         }
     }
 }
@@ -160,14 +161,14 @@ impl OpenAiModelsManager {
 impl StaticModelsManager {
     /// Construct a static model manager from an authoritative catalog.
     pub fn new(
-        auth_mode: Option<AuthMode>,
+        auth_manager: Option<Arc<AuthManager>>,
         model_catalog: ModelsResponse,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         Self {
             remote_models: RwLock::new(model_catalog.models),
             collaboration_modes_config,
-            auth_mode,
+            auth_manager,
         }
     }
 }
@@ -184,7 +185,7 @@ impl ModelsManager for OpenAiModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models().await;
-        build_available_models(self.endpoint_client.auth_mode(), remote_models)
+        build_available_models(self.auth_mode(), remote_models)
     }
 
     async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse {
@@ -209,10 +210,7 @@ impl ModelsManager for OpenAiModelsManager {
 
     fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models()?;
-        Ok(build_available_models(
-            self.endpoint_client.auth_mode(),
-            remote_models,
-        ))
+        Ok(build_available_models(self.auth_mode(), remote_models))
     }
 
     #[instrument(
@@ -235,10 +233,7 @@ impl ModelsManager for OpenAiModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models().await;
-        default_model_from_available(build_available_models(
-            self.endpoint_client.auth_mode(),
-            remote_models,
-        ))
+        default_model_from_available(build_available_models(self.auth_mode(), remote_models))
     }
 
     #[instrument(level = "info", skip(self, config), fields(model = model))]
@@ -308,8 +303,13 @@ impl OpenAiModelsManager {
     }
 
     fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.auth_mode() == Some(AuthMode::Chatgpt)
-            || self.endpoint_client.has_command_auth()
+        self.auth_mode() == Some(AuthMode::Chatgpt) || self.endpoint_client.has_command_auth()
+    }
+
+    fn auth_mode(&self) -> Option<AuthMode> {
+        self.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_mode())
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -389,7 +389,7 @@ impl OpenAiModelsManager {
 #[async_trait]
 impl ModelsManager for StaticModelsManager {
     async fn list_models(&self, _refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
-        build_available_models(self.auth_mode, self.get_remote_models().await)
+        build_available_models(self.auth_mode(), self.get_remote_models().await)
     }
 
     async fn raw_model_catalog(&self, _refresh_strategy: RefreshStrategy) -> ModelsResponse {
@@ -411,7 +411,7 @@ impl ModelsManager for StaticModelsManager {
 
     fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models()?;
-        Ok(build_available_models(self.auth_mode, remote_models))
+        Ok(build_available_models(self.auth_mode(), remote_models))
     }
 
     async fn get_default_model(
@@ -423,7 +423,7 @@ impl ModelsManager for StaticModelsManager {
             return model.to_string();
         }
         default_model_from_available(build_available_models(
-            self.auth_mode,
+            self.auth_mode(),
             self.get_remote_models().await,
         ))
     }
@@ -437,6 +437,12 @@ impl ModelsManager for StaticModelsManager {
 }
 
 impl StaticModelsManager {
+    fn auth_mode(&self) -> Option<AuthMode> {
+        self.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_mode())
+    }
+
     async fn get_remote_models(&self) -> Vec<ModelInfo> {
         self.remote_models.read().await.clone()
     }

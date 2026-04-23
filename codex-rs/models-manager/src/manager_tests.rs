@@ -1,6 +1,11 @@
 use super::*;
 use crate::ModelsManagerConfig;
 use chrono::Utc;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthRefreshContext;
+use codex_login::ExternalAuthTokens;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -63,7 +68,6 @@ fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
 
 #[derive(Debug)]
 struct TestModelsEndpoint {
-    auth_mode: Option<AuthMode>,
     has_command_auth: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
@@ -72,7 +76,6 @@ struct TestModelsEndpoint {
 impl TestModelsEndpoint {
     fn new(responses: Vec<Vec<ModelInfo>>) -> Arc<Self> {
         Arc::new(Self {
-            auth_mode: Some(AuthMode::Chatgpt),
             has_command_auth: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
@@ -81,7 +84,6 @@ impl TestModelsEndpoint {
 
     fn without_refresh(responses: Vec<Vec<ModelInfo>>) -> Arc<Self> {
         Arc::new(Self {
-            auth_mode: None,
             has_command_auth: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
@@ -93,12 +95,27 @@ impl TestModelsEndpoint {
     }
 }
 
+#[derive(Debug)]
+struct TestExternalApiKeyAuth;
+
 #[async_trait]
-impl ModelsEndpointClient for TestModelsEndpoint {
-    fn auth_mode(&self) -> Option<AuthMode> {
-        self.auth_mode
+impl ExternalAuth for TestExternalApiKeyAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
     }
 
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        Ok(ExternalAuthTokens::access_token_only(
+            "test-external-api-key",
+        ))
+    }
+}
+
+#[async_trait]
+impl ModelsEndpointClient for TestModelsEndpoint {
     fn has_command_auth(&self) -> bool {
         self.has_command_auth
     }
@@ -122,16 +139,31 @@ fn openai_manager_for_tests(
     codex_home: std::path::PathBuf,
     endpoint_client: Arc<dyn ModelsEndpointClient>,
 ) -> OpenAiModelsManager {
+    openai_manager_for_tests_with_auth(
+        codex_home,
+        endpoint_client,
+        Some(AuthManager::from_auth_for_testing(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
+    )
+}
+
+fn openai_manager_for_tests_with_auth(
+    codex_home: std::path::PathBuf,
+    endpoint_client: Arc<dyn ModelsEndpointClient>,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> OpenAiModelsManager {
     OpenAiModelsManager::new(
         codex_home,
         endpoint_client,
+        auth_manager,
         CollaborationModesConfig::default(),
     )
 }
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
     StaticModelsManager::new(
-        /*auth_mode*/ None,
+        /*auth_manager*/ None,
         model_catalog,
         CollaborationModesConfig::default(),
     )
@@ -405,7 +437,11 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
         "No Auth",
         /*priority*/ 1,
     )]]);
-    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
 
     manager
         .refresh_available_models(RefreshStrategy::Online)
@@ -425,6 +461,43 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     );
 }
 
+#[tokio::test]
+async fn refresh_available_models_skips_network_when_external_api_key_overrides_chatgpt_auth() {
+    let dynamic_slug = "dynamic-model-only-for-test-external-api-key";
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![vec![remote_model(
+        dynamic_slug,
+        "External API Key",
+        /*priority*/ 1,
+    )]]);
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    auth_manager.set_external_auth(Arc::new(TestExternalApiKeyAuth));
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        Some(auth_manager),
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::Online)
+        .await
+        .expect("refresh should no-op with API key auth");
+    let cached_remote = manager.get_remote_models().await;
+
+    assert!(
+        !cached_remote
+            .iter()
+            .any(|candidate| candidate.slug == dynamic_slug),
+        "remote refresh should be skipped when external API key auth is active"
+    );
+    assert_eq!(
+        endpoint.fetch_count(),
+        0,
+        "endpoint should avoid model fetches when external API key auth is active"
+    );
+}
+
 #[test]
 fn build_available_models_picks_default_after_hiding_hidden_models() {
     let manager = static_manager_for_tests(ModelsResponse { models: Vec::new() });
@@ -438,9 +511,48 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
     let mut expected_visible = ModelPreset::from(visible_model.clone());
     expected_visible.is_default = true;
 
-    let available = build_available_models(manager.auth_mode, vec![hidden_model, visible_model]);
+    let available = build_available_models(manager.auth_mode(), vec![hidden_model, visible_model]);
 
     assert_eq!(available, vec![expected_hidden, expected_visible]);
+}
+
+#[tokio::test]
+async fn static_manager_reads_latest_auth_mode() {
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let chatgpt_only_model = {
+        let mut model = remote_model("chatgpt-only", "ChatGPT Only", /*priority*/ 0);
+        model.supported_in_api = false;
+        model
+    };
+    let api_model = remote_model("api-model", "API Model", /*priority*/ 1);
+    let manager = StaticModelsManager::new(
+        Some(Arc::clone(&auth_manager)),
+        ModelsResponse {
+            models: vec![chatgpt_only_model, api_model],
+        },
+        CollaborationModesConfig::default(),
+    );
+
+    let chatgpt_models = manager.list_models(RefreshStrategy::Online).await;
+    assert_eq!(
+        chatgpt_models
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["chatgpt-only", "api-model"]
+    );
+
+    auth_manager.set_external_auth(Arc::new(TestExternalApiKeyAuth));
+    let api_models = manager.list_models(RefreshStrategy::Online).await;
+
+    assert_eq!(
+        api_models
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["api-model"]
+    );
 }
 
 #[test]

@@ -16,7 +16,6 @@ use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_models_manager::AuthMode;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::error::CodexErr;
@@ -50,12 +49,6 @@ impl OpenAiModelsEndpoint {
         }
     }
 
-    fn auth_cached(&self) -> Option<CodexAuth> {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-    }
-
     async fn auth(&self) -> Option<CodexAuth> {
         match self.auth_manager.as_ref() {
             Some(auth_manager) => auth_manager.auth().await,
@@ -74,10 +67,6 @@ impl OpenAiModelsEndpoint {
 
 #[async_trait]
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
-    fn auth_mode(&self) -> Option<AuthMode> {
-        self.auth_cached().as_ref().map(CodexAuth::auth_mode)
-    }
-
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
     }
@@ -209,12 +198,8 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 mod tests {
     use std::num::NonZeroU64;
 
-    use codex_login::AuthManager;
-    use codex_login::CodexAuth;
-    use codex_protocol::config_types::ModelProviderAuthInfo;
-    use pretty_assertions::assert_eq;
-
     use super::*;
+    use codex_protocol::config_types::ModelProviderAuthInfo;
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {
@@ -234,25 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn auth_mode_uses_cached_auth_manager_state() {
-        let endpoint = OpenAiModelsEndpoint::new(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-                "test-api-key",
-            ))),
-        );
-
-        assert_eq!(endpoint.auth_mode(), Some(AuthMode::ApiKey));
-    }
-
-    #[test]
     fn command_auth_provider_reports_command_auth_without_cached_auth() {
         let endpoint = OpenAiModelsEndpoint::new(
             provider_info_with_command_auth(),
             /*auth_manager*/ None,
         );
 
-        assert_eq!(endpoint.auth_mode(), None);
         assert!(endpoint.has_command_auth());
     }
 

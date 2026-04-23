@@ -182,13 +182,9 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Arc<dyn ModelsManager> {
-        let auth_mode = self
-            .auth_manager
-            .as_ref()
-            .and_then(|manager| manager.auth_mode());
         match config_model_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
-                auth_mode,
+                self.auth_manager.clone(),
                 model_catalog,
                 collaboration_modes_config,
             )),
@@ -200,6 +196,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 Arc::new(OpenAiModelsManager::new(
                     codex_home,
                     endpoint,
+                    self.auth_manager.clone(),
                     collaboration_modes_config,
                 ))
             }
@@ -418,10 +415,7 @@ mod tests {
             .map(|model| model.slug.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            model_ids,
-            vec!["openai.gpt-oss-120b-1:0", "openai.gpt-oss-20b-1:0"]
-        );
+        assert_eq!(model_ids, vec!["openai.gpt-oss-120b", "openai.gpt-oss-20b"]);
     }
 
     #[tokio::test]

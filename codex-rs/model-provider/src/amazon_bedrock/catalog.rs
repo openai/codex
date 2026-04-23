@@ -15,12 +15,12 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![
             bedrock_model(
-                "openai.gpt-oss-120b-1:0",
+                "openai.gpt-oss-120b",
                 "GPT OSS 120B on Bedrock",
                 /*priority*/ 0,
             ),
             bedrock_model(
-                "openai.gpt-oss-20b-1:0",
+                "openai.gpt-oss-20b",
                 "GPT OSS 20B on Bedrock",
                 /*priority*/ 1,
             ),
@@ -90,11 +90,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_uses_bedrock_model_ids_as_slugs() {
+    fn catalog_uses_mantle_model_ids_as_slugs() {
         let catalog = static_model_catalog();
 
         assert_eq!(catalog.models.len(), 2);
-        assert_eq!(catalog.models[0].slug, "openai.gpt-oss-120b-1:0");
-        assert_eq!(catalog.models[1].slug, "openai.gpt-oss-20b-1:0");
+        assert_eq!(catalog.models[0].slug, "openai.gpt-oss-120b");
+        assert_eq!(catalog.models[1].slug, "openai.gpt-oss-20b");
     }
 }

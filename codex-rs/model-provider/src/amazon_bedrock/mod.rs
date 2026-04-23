@@ -88,7 +88,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Arc<dyn ModelsManager> {
         Arc::new(StaticModelsManager::new(
-            /*auth_mode*/ None,
+            /*auth_manager*/ None,
             config_model_catalog.unwrap_or_else(static_model_catalog),
             collaboration_modes_config,
         ))
