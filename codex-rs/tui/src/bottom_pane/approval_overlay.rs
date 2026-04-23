@@ -1515,8 +1515,7 @@ mod tests {
     fn permissions_strict_auto_review_shortcut_submits_turn_scope_with_strict_review() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view =
-            ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
+        let mut view = make_overlay(make_permissions_request(), tx, Features::with_defaults());
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
 
