@@ -430,17 +430,17 @@ impl Session {
             active_turn.clear_pending().await;
         }
         if reason == TurnAbortReason::Interrupted {
-            if !aborted_turn
-                && let Err(err) = self
-                    .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
-                        turn_context: None,
-                        reason: TurnAbortReason::Interrupted,
-                    })
-                    .await
+            if aborted_turn {
+                self.maybe_start_turn_for_pending_work().await;
+            } else if let Err(err) = self
+                .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+                    turn_context: None,
+                    reason: TurnAbortReason::Interrupted,
+                })
+                .await
             {
                 warn!("failed to apply goal runtime idle-interrupt event: {err}");
             }
-            self.maybe_start_turn_for_pending_work().await;
         }
     }
 

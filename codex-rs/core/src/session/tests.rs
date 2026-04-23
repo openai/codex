@@ -5957,6 +5957,25 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
+async fn idle_interrupt_does_not_wake_queued_next_turn_items() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "assistant".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued before interrupt".to_string(),
+        }],
+    };
+
+    sess.queue_response_items_for_next_turn(vec![queued_item])
+        .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    assert!(sess.active_turn.lock().await.is_none());
+    assert!(sess.has_queued_response_items_for_next_turn().await);
+}
+
+#[tokio::test]
 async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
