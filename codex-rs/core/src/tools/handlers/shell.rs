@@ -536,6 +536,7 @@ impl ShellHandler {
             network: exec_params.network.clone(),
             sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
+            #[cfg(unix)]
             additional_permissions_preapproved: effective_additional_permissions
                 .permissions_preapproved,
             justification: exec_params.justification.clone(),
