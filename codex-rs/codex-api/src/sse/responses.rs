@@ -197,8 +197,7 @@ impl ResponsesStreamEvent {
     ///
     /// Precedence:
     /// 1. `response.headers` for standard Responses stream events.
-    /// 2. top-level `headers` for websocket metadata events (for example
-    ///    `codex.response.metadata`).
+    /// 2. top-level `headers` for websocket metadata events.
     pub fn response_model(&self) -> Option<String> {
         let response_headers_model = self
             .response
@@ -245,6 +244,12 @@ pub(crate) fn model_verifications_from_event_value(
     event
         .get("openai_verification_recommendation")
         .and_then(model_verifications_from_json_value)
+        .or_else(|| {
+            event
+                .get("metadata")
+                .and_then(|metadata| metadata.get("openai_verification_recommendation"))
+                .and_then(model_verifications_from_json_value)
+        })
         .or_else(|| {
             event
                 .get("response")
@@ -1317,8 +1322,12 @@ mod tests {
     async fn process_sse_emits_model_verification_field() {
         let events = run_sse(vec![
             json!({
-                "type": "codex.response.metadata",
-                "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+                "type": "response.metadata",
+                "sequence_number": 1,
+                "response_id": "resp-1",
+                "metadata": {
+                    "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
+                }
             }),
             json!({
                 "type": "response.completed",
@@ -1346,7 +1355,7 @@ mod tests {
     #[test]
     fn responses_stream_event_response_model_reads_top_level_headers() {
         let ev: ResponsesStreamEvent = serde_json::from_value(json!({
-            "type": "codex.response.metadata",
+            "type": "response.metadata",
             "headers": {
                 "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS,
             }
@@ -1382,10 +1391,14 @@ mod tests {
     }
 
     #[test]
-    fn responses_stream_event_model_verification_reads_top_level_field() {
+    fn responses_stream_event_model_verification_reads_metadata_field() {
         let event = json!({
-            "type": "codex.response.metadata",
-            "openai_verification_recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
+            "type": "response.metadata",
+            "sequence_number": 1,
+            "response_id": "resp-1",
+            "metadata": {
+                "openai_verification_recommendation": [TRUSTED_ACCESS_FOR_CYBER_VERIFICATION]
+            }
         });
 
         assert_eq!(
@@ -1415,7 +1428,7 @@ mod tests {
     #[test]
     fn responses_stream_event_model_verification_reads_top_level_headers() {
         let event = json!({
-            "type": "codex.response.metadata",
+            "type": "response.metadata",
             "headers": {
                 "OpenAI-Verification-Recommendation": TRUSTED_ACCESS_FOR_CYBER_VERIFICATION
             }
@@ -1430,8 +1443,10 @@ mod tests {
     #[test]
     fn responses_stream_event_model_verification_ignores_unknown_field() {
         let event = json!({
-            "type": "codex.response.metadata",
-            "openai_verification_recommendation": "unknown"
+            "type": "response.metadata",
+            "metadata": {
+                "openai_verification_recommendation": "unknown"
+            }
         });
 
         assert_eq!(model_verifications_from_event_value(&event), None);
