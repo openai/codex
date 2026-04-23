@@ -963,7 +963,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -997,7 +997,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_installed_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1027,6 +1027,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/list"))
         .and(query_param("scope", "GLOBAL"))
+        .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(global_directory_body))
@@ -1035,6 +1036,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/list"))
         .and(query_param("scope", "WORKSPACE"))
+        .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
@@ -1085,7 +1087,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         Some("ChatGPT Plugins")
     );
     assert_eq!(remote_marketplace.plugins.len(), 1);
-    assert_eq!(remote_marketplace.plugins[0].id, "linear@chatgpt-global");
+    assert_eq!(remote_marketplace.plugins[0].id, "plugins~Plugin_linear");
     assert_eq!(remote_marketplace.plugins[0].name, "linear");
     assert_eq!(remote_marketplace.plugins[0].source, PluginSource::Remote);
     assert_eq!(remote_marketplace.plugins[0].installed, true);
@@ -1144,7 +1146,7 @@ async fn plugin_list_remote_marketplace_replaces_local_marketplace_with_same_nam
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1170,30 +1172,27 @@ async fn plugin_list_remote_marketplace_replaces_local_marketplace_with_same_nam
     "next_page_token": null
   }
 }"#;
-    for (path_suffix, scope, body) in [
-        (
-            "/backend-api/ps/plugins/list",
-            "GLOBAL",
-            global_directory_body,
-        ),
-        ("/backend-api/ps/plugins/list", "WORKSPACE", empty_page_body),
-        (
-            "/backend-api/ps/plugins/installed",
-            "GLOBAL",
-            empty_page_body,
-        ),
-        (
-            "/backend-api/ps/plugins/installed",
-            "WORKSPACE",
-            empty_page_body,
-        ),
+    for (scope, body) in [
+        ("GLOBAL", global_directory_body),
+        ("WORKSPACE", empty_page_body),
     ] {
         Mock::given(method("GET"))
-            .and(path(path_suffix))
+            .and(path("/backend-api/ps/plugins/list"))
             .and(query_param("scope", scope))
+            .and(query_param("limit", "200"))
             .and(header("authorization", "Bearer chatgpt-token"))
             .and(header("chatgpt-account-id", "account-123"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+    }
+    for scope in ["GLOBAL", "WORKSPACE"] {
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", scope))
+            .and(header("authorization", "Bearer chatgpt-token"))
+            .and(header("chatgpt-account-id", "account-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
             .mount(&server)
             .await;
     }

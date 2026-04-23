@@ -378,6 +378,9 @@
             "collaboration_modes": {
               "type": "boolean"
             },
+            "computer_use": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -2530,6 +2533,9 @@
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "computer_use": {
           "type": "boolean"
         },
         "connectors": {
