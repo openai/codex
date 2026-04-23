@@ -101,7 +101,7 @@ fn exec_command_tool_matches_expected_spec() {
     let description = if cfg!(windows) {
         format!(
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction.{}",
-            windows_shell_guidance()
+            windows_shell_guidance_description()
         )
     } else {
         "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
