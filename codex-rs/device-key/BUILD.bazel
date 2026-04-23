@@ -1,6 +1,27 @@
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "device-key",
     crate_name = "codex_device_key",
+    # Bazel wires the Objective-C provider through :macos-provider below, so skip Cargo's build.rs.
+    build_script_enabled = False,
+    deps_extra = select({
+        "@platforms//os:macos": [":macos-provider"],
+        "//conditions:default": [],
+    }),
+)
+
+objc_library(
+    name = "macos-provider",
+    srcs = ["src/platform/macos_provider.m"],
+    hdrs = ["src/platform/macos_provider.h"],
+    copts = ["-fobjc-arc"],
+    sdk_frameworks = [
+        "Foundation",
+        "LocalAuthentication",
+        "Security",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    visibility = ["//visibility:private"],
 )
