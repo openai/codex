@@ -16,7 +16,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
@@ -74,15 +73,6 @@ pub(crate) async fn run_codex_thread_interactive(
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let environments = parent_ctx
-        .environments
-        .iter()
-        .map(|environment| TurnEnvironmentSelection {
-            environment_id: environment.environment_id.clone(),
-            cwd: environment.cwd.clone(),
-        })
-        .collect();
-
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
@@ -103,7 +93,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
         parent_trace: None,
-        environments,
+        environments: parent_ctx.environment_selections.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
     }))

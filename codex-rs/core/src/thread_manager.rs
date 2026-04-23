@@ -4,6 +4,7 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::selected_primary_environment;
+use crate::environment_selection::validate_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
@@ -404,6 +405,20 @@ impl ThreadManager {
 
     pub fn environment_manager(&self) -> Arc<EnvironmentManager> {
         self.state.environment_manager.clone()
+    }
+
+    pub fn default_environment_selections(
+        &self,
+        cwd: &AbsolutePathBuf,
+    ) -> Vec<TurnEnvironmentSelection> {
+        default_thread_environment_selections(self.state.environment_manager.as_ref(), cwd)
+    }
+
+    pub fn validate_environment_selections(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> CodexResult<()> {
+        validate_environment_selections(self.state.environment_manager.as_ref(), environments)
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {

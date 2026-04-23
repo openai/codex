@@ -51,6 +51,18 @@ impl From<Option<Vec<TurnEnvironmentSelection>>> for TurnEnvironmentOverride {
     }
 }
 
+impl TurnEnvironmentOverride {
+    pub(crate) fn resolve_ref(
+        &self,
+        thread_environments: &[TurnEnvironmentSelection],
+    ) -> Vec<TurnEnvironmentSelection> {
+        match self {
+            Self::Inherit => thread_environments.to_vec(),
+            Self::Explicit(environments) => environments.clone(),
+        }
+    }
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -66,6 +78,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) environment: Option<Arc<Environment>>,
+    pub(crate) environment_selections: Vec<TurnEnvironmentSelection>,
     pub(crate) environments: Vec<TurnEnvironment>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -205,6 +218,7 @@ impl TurnContext {
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             environment: self.environment.clone(),
+            environment_selections: self.environment_selections.clone(),
             environments: self.environments.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -396,6 +410,7 @@ impl Session {
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
         environment: Option<Arc<Environment>>,
+        environment_selections: Vec<TurnEnvironmentSelection>,
         environments: Vec<TurnEnvironment>,
         cwd: AbsolutePathBuf,
         sub_id: String,
@@ -464,6 +479,7 @@ impl Session {
             reasoning_summary,
             session_source,
             environment,
+            environment_selections,
             environments,
             cwd,
             current_date: Some(current_date),
@@ -508,12 +524,10 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let effective_environments = match updates.environments.clone() {
-                        TurnEnvironmentOverride::Inherit => next.environments.clone(),
-                        TurnEnvironmentOverride::Explicit(environments) => environments,
-                    };
+                    let effective_environments =
+                        updates.environments.resolve_ref(&next.environments);
                     let turn_environments =
-                        self.resolve_turn_environments(effective_environments)?;
+                        self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
@@ -522,6 +536,7 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
+                        effective_environments,
                         turn_environments,
                         sandbox_policy_changed,
                         previous_cwd,
@@ -535,6 +550,7 @@ impl Session {
 
         let (
             session_configuration,
+            effective_environments,
             turn_environments,
             sandbox_policy_changed,
             previous_cwd,
@@ -573,6 +589,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                effective_environments,
                 turn_environments,
             )
             .await)
@@ -580,11 +597,11 @@ impl Session {
 
     fn resolve_turn_environments(
         &self,
-        environments: Vec<TurnEnvironmentSelection>,
+        environments: &[TurnEnvironmentSelection],
     ) -> CodexResult<Vec<TurnEnvironment>> {
         let mut turn_environments = Vec::with_capacity(environments.len());
         for selected_environment in environments {
-            let environment_id = selected_environment.environment_id;
+            let environment_id = selected_environment.environment_id.clone();
             let environment = self
                 .services
                 .environment_manager
@@ -594,7 +611,7 @@ impl Session {
                         "unknown turn environment id `{environment_id}`"
                     ))
                 })?;
-            let cwd = selected_environment.cwd;
+            let cwd = selected_environment.cwd.clone();
             turn_environments.push(TurnEnvironment {
                 environment_id,
                 environment,
@@ -610,6 +627,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        environment_selections: Vec<TurnEnvironmentSelection>,
         turn_environments: Vec<TurnEnvironment>,
     ) -> Arc<TurnContext> {
         let primary_turn_environment = turn_environments.first();
@@ -671,6 +689,7 @@ impl Session {
                     .then(|| started_proxy.proxy())
                 }),
             environment,
+            environment_selections,
             turn_environments,
             cwd,
             sub_id,
@@ -712,12 +731,15 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        let turn_environments =
-            match self.resolve_turn_environments(session_configuration.environments.clone()) {
-                Ok(turn_environments) => turn_environments,
+        let (environment_selections, turn_environments) =
+            match self.resolve_turn_environments(&session_configuration.environments) {
+                Ok(turn_environments) => (
+                    session_configuration.environments.clone(),
+                    turn_environments,
+                ),
                 Err(err) => {
                     warn!("failed to resolve stored session environments: {err}");
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 }
             };
 
@@ -725,6 +747,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            environment_selections,
             turn_environments,
         )
         .await

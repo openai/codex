@@ -406,20 +406,6 @@ const THREAD_LIST_MAX_LIMIT: usize = 100;
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
 
-fn default_thread_environment_selections(
-    environment_manager: &EnvironmentManager,
-    cwd: &AbsolutePathBuf,
-) -> Vec<TurnEnvironmentSelection> {
-    environment_manager
-        .default_environment_id()
-        .map(|environment_id| TurnEnvironmentSelection {
-            environment_id: environment_id.to_string(),
-            cwd: cwd.clone(),
-        })
-        .into_iter()
-        .collect()
-}
-
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
@@ -672,6 +658,13 @@ fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
         None => Arc::new(LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config),
         )),
+    }
+}
+
+fn environment_selection_error_message(err: CodexErr) -> String {
+    match err {
+        CodexErr::InvalidRequest(message) => message,
+        err => err.to_string(),
     }
 }
 
@@ -2480,6 +2473,19 @@ impl CodexMessageProcessor {
                 })
                 .collect::<Vec<_>>()
         });
+        if let Some(environments) = environments.as_ref() {
+            if let Err(err) = self
+                .thread_manager
+                .validate_environment_selections(environments)
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    environment_selection_error_message(err),
+                )
+                .await;
+                return;
+            }
+        }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2694,13 +2700,9 @@ impl CodexMessageProcessor {
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
-            default_thread_environment_selections(
-                listener_task_context
-                    .thread_manager
-                    .environment_manager()
-                    .as_ref(),
-                &config.cwd,
-            )
+            listener_task_context
+                .thread_manager
+                .default_environment_selections(&config.cwd)
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -6967,22 +6969,16 @@ impl CodexMessageProcessor {
                     .collect()
             });
         if let Some(environments) = environments.as_ref() {
-            let environment_manager = self.thread_manager.environment_manager();
-            for environment in environments {
-                if environment_manager
-                    .get_environment(&environment.environment_id)
-                    .is_none()
-                {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "unknown turn environment id `{}`",
-                            environment.environment_id
-                        ),
-                    )
-                    .await;
-                    return;
-                }
+            if let Err(err) = self
+                .thread_manager
+                .validate_environment_selections(environments)
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    environment_selection_error_message(err),
+                )
+                .await;
+                return;
             }
         }
 

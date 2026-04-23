@@ -2821,6 +2821,15 @@ fn turn_environments_for_tests(
     }]
 }
 
+fn turn_environment_selections_for_tests(
+    cwd: &codex_utils_absolute_path::AbsolutePathBuf,
+) -> Vec<TurnEnvironmentSelection> {
+    vec![TurnEnvironmentSelection {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: cwd.clone(),
+    }]
+}
+
 #[tokio::test]
 async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;
@@ -3352,6 +3361,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
+    let environment_selections = turn_environment_selections_for_tests(&session_configuration.cwd);
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Session::make_turn_context(
         conversation_id,
@@ -3367,6 +3377,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &models_manager,
         /*network*/ None,
         Some(environment),
+        environment_selections,
         turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
@@ -4720,6 +4731,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
             .await,
     );
+    let environment_selections = turn_environment_selections_for_tests(&session_configuration.cwd);
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
     let turn_context = Arc::new(Session::make_turn_context(
         conversation_id,
@@ -4735,6 +4747,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         &models_manager,
         /*network*/ None,
         Some(environment),
+        environment_selections,
         turn_environments,
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
