@@ -5,13 +5,14 @@ use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
+use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tempfile::tempdir;
 
 #[tokio::test]
 async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample"]);
     write_curated_plugin_sha(codex_home.path());
     write_plugins_feature_config(codex_home.path());

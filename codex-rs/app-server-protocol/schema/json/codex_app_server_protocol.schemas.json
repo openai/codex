@@ -696,6 +696,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/upgrade"
+              ],
+              "title": "Marketplace/upgradeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MarketplaceUpgradeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/upgradeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -10316,6 +10340,64 @@
           "marketplaceName"
         ],
         "title": "MarketplaceRemoveResponse",
+        "type": "object"
+      },
+      "MarketplaceUpgradeErrorInfo": {
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "message"
+        ],
+        "type": "object"
+      },
+      "MarketplaceUpgradeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "MarketplaceUpgradeParams",
+        "type": "object"
+      },
+      "MarketplaceUpgradeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/definitions/v2/MarketplaceUpgradeErrorInfo"
+            },
+            "type": "array"
+          },
+          "selectedMarketplaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "upgradedRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors",
+          "selectedMarketplaces",
+          "upgradedRoots"
+        ],
+        "title": "MarketplaceUpgradeResponse",
         "type": "object"
       },
       "McpAuthStatus": {

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -129,6 +130,14 @@ fn disabled_recorder_accepts_trace_calls_without_writing() -> anyhow::Result<()>
         input_history: &[],
         replacement_history: &[],
     });
+
+    let built_dispatch_invocation = Cell::new(false);
+    let dispatch_trace = recorder.start_tool_dispatch_trace(|| {
+        built_dispatch_invocation.set(true);
+        None
+    });
+    assert!(!built_dispatch_invocation.get());
+    assert!(!dispatch_trace.is_enabled());
 
     assert_eq!(fs::read_dir(temp.path())?.count(), 0);
 

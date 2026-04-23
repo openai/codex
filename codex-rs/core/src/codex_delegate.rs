@@ -95,8 +95,10 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
+        thread_store: Arc::clone(&parent_session.services.thread_store),
     }))
-    .await?;
+    .or_cancel(&cancel_token)
+    .await??;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
         let thread_config = codex.thread_config_snapshot().await;
         let client_metadata = parent_session.app_server_client_metadata().await;

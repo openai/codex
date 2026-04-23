@@ -58,6 +58,7 @@ codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
+codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
