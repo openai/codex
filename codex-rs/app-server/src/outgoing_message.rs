@@ -358,12 +358,15 @@ impl OutgoingMessageSender {
                 .sender
                 .send(OutgoingEnvelope::ToConnection {
                     connection_id,
-                    message: OutgoingMessage::Request(request),
+                    message: OutgoingMessage::Request(request.clone()),
                     write_complete_tx: None,
                 })
                 .await
             {
                 warn!("failed to resend request to client: {err:?}");
+            } else {
+                self.analytics_events_client
+                    .track_server_request(connection_id.0, request);
             }
         }
     }
