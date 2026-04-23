@@ -164,6 +164,10 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUse,
+    /// Allow Computer Use integration in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
     /// Show the startup prompt for migrating external agent config into Codex.
@@ -865,6 +869,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::BrowserUse,
         key: "browser_use",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ComputerUse,
+        key: "computer_use",
         stage: Stage::Stable,
         default_enabled: true,
     },

@@ -162,6 +162,10 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::BrowserUse.stage(), Stage::Stable);
     assert_eq!(Feature::BrowserUse.default_enabled(), true);
     assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
+
+    assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
+    assert_eq!(Feature::ComputerUse.default_enabled(), true);
+    assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
 }
 
 #[test]
