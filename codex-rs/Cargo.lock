@@ -2527,6 +2527,7 @@ dependencies = [
 name = "codex-device-key"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "p256",
  "pretty_assertions",
@@ -2534,6 +2535,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "url",
 ]
 

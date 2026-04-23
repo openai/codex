@@ -325,7 +325,8 @@ impl MessageProcessor {
             thread_manager.clone(),
             analytics_events_client.clone(),
         );
-        let device_key_api = DeviceKeyApi::default();
+        let device_key_api =
+            DeviceKeyApi::new(config.sqlite_home.clone(), config.model_provider_id.clone());
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
         let fs_api = FsApi::new(
@@ -882,8 +883,7 @@ impl MessageProcessor {
                     },
                     params,
                     device_key_requests_allowed,
-                )
-                .await;
+                );
             }
             ClientRequest::DeviceKeyPublic { request_id, params } => {
                 self.handle_device_key_public(
@@ -893,8 +893,7 @@ impl MessageProcessor {
                     },
                     params,
                     device_key_requests_allowed,
-                )
-                .await;
+                );
             }
             ClientRequest::DeviceKeySign { request_id, params } => {
                 self.handle_device_key_sign(
@@ -904,8 +903,7 @@ impl MessageProcessor {
                     },
                     params,
                     device_key_requests_allowed,
-                )
-                .await;
+                );
             }
             ClientRequest::FsReadFile { request_id, params } => {
                 self.handle_fs_read_file(
@@ -1173,96 +1171,81 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_device_key_create(
+    fn handle_device_key_create(
         &self,
         request_id: ConnectionRequestId,
         params: DeviceKeyCreateParams,
         device_key_requests_allowed: bool,
     ) {
-        if self
-            .reject_device_key_request_over_remote_transport(
-                request_id.clone(),
-                "device/key/create",
-                device_key_requests_allowed,
-            )
-            .await
-        {
-            return;
-        }
-
-        match self.device_key_api.create(params) {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/create",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.create(params).await },
+        );
     }
 
-    async fn handle_device_key_public(
+    fn handle_device_key_public(
         &self,
         request_id: ConnectionRequestId,
         params: DeviceKeyPublicParams,
         device_key_requests_allowed: bool,
     ) {
-        if self
-            .reject_device_key_request_over_remote_transport(
-                request_id.clone(),
-                "device/key/public",
-                device_key_requests_allowed,
-            )
-            .await
-        {
-            return;
-        }
-
-        match self.device_key_api.public(params) {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/public",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.public(params).await },
+        );
     }
 
-    async fn handle_device_key_sign(
+    fn handle_device_key_sign(
         &self,
         request_id: ConnectionRequestId,
         params: DeviceKeySignParams,
         device_key_requests_allowed: bool,
     ) {
-        if self
-            .reject_device_key_request_over_remote_transport(
-                request_id.clone(),
-                "device/key/sign",
-                device_key_requests_allowed,
-            )
-            .await
-        {
-            return;
-        }
-
-        match self.device_key_api.sign(params) {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/sign",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.sign(params).await },
+        );
     }
 
-    async fn reject_device_key_request_over_remote_transport(
+    fn spawn_device_key_request<R, F, Fut>(
         &self,
         request_id: ConnectionRequestId,
-        method: &str,
+        method: &'static str,
         device_key_requests_allowed: bool,
-    ) -> bool {
-        if device_key_requests_allowed {
-            return false;
-        }
+        run_request: F,
+    ) where
+        R: serde::Serialize + Send + 'static,
+        F: FnOnce(DeviceKeyApi) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        let device_key_api = self.device_key_api.clone();
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            if !device_key_requests_allowed {
+                outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("{method} is not available over remote transports"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
 
-        self.outgoing
-            .send_error(
-                request_id,
-                JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("{method} is not available over remote transports"),
-                    data: None,
-                },
-            )
-            .await;
-        true
+            match run_request(device_key_api).await {
+                Ok(response) => outgoing.send_response(request_id, response).await,
+                Err(error) => outgoing.send_error(request_id, error).await,
+            }
+        });
     }
 
     async fn handle_external_agent_config_detect(
