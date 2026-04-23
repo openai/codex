@@ -626,8 +626,19 @@ impl Default for MultiAgentV2Config {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalResizeReflowMaxRows {
+    /// Use the runtime terminal detector to choose a scrollback-sized cap.
+    #[default]
+    Auto,
+    /// Keep all rendered transcript rows during resize reflow.
+    Disabled,
+    /// Keep at most this many rendered transcript rows during resize reflow.
+    Limit(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerminalResizeReflowConfig {
-    pub max_rows: Option<usize>,
+    pub max_rows: TerminalResizeReflowMaxRows,
 }
 
 impl AuthManagerConfig for Config {
@@ -1488,17 +1499,16 @@ fn resolve_multi_agent_v2_config(
 }
 
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
-    let defaults = TerminalResizeReflowConfig::default();
     let Some(tui) = config_toml.tui.as_ref() else {
-        return defaults;
+        return TerminalResizeReflowConfig::default();
     };
 
     TerminalResizeReflowConfig {
-        max_rows: tui
-            .terminal_resize_reflow
-            .max_rows
-            .and_then(|rows| (rows > 0).then_some(rows))
-            .or(defaults.max_rows),
+        max_rows: match tui.terminal_resize_reflow.max_rows {
+            Some(0) => TerminalResizeReflowMaxRows::Disabled,
+            Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
+            None => TerminalResizeReflowMaxRows::Auto,
+        },
     }
 }
 

@@ -676,7 +676,10 @@ max_rows = 9000
 
         app.refresh_in_memory_config_from_disk().await?;
 
-        assert_eq!(app.config.terminal_resize_reflow.max_rows, Some(9000));
+        assert_eq!(
+            app.config.terminal_resize_reflow.max_rows,
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
+        );
         Ok(())
     }
 

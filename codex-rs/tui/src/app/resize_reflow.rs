@@ -147,7 +147,7 @@ impl App {
     }
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
-        self.config.terminal_resize_reflow.max_rows
+        crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
     }
 
     /// Finish stream consolidation by repairing any resize work that happened during streaming.

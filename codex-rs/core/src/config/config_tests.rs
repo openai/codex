@@ -1335,6 +1335,10 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
         cfg.terminal_resize_reflow,
         TerminalResizeReflowConfig::default()
     );
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Auto
+    );
 
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
@@ -1352,7 +1356,10 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     .await
     .expect("load overridden config");
 
-    assert_eq!(cfg.terminal_resize_reflow.max_rows, Some(9000));
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Limit(9000)
+    );
 
     let cfg = Config::load_from_base_config_with_overrides(
         ConfigToml {
@@ -1368,7 +1375,10 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     .await
     .expect("load config with disabled resize reflow limits");
 
-    assert_eq!(cfg.terminal_resize_reflow.max_rows, None);
+    assert_eq!(
+        cfg.terminal_resize_reflow.max_rows,
+        TerminalResizeReflowMaxRows::Disabled
+    );
 }
 
 #[tokio::test]

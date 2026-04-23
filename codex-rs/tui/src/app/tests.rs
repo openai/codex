@@ -23,6 +23,7 @@ use assert_matches::assert_matches;
 
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -3705,7 +3706,7 @@ fn rendered_line_text(line: &Line<'static>) -> String {
 #[tokio::test]
 async fn capped_resize_reflow_renders_recent_suffix_only() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = Some(5);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(5);
     app.transcript_cells = (0..20)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
@@ -3732,7 +3733,7 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
 #[tokio::test]
 async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = None;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
     app.transcript_cells = (0..20)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
@@ -3747,7 +3748,7 @@ async fn uncapped_resize_reflow_renders_all_cells_when_row_cap_absent() {
 #[tokio::test]
 async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
-    app.config.terminal_resize_reflow.max_rows = Some(100);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(100);
     app.transcript_cells = (0..3)
         .map(|i| plain_line_cell(format!("cell {i}")))
         .collect();
@@ -3774,7 +3775,7 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
 async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
-    app.config.terminal_resize_reflow.max_rows = Some(3);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
 
     app.begin_initial_history_replay_buffer();
     for index in 0..5 {
