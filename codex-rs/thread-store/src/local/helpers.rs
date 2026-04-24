@@ -14,6 +14,8 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::ThreadItem;
+use codex_state::ThreadGitInfoFields;
+use codex_state::ThreadMetadata;
 
 use crate::StoredThread;
 use crate::ThreadStoreError;
@@ -152,6 +154,38 @@ pub(super) fn git_info_from_parts(
         branch,
         repository_url: origin_url,
     })
+}
+
+fn git_info_fields_from_git_info(git_info: Option<&GitInfo>) -> ThreadGitInfoFields {
+    let Some(git_info) = git_info else {
+        return ThreadGitInfoFields::default();
+    };
+    ThreadGitInfoFields::new(
+        git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
+        git_info.branch.clone(),
+        git_info.repository_url.clone(),
+    )
+}
+
+fn git_info_from_fields(fields: ThreadGitInfoFields) -> Option<GitInfo> {
+    if fields.is_empty() {
+        return None;
+    }
+    Some(GitInfo {
+        commit_hash: fields.sha.as_deref().map(GitSha::new),
+        branch: fields.branch,
+        repository_url: fields.origin_url,
+    })
+}
+
+pub(super) fn git_info_from_metadata(metadata: &ThreadMetadata) -> Option<GitInfo> {
+    git_info_from_fields(metadata.git_info_fields())
+}
+
+pub(super) fn apply_metadata_git_info(thread: &mut StoredThread, metadata: &ThreadMetadata) {
+    let mut git_info = git_info_fields_from_git_info(thread.git_info.as_ref());
+    git_info.overlay_non_null(&metadata.git_info_fields());
+    thread.git_info = git_info_from_fields(git_info);
 }
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {

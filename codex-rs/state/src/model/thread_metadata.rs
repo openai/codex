@@ -104,6 +104,47 @@ pub struct ThreadMetadata {
     pub git_origin_url: Option<String>,
 }
 
+/// Git metadata fields stored with a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ThreadGitInfoFields {
+    /// The git commit SHA, if known.
+    pub sha: Option<String>,
+    /// The git branch name, if known.
+    pub branch: Option<String>,
+    /// The git origin URL, if known.
+    pub origin_url: Option<String>,
+}
+
+impl ThreadGitInfoFields {
+    /// Create git metadata from its persisted string fields.
+    pub fn new(sha: Option<String>, branch: Option<String>, origin_url: Option<String>) -> Self {
+        Self {
+            sha,
+            branch,
+            origin_url,
+        }
+    }
+
+    /// Returns true when no git metadata fields are present.
+    pub fn is_empty(&self) -> bool {
+        self.sha.is_none() && self.branch.is_none() && self.origin_url.is_none()
+    }
+
+    /// Overlay non-null fields from `other`, preserving existing values for
+    /// fields that `other` does not know about.
+    pub fn overlay_non_null(&mut self, other: &Self) {
+        if other.sha.is_some() {
+            self.sha = other.sha.clone();
+        }
+        if other.branch.is_some() {
+            self.branch = other.branch.clone();
+        }
+        if other.origin_url.is_some() {
+            self.origin_url = other.origin_url.clone();
+        }
+    }
+}
+
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMetadataBuilder {
@@ -216,17 +257,22 @@ impl ThreadMetadataBuilder {
 }
 
 impl ThreadMetadata {
+    /// Return the persisted git metadata fields for this thread.
+    pub fn git_info_fields(&self) -> ThreadGitInfoFields {
+        ThreadGitInfoFields::new(
+            self.git_sha.clone(),
+            self.git_branch.clone(),
+            self.git_origin_url.clone(),
+        )
+    }
+
     /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
     pub fn prefer_existing_git_info(&mut self, existing: &Self) {
-        if existing.git_sha.is_some() {
-            self.git_sha = existing.git_sha.clone();
-        }
-        if existing.git_branch.is_some() {
-            self.git_branch = existing.git_branch.clone();
-        }
-        if existing.git_origin_url.is_some() {
-            self.git_origin_url = existing.git_origin_url.clone();
-        }
+        let mut git_info = self.git_info_fields();
+        git_info.overlay_non_null(&existing.git_info_fields());
+        self.git_sha = git_info.sha;
+        self.git_branch = git_info.branch;
+        self.git_origin_url = git_info.origin_url;
     }
 
     /// Return the list of field names that differ between `self` and `other`.
