@@ -41,6 +41,8 @@ use super::ComposerDraft;
 use super::InputResult;
 use crate::app_event::AppEvent;
 use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::has_ctrl_or_alt;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 
@@ -84,44 +86,12 @@ impl ChatComposer {
     /// some terminals emit. Callers should only use this before generic text handling; treating the
     /// raw control character as ordinary input would insert an invisible byte into the search query
     /// or composer draft.
-    pub(super) fn is_history_search_key(key_event: &KeyEvent) -> bool {
-        matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'r')
-        ) || matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{0012}'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            }
-        )
+    pub(super) fn is_history_search_key(key_event: &KeyEvent, bindings: &[KeyBinding]) -> bool {
+        bindings.is_pressed(*key_event)
     }
 
-    fn is_history_search_forward_key(key_event: &KeyEvent) -> bool {
-        matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'s')
-        ) || matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('\u{0013}'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            }
-        )
+    fn is_history_search_forward_key(key_event: &KeyEvent, bindings: &[KeyBinding]) -> bool {
+        bindings.is_pressed(*key_event)
     }
 
     /// Opens footer-owned reverse history search without previewing history yet.
@@ -166,12 +136,14 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
-        if Self::is_history_search_key(&key_event) || matches!(key_event.code, KeyCode::Up) {
+        if Self::is_history_search_key(&key_event, &self.history_search_previous_keys)
+            || matches!(key_event.code, KeyCode::Up)
+        {
             let result = self.history_search_in_direction(HistorySearchDirection::Older);
             return (result, true);
         }
 
-        if Self::is_history_search_forward_key(&key_event)
+        if Self::is_history_search_forward_key(&key_event, &self.history_search_next_keys)
             || matches!(key_event.code, KeyCode::Down)
         {
             let result = self.history_search_in_direction(HistorySearchDirection::Newer);

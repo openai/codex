@@ -1,8 +1,10 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: before
 ---
   Apps
   Loading installed and available apps...
 
 ›    Loading apps...  This updates when the full list is ready.
+
+  Press enter to confirm or esc to go back

@@ -154,6 +154,7 @@ use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
+use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
@@ -183,6 +184,10 @@ use super::slash_commands;
 use super::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::EditorKeymap;
+use crate::keymap::RuntimeKeymap;
+use crate::keymap::primary_binding;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
@@ -386,6 +391,20 @@ pub(crate) struct ChatComposer {
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
     history_search: Option<HistorySearchSession>,
+    submit_keys: Vec<KeyBinding>,
+    queue_keys: Vec<KeyBinding>,
+    toggle_shortcuts_keys: Vec<KeyBinding>,
+    history_search_previous_keys: Vec<KeyBinding>,
+    history_search_next_keys: Vec<KeyBinding>,
+    editor_keymap: EditorKeymap,
+    footer_external_editor_key: Option<KeyBinding>,
+    footer_show_transcript_key: Option<KeyBinding>,
+    footer_insert_newline_key: Option<KeyBinding>,
+    footer_queue_key: Option<KeyBinding>,
+    footer_toggle_shortcuts_key: Option<KeyBinding>,
+    footer_history_search_key: Option<KeyBinding>,
+    footer_reasoning_down_key: Option<KeyBinding>,
+    footer_reasoning_up_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -472,6 +491,8 @@ impl ChatComposer {
         config: ChatComposerConfig,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
+        let default_keymap = RuntimeKeymap::defaults();
+        let default_editor_keymap = default_keymap.editor.clone();
 
         let mut this = Self {
             textarea: TextArea::new(),
@@ -533,6 +554,32 @@ impl ChatComposer {
             side_conversation_context_label: None,
             active_agent_label: None,
             history_search: None,
+            submit_keys: vec![key_hint::plain(KeyCode::Enter)],
+            queue_keys: vec![key_hint::plain(KeyCode::Tab)],
+            toggle_shortcuts_keys: vec![
+                key_hint::plain(KeyCode::Char('?')),
+                key_hint::shift(KeyCode::Char('?')),
+            ],
+            history_search_previous_keys: default_keymap.composer.history_search_previous.clone(),
+            history_search_next_keys: default_keymap.composer.history_search_next.clone(),
+            editor_keymap: default_editor_keymap,
+            footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
+            footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            footer_insert_newline_key: footer_insert_newline_key(
+                &default_keymap.editor.insert_newline,
+                use_shift_enter_hint,
+            ),
+            footer_queue_key: Some(key_hint::plain(KeyCode::Tab)),
+            footer_toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            footer_history_search_key: primary_binding(
+                &default_keymap.composer.history_search_previous,
+            ),
+            footer_reasoning_down_key: primary_binding(
+                &default_keymap.chat.decrease_reasoning_effort,
+            ),
+            footer_reasoning_up_key: primary_binding(
+                &default_keymap.chat.increase_reasoning_effort,
+            ),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -604,6 +651,31 @@ impl ChatComposer {
 
     pub fn set_fast_command_enabled(&mut self, enabled: bool) {
         self.fast_command_enabled = enabled;
+    }
+
+    /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
+    ///
+    /// Submit and queue bindings are cached here because composer dispatch must
+    /// check them before generic textarea editing. The embedded textarea receives
+    /// the same snapshot's editor bindings so a live remap cannot leave submit
+    /// keys updated while cursor/editing keys still use old defaults.
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.submit_keys = keymap.composer.submit.clone();
+        self.queue_keys = keymap.composer.queue.clone();
+        self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
+        self.history_search_previous_keys = keymap.composer.history_search_previous.clone();
+        self.history_search_next_keys = keymap.composer.history_search_next.clone();
+        self.editor_keymap = keymap.editor.clone();
+        self.textarea.set_keymap_bindings(&self.editor_keymap);
+        self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
+        self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
+        self.footer_insert_newline_key =
+            footer_insert_newline_key(&keymap.editor.insert_newline, self.use_shift_enter_hint);
+        self.footer_queue_key = primary_binding(&keymap.composer.queue);
+        self.footer_toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
+        self.footer_history_search_key = primary_binding(&keymap.composer.history_search_previous);
+        self.footer_reasoning_down_key = primary_binding(&keymap.chat.decrease_reasoning_effort);
+        self.footer_reasoning_up_key = primary_binding(&keymap.chat.increase_reasoning_effort);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1421,7 +1493,7 @@ impl ChatComposer {
             return self.handle_history_search_key(key_event);
         }
 
-        if Self::is_history_search_key(&key_event) {
+        if Self::is_history_search_key(&key_event, &self.history_search_previous_keys) {
             return self.begin_history_search();
         }
 
@@ -1606,7 +1678,7 @@ impl ChatComposer {
         if self.disable_paste_burst {
             // When burst detection is disabled, treat IME/non-ASCII input as normal typing.
             // In particular, do not retro-capture or buffer already-inserted prefix text.
-            self.textarea.input(input);
+            self.textarea.input_with_keymap(input, &self.editor_keymap);
             let text_after = self.textarea.text();
             self.pending_pastes
                 .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -1663,7 +1735,7 @@ impl ChatComposer {
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
-        self.textarea.input(input);
+        self.textarea.input_with_keymap(input, &self.editor_keymap);
 
         let text_after = self.textarea.text();
         self.pending_pastes
@@ -2846,6 +2918,16 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if self.queue_keys.is_pressed(key_event)
+            && (self.is_task_running || !self.is_bang_shell_command())
+        {
+            return self.handle_submission(self.is_task_running);
+        }
+
+        if self.submit_keys.is_pressed(key_event) {
+            return self.handle_submission(/*should_queue*/ false);
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -2886,19 +2968,6 @@ impl ChatComposer {
                 }
                 self.handle_input_basic(key_event)
             }
-            KeyEvent {
-                code: KeyCode::Tab,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.is_task_running || !self.is_bang_shell_command() => {
-                self.handle_submission(self.is_task_running)
-            }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.handle_submission(/*should_queue*/ false),
             input => self.handle_input_basic(input),
         }
     }
@@ -3070,7 +3139,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        self.textarea.input(input);
+        self.textarea.input_with_keymap(input, &self.editor_keymap);
         self.sync_bash_mode_from_text();
 
         if let Some(elements_before) = elements_before {
@@ -3146,13 +3215,18 @@ impl ChatComposer {
         }
     }
 
+    /// Handle the dedicated shortcut-overlay toggle key(s).
+    ///
+    /// This only toggles when the composer is empty and no paste burst is in
+    /// progress, so typing/pasting `?` still inserts text instead of opening
+    /// help. The bound key list intentionally supports terminal-variant
+    /// modifier reporting (for example `?` vs `shift-?`).
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
         if key_event.kind != KeyEventKind::Press {
             return false;
         }
 
-        let toggles = matches!(key_event.code, KeyCode::Char('?'))
-            && !has_ctrl_or_alt(key_event.modifiers)
+        let toggles = self.toggle_shortcuts_keys.is_pressed(*key_event)
             && self.is_empty()
             && !self.is_in_paste_burst();
 
@@ -3195,6 +3269,17 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            key_hints: FooterKeyHints {
+                toggle_shortcuts: self.footer_toggle_shortcuts_key,
+                queue: self.footer_queue_key,
+                insert_newline: self.footer_insert_newline_key,
+                external_editor: self.footer_external_editor_key,
+                edit_previous: Some(key_hint::plain(KeyCode::Esc)),
+                show_transcript: self.footer_show_transcript_key,
+                history_search: self.footer_history_search_key,
+                reasoning_down: self.footer_reasoning_down_key,
+                reasoning_up: self.footer_reasoning_up_key,
+            },
             active_agent_label: self.active_agent_label.clone(),
         }
     }
@@ -3754,6 +3839,23 @@ impl ChatComposer {
     }
 }
 
+fn footer_insert_newline_key(
+    bindings: &[KeyBinding],
+    enhanced_keys_supported: bool,
+) -> Option<KeyBinding> {
+    let shift_enter = key_hint::shift(KeyCode::Enter);
+    if enhanced_keys_supported && bindings.contains(&shift_enter) {
+        return Some(shift_enter);
+    }
+
+    let plain_enter = key_hint::plain(KeyCode::Enter);
+    bindings
+        .iter()
+        .copied()
+        .find(|binding| *binding != plain_enter)
+        .or_else(|| bindings.first().copied())
+}
+
 #[cfg(not(target_os = "linux"))]
 impl ChatComposer {
     pub fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
@@ -4019,6 +4121,7 @@ impl ChatComposer {
                                     show_cycle_hint,
                                     show_shortcuts_hint,
                                     show_queue_hint,
+                                    footer_props.key_hints,
                                 ))
                             }
                             FooterMode::EscHint
@@ -5217,6 +5320,30 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
+    }
+
+    #[test]
+    fn shift_question_mark_toggles_shortcut_overlay_when_empty() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_steer_enabled(true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "toggling overlay should request redraw");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
     /// Behavior: while a paste-like burst is being captured, `?` must not toggle the shortcut
@@ -6898,6 +7025,96 @@ mod tests {
         assert_queued_slash("/review check regressions");
         assert_queued_slash("/fast on");
         assert_queued_slash("/does-not-exist");
+    }
+
+    #[test]
+    fn remapped_submit_does_not_fall_back_to_enter() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .textarea
+            .set_text_clearing_elements("explain the change");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![key_hint::ctrl(KeyCode::Char('j'))];
+        composer.set_keymap_bindings(&keymap);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("explain the change\n", composer.textarea.text());
+    }
+
+    #[test]
+    fn remapped_queue_does_not_fall_back_to_tab() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+        composer.textarea.set_text_clearing_elements("queue me");
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.queue = vec![key_hint::ctrl(KeyCode::Char('q'))];
+        composer.set_keymap_bindings(&keymap);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("queue me", composer.textarea.text());
+    }
+
+    #[test]
+    fn remapped_history_search_does_not_fall_back_to_ctrl_r() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.history_search_previous = vec![key_hint::plain(KeyCode::F(2))];
+        composer.set_keymap_bindings(&keymap);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(!composer.history_search_active());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        assert!(composer.history_search_active());
     }
 
     #[test]

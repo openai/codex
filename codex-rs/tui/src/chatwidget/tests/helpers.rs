@@ -211,6 +211,7 @@ pub(super) async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         clipboard_lease: None,
+        copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
@@ -271,7 +272,8 @@ pub(super) async fn make_chatwidget_manual(
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
-        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        chat_keymap: crate::keymap::RuntimeKeymap::defaults().chat,
+        queued_message_edit_hint_binding: Some(crate::key_hint::alt(KeyCode::Up)),
         suppress_session_configured_redraw: false,
         suppress_initial_user_message_submit: false,
         pending_notification: None,
@@ -730,9 +732,10 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
     terminal_info: TerminalInfo,
 ) {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info);
+    chat.queued_message_edit_hint_binding =
+        Some(queued_message_edit_binding_for_terminal(terminal_info));
     chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(/*running*/ true);
