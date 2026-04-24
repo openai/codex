@@ -635,9 +635,6 @@ impl Codex {
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             permission_profile: config.permissions.permission_profile.clone(),
-            sandbox_policy: config.permissions.sandbox_policy.clone(),
-            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -968,8 +965,7 @@ impl Session {
             return;
         };
 
-        let spec = match spec
-            .recompute_for_sandbox_policy(session_configuration.sandbox_policy.get())
+        let spec = match spec.recompute_for_sandbox_policy(&session_configuration.sandbox_policy())
         {
             Ok(spec) => spec,
             Err(err) => {
@@ -1330,8 +1326,9 @@ impl Session {
             };
 
             let previous_cwd = state.session_configuration.cwd.clone();
-            let sandbox_policy_changed =
-                state.session_configuration.sandbox_policy != updated.sandbox_policy;
+            let previous_sandbox_policy = state.session_configuration.sandbox_policy();
+            let updated_sandbox_policy = updated.sandbox_policy();
+            let sandbox_policy_changed = previous_sandbox_policy != updated_sandbox_policy;
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
