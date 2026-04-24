@@ -6,6 +6,7 @@ use tokio::sync::Semaphore;
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
+    pub(crate) root_thread_id: ThreadId,
     pub(crate) conversation_id: ThreadId,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
@@ -251,6 +252,7 @@ impl Session {
     )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
+        root_thread_id: Option<ThreadId>,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
@@ -287,6 +289,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
+        let root_thread_id = root_thread_id.unwrap_or(conversation_id);
         let window_generation = match &initial_history {
             InitialHistory::Resumed(resumed_history) => u64::try_from(
                 resumed_history
@@ -757,7 +760,8 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
-                    conversation_id,
+                    /*root_thread_id*/ root_thread_id,
+                    /*thread_id*/ conversation_id,
                     installation_id,
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
@@ -783,6 +787,7 @@ impl Session {
 
             let (mailbox, mailbox_rx) = Mailbox::new();
             let sess = Arc::new(Session {
+                root_thread_id,
                 conversation_id,
                 tx_event: tx_event.clone(),
                 agent_status,

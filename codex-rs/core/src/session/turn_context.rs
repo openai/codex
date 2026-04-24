@@ -388,7 +388,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_turn_context(
-        conversation_id: ThreadId,
+        root_thread_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -448,7 +448,7 @@ impl Session {
 
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
-            conversation_id.to_string(),
+            root_thread_id.to_string(),
             &session_source,
             sub_id.clone(),
             cwd.clone(),
@@ -655,7 +655,7 @@ impl Session {
                 .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
-            self.conversation_id,
+            self.root_thread_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),

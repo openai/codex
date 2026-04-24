@@ -726,7 +726,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_conversation_id_and_model_headers_in_request() {
+async fn includes_session_and_thread_headers_in_request() {
     skip_if_no_network!();
 
     // Mock server
@@ -764,6 +764,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
     let request_session_id = request.header("session_id").expect("session_id header");
+    let request_thread_id = request.header("thread_id").expect("thread_id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -774,6 +775,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
             .expect("read installation id");
 
     assert_eq!(request_session_id, session_id.to_string());
+    assert_eq!(request_thread_id, session_id.to_string());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
     assert_eq!(
@@ -884,7 +886,8 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
             "unused-api-key",
         ))),
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
@@ -1001,7 +1004,6 @@ async fn chatgpt_auth_sends_correct_request() {
         .await
         .expect("create new conversation");
     let codex = test.codex.clone();
-    let thread_id = test.session_configured.session_id;
 
     codex
         .submit(Op::UserInput {
@@ -1030,10 +1032,12 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_body = request.body_json();
 
     let session_id = request.header("session_id").expect("session_id header");
+    let thread_id = request.header("thread_id").expect("thread_id header");
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
     assert_eq!(session_id, thread_id.to_string());
+    assert_eq!(thread_id, test.session_configured.session_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
@@ -2199,7 +2203,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     let client = ModelClient::new(
         /*auth_manager*/ None,
-        conversation_id,
+        /*root_thread_id*/ conversation_id,
+        /*thread_id*/ conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider.clone(),
         SessionSource::Exec,
