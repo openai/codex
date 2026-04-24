@@ -10,6 +10,8 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -134,12 +136,15 @@ async fn run_cmd_result_with_policies(
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
 
     process_exec_tool_call(
         params,
-        &sandbox_policy,
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
+        &permission_profile,
         &sandbox_cwd,
         &codex_linux_sandbox_exe,
         use_legacy_landlock,
@@ -396,11 +401,11 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, sandbox_cwd.as_path());
     let result = process_exec_tool_call(
         params,
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::from(&sandbox_policy),
+        &permission_profile,
         &sandbox_cwd,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
