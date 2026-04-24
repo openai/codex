@@ -323,10 +323,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .expect("set sandbox policy");
     assert_eq!(
         chat.config_ref().permissions.permission_profile(),
-        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-            &updated_sandbox,
-            &expected_cwd
-        ),
+        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(&updated_sandbox),
         "local sandbox changes should replace SessionConfigured profile-derived runtime permissions"
     );
 }

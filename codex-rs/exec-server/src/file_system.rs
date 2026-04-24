@@ -57,8 +57,7 @@ pub struct FileSystemSandboxContext {
 
 impl FileSystemSandboxContext {
     pub fn from_legacy_sandbox_policy(sandbox_policy: SandboxPolicy, cwd: AbsolutePathBuf) -> Self {
-        let permissions =
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
+        let permissions = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
         Self::from_permission_profile_with_cwd(permissions, cwd)
     }
 
