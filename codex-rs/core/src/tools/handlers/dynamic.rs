@@ -3,8 +3,12 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
@@ -29,6 +33,37 @@ impl ToolHandler for DynamicToolHandler {
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::new(invocation.tool_name.display()),
+            tool_input: parse_arguments(arguments).ok()?,
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::new(invocation.tool_name.display()),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: parse_arguments(arguments).ok()?,
+            tool_response: serde_json::json!({
+                "contentItems": result.body.clone(),
+                "success": result.success_for_logging(),
+            }),
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -139,4 +174,92 @@ async fn request_dynamic_tool(
     session.send_event(turn_context, response_event).await;
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::tests::make_session_and_context;
+    use crate::tools::context::ToolCallSource;
+    use crate::turn_diff_tracker::TurnDiffTracker;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    async fn dynamic_invocation(arguments: serde_json::Value) -> ToolInvocation {
+        let (session, turn) = make_session_and_context().await;
+        ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            cancellation_token: CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-dynamic".to_string(),
+            tool_name: ToolName::namespaced("openclaw__", "message"),
+            source: ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: arguments.to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dynamic_pre_tool_use_payload_uses_model_tool_name_and_structured_args() {
+        let invocation = dynamic_invocation(json!({
+            "channel": "telegram",
+            "text": "hello"
+        }))
+        .await;
+
+        assert_eq!(
+            DynamicToolHandler.pre_tool_use_payload(&invocation),
+            Some(PreToolUsePayload {
+                tool_name: HookToolName::new("openclaw__message"),
+                tool_input: json!({
+                    "channel": "telegram",
+                    "text": "hello"
+                }),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_post_tool_use_payload_includes_structured_args_and_result() {
+        let invocation = dynamic_invocation(json!({ "text": "hello" })).await;
+        let output = FunctionToolOutput::from_content(
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "sent".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                    detail: None,
+                },
+            ],
+            Some(true),
+        );
+
+        assert_eq!(
+            DynamicToolHandler.post_tool_use_payload(&invocation, &output),
+            Some(PostToolUsePayload {
+                tool_name: HookToolName::new("openclaw__message"),
+                tool_use_id: "call-dynamic".to_string(),
+                tool_input: json!({ "text": "hello" }),
+                tool_response: json!({
+                    "contentItems": [
+                        {
+                            "type": "input_text",
+                            "text": "sent"
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc"
+                        }
+                    ],
+                    "success": true
+                }),
+            })
+        );
+    }
 }
