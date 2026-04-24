@@ -420,7 +420,7 @@ impl ListSelectionView {
         }
 
         let len = self.filtered_indices.len();
-        self.state.selected_idx = self
+        let selected_visible_idx = self
             .state
             .selected_idx
             .and_then(|visible_idx| {
@@ -434,6 +434,13 @@ impl ListSelectionView {
                         .iter()
                         .position(|idx| *idx == actual_idx)
                 })
+            });
+        self.state.selected_idx = selected_visible_idx
+            .filter(|visible_idx| {
+                self.filtered_indices
+                    .get(*visible_idx)
+                    .and_then(|actual_idx| self.active_items().get(*actual_idx))
+                    .is_some_and(Self::item_is_enabled)
             })
             .or_else(|| self.first_enabled_visible_idx())
             .or_else(|| (len > 0).then_some(0));
