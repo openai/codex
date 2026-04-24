@@ -411,6 +411,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
 }
 
+#[tokio::test]
 async fn new_uses_active_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;

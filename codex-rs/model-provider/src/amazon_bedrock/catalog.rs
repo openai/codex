@@ -1,3 +1,5 @@
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -10,22 +12,46 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 
 const GPT_OSS_CONTEXT_WINDOW: i64 = 128_000;
+const GPT_5_4_CMB_MODEL_ID: &str = "openai.gpt-5.4-cmb";
+const GPT_5_4_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![
+            gpt_5_4_cmb_bedrock_model(/*priority*/ 0),
             bedrock_model(
                 "openai.gpt-oss-120b",
                 "GPT OSS 120B on Bedrock",
-                /*priority*/ 0,
+                /*priority*/ 1,
             ),
             bedrock_model(
                 "openai.gpt-oss-20b",
                 "GPT OSS 20B on Bedrock",
-                /*priority*/ 1,
+                /*priority*/ 2,
             ),
         ],
     }
+}
+
+fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
+    let mut model = bundled_gpt_5_4_model();
+
+    model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
+    model.priority = priority;
+    model
+}
+
+fn bundled_gpt_5_4_model() -> ModelInfo {
+    if let Ok(response) = bundled_models_response()
+        && let Some(model) = response
+            .models
+            .into_iter()
+            .find(|model| model.slug == GPT_5_4_MODEL_ID)
+    {
+        return model;
+    }
+
+    model_info_from_slug(GPT_5_4_MODEL_ID)
 }
 
 fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
@@ -93,8 +119,25 @@ mod tests {
     fn catalog_uses_mantle_model_ids_as_slugs() {
         let catalog = static_model_catalog();
 
-        assert_eq!(catalog.models.len(), 2);
-        assert_eq!(catalog.models[0].slug, "openai.gpt-oss-120b");
-        assert_eq!(catalog.models[1].slug, "openai.gpt-oss-20b");
+        assert_eq!(catalog.models.len(), 3);
+        assert_eq!(catalog.models[0].slug, GPT_5_4_CMB_MODEL_ID);
+        assert_eq!(catalog.models[1].slug, "openai.gpt-oss-120b");
+        assert_eq!(catalog.models[2].slug, "openai.gpt-oss-20b");
+    }
+
+    #[test]
+    fn gpt_5_4_cmb_uses_gpt_5_4_spec() {
+        let catalog = static_model_catalog();
+        let cmb_model = catalog
+            .models
+            .iter()
+            .find(|model| model.slug == GPT_5_4_CMB_MODEL_ID)
+            .expect("Bedrock catalog should include GPT-5.4 CMB");
+        let mut gpt_5_4_model = bundled_gpt_5_4_model();
+
+        gpt_5_4_model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
+        gpt_5_4_model.priority = cmb_model.priority;
+
+        assert_eq!(*cmb_model, gpt_5_4_model);
     }
 }
