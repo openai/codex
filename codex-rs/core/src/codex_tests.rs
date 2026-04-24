@@ -5305,6 +5305,94 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     );
 }
 
+#[tokio::test]
+async fn reflections_new_context_window_marks_terminal_control() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.tools_config.reflections = true;
+    let sess = Arc::new(session);
+    let tc = Arc::new(turn_context);
+
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: codex_tools::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME.to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-reflections-reset".to_string(),
+    };
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&sess),
+        turn_context: Arc::clone(&tc),
+        tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        cancellation_token: CancellationToken::new(),
+    };
+
+    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
+        .await
+        .expect("reflections reset tool call should be handled");
+
+    assert!(output.needs_follow_up);
+    assert!(output.tool_future.is_some());
+    assert_eq!(
+        output.terminal_control,
+        Some(crate::stream_events_utils::ResponseTerminalControl::ReflectionsContextWindowReset)
+    );
+}
+
+#[tokio::test]
+async fn reflections_terminal_reset_compaction_failure_allows_same_context_continuation() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    sess.request_reflections_context_window_reset();
+
+    let tool_future: BoxFuture<'static, CodexResult<ResponseInputItem>> = Box::pin(async {
+        Ok(ResponseInputItem::FunctionCallOutput {
+            call_id: "call-reflections-reset".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(
+                    "A fresh Reflections context window will start after this tool result is recorded."
+                        .to_string(),
+                ),
+                success: Some(true),
+            },
+        })
+    });
+
+    let compacted = run_reflections_terminal_reset(tool_future, Arc::clone(&sess), Arc::clone(&tc))
+        .await
+        .expect("compaction failure should be surfaced without failing the sampling loop");
+
+    assert!(!compacted);
+    assert!(!sess.take_reflections_context_window_reset_request());
+    let history = sess.clone_history().await;
+    assert!(
+        history.raw_items().iter().any(|item| {
+            let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+                return false;
+            };
+            call_id == "call-reflections-reset"
+                && output.success == Some(false)
+                && matches!(
+                    &output.body,
+                    FunctionCallOutputBody::Text(text)
+                        if text.contains("Failed to start a fresh Reflections context window")
+                )
+        }),
+        "compaction failure should be recorded as a failed tool output"
+    );
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        loop {
+            let event = rx
+                .recv()
+                .await
+                .expect("expected reflections compaction error event");
+            if matches!(event.msg, EventMsg::Error(_)) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for reflections compaction error event");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;

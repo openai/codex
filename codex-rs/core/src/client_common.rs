@@ -158,6 +158,20 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+    pub(crate) abort_handle: tokio::task::AbortHandle,
+}
+
+impl ResponseStream {
+    pub(crate) fn close(&mut self) {
+        self.abort_handle.abort();
+        self.rx_event.close();
+    }
+}
+
+impl Drop for ResponseStream {
+    fn drop(&mut self) {
+        self.abort_handle.abort();
+    }
 }
 
 impl Stream for ResponseStream {

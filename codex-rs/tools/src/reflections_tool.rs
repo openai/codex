@@ -25,7 +25,7 @@ pub fn create_reflections_new_context_window_tool(
         "under the Reflections notes directory"
     };
     let mut description = format!(
-        "Starts a fresh context window for the same task. Use this after you have saved concise recovery notes {recovery_notes_location} when the current context is large or the next steps should continue from durable logs."
+        "Starts a fresh context window for the same task. Use this after you have saved concise recovery notes {recovery_notes_location} when the current context is large or the next steps should continue from durable logs. This is a control-flow tool: after the tool result is recorded, the current response stops and the next model request resumes from the Reflections handoff in a fresh context window."
     );
     if let Some(usage_hint) = usage_hint {
         description.push_str("\n\n");

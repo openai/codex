@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
+use codex_tools::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
@@ -191,6 +192,12 @@ pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
     pub tool_future: Option<InFlightFuture<'static>>,
+    pub terminal_control: Option<ResponseTerminalControl>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseTerminalControl {
+    ReflectionsContextWindowReset,
 }
 
 pub(crate) struct HandleOutputCtx {
@@ -227,6 +234,13 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
 
+            let terminal_control = if call.tool_name.namespace.is_none()
+                && call.tool_name.name.as_str() == REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME
+            {
+                Some(ResponseTerminalControl::ReflectionsContextWindowReset)
+            } else {
+                None
+            };
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
                 ctx.tool_runtime
@@ -235,6 +249,7 @@ pub(crate) async fn handle_output_item_done(
             );
 
             output.needs_follow_up = true;
+            output.terminal_control = terminal_control;
             output.tool_future = Some(tool_future);
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.

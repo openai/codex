@@ -21,13 +21,19 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_local_shell_call;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -492,6 +498,166 @@ async fn reflections_manual_compact_writes_sidecar_without_summarizer_request() 
     assert!(rollout.contains("reflections_write_note"));
     assert!(!rollout.contains(&format!("{}/logs", sidecar_path.display())));
     assert!(!rollout.contains("logs/cw00000/transcript.md"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reflections_new_context_window_skips_sibling_tools_and_resumes_fresh() {
+    skip_if_no_network!();
+
+    const AFTER_RESET_TEXT: &str = "SHOULD_NOT_RECORD_AFTER_RESET";
+    const AFTER_RESET_NOTE: &str = "call-note-after-reset";
+    const LIST_LOGS_CALL: &str = "call-list-logs";
+
+    let (after_reset_gate_tx, after_reset_gate_rx) = tokio::sync::oneshot::channel();
+    let first_turn = sse(vec![
+        ev_response_created("r1"),
+        ev_function_call(
+            "call-reflections-reset",
+            REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME,
+            "{}",
+        ),
+    ]);
+    let after_reset_chunk = sse(vec![
+        ev_message_item_added("msg-empty-after-reset", ""),
+        ev_output_text_delta(AFTER_RESET_TEXT),
+        ev_assistant_message("msg-after-reset", AFTER_RESET_TEXT),
+        ev_function_call(
+            AFTER_RESET_NOTE,
+            "reflections_write_note",
+            r#"{"note_id":"dangling","operation":"append","content":"DANGLING_NOTE"}"#,
+        ),
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+    ]);
+    let list_logs_turn = sse(vec![
+        ev_response_created("r2"),
+        ev_function_call(
+            LIST_LOGS_CALL,
+            "reflections_list",
+            r#"{"collection":"logs","start":1,"stop":200}"#,
+        ),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+    ]);
+    let final_turn = sse(vec![
+        ev_response_created("r3"),
+        ev_assistant_message("m2", "AFTER_REFLECTIONS_TOOL_RESET"),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+    ]);
+    let (streaming_server, _completion_receivers) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: first_turn,
+            },
+            StreamingSseChunk {
+                gate: Some(after_reset_gate_rx),
+                body: after_reset_chunk,
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: list_logs_turn,
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: final_turn,
+        }],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.compaction_strategy = CompactionStrategyConfig::Reflections;
+    });
+    let test = builder
+        .build_with_streaming_server(&streaming_server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let sidecar_path = rollout_path.with_extension("reflections");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start work and reset with reflections".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let _ = after_reset_gate_tx.send(());
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let request_bodies: Vec<String> = streaming_server
+        .requests()
+        .await
+        .into_iter()
+        .map(|request| String::from_utf8_lossy(&request).to_string())
+        .collect();
+    streaming_server.shutdown().await;
+    assert_eq!(request_bodies.len(), 3);
+    assert!(
+        body_contains_text(&request_bodies[1], "Your context window was reset"),
+        "follow-up request should resume from the fresh Reflections handoff"
+    );
+    assert!(
+        !request_bodies[1].contains(&format!("unsupported call: {DUMMY_FUNCTION_NAME}")),
+        "sibling tool calls after the reset control tool should not be executed"
+    );
+    assert!(
+        request_bodies[2].contains("cw00000"),
+        "reflections_list(logs) should return the completed reset window"
+    );
+    assert!(
+        !request_bodies[2].contains("cw00001"),
+        "reflections_list(logs) should not expose a partial second window"
+    );
+    assert!(
+        !request_bodies[2].contains(AFTER_RESET_TEXT)
+            && !request_bodies[2].contains(AFTER_RESET_NOTE)
+            && !request_bodies[2].contains("DANGLING_NOTE"),
+        "reflections_list(logs) should not include events emitted after the reset tool"
+    );
+
+    let rollout = std::fs::read_to_string(&rollout_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read rollout file {}: {err}",
+            rollout_path.display()
+        )
+    });
+    assert!(
+        rollout.contains(REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME),
+        "reset tool call should be recorded before compaction"
+    );
+    assert!(
+        !rollout.contains(DUMMY_FUNCTION_NAME)
+            && !rollout.contains(AFTER_RESET_TEXT)
+            && !rollout.contains("msg-empty-after-reset")
+            && !rollout.contains(AFTER_RESET_NOTE)
+            && !rollout.contains("DANGLING_NOTE"),
+        "output after the reset control tool should not be recorded"
+    );
+
+    let state_path = sidecar_path.join("state.json");
+    let state = std::fs::read_to_string(&state_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", state_path.display()));
+    assert!(state.contains("\"latest_window\": \"cw00000\""));
+    assert!(!state.contains("cw00001"));
+
+    let transcript_path = sidecar_path.join("logs/cw00000/transcript.md");
+    let transcript = std::fs::read_to_string(&transcript_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", transcript_path.display()));
+    assert!(
+        !transcript.contains(AFTER_RESET_TEXT)
+            && !transcript.contains(AFTER_RESET_NOTE)
+            && !transcript.contains("DANGLING_NOTE"),
+        "transcript should stop at the reset control tool"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

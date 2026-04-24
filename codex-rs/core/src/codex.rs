@@ -39,6 +39,7 @@ use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::ResponseTerminalControl;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -344,6 +345,8 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -7995,15 +7998,23 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
-    let mut reset_reflections_context_window = false;
+) -> CodexResult<bool> {
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
                 if sess.take_reflections_context_window_reset_request() {
-                    reset_reflections_context_window = true;
+                    crate::reflections::run_reflections_compact_task_inner(
+                        Arc::clone(&sess),
+                        Arc::clone(&turn_context),
+                        InitialContextInjection::DoNotInject,
+                        CompactionTrigger::Manual,
+                        CompactionReason::UserRequested,
+                        CompactionPhase::MidTurn,
+                    )
+                    .await?;
+                    return Ok(true);
                 }
             }
             Err(err) => {
@@ -8011,18 +8022,63 @@ async fn drain_in_flight(
             }
         }
     }
-    if reset_reflections_context_window {
-        crate::reflections::run_reflections_compact_task_inner(
-            Arc::clone(&sess),
-            Arc::clone(&turn_context),
-            InitialContextInjection::DoNotInject,
-            CompactionTrigger::Manual,
-            CompactionReason::UserRequested,
-            CompactionPhase::MidTurn,
-        )
-        .await?;
+    Ok(false)
+}
+
+async fn run_reflections_terminal_reset(
+    tool_future: BoxFuture<'static, CodexResult<ResponseInputItem>>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) -> CodexResult<bool> {
+    let response_input = tool_future.await?;
+
+    if !sess.take_reflections_context_window_reset_request() {
+        sess.record_conversation_items(&turn_context, &[response_input.into()])
+            .await;
+        return Ok(false);
     }
-    Ok(())
+
+    match crate::reflections::run_reflections_compact_task_inner(
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        InitialContextInjection::DoNotInject,
+        CompactionTrigger::Manual,
+        CompactionReason::UserRequested,
+        CompactionPhase::MidTurn,
+    )
+    .await
+    {
+        Ok(()) => Ok(true),
+        Err(err) => {
+            error!("reflections_new_context_window compaction failed: {err}");
+            let failure_output = reflections_terminal_reset_failure_output(response_input, &err);
+            sess.record_conversation_items(&turn_context, &[failure_output.into()])
+                .await;
+            Ok(false)
+        }
+    }
+}
+
+fn reflections_terminal_reset_failure_output(
+    response_input: ResponseInputItem,
+    err: &CodexErr,
+) -> ResponseInputItem {
+    let call_id = match response_input {
+        ResponseInputItem::FunctionCallOutput { call_id, .. }
+        | ResponseInputItem::CustomToolCallOutput { call_id, .. }
+        | ResponseInputItem::McpToolCallOutput { call_id, .. }
+        | ResponseInputItem::ToolSearchOutput { call_id, .. } => call_id,
+        ResponseInputItem::Message { .. } => String::new(),
+    };
+    ResponseInputItem::FunctionCallOutput {
+        call_id,
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(format!(
+                "Failed to start a fresh Reflections context window: {err}"
+            )),
+            success: Some(false),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8156,8 +8212,37 @@ async fn try_run_sampling_request(
                         Ok(output_result) => output_result,
                         Err(err) => break Err(err),
                     };
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                match output_result.terminal_control {
+                    Some(ResponseTerminalControl::ReflectionsContextWindowReset) => {
+                        in_flight = FuturesOrdered::new();
+                        stream.close();
+                        client_session.reset_websocket_session();
+                        let reset_succeeded = if let Some(tool_future) = output_result.tool_future {
+                            run_reflections_terminal_reset(
+                                tool_future,
+                                Arc::clone(&sess),
+                                Arc::clone(&turn_context),
+                            )
+                            .await?
+                        } else {
+                            false
+                        };
+                        if reset_succeeded {
+                            break Ok(SamplingRequestResult {
+                                needs_follow_up: true,
+                                last_agent_message,
+                            });
+                        }
+                        break Ok(SamplingRequestResult {
+                            needs_follow_up: true,
+                            last_agent_message,
+                        });
+                    }
+                    None => {
+                        if let Some(tool_future) = output_result.tool_future {
+                            in_flight.push_back(tool_future);
+                        }
+                    }
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -8351,7 +8436,10 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    let compacted = drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    if compacted {
+        client_session.reset_websocket_session();
+    }
 
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
