@@ -2280,3 +2280,74 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         "/v1/responses"
     );
 }
+
+#[tokio::test]
+async fn approve_mode_does_not_prompt_user_when_arc_requests_confirmation() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "ask-user",
+            "short_reason": "Tool call in payload; needs confirmation/context.",
+            "rationale": "ARC wants a second review",
+            "risk_score": 65,
+            "risk_level": "medium",
+            "evidence": [{
+                "message": "dangerous_tool",
+                "why": "requires review",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, mut turn_context, _rx_event) = make_session_and_context_with_rx().await;
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        *active_turn = Some(ActiveTurn::default());
+    }
+    turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+        codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+
+    let invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "id": 1 })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
+        openai_file_input_params: None,
+    };
+
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        maybe_request_mcp_tool_approval(
+            &session,
+            &turn_context,
+            "call-approve-ask-user",
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::Approve,
+        ),
+    )
+    .await
+    .expect("approve mode should not wait for another user prompt");
+
+    assert_eq!(decision, None);
+}
