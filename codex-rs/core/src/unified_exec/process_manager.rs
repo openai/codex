@@ -788,6 +788,8 @@ impl UnifiedExecProcessManager {
             self,
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
+        let file_system_sandbox_policy = context.turn.file_system_sandbox_policy();
+        let sandbox_policy = context.turn.sandbox_policy();
         let exec_approval_requirement = context
             .session
             .services
@@ -795,8 +797,8 @@ impl UnifiedExecProcessManager {
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                sandbox_policy: &sandbox_policy,
+                file_system_sandbox_policy: &file_system_sandbox_policy,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
