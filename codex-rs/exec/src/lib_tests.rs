@@ -430,7 +430,6 @@ fn session_configured_from_thread_response_uses_review_policy_from_response() {
         permission_profile: Some(
             codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
                 &codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
-                &test_path_buf("/tmp"),
             )
             .into(),
         ),

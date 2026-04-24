@@ -321,7 +321,7 @@ mod agent {
             exclude_slash_tmp: true,
         };
         let consolidation_file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 &consolidation_sandbox_policy,
                 agent_config.cwd.as_path(),
             );
