@@ -2,6 +2,7 @@
 use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
+
+const DEFAULT_LOGIN_PORT: u16 = 1455;
 
 // See spawn.rs for details
 
@@ -397,6 +400,63 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         !auth_path.exists(),
         "auth.json should not be written when oauth callback is denied"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn falls_back_to_ephemeral_port_when_default_port_is_in_use() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let default_port_listener = match TcpListener::bind(("127.0.0.1", DEFAULT_LOGIN_PORT)) {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Skipping test because 127.0.0.1:{DEFAULT_LOGIN_PORT} is already in use");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let default_port_server =
+        Arc::new(tiny_http::Server::from_listener(default_port_listener, None).unwrap());
+    let default_port_server_handle = {
+        let server = default_port_server.clone();
+        thread::spawn(move || {
+            while let Ok(req) = server.recv() {
+                let _ = req.respond(tiny_http::Response::from_string("not codex"));
+            }
+        })
+    };
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+    let tmp = tempdir()?;
+
+    let mut opts = ServerOptions::new(
+        tmp.path().to_path_buf(),
+        codex_login::CLIENT_ID.to_string(),
+        None,
+        AuthCredentialsStoreMode::File,
+    );
+    opts.issuer = issuer;
+    opts.open_browser = false;
+    opts.force_state = Some("fallback_state".to_string());
+
+    let server_result = run_login_server(opts);
+    default_port_server.unblock();
+    let _ = default_port_server_handle.join();
+
+    let server = server_result?;
+    let actual_port = server.actual_port;
+    let auth_url = server.auth_url.clone();
+    server.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), server.block_until_done())
+        .await
+        .expect("login server should shut down after cancel");
+
+    assert_ne!(actual_port, DEFAULT_LOGIN_PORT);
+    assert!(auth_url.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{actual_port}%2Fauth%2Fcallback"
+    )));
 
     Ok(())
 }
