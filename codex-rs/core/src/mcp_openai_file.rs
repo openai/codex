@@ -149,10 +149,9 @@ async fn build_uploaded_local_argument_value(
         "file_size_bytes": uploaded.file_size_bytes,
     });
     if uploaded.library_file_id.is_none() {
-        uploaded_value
-            .as_object_mut()
-            .expect("uploaded value should be an object")
-            .remove("library_file_id");
+        if let Some(uploaded_object) = uploaded_value.as_object_mut() {
+            uploaded_object.remove("library_file_id");
+        }
     }
     Ok(uploaded_value)
 }
