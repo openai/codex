@@ -80,6 +80,30 @@ impl ResponseMock {
             .iter()
             .find_map(|req| req.function_call_output_text(call_id))
     }
+
+    pub fn function_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.requests().iter().find_map(|req| {
+            let input = req.input();
+            let item = input.iter().find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+            })?;
+            let output = item.get("output").cloned().unwrap_or(Value::Null);
+            match output {
+                Value::String(_) | Value::Array(_) => Some((output_value_to_text(&output), None)),
+                Value::Object(obj) => Some((
+                    obj.get("content")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    obj.get("success").and_then(Value::as_bool),
+                )),
+                _ => Some((None, None)),
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

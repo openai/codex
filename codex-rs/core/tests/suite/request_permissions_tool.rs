@@ -214,6 +214,10 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             .features
             .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::GuardianApproval)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -344,6 +348,10 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
             .features
             .enable(Feature::RequestPermissionsTool)
             .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::GuardianApproval)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -386,20 +394,24 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         ]),
     ];
     if strict_auto_review {
-        sse_sequence.push(sse(vec![
-            ev_response_created(&format!("{response_prefix}-guardian")),
-            ev_assistant_message(
-                "msg-strict-request-permissions-patch-guardian",
-                &serde_json::json!({
-                    "risk_level": "low",
-                    "user_authorization": "high",
-                    "outcome": "allow",
-                    "rationale": "The patch stays within the strict turn grant.",
-                })
-                .to_string(),
-            ),
-            ev_completed(&format!("{response_prefix}-guardian")),
-        ]));
+        // Strict auto-review also re-reviews the unsandboxed retry if the
+        // sandboxed apply_patch attempt is denied by the platform sandbox.
+        for guardian_suffix in ["guardian-initial", "guardian-retry"] {
+            sse_sequence.push(sse(vec![
+                ev_response_created(&format!("{response_prefix}-{guardian_suffix}")),
+                ev_assistant_message(
+                    &format!("msg-strict-request-permissions-patch-{guardian_suffix}"),
+                    &serde_json::json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "The patch stays within the strict turn grant.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed(&format!("{response_prefix}-{guardian_suffix}")),
+            ]));
+        }
     }
     sse_sequence.push(sse(vec![
         ev_response_created(&format!("{response_prefix}-3")),
@@ -462,12 +474,14 @@ async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Resu
         }
     }
 
-    let patch_output = responses
-        .function_call_output_text("apply-patch-call")
-        .map(|output| json!({ "output": output }))
+    let (patch_content_output, patch_success) = responses
+        .function_call_output_content_and_success("apply-patch-call")
         .unwrap_or_else(|| panic!("expected apply-patch-call output"));
-    let (exit_code, stdout) = parse_result(&patch_output);
-    assert!(exit_code.is_none() || exit_code == Some(0));
+    assert!(
+        patch_success.unwrap_or(true),
+        "apply_patch output should be successful"
+    );
+    let stdout = patch_content_output.unwrap_or_default();
     assert!(
         stdout.contains("Success."),
         "unexpected patch output: {stdout}"

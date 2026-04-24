@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use codex_config::ConfigEditsBuilder;
 use codex_config::McpServerConfig;
@@ -30,7 +31,7 @@ const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";
 const MCP_DEPENDENCY_OPTION_SKIP: &str = "Continue anyway";
 
 pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
-    sess: &Session,
+    sess: &Arc<Session>,
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
     mentioned_skills: &[SkillMetadata],
@@ -60,20 +61,25 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
         return;
     }
 
-    let unprompted_missing = filter_prompted_mcp_dependencies(sess, &missing).await;
+    let unprompted_missing = filter_prompted_mcp_dependencies(sess.as_ref(), &missing).await;
     if unprompted_missing.is_empty() {
         return;
     }
 
-    if should_install_mcp_dependencies(sess, turn_context, &unprompted_missing, cancellation_token)
-        .await
+    if should_install_mcp_dependencies(
+        sess.as_ref(),
+        turn_context,
+        &unprompted_missing,
+        cancellation_token,
+    )
+    .await
     {
         maybe_install_mcp_dependencies(sess, turn_context, config.as_ref(), mentioned_skills).await;
     }
 }
 
 pub(crate) async fn maybe_install_mcp_dependencies(
-    sess: &Session,
+    sess: &Arc<Session>,
     turn_context: &TurnContext,
     config: &crate::config::Config,
     mentioned_skills: &[SkillMetadata],

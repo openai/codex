@@ -280,6 +280,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),
         auth.as_ref(),
+        /*elicitation_reviewer*/ None,
     )
     .await;
 

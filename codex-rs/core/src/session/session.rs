@@ -874,6 +874,7 @@ impl Session {
                 codex_apps_tools_cache_key(auth),
                 tool_plugin_provenance,
                 auth,
+                Some(sess.mcp_elicitation_reviewer()),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",
