@@ -105,7 +105,7 @@ impl BufferedLogSink {
     }
 
     pub fn try_send(&self, entry: LogEntry) {
-        let _ = self.sender.try_send(LogSinkCommand::Entry(entry));
+        let _ = self.sender.try_send(LogSinkCommand::Entry(Box::new(entry)));
     }
 
     pub async fn flush(&self) {
@@ -126,13 +126,8 @@ struct SqliteLogWriter {
 }
 
 impl LogBatchWriter for SqliteLogWriter {
-    fn write_batch<'a>(
-        &'a mut self,
-        entries: Vec<LogEntry>,
-    ) -> impl Future<Output = ()> + Send + 'a {
-        async move {
-            let _ = self.state_db.insert_logs(entries.as_slice()).await;
-        }
+    async fn write_batch(&mut self, entries: Vec<LogEntry>) {
+        let _ = self.state_db.insert_logs(entries.as_slice()).await;
     }
 }
 
@@ -258,7 +253,7 @@ impl LogDbLayer {
 }
 
 enum LogSinkCommand {
-    Entry(LogEntry),
+    Entry(Box<LogEntry>),
     Flush(oneshot::Sender<()>),
 }
 
@@ -276,7 +271,7 @@ async fn run_buffered_sink<W>(
             maybe_command = receiver.recv() => {
                 match maybe_command {
                     Some(LogSinkCommand::Entry(entry)) => {
-                        buffer.push(entry);
+                        buffer.push(*entry);
                         if buffer.len() >= config.batch_size {
                             flush(&mut writer, &mut buffer).await;
                         }
@@ -511,13 +506,8 @@ mod tests {
     }
 
     impl LogBatchWriter for TestWriter {
-        fn write_batch<'a>(
-            &'a mut self,
-            entries: Vec<LogEntry>,
-        ) -> impl Future<Output = ()> + Send + 'a {
-            async move {
-                self.batches().push(entries);
-            }
+        async fn write_batch(&mut self, entries: Vec<LogEntry>) {
+            self.batches().push(entries);
         }
     }
 
@@ -803,7 +793,7 @@ mod tests {
 
         match receiver.try_recv().expect("first entry queued") {
             LogSinkCommand::Entry(entry) => {
-                assert_eq!(entry, test_entry("first-queued-log"));
+                assert_eq!(*entry, test_entry("first-queued-log"));
             }
             LogSinkCommand::Flush(_) => panic!("expected queued entry"),
         }
