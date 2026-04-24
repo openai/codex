@@ -16,7 +16,8 @@ This file is a curated helper. Every recommendation here must be verified agains
 | `gpt-4.1-nano` | Fastest and cheapest no-reasoning text |
 | `gpt-5.3-codex` | Agentic coding, code editing, and tool-heavy coding workflows |
 | `gpt-5.1-codex-mini` | Cheaper coding workflows |
-| `gpt-image-1.5` | Best image generation and edit quality |
+| `gpt-image-2` | Best image generation and edit quality |
+| `gpt-image-1.5` | Less expensive image generation and edit quality |
 | `gpt-image-1-mini` | Cost-optimized image generation |
 | `gpt-4o-mini-tts` | Text-to-speech |
 | `gpt-4o-mini-transcribe` | Speech-to-text, fast and cost-efficient |

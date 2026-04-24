@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-PACKAGE_NAME = "openai-codex-cli-bin"
+from codex_app_server_bin import PACKAGE_NAME
+from codex_app_server_bin import bundled_app_server_path
 
 
 def bundled_codex_path() -> Path:
-    exe = "codex.exe" if os.name == "nt" else "codex"
-    path = Path(__file__).resolve().parent / "bin" / exe
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"{PACKAGE_NAME} is installed but missing its packaged codex binary at {path}"
-        )
-    return path
+    return bundled_app_server_path()
 
 
-__all__ = ["PACKAGE_NAME", "bundled_codex_path"]
+__all__ = ["PACKAGE_NAME", "bundled_app_server_path", "bundled_codex_path"]

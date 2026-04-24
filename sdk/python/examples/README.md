@@ -21,12 +21,12 @@ source .venv/bin/activate
 
 When running examples from this repo checkout, the SDK source uses the local
 tree and does not bundle a runtime binary. The helper in `examples/_bootstrap.py`
-uses the installed `openai-codex-cli-bin` runtime package.
+uses the installed `openai-codex-app-server-bin` runtime package.
 
-If the pinned `openai-codex-cli-bin` runtime is not already installed, the bootstrap
-will download the matching GitHub release artifact, stage a temporary local
-`openai-codex-cli-bin` package, install it into your active interpreter, and clean up
-the temporary files afterward.
+If the pinned `openai-codex-app-server-bin` runtime is not already installed, the
+bootstrap will download the matching GitHub release artifact, stage a temporary
+local `openai-codex-app-server-bin` package, install it into your active
+interpreter, and clean up the temporary files afterward.
 
 Current pinned runtime version: `0.116.0-alpha.1`
 
@@ -41,8 +41,8 @@ python examples/<example-folder>/async.py
 
 The examples bootstrap local imports from `sdk/python/src` automatically, so no
 SDK wheel install is required. You only need the Python dependencies for your
-active interpreter and an installed `openai-codex-cli-bin` runtime package (either
-already present or automatically provisioned by the bootstrap).
+active interpreter and an installed `openai-codex-app-server-bin` runtime
+package (either already present or automatically provisioned by the bootstrap).
 
 ## Recommended first run
 

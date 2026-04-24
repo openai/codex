@@ -54,13 +54,13 @@ This avoids duplicate ways to do the same operation and keeps behavior explicit.
 
 Common causes:
 
-- published runtime package (`openai-codex-cli-bin`) is not installed
-- local `codex_bin` override points to a missing file
+- published runtime package (`openai-codex-app-server-bin`) is not installed
+- local `app_server_bin` override points to a missing file
 - local auth/session is missing
 - incompatible/old app-server
 
 Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version. Publish `openai-codex-cli-bin` as
+platform with the same pinned runtime version. Publish `openai-codex-app-server-bin` as
 platform wheels only; do not publish an sdist:
 
 ```bash
@@ -72,8 +72,8 @@ python scripts/update_sdk_artifacts.py \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
-  /tmp/codex-python-release/openai-codex-cli-bin \
-  /path/to/codex \
+  /tmp/codex-python-release/openai-codex-app-server-bin \
+  /path/to/codex-app-server \
   --runtime-version 1.2.3
 ```
 
