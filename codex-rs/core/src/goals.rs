@@ -1317,7 +1317,9 @@ impl Session {
             .await
             .context("failed to read thread metadata before reconciling thread goals")?
             .is_some();
-        if !thread_metadata_present && let Some(rollout_path) = self.current_rollout_path().await {
+        if !thread_metadata_present
+            && let Ok(Some(rollout_path)) = self.current_rollout_path().await
+        {
             reconcile_rollout(
                 Some(&state_db),
                 rollout_path.as_path(),
