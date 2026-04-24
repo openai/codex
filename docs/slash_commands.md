@@ -33,4 +33,4 @@ name. `$ARGUMENTS` expands to all text after the command name; `$1`, `$2`, and l
 placeholders expand from shell-style split arguments.
 
 Private command prompts are sent to the model as prompt text. Codex does not pre-execute
-Claude-style ``!`command` `` substitutions or apply `allowed-tools` frontmatter from these files.
+``!`command` `` substitutions or apply tool-restriction frontmatter from these files.
