@@ -58,12 +58,6 @@ pub(crate) struct SessionConfiguration {
     pub(super) approvals_reviewer: ApprovalsReviewer,
     /// Canonical permission profile for the session.
     pub(super) permission_profile: Constrained<PermissionProfile>,
-    /// Legacy sandbox projection retained while lower-level callers migrate.
-    pub(super) sandbox_policy: Constrained<SandboxPolicy>,
-    /// Filesystem sandbox projection of `permission_profile`.
-    pub(super) file_system_sandbox_policy: FileSystemSandboxPolicy,
-    /// Network sandbox projection of `permission_profile`.
-    pub(super) network_sandbox_policy: NetworkSandboxPolicy,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
     /// Absolute working directory that should be treated as the *root* of the
@@ -101,6 +95,28 @@ impl SessionConfiguration {
         self.permission_profile.get().clone()
     }
 
+    pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
+        self.permission_profile()
+            .to_legacy_sandbox_policy(&self.cwd)
+            .unwrap_or_else(|_| {
+                let file_system_sandbox_policy = self.file_system_sandbox_policy();
+                codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+                    self.permission_profile.get(),
+                    &file_system_sandbox_policy,
+                    self.network_sandbox_policy(),
+                    &self.cwd,
+                )
+            })
+    }
+
+    pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
+        self.permission_profile.get().file_system_sandbox_policy()
+    }
+
+    pub(super) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
+        self.permission_profile.get().network_sandbox_policy()
+    }
+
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -108,7 +124,7 @@ impl SessionConfiguration {
             service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
-            sandbox_policy: self.sandbox_policy.get().clone(),
+            sandbox_policy: self.sandbox_policy(),
             permission_profile: self.permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
@@ -120,11 +136,17 @@ impl SessionConfiguration {
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
-        let file_system_policy_matches_legacy = self.file_system_sandbox_policy
-            == FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-                self.sandbox_policy.get(),
+        let current_sandbox_policy = self.sandbox_policy();
+        let current_file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let current_network_sandbox_policy = self.network_sandbox_policy();
+        let legacy_file_system_projection =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                &current_sandbox_policy,
                 &self.cwd,
+                &current_file_system_sandbox_policy,
             );
+        let file_system_policy_matches_legacy = current_file_system_sandbox_policy
+            .is_semantically_equivalent_to(&legacy_file_system_projection, &self.cwd);
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
             next_configuration.collaboration_mode = collaboration_mode;
         }
@@ -172,42 +194,37 @@ impl SessionConfiguration {
         if let Some(permission_profile) = updates.permission_profile.clone() {
             next_configuration.set_permission_profile_projection(
                 permission_profile,
-                Some(&self.file_system_sandbox_policy),
+                Some(&current_file_system_sandbox_policy),
             )?;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            next_configuration.sandbox_policy.set(sandbox_policy)?;
-            next_configuration.file_system_sandbox_policy =
+            let file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    next_configuration.sandbox_policy.get(),
+                    &sandbox_policy,
                     &next_configuration.cwd,
-                    &self.file_system_sandbox_policy,
+                    &current_file_system_sandbox_policy,
                 );
-            next_configuration.network_sandbox_policy =
-                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
+            let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             next_configuration.permission_profile.set(
                 PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(
-                        next_configuration.sandbox_policy.get(),
-                    ),
-                    &next_configuration.file_system_sandbox_policy,
-                    next_configuration.network_sandbox_policy,
+                    SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
                 ),
             )?;
         } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
-            next_configuration.file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-                    next_configuration.sandbox_policy.get(),
+            let file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    &current_sandbox_policy,
                     &next_configuration.cwd,
+                    &current_file_system_sandbox_policy,
                 );
             next_configuration.permission_profile.set(
                 PermissionProfile::from_runtime_permissions_with_enforcement(
-                    SandboxEnforcement::from_legacy_sandbox_policy(
-                        next_configuration.sandbox_policy.get(),
-                    ),
-                    &next_configuration.file_system_sandbox_policy,
-                    next_configuration.network_sandbox_policy,
+                    SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
+                    &file_system_sandbox_policy,
+                    current_network_sandbox_policy,
                 ),
             )?;
         }
@@ -238,7 +255,7 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        let sandbox_policy = effective_permission_profile
+        effective_permission_profile
             .to_legacy_sandbox_policy(&self.cwd)
             .map_err(|err| ConstraintError::InvalidValue {
                 field_name: "permission_profile",
@@ -249,9 +266,6 @@ impl SessionConfiguration {
                 requirement_source: codex_config::RequirementSource::Unknown,
             })?;
         self.permission_profile.set(effective_permission_profile)?;
-        self.sandbox_policy.set(sandbox_policy)?;
-        self.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.network_sandbox_policy = network_sandbox_policy;
         Ok(())
     }
 }
@@ -482,7 +496,7 @@ impl Session {
                 model: session_configuration.collaboration_mode.model().to_string(),
                 provider_name: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value().to_string(),
-                sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
+                sandbox_policy: format!("{:?}", session_configuration.sandbox_policy()),
             };
             let rollout_thread_trace = if matches!(
                 session_configuration.session_source,
@@ -763,7 +777,7 @@ impl Session {
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                     &config.permissions.approval_policy,
-                    &config.permissions.sandbox_policy,
+                    &config.permissions.permission_profile,
                 ))),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
@@ -848,6 +862,7 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
+            let session_sandbox_policy = session_configuration.sandbox_policy();
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -859,7 +874,7 @@ impl Session {
                     service_tier: session_configuration.service_tier,
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
-                    sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+                    sandbox_policy: session_sandbox_policy.clone(),
                     permission_profile: Some(session_configuration.permission_profile()),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
@@ -868,7 +883,7 @@ impl Session {
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {
                         Self::managed_network_proxy_active_for_sandbox_policy(
-                            session_configuration.sandbox_policy.get(),
+                            &session_sandbox_policy,
                         )
                     }),
                     rollout_path,
@@ -902,7 +917,7 @@ impl Session {
                 &session_configuration.approval_policy,
                 INITIAL_SUBMIT_ID.to_owned(),
                 tx_event.clone(),
-                session_configuration.sandbox_policy.get().clone(),
+                session_configuration.permission_profile(),
                 McpRuntimeEnvironment::new(
                     sess.services
                         .environment_manager

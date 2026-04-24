@@ -28,10 +28,10 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::mcp::Tool;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpListToolsResponseEvent;
-use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
@@ -89,12 +89,12 @@ pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
 /// of being shown to the user.
 pub fn mcp_permission_prompt_is_auto_approved(
     approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
 ) -> bool {
     approval_policy == AskForApproval::Never
         && matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+            permission_profile,
+            PermissionProfile::Disabled | PermissionProfile::External { .. }
         )
 }
 
@@ -313,7 +313,7 @@ pub async fn read_mcp_resource(
         &config.approval_policy,
         String::new(),
         tx_event,
-        SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::default(),
         runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
@@ -386,7 +386,7 @@ pub async fn collect_mcp_snapshot_with_detail(
         &config.approval_policy,
         submit_id,
         tx_event,
-        SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::default(),
         runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
@@ -466,7 +466,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         &config.approval_policy,
         submit_id,
         tx_event,
-        SandboxPolicy::new_read_only_policy(),
+        PermissionProfile::default(),
         runtime_environment,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
