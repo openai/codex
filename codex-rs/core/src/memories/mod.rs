@@ -6,6 +6,7 @@
 
 pub(crate) mod citations;
 mod control;
+mod extensions;
 mod phase1;
 mod phase2;
 pub(crate) mod prompts;
@@ -14,6 +15,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 pub(crate) mod usage;
+mod workspace;
 
 use codex_protocol::openai_models::ReasoningEffort;
 
@@ -25,12 +27,10 @@ pub use control::clear_memory_roots_contents;
 pub(crate) use start::start_memories_startup_task;
 
 mod artifacts {
-    pub(super) const EXTENSIONS_SUBDIR: &str = "memories_extensions";
+    pub(super) const EXTENSIONS_SUBDIR: &str = "extensions";
     pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
     pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 }
-
-mod extensions;
 
 /// Phase 1 (startup extraction).
 mod phase_one {
@@ -111,7 +111,7 @@ fn rollout_summaries_dir(root: &Path) -> PathBuf {
 }
 
 fn memory_extensions_root(root: &Path) -> PathBuf {
-    root.with_file_name(artifacts::EXTENSIONS_SUBDIR)
+    root.join(artifacts::EXTENSIONS_SUBDIR)
 }
 
 fn raw_memories_file(root: &Path) -> PathBuf {

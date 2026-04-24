@@ -12,6 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
 
+use crate::operations::run_git_for_status;
+
 const BASELINE_COMMIT_MESSAGE: &str =
     "Initialize Codex git baseline\n\nCo-authored-by: Codex <noreply@openai.com>";
 
@@ -66,15 +68,37 @@ struct GitBaselineFileEntry {
 /// git is used only as a baseline/diff implementation detail, not for user repositories.
 pub async fn reset_git_repository(root: &Path) -> anyhow::Result<()> {
     let root = root.to_path_buf();
+    task::spawn_blocking(move || reset_git_repository_sync(&root)).await?
+}
+
+/// Ensures `root` has a usable git baseline repository.
+///
+/// Existing usable `.git/` metadata is preserved. Missing or unusable metadata is replaced with a
+/// fresh one-commit baseline.
+pub async fn ensure_git_baseline_repository(root: &Path) -> anyhow::Result<()> {
+    let root = root.to_path_buf();
     task::spawn_blocking(move || {
         fs::create_dir_all(&root)
             .with_context(|| format!("create git baseline root {}", root.display()))?;
-        remove_git_metadata(&root)?;
-        let repo = gix::init(&root).with_context(|| format!("init git repo {}", root.display()))?;
-        commit_current_tree(&repo, BASELINE_COMMIT_MESSAGE)?;
-        anyhow::Ok(())
+        if root.join(".git").is_dir()
+            && let Ok(repo) = gix::open(&root)
+            && head_file_entries(&repo).is_ok()
+        {
+            return Ok(());
+        }
+        reset_git_repository_sync(&root)
     })
     .await?
+}
+
+fn reset_git_repository_sync(root: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(root)
+        .with_context(|| format!("create git baseline root {}", root.display()))?;
+    remove_git_metadata(root)?;
+    let repo = gix::init(root).with_context(|| format!("init git repo {}", root.display()))?;
+    commit_current_tree(&repo, BASELINE_COMMIT_MESSAGE)?;
+    write_index_from_head(root)?;
+    Ok(())
 }
 
 /// Returns the diff between the latest baseline reset and the current directory contents.
@@ -128,6 +152,11 @@ fn commit_current_tree(repo: &gix::Repository, message: &str) -> anyhow::Result<
     )
     .context("commit git baseline repo")?;
     Ok(())
+}
+
+fn write_index_from_head(root: &Path) -> anyhow::Result<()> {
+    run_git_for_status(root, ["read-tree", "--reset", "HEAD"], /*env*/ None)
+        .context("write git baseline index from HEAD")
 }
 
 fn codex_signature() -> gix::actor::Signature {
@@ -501,7 +530,23 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("run git command");
+        assert!(
+            output.status.success(),
+            "git command failed: {args:?}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
 
     #[tokio::test]
     async fn reset_creates_fresh_baseline() {
@@ -513,9 +558,30 @@ mod tests {
         reset_git_repository(&root).await.expect("reset repo");
 
         assert!(root.join(".git").is_dir());
+        assert!(root.join(".git/index").is_file());
         let diff = diff_since_latest_init(&root).await.expect("diff");
         assert!(!diff.has_changes());
         assert_eq!(diff.unified_diff, "");
+        assert_eq!(git_stdout(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
+    }
+
+    #[tokio::test]
+    async fn ensure_recovers_from_unborn_repository() {
+        let home = TempDir::new().expect("tempdir");
+        let root = home.path().join("repo");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("MEMORY.md"), "memory").expect("write memory");
+        gix::init(&root).expect("init git repo without baseline commit");
+
+        ensure_git_baseline_repository(&root)
+            .await
+            .expect("ensure repo");
+
+        let diff = diff_since_latest_init(&root).await.expect("diff");
+        assert!(!diff.has_changes());
+        assert_eq!(git_stdout(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
     }
 
     #[tokio::test]
