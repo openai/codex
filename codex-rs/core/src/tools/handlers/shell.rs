@@ -36,7 +36,7 @@ use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
 use codex_features::Feature;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::ShellCommandBackendConfig;
@@ -79,7 +79,7 @@ struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
     hook_command: String,
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,

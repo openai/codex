@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package codex.thread_config.v1;
+
+service ThreadConfigLoader {
+  rpc Load(LoadThreadConfigRequest) returns (LoadThreadConfigResponse);
+}
+
+message LoadThreadConfigRequest {
+  optional string thread_id = 1;
+  optional string cwd = 2;
+}
+
+message LoadThreadConfigResponse {
+  repeated ThreadConfigSource sources = 1;
+}
+
+message ThreadConfigSource {
+  oneof source {
+    SessionThreadConfig session = 1;
+    UserThreadConfig user = 2;
+  }
+}
+
+message SessionThreadConfig {
+  optional string model_provider = 1;
+  repeated ModelProvider model_providers = 2;
+  map<string, bool> features = 3;
+}
+
+message UserThreadConfig {}
+
+message ModelProvider {
+  string id = 1;
+  string name = 2;
+  optional string base_url = 3;
+  optional string env_key = 4;
+  optional string env_key_instructions = 5;
+  optional string experimental_bearer_token = 6;
+  optional ModelProviderAuthInfo auth = 7;
+  WireApi wire_api = 8;
+  optional StringMap query_params = 9;
+  optional StringMap http_headers = 10;
+  optional StringMap env_http_headers = 11;
+  optional uint64 request_max_retries = 12;
+  optional uint64 stream_max_retries = 13;
+  optional uint64 stream_idle_timeout_ms = 14;
+  optional uint64 websocket_connect_timeout_ms = 15;
+  bool requires_openai_auth = 16;
+  bool supports_websockets = 17;
+}
+
+message StringMap {
+  map<string, string> values = 1;
+}
+
+message ModelProviderAuthInfo {
+  string command = 1;
+  repeated string args = 2;
+  uint64 timeout_ms = 3;
+  uint64 refresh_interval_ms = 4;
+  string cwd = 5;
+}
+
+enum WireApi {
+  WIRE_API_UNSPECIFIED = 0;
+  WIRE_API_RESPONSES = 1;
+}

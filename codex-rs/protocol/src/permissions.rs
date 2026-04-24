@@ -340,6 +340,41 @@ impl FileSystemSandboxPolicy {
         rebuilt
     }
 
+    /// Preserve explicit read-deny rules from `existing` when a caller
+    /// replaces the allow side of a policy.
+    pub fn preserve_deny_read_restrictions_from(&mut self, existing: &Self) {
+        let has_deny_read_entries = existing
+            .entries
+            .iter()
+            .any(|entry| entry.access == FileSystemAccessMode::None);
+        if matches!(self.kind, FileSystemSandboxKind::Unrestricted) && has_deny_read_entries {
+            *self = Self::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }]);
+        }
+
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return;
+        }
+
+        if self.glob_scan_max_depth.is_none() {
+            self.glob_scan_max_depth = existing.glob_scan_max_depth;
+        }
+
+        for deny_entry in existing
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !self.entries.iter().any(|entry| entry == deny_entry) {
+                self.entries.push(deny_entry.clone());
+            }
+        }
+    }
+
     /// Returns true when a restricted policy contains any entry that really
     /// reduces a broader `:root = write` grant.
     ///
@@ -2295,6 +2330,28 @@ mod tests {
             }),
             "expected explicit deny entry to be preserved"
         );
+    }
+
+    #[test]
+    fn preserving_deny_entries_keeps_unrestricted_policy_enforceable() {
+        let deny_entry = unreadable_glob_entry("/tmp/project/**/*.env".to_string());
+        let mut existing = FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
+        existing.glob_scan_max_depth = Some(2);
+        let mut replacement = FileSystemSandboxPolicy::unrestricted();
+
+        replacement.preserve_deny_read_restrictions_from(&existing);
+
+        let mut expected = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            deny_entry,
+        ]);
+        expected.glob_scan_max_depth = Some(2);
+        assert_eq!(replacement, expected);
     }
 
     fn deny_policy(path: &Path) -> FileSystemSandboxPolicy {

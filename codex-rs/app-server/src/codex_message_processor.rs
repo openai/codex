@@ -37,7 +37,6 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::AuthMode as CoreAuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
@@ -88,6 +87,9 @@ use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::MarketplaceUpgradeErrorInfo;
+use codex_app_server_protocol::MarketplaceUpgradeParams;
+use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -224,6 +226,7 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
+use codex_core::StartThreadWithToolsOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
@@ -245,27 +248,28 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
-use codex_core::plugins::MarketplaceAddError;
-use codex_core::plugins::MarketplaceRemoveError;
-use codex_core::plugins::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
-use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
-use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
-use codex_core::plugins::remove_marketplace;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::marketplace_add::MarketplaceAddError;
+use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
+use codex_core_plugins::marketplace_add::add_marketplace as add_marketplace_to_codex_home;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveError;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
+use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_core_plugins::remote::RemoteMarketplace;
 use codex_core_plugins::remote::RemotePluginCatalogError;
 use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
@@ -298,7 +302,10 @@ use codex_mcp::discover_supported_scopes;
 use codex_mcp::effective_mcp_servers;
 use codex_mcp::read_mcp_resource as read_mcp_resource_without_thread;
 use codex_mcp::resolve_oauth_scopes;
+use codex_model_provider::ProviderAccountError;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -310,7 +317,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -660,6 +666,13 @@ fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
     }
 }
 
+fn environment_selection_error_message(err: CodexErr) -> String {
+    match err {
+        CodexErr::InvalidRequest(message) => message,
+        err => err.to_string(),
+    }
+}
+
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
@@ -779,14 +792,12 @@ impl CodexMessageProcessor {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> CollaborationMode {
         if collaboration_mode.settings.developer_instructions.is_none()
-            && let Some(instructions) = self
-                .thread_manager
-                .get_models_manager()
-                .list_collaboration_modes_for_config(collaboration_modes_config)
-                .into_iter()
-                .find(|preset| preset.mode == Some(collaboration_mode.mode))
-                .and_then(|preset| preset.developer_instructions.flatten())
-                .filter(|instructions| !instructions.is_empty())
+            && let Some(instructions) =
+                builtin_collaboration_mode_presets(collaboration_modes_config)
+                    .into_iter()
+                    .find(|preset| preset.mode == Some(collaboration_mode.mode))
+                    .and_then(|preset| preset.developer_instructions.flatten())
+                    .filter(|instructions| !instructions.is_empty())
         {
             collaboration_mode.settings.developer_instructions = Some(instructions);
         }
@@ -977,6 +988,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::MarketplaceRemove { request_id, params } => {
                 self.marketplace_remove(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MarketplaceUpgrade { request_id, params } => {
+                self.marketplace_upgrade(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -1836,51 +1851,28 @@ impl CodexMessageProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Whether auth is required for the active model provider.
-        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
-
-        if !requires_openai_auth {
-            let response = GetAccountResponse {
-                account: None,
-                requires_openai_auth,
-            };
-            self.outgoing.send_response(request_id, response).await;
-            return;
-        }
-
-        let account = match self.auth_manager.auth_cached() {
-            Some(auth) => match auth.auth_mode() {
-                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt
-                | CoreAuthMode::ChatgptAuthTokens
-                | CoreAuthMode::AgentIdentity => {
-                    let email = auth.get_account_email();
-                    let plan_type = auth.account_plan_type();
-
-                    match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => {
-                            Some(Account::Chatgpt { email, plan_type })
-                        }
-                        _ => {
-                            let error = JSONRPCErrorError {
-                                code: INVALID_REQUEST_ERROR_CODE,
-                                message:
-                                    "email and plan type are required for chatgpt authentication"
-                                        .to_string(),
-                                data: None,
-                            };
-                            self.outgoing.send_error(request_id, error).await;
-                            return;
-                        }
-                    }
-                }
-            },
-            None => None,
+        let provider = create_model_provider(
+            self.config.model_provider.clone(),
+            Some(self.auth_manager.clone()),
+        );
+        let account_state = match provider.account_state() {
+            Ok(account_state) => account_state,
+            Err(ProviderAccountError::MissingChatgptAccountDetails) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "email and plan type are required for chatgpt authentication"
+                        .to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         };
+        let account = account_state.account.map(Account::from);
 
         let response = GetAccountResponse {
             account,
-            requires_openai_auth,
+            requires_openai_auth: account_state.requires_openai_auth,
         };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -1935,7 +1927,7 @@ impl CodexMessageProcessor {
             });
         };
 
-        if !auth.is_chatgpt_auth() {
+        if !auth.uses_codex_backend() {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "chatgpt authentication required to notify workspace owner".to_string(),
@@ -1990,7 +1982,7 @@ impl CodexMessageProcessor {
             });
         };
 
-        if !auth.is_chatgpt_auth() {
+        if !auth.uses_codex_backend() {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "chatgpt authentication required to read rate limits".to_string(),
@@ -2353,24 +2345,8 @@ impl CodexMessageProcessor {
         file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
         configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
     ) {
-        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-            file_system_sandbox_policy.glob_scan_max_depth =
-                configured_file_system_sandbox_policy.glob_scan_max_depth;
-        }
-
-        for deny_entry in configured_file_system_sandbox_policy
-            .entries
-            .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
-        {
-            if !file_system_sandbox_policy
-                .entries
-                .iter()
-                .any(|entry| entry == deny_entry)
-            {
-                file_system_sandbox_policy.entries.push(deny_entry.clone());
-            }
-        }
+        file_system_sandbox_policy
+            .preserve_deny_read_restrictions_from(configured_file_system_sandbox_policy);
     }
 
     async fn command_exec_write(
@@ -2445,6 +2421,7 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
+            environments,
             persist_extended_history,
         } = params;
         if sandbox.is_some() && permission_profile.is_some() {
@@ -2453,6 +2430,24 @@ impl CodexMessageProcessor {
                 "`permissionProfile` cannot be combined with `sandbox`".to_string(),
             )
             .await;
+            return;
+        }
+        let environments = environments.map(|environments| {
+            environments
+                .into_iter()
+                .map(|environment| TurnEnvironmentSelection {
+                    environment_id: environment.environment_id,
+                    cwd: environment.cwd,
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Some(environments) = environments.as_ref()
+            && let Err(err) = self
+                .thread_manager
+                .validate_environment_selections(environments)
+        {
+            self.send_invalid_request_error(request_id, environment_selection_error_message(err))
+                .await;
             return;
         }
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -2493,6 +2488,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                environments,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -2567,6 +2563,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -2597,7 +2594,7 @@ impl CodexMessageProcessor {
             requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
 
         if requested_cwd.is_some()
-            && !config.active_project.is_trusted()
+            && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project
                 || matches!(
                     config.permissions.sandbox_policy.get(),
@@ -2666,6 +2663,11 @@ impl CodexMessageProcessor {
         }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let environments = environments.unwrap_or_else(|| {
+            listener_task_context
+                .thread_manager
+                .default_environment_selections(&config.cwd)
+        });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
@@ -2697,19 +2699,20 @@ impl CodexMessageProcessor {
 
         match listener_task_context
             .thread_manager
-            .start_thread_with_tools_and_service_name(
+            .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
                 config,
-                match session_start_source
+                initial_history: match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
                 {
                     codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
                     codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
                 },
-                core_dynamic_tools,
+                dynamic_tools: core_dynamic_tools,
                 persist_extended_history,
-                service_name,
-                request_trace,
-            )
+                metrics_service_name: service_name,
+                parent_trace: request_trace,
+                environments,
+            })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
                 otel.name = "app_server.thread_start.create_thread",
@@ -2792,10 +2795,8 @@ impl CodexMessageProcessor {
                     /*has_in_progress_turn*/ false,
                 );
 
-                let permission_profile = thread_response_permission_profile(
-                    &config_snapshot.sandbox_policy,
-                    config_snapshot.permission_profile,
-                );
+                let permission_profile =
+                    thread_response_permission_profile(config_snapshot.permission_profile);
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -2839,6 +2840,17 @@ impl CodexMessageProcessor {
                         "app_server.thread_start.notify_started",
                         otel.name = "app_server.thread_start.notify_started",
                     ))
+                    .await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message,
+                    data: None,
+                };
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
                     .await;
             }
             Err(err) => {
@@ -4465,8 +4477,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -4522,7 +4536,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
@@ -4572,8 +4585,8 @@ impl CodexMessageProcessor {
                         codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
-                        fallback_model_provider.as_str(),
                         persisted_resume_metadata.as_ref(),
+                        include_turns,
                     )
                     .await
                 {
@@ -4599,7 +4612,6 @@ impl CodexMessageProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let permission_profile = thread_response_permission_profile(
-                    &session_configured.sandbox_policy,
                     codex_thread.config_snapshot().await.permission_profile,
                 );
 
@@ -4627,24 +4639,28 @@ impl CodexMessageProcessor {
                 }
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = response.thread.clone();
-                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                    &response_history.get_rollout_items(),
-                    &token_usage_thread,
-                );
+                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
-                // The client needs restored usage before it starts another turn.
-                // Sending after the response preserves JSON-RPC request ordering while
-                // still filling the status line before the next turn lifecycle begins.
-                send_thread_token_usage_update_to_connection(
-                    &self.outgoing,
-                    connection_id,
-                    thread_id,
-                    &token_usage_thread,
-                    codex_thread.as_ref(),
-                    token_usage_turn_id,
-                )
-                .await;
+                // `excludeTurns` is explicitly the cheap resume path, so avoid
+                // rebuilding history only to attribute a replayed usage update.
+                if let Some(token_usage_thread) = token_usage_thread {
+                    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                        &response_history.get_rollout_items(),
+                        token_usage_thread.turns.as_slice(),
+                    );
+                    // The client needs restored usage before it starts another turn.
+                    // Sending after the response preserves JSON-RPC request ordering while
+                    // still filling the status line before the next turn lifecycle begins.
+                    send_thread_token_usage_update_to_connection(
+                        &self.outgoing,
+                        connection_id,
+                        thread_id,
+                        &token_usage_thread,
+                        codex_thread.as_ref(),
+                        token_usage_turn_id,
+                    )
+                    .await;
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4835,6 +4851,7 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
+                    include_turns: !params.exclude_turns,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4938,22 +4955,22 @@ impl CodexMessageProcessor {
         thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
-        fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
+        include_turns: bool,
     ) -> std::result::Result<Thread, String> {
+        let config_snapshot = thread.config_snapshot().await;
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
                     &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
-                    fallback_provider,
+                    config_snapshot.model_provider_id.as_str(),
                     persisted_resume_metadata,
                 )
                 .await
             }
             InitialHistory::Forked(items) => {
-                let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -4969,13 +4986,15 @@ impl CodexMessageProcessor {
         let mut thread = thread?;
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
-        let history_items = thread_history.get_rollout_items();
-        populate_thread_turns(
-            &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
-            /*active_turn*/ None,
-        )
-        .await?;
+        if include_turns {
+            let history_items = thread_history.get_rollout_items();
+            populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                /*active_turn*/ None,
+            )
+            .await?;
+        }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
@@ -5002,8 +5021,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             ephemeral,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
         if sandbox.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
                 request_id,
@@ -5223,12 +5244,13 @@ impl CodexMessageProcessor {
                     })
                 })
                 .map(|id| id.to_string());
-            if let Err(message) = populate_thread_turns(
-                &mut thread,
-                ThreadTurnSource::HistoryItems(&history_items),
-                /*active_turn*/ None,
-            )
-            .await
+            if include_turns
+                && let Err(message) = populate_thread_turns(
+                    &mut thread,
+                    ThreadTurnSource::HistoryItems(&history_items),
+                    /*active_turn*/ None,
+                )
+                .await
             {
                 self.send_internal_error(request_id, message).await;
                 return;
@@ -5237,6 +5259,7 @@ impl CodexMessageProcessor {
         };
 
         if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref()
+            && include_turns
             && let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
@@ -5259,7 +5282,6 @@ impl CodexMessageProcessor {
             /*has_in_progress_turn*/ false,
         );
         let permission_profile = thread_response_permission_profile(
-            &session_configured.sandbox_policy,
             forked_thread.config_snapshot().await.permission_profile,
         );
 
@@ -5287,30 +5309,34 @@ impl CodexMessageProcessor {
         }
 
         let connection_id = request_id.connection_id;
-        let token_usage_thread = response.thread.clone();
-        let token_usage_turn_id = if let Some(turn_id) =
-            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
-        {
-            Some(turn_id)
-        } else {
-            latest_token_usage_turn_id_from_rollout_path(
-                rollout_path.as_path(),
-                &token_usage_thread,
-            )
-            .await
-        };
+        let token_usage_thread = include_turns.then(|| response.thread.clone());
         self.outgoing.send_response(request_id, response).await;
-        // Mirror the resume contract for forks: the new thread is usable as soon
-        // as the response arrives, so restored usage must follow immediately.
-        send_thread_token_usage_update_to_connection(
-            &self.outgoing,
-            connection_id,
-            thread_id,
-            &token_usage_thread,
-            forked_thread.as_ref(),
-            token_usage_turn_id,
-        )
-        .await;
+        // `excludeTurns` is the cheap fork path, so skip restored usage replay
+        // instead of rebuilding history only to attribute a historical update.
+        if let Some(token_usage_thread) = token_usage_thread {
+            let token_usage_turn_id = if let Some(turn_id) =
+                latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+            {
+                Some(turn_id)
+            } else {
+                latest_token_usage_turn_id_from_rollout_path(
+                    rollout_path.as_path(),
+                    token_usage_thread.turns.as_slice(),
+                )
+                .await
+            };
+            // Mirror the resume contract for forks: the new thread is usable as soon
+            // as the response arrives, so restored usage must follow immediately.
+            send_thread_token_usage_update_to_connection(
+                &self.outgoing,
+                connection_id,
+                thread_id,
+                &token_usage_thread,
+                forked_thread.as_ref(),
+                token_usage_turn_id,
+            )
+            .await;
+        }
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -5885,8 +5911,8 @@ impl CodexMessageProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         let runtime_environment = match environment_manager.default_environment() {
             Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used by
-                // stdio MCPs whose config omits `cwd`.
+                // Status listing has no turn cwd. This fallback is used only
+                // by executor-backed stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
             None => McpRuntimeEnvironment::new(
@@ -6390,7 +6416,7 @@ impl CodexMessageProcessor {
         let auth = self.auth_manager.auth().await;
         if !config
             .features
-            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
         {
             self.outgoing
                 .send_response(
@@ -6759,10 +6785,65 @@ impl CodexMessageProcessor {
             }
         }
     }
+
+    async fn marketplace_upgrade(
+        &self,
+        request_id: ConnectionRequestId,
+        params: MarketplaceUpgradeParams,
+    ) {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let MarketplaceUpgradeParams { marketplace_name } = params;
+
+        let result = tokio::task::spawn_blocking(move || {
+            plugins_manager
+                .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(outcome)) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        MarketplaceUpgradeResponse {
+                            selected_marketplaces: outcome.selected_marketplaces,
+                            upgraded_roots: outcome.upgraded_roots,
+                            errors: outcome
+                                .errors
+                                .into_iter()
+                                .map(|err| MarketplaceUpgradeErrorInfo {
+                                    marketplace_name: err.marketplace_name,
+                                    message: err.message,
+                                })
+                                .collect(),
+                        },
+                    )
+                    .await;
+            }
+            Ok(Err(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to upgrade marketplaces: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
-            codex_core::plugins::MarketplaceAddRequest {
+            MarketplaceAddRequest {
                 source: params.source,
                 ref_name: params.ref_name,
                 sparse_paths: params.sparse_paths.unwrap_or_default(),
@@ -6892,15 +6973,25 @@ impl CodexMessageProcessor {
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
-        let environments = params.environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd,
-                })
-                .collect()
-        });
+        let environments: Option<Vec<TurnEnvironmentSelection>> =
+            params.environments.map(|environments| {
+                environments
+                    .into_iter()
+                    .map(|environment| TurnEnvironmentSelection {
+                        environment_id: environment.environment_id,
+                        cwd: environment.cwd,
+                    })
+                    .collect()
+            });
+        if let Some(environments) = environments.as_ref()
+            && let Err(err) = self
+                .thread_manager
+                .validate_environment_selections(environments)
+        {
+            self.send_invalid_request_error(request_id, environment_selection_error_message(err))
+                .await;
+            return;
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -8640,12 +8731,13 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
+    if pending.include_turns
+        && let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
+            active_turn.as_ref(),
+        )
+        .await
     {
         outgoing
             .send_error(
@@ -8714,8 +8806,7 @@ async fn handle_pending_thread_resume_request(
         ..
     } = pending.config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let permission_profile =
-        thread_response_permission_profile(&sandbox_policy, permission_profile);
+    let permission_profile = thread_response_permission_profile(permission_profile);
 
     let response = ThreadResumeResponse {
         thread,
@@ -8730,24 +8821,28 @@ async fn handle_pending_thread_resume_request(
         permission_profile,
         reasoning_effort,
     };
-    let token_usage_thread = response.thread.clone();
-    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
-        pending.rollout_path.as_path(),
-        &token_usage_thread,
-    )
-    .await;
+    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
-    // Rejoining a loaded thread has the same UI contract as a cold resume, but
-    // uses the live conversation state instead of reconstructing a new session.
-    send_thread_token_usage_update_to_connection(
-        outgoing,
-        connection_id,
-        conversation_id,
-        &token_usage_thread,
-        conversation.as_ref(),
-        token_usage_turn_id,
-    )
-    .await;
+    // Match cold resume: metadata-only resume should attach the listener without
+    // paying the cost of turn reconstruction for historical usage replay.
+    if let Some(token_usage_thread) = token_usage_thread {
+        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+            pending.rollout_path.as_path(),
+            token_usage_thread.turns.as_slice(),
+        )
+        .await;
+        // Rejoining a loaded thread has the same UI contract as a cold resume, but
+        // uses the live conversation state instead of reconstructing a new session.
+        send_thread_token_usage_update_to_connection(
+            outgoing,
+            connection_id,
+            conversation_id,
+            &token_usage_thread,
+            conversation.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
+    }
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
@@ -9841,17 +9936,9 @@ fn with_thread_spawn_agent_metadata(
 }
 
 fn thread_response_permission_profile(
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     permission_profile: codex_protocol::models::PermissionProfile,
 ) -> Option<codex_app_server_protocol::PermissionProfile> {
-    match sandbox_policy {
-        codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
-        | codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. } => {
-            Some(permission_profile.into())
-        }
-        codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
-    }
+    Some(permission_profile.into())
 }
 
 fn requested_permissions_trust_project(overrides: &ConfigOverrides, cwd: &Path) -> bool {
@@ -10168,6 +10255,7 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;
@@ -10373,25 +10461,28 @@ mod tests {
     }
 
     #[test]
-    fn thread_response_permission_profile_omits_external_sandbox() {
+    fn thread_response_permission_profile_preserves_enforcement() {
         let cwd = test_path_buf("/tmp").abs();
-        let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-            &SandboxPolicy::DangerFullAccess,
-            cwd.as_path(),
-        );
-
-        assert_eq!(
-            thread_response_permission_profile(
+        let full_access_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &SandboxPolicy::DangerFullAccess,
+                cwd.as_path(),
+            );
+        let external_profile =
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
                 &SandboxPolicy::ExternalSandbox {
                     network_access: codex_protocol::protocol::NetworkAccess::Restricted,
                 },
-                profile.clone(),
-            ),
-            None
+                cwd.as_path(),
+            );
+
+        assert_eq!(
+            thread_response_permission_profile(external_profile.clone()),
+            Some(external_profile.into())
         );
         assert_eq!(
-            thread_response_permission_profile(&SandboxPolicy::DangerFullAccess, profile.clone()),
-            Some(profile.into())
+            thread_response_permission_profile(full_access_profile.clone()),
+            Some(full_access_profile.into())
         );
     }
 
@@ -10610,6 +10701,7 @@ mod tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            exclude_turns: false,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

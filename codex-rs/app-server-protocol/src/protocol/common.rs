@@ -357,6 +357,10 @@ client_request_definitions! {
         params: v2::MarketplaceRemoveParams,
         response: v2::MarketplaceRemoveResponse,
     },
+    MarketplaceUpgrade => "marketplace/upgrade" {
+        params: v2::MarketplaceUpgradeParams,
+        response: v2::MarketplaceUpgradeResponse,
+    },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,
@@ -1522,22 +1526,7 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "permissionProfile": {
-                        "network": {
-                            "enabled": true,
-                        },
-                        "fileSystem": {
-                            "entries": [
-                                {
-                                    "path": {
-                                        "type": "special",
-                                        "value": {
-                                            "kind": "root",
-                                        },
-                                    },
-                                    "access": "write",
-                                },
-                            ],
-                        },
+                        "type": "disabled"
                     },
                     "reasoningEffort": null
                 }

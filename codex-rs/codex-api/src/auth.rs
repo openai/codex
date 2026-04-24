@@ -34,6 +34,13 @@ pub trait AuthProvider: Send + Sync {
     /// used by telemetry and non-HTTP request paths.
     fn add_auth_headers(&self, headers: &mut HeaderMap);
 
+    /// Returns any auth headers that are available without request body access.
+    fn to_auth_headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        self.add_auth_headers(&mut headers);
+        headers
+    }
+
     /// Applies auth to a complete outbound request and returns the request to send.
     ///
     /// The input `request` is moved into this method. Implementations may mutate

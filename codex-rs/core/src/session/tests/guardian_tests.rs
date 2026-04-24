@@ -8,7 +8,9 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
+use crate::test_support::models_manager_with_provider;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_exec_server::EnvironmentManager;
@@ -18,9 +20,9 @@ use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -91,11 +93,11 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
@@ -170,11 +172,11 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
     config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     Arc::get_mut(&mut session)
         .expect("single session ref")
         .services
@@ -286,11 +288,11 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     let mut config = (*turn_context_raw.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
@@ -341,6 +343,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -438,11 +441,11 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(crate::test_support::models_manager_with_provider(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
@@ -476,6 +479,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_policy_skip() {
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "strict-shell-call".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": command,
@@ -521,6 +525,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -639,6 +644,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": [
@@ -731,12 +737,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     );
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(
+    let models_manager = models_manager_with_provider(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
-        /*model_catalog*/ None,
-        CollaborationModesConfig::default(),
-    ));
+        config.model_provider.clone(),
+    );
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
@@ -744,6 +749,9 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_watcher = Arc::new(SkillsWatcher::noop());
+    let thread_store = Arc::new(codex_thread_store::LocalThreadStore::new(
+        codex_rollout::RolloutConfig::from_view(&config),
+    ));
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
@@ -764,10 +772,12 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         metrics_service_name: None,
         inherited_shell_snapshot: None,
         inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
-        inherited_rollout_trace: RolloutTraceRecorder::disabled(),
+        parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
+        environments: Vec::new(),
         analytics_events_client: None,
+        thread_store,
     })
     .await
     .expect("spawn guardian subagent");
