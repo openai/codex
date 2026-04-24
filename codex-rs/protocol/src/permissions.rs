@@ -1990,14 +1990,11 @@ mod tests {
         fs::write(&payload, "sandbox_mode = \"danger-full-access\"").expect("write payload");
         std::os::unix::fs::symlink(&payload, &config).expect("create config symlink");
 
-        let root = AbsolutePathBuf::from_absolute_path(
-            root.canonicalize().expect("canonicalize root"),
-        )
-        .expect("absolute root");
-        let expected_dot_codex = root.join(".codex").expect("absolute .codex");
-        let expected_config = root
-            .join(".codex/config.toml")
-            .expect("absolute .codex/config.toml");
+        let root =
+            AbsolutePathBuf::from_absolute_path(root.canonicalize().expect("canonicalize root"))
+                .expect("absolute root");
+        let expected_dot_codex = root.join(".codex");
+        let expected_config = root.join(".codex/config.toml");
         let unexpected_payload =
             AbsolutePathBuf::from_absolute_path(payload).expect("absolute payload");
 
