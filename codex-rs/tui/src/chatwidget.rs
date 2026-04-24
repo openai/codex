@@ -5405,8 +5405,13 @@ impl ChatWidget {
                     }
                     Err(err) => {
                         tracing::warn!("failed to paste image: {err}");
+                        #[cfg(target_os = "windows")]
+                        let guidance = "If you're on Windows, try Alt+V first; some terminals intercept Ctrl+V. If that still fails, save the image to a file and paste the file path instead.";
+                        #[cfg(not(target_os = "windows"))]
+                        let guidance =
+                            "Try saving the image to a file and paste the file path instead.";
                         self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
+                            "Failed to paste image: {err}. {guidance}",
                         )));
                     }
                 }
