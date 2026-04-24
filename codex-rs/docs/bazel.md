@@ -6,6 +6,38 @@ provides hermetic builds, toolchains, and cross-platform artifacts.
 
 As of 1/9/2026, this setup is still experimental as we stabilize it.
 
+## Local build and test commands
+
+Run Bazel commands from the repository root. Bazel is a good default for
+build-heavy local validation because CI already uses it and the repository has
+remote caching configured.
+
+Common commands:
+
+```bash
+# Build the main CLI binary.
+bazel build //codex-rs/cli:codex
+
+# Run a crate's unit tests.
+bazel test //codex-rs/tui:tui-unit-tests
+
+# Run all tests in one crate package, including integration tests.
+bazel test //codex-rs/tui:all
+
+# Run all codex-rs tests.
+bazel test //codex-rs/...
+```
+
+To discover the generated targets for a crate, query the package:
+
+```bash
+bazel query //codex-rs/tui:all
+```
+
+Cargo remains the source of truth for crates and feature definitions, so keep
+using Cargo when you are validating Cargo-specific behavior or when a crate does
+not yet have a matching Bazel target.
+
 ## High-level layout
 
 - `../MODULE.bazel` defines Bazel dependencies and Rust toolchains.
