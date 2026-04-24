@@ -44,34 +44,6 @@ impl TurnEnvironment {
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) enum TurnEnvironmentOverride {
-    #[default]
-    Inherit,
-    Explicit(Vec<TurnEnvironmentSelection>),
-}
-
-impl From<Option<Vec<TurnEnvironmentSelection>>> for TurnEnvironmentOverride {
-    fn from(environments: Option<Vec<TurnEnvironmentSelection>>) -> Self {
-        match environments {
-            Some(environments) => Self::Explicit(environments),
-            None => Self::Inherit,
-        }
-    }
-}
-
-impl TurnEnvironmentOverride {
-    pub(crate) fn resolve_ref(
-        &self,
-        thread_environments: &[TurnEnvironmentSelection],
-    ) -> Vec<TurnEnvironmentSelection> {
-        match self {
-            Self::Inherit => thread_environments.to_vec(),
-            Self::Explicit(environments) => environments.clone(),
-        }
-    }
-}
-
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -529,8 +501,10 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let effective_environments =
-                        updates.environments.resolve_ref(&next.environments);
+                    let effective_environments = updates
+                        .environments
+                        .clone()
+                        .unwrap_or_else(|| next.environments.clone());
                     let turn_environments =
                         self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();

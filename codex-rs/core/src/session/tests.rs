@@ -1,5 +1,4 @@
 use super::turn_context::TurnEnvironment;
-use super::turn_context::TurnEnvironmentOverride;
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
@@ -4095,7 +4094,7 @@ async fn turn_environments_set_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
+                environments: Some(vec![TurnEnvironmentSelection {
                     environment_id: "local".to_string(),
                     cwd: selected_cwd.clone(),
                 }]),
@@ -4179,7 +4178,7 @@ async fn multiple_turn_environments_use_first_as_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: TurnEnvironmentOverride::Explicit(vec![
+                environments: Some(vec![
                     TurnEnvironmentSelection {
                         environment_id: "local".to_string(),
                         cwd: first_cwd.clone(),
@@ -4218,7 +4217,7 @@ async fn empty_turn_environments_clear_primary_environment() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: TurnEnvironmentOverride::Explicit(vec![]),
+                environments: Some(vec![]),
                 ..Default::default()
             },
         )
@@ -4239,7 +4238,7 @@ async fn unknown_turn_environment_returns_error() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                environments: TurnEnvironmentOverride::Explicit(vec![TurnEnvironmentSelection {
+                environments: Some(vec![TurnEnvironmentSelection {
                     environment_id: "missing".to_string(),
                     cwd: session.get_config().await.cwd.clone(),
                 }]),

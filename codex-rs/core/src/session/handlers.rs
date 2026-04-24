@@ -166,7 +166,7 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
-                    environments: environments.into(),
+                    environments,
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
@@ -216,7 +216,7 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
-                    environments: environments.into(),
+                    environments,
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
@@ -233,7 +233,7 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             SessionSettingsUpdate {
                 final_output_json_schema: Some(final_output_json_schema),
-                environments: environments.into(),
+                environments,
                 ..Default::default()
             },
             responsesapi_client_metadata,

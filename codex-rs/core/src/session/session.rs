@@ -1,6 +1,5 @@
 use super::*;
 use crate::config::ConstraintError;
-use crate::session::turn_context::TurnEnvironmentOverride;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -246,10 +245,10 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
-    /// Turn-local environment override. This is consumed while building a turn
-    /// context and does not mutate the sticky thread environments stored on
-    /// `SessionConfiguration`.
-    pub(crate) environments: TurnEnvironmentOverride,
+    /// Turn-local environment override. `None` inherits the sticky thread
+    /// environments stored on `SessionConfiguration`; `Some([])` explicitly
+    /// disables environments for this turn.
+    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
