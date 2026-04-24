@@ -679,6 +679,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_updates_resize_reflow_config() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[tui.terminal_resize_reflow]
+max_rows = 9000
+"#,
+        )?;
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app.config.terminal_resize_reflow.max_rows,
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rebuild_config_for_resume_or_fallback_uses_current_config_on_same_cwd_error()
     -> Result<()> {
         let mut app = make_test_app().await;

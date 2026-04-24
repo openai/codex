@@ -91,6 +91,8 @@ pub enum Feature {
     UnifiedExec,
     /// Route shell tool execution through the zsh exec bridge.
     ShellZshFork,
+    /// Reflow transcript scrollback when the terminal is resized.
+    TerminalResizeReflow,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Stream structured progress while apply_patch input is being generated.
@@ -668,6 +670,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "js_repl_tools_only",
         stage: Stage::Removed,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TerminalResizeReflow,
+        key: "terminal_resize_reflow",
+        stage: Stage::Experimental {
+            name: "Terminal resize reflow",
+            menu_description: "Rebuild Codex-owned transcript scrollback when the terminal width changes.",
+            announcement: "",
+        },
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,

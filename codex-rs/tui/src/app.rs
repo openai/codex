@@ -71,6 +71,7 @@ use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 #[cfg(test)]
 use crate::test_support::test_path_display;
+use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -190,6 +191,7 @@ mod loaded_threads;
 mod pending_interactive_replay;
 mod platform_actions;
 mod replay_filter;
+mod resize_reflow;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
@@ -482,10 +484,36 @@ fn list_skills_response_to_core(response: SkillsListResponse) -> ListSkillsRespo
     }
 }
 
+fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let end = transcript_cells.len();
+    let mut start = end;
+
+    while start > 0
+        && transcript_cells[start - 1].is_stream_continuation()
+        && transcript_cells[start - 1].as_any().is::<T>()
+    {
+        start -= 1;
+    }
+
+    if start > 0
+        && transcript_cells[start - 1].as_any().is::<T>()
+        && !transcript_cells[start - 1].is_stream_continuation()
+    {
+        start -= 1;
+    }
+
+    start
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: Option<String>,
     resume_command: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct InitialHistoryReplayBuffer {
+    retained_lines: VecDeque<Line<'static>>,
 }
 
 pub(crate) struct App {
@@ -509,6 +537,8 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
+    transcript_reflow: TranscriptReflowState,
+    initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -894,6 +924,8 @@ impl App {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            transcript_reflow: TranscriptReflowState::default(),
+            initial_history_replay_buffer: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
@@ -1086,7 +1118,10 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw) {
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+            self.handle_draw_pre_render(tui)?;
+        } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
                 self.refresh_status_line();
@@ -1108,7 +1143,7 @@ impl App {
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
-                TuiEvent::Draw => {
+                TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
@@ -1122,15 +1157,23 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
-                        |frame| {
+                    let desired_height =
+                        self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    if terminal_resize_reflow_enabled {
+                        tui.draw_with_resize_reflow(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
-                        },
-                    )?;
+                        })?;
+                    } else {
+                        tui.draw(desired_height, |frame| {
+                            self.chat_widget.render(frame.area(), frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
+                            }
+                        })?;
+                    }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
