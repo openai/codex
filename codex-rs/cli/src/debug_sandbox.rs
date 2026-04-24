@@ -3,7 +3,6 @@ mod pid_tracker;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -16,9 +15,7 @@ use codex_core::exec_env::create_env;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::permissions::forbidden_agent_preserved_path_write;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
@@ -145,7 +142,7 @@ async fn run_command_under_sandbox(
     // sandbox policy. In the future, we could add a CLI option to set them
     // separately.
     let sandbox_policy_cwd = cwd.clone();
-    if let Some(reason) = preserved_path_write_forbidden_reason(
+    if let Some(reason) = codex_shell_command::preserved_path_write_forbidden_reason(
         &command,
         cwd.as_path(),
         &config.permissions.file_system_sandbox_policy,
@@ -283,126 +280,6 @@ async fn run_command_under_sandbox(
     }
 
     handle_exit_status(status);
-}
-
-fn preserved_path_write_forbidden_reason(
-    command: &[String],
-    cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-) -> Option<String> {
-    let commands = codex_shell_command::bash::parse_shell_lc_plain_commands(command)
-        .or_else(|| codex_shell_command::bash::parse_shell_lc_command_word_prefixes(command))
-        .unwrap_or_else(|| vec![command.to_vec()]);
-
-    for simple_command in commands {
-        if let Some(name) =
-            simple_command_preserved_path_write(&simple_command, cwd, file_system_sandbox_policy)
-        {
-            return Some(preserved_path_write_reason(name));
-        }
-    }
-
-    if let Some(targets) =
-        codex_shell_command::bash::parse_shell_lc_write_redirection_targets(command)
-    {
-        for target in targets {
-            if let Some(name) = forbidden_agent_preserved_path_write(
-                Path::new(&target),
-                cwd,
-                file_system_sandbox_policy,
-            ) {
-                return Some(preserved_path_write_reason(name));
-            }
-        }
-    }
-    None
-}
-
-fn preserved_path_write_reason(name: &str) -> String {
-    format!("command targets preserved workspace metadata path `{name}`")
-}
-
-fn simple_command_preserved_path_write(
-    command: &[String],
-    cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-) -> Option<&'static str> {
-    let program = command.first().map(|program| {
-        Path::new(program)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(program)
-    })?;
-
-    match program {
-        "git" => git_init_preserved_path_write(command, cwd, file_system_sandbox_policy),
-        "touch" | "mkdir" | "rm" | "rmdir" | "ln" | "mv" | "cp" | "install" => command
-            .iter()
-            .skip(1)
-            .filter(|arg| !arg.starts_with('-'))
-            .find_map(|arg| {
-                forbidden_agent_preserved_path_write(
-                    Path::new(arg),
-                    cwd,
-                    file_system_sandbox_policy,
-                )
-            }),
-        _ => None,
-    }
-}
-
-fn git_init_preserved_path_write(
-    command: &[String],
-    cwd: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-) -> Option<&'static str> {
-    let mut git_cwd = PathBuf::from(cwd);
-    let mut index = 1;
-
-    while index < command.len() {
-        match command[index].as_str() {
-            "-C" => {
-                let next = command.get(index + 1)?;
-                git_cwd = resolve_shell_operand(Path::new(next), &git_cwd);
-                index += 2;
-            }
-            "--" => {
-                index += 1;
-                break;
-            }
-            arg if arg.starts_with('-') => {
-                index += 1;
-            }
-            _ => break,
-        }
-    }
-
-    if command.get(index).map(String::as_str) != Some("init") {
-        return None;
-    }
-
-    let init_target = command
-        .iter()
-        .skip(index + 1)
-        .find(|arg| !arg.starts_with('-'))
-        .map_or_else(
-            || git_cwd.clone(),
-            |arg| resolve_shell_operand(Path::new(arg), &git_cwd),
-        );
-
-    forbidden_agent_preserved_path_write(
-        init_target.join(".git").as_path(),
-        &git_cwd,
-        file_system_sandbox_policy,
-    )
-}
-
-fn resolve_shell_operand(path: &Path, cwd: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -903,112 +780,5 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    fn legacy_workspace_write_policy(cwd: &std::path::Path) -> FileSystemSandboxPolicy {
-        let policy = codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: codex_protocol::protocol::ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd)
-    }
-
-    #[test]
-    fn debug_sandbox_preserved_path_guard_blocks_git_init_under_parent_repo() {
-        let repo = TempDir::new().expect("tempdir");
-        std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-        let cwd = repo.path().join("sub");
-        std::fs::create_dir(&cwd).expect("create cwd");
-        let policy = legacy_workspace_write_policy(&cwd);
-
-        let reason = preserved_path_write_forbidden_reason(
-            &[
-                "/bin/bash".to_string(),
-                "-lc".to_string(),
-                "git init".to_string(),
-            ],
-            &cwd,
-            &policy,
-        );
-
-        assert_eq!(
-            reason,
-            Some("command targets preserved workspace metadata path `.git`".to_string())
-        );
-    }
-
-    #[test]
-    fn debug_sandbox_preserved_path_guard_allows_normal_git_under_parent_repo() {
-        let repo = TempDir::new().expect("tempdir");
-        std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-        let cwd = repo.path().join("sub");
-        std::fs::create_dir(&cwd).expect("create cwd");
-        let policy = legacy_workspace_write_policy(&cwd);
-
-        let reason = preserved_path_write_forbidden_reason(
-            &[
-                "/bin/bash".to_string(),
-                "-lc".to_string(),
-                "git status --short".to_string(),
-            ],
-            &cwd,
-            &policy,
-        );
-
-        assert_eq!(reason, None);
-    }
-
-    #[test]
-    fn debug_sandbox_preserved_path_guard_blocks_preserved_path_redirections() {
-        let repo = TempDir::new().expect("tempdir");
-        std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-        let cwd = repo.path().join("sub");
-        std::fs::create_dir(&cwd).expect("create cwd");
-        let policy = legacy_workspace_write_policy(&cwd);
-
-        let reason = preserved_path_write_forbidden_reason(
-            &[
-                "/bin/bash".to_string(),
-                "-lc".to_string(),
-                "printf pwned > .git".to_string(),
-            ],
-            &cwd,
-            &policy,
-        );
-
-        assert_eq!(
-            reason,
-            Some("command targets preserved workspace metadata path `.git`".to_string())
-        );
-    }
-
-    #[test]
-    fn debug_sandbox_preserved_path_guard_blocks_git_init_inside_complex_script() {
-        let repo = TempDir::new().expect("tempdir");
-        std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-        let cwd = repo.path().join("sub");
-        std::fs::create_dir(&cwd).expect("create cwd");
-        let policy = legacy_workspace_write_policy(&cwd);
-
-        let reason = preserved_path_write_forbidden_reason(
-            &[
-                "/bin/bash".to_string(),
-                "-lc".to_string(),
-                "set -e\nif git init -q; then\n  exit 22\nfi".to_string(),
-            ],
-            &cwd,
-            &policy,
-        );
-
-        assert_eq!(
-            reason,
-            Some("command targets preserved workspace metadata path `.git`".to_string())
-        );
     }
 }

@@ -2,9 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -28,7 +25,6 @@ use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::powershell::try_find_powershell_executable_blocking;
 use codex_shell_command::powershell::try_find_pwsh_executable_blocking;
 use serde_json::json;
-use tempfile::TempDir;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -77,134 +73,6 @@ fn assert_safe(shell: &Shell, command: &str) {
     assert!(is_known_safe_command(&shell.derive_exec_args(
         command, /* use_login_shell */ /*use_login_shell*/ false
     )));
-}
-
-fn legacy_workspace_write_policy(cwd: &std::path::Path) -> FileSystemSandboxPolicy {
-    let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        read_only_access: ReadOnlyAccess::Restricted {
-            include_platform_defaults: false,
-            readable_roots: vec![],
-        },
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd)
-}
-
-#[test]
-fn preserved_path_detector_blocks_git_init_under_parent_repo() {
-    let repo = TempDir::new().expect("tempdir");
-    std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-    let cwd = repo.path().join("sub");
-    std::fs::create_dir(&cwd).expect("create cwd");
-    let policy = legacy_workspace_write_policy(&cwd);
-
-    let reason = super::preserved_path_write_forbidden_reason(
-        &[
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "git init".to_string(),
-        ],
-        &cwd,
-        &policy,
-    );
-
-    assert_eq!(
-        reason,
-        Some("command targets preserved workspace metadata path `.git`".to_string())
-    );
-}
-
-#[test]
-fn preserved_path_detector_allows_normal_git_under_parent_repo() {
-    let repo = TempDir::new().expect("tempdir");
-    std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-    let cwd = repo.path().join("sub");
-    std::fs::create_dir(&cwd).expect("create cwd");
-    let policy = legacy_workspace_write_policy(&cwd);
-
-    let reason = super::preserved_path_write_forbidden_reason(
-        &[
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "git status --short".to_string(),
-        ],
-        &cwd,
-        &policy,
-    );
-
-    assert_eq!(reason, None);
-}
-
-#[test]
-fn preserved_path_detector_blocks_direct_preserved_path_writes() {
-    let cwd = TempDir::new().expect("tempdir");
-    let policy = legacy_workspace_write_policy(cwd.path());
-
-    let reason = super::preserved_path_write_forbidden_reason(
-        &[
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "touch .git && mkdir -p .codex".to_string(),
-        ],
-        cwd.path(),
-        &policy,
-    );
-
-    assert_eq!(
-        reason,
-        Some("command targets preserved workspace metadata path `.git`".to_string())
-    );
-}
-
-#[test]
-fn preserved_path_detector_blocks_preserved_path_redirections() {
-    let repo = TempDir::new().expect("tempdir");
-    std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-    let cwd = repo.path().join("sub");
-    std::fs::create_dir(&cwd).expect("create cwd");
-    let policy = legacy_workspace_write_policy(&cwd);
-
-    let reason = super::preserved_path_write_forbidden_reason(
-        &[
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "printf pwned > .git".to_string(),
-        ],
-        &cwd,
-        &policy,
-    );
-
-    assert_eq!(
-        reason,
-        Some("command targets preserved workspace metadata path `.git`".to_string())
-    );
-}
-
-#[test]
-fn preserved_path_detector_blocks_git_init_inside_complex_script() {
-    let repo = TempDir::new().expect("tempdir");
-    std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
-    let cwd = repo.path().join("sub");
-    std::fs::create_dir(&cwd).expect("create cwd");
-    let policy = legacy_workspace_write_policy(&cwd);
-
-    let reason = super::preserved_path_write_forbidden_reason(
-        &[
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "set -e\nif git init -q; then\n  exit 22\nfi".to_string(),
-        ],
-        &cwd,
-        &policy,
-    );
-
-    assert_eq!(
-        reason,
-        Some("command targets preserved workspace metadata path `.git`".to_string())
-    );
 }
 
 #[tokio::test]
