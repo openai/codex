@@ -217,6 +217,33 @@ pub fn auth_provider_from_agent_task(
     })
 }
 
+/// Builds background/control-plane auth from the concrete auth snapshot.
+///
+/// ChatGPT callers that have opted into Agent Identity should first resolve the
+/// effective [`AgentIdentityAuth`] and call
+/// [`background_auth_provider_from_agent_identity_auth`].
+pub async fn background_auth_provider_from_auth(
+    auth: &CodexAuth,
+    chatgpt_base_url: Option<String>,
+) -> std::io::Result<SharedAuthProvider> {
+    match auth {
+        CodexAuth::AgentIdentity(auth) => {
+            background_auth_provider_from_agent_identity_auth(auth.clone(), chatgpt_base_url).await
+        }
+        CodexAuth::ApiKey(_) | CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            Ok(auth_provider_from_auth(auth))
+        }
+    }
+}
+
+pub async fn background_auth_provider_from_agent_identity_auth(
+    auth: AgentIdentityAuth,
+    chatgpt_base_url: Option<String>,
+) -> std::io::Result<SharedAuthProvider> {
+    auth.ensure_runtime(chatgpt_base_url).await?;
+    Ok(Arc::new(AgentIdentityAuthProvider { auth, task: None }))
+}
+
 #[cfg(test)]
 mod tests {
     use codex_agent_identity::AgentRuntimeId;
@@ -317,8 +344,8 @@ mod tests {
             auth,
             RegisteredAgentTask::new(
                 AgentRuntimeId::new("agent-runtime-1"),
-                AgentTaskId::new("background-task-1"),
-                AgentTaskKind::Background,
+                AgentTaskId::new("thread-task-1"),
+                AgentTaskKind::Thread,
             ),
         );
 
@@ -342,6 +369,49 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("true")
         );
+    }
+
+    #[tokio::test]
+    async fn background_auth_provider_uses_process_task() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/agent-runtime-1/task/register"))
+            .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+                "task_id": "task-process-1",
+            })))
+            .expect(/*r*/ 1)
+            .mount(&server)
+            .await;
+        let auth = agent_identity_auth(/*chatgpt_account_is_fedramp*/ false);
+
+        let provider =
+            background_auth_provider_from_agent_identity_auth(auth.clone(), Some(server.uri()))
+                .await
+                .expect("background auth should resolve");
+        let reused = background_auth_provider_from_agent_identity_auth(auth, Some(server.uri()))
+            .await
+            .expect("background auth should reuse process task");
+
+        let headers = provider.to_auth_headers();
+        assert!(
+            headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("AgentAssertion "))
+        );
+        let reused_headers = reused.to_auth_headers();
+        assert_eq!(
+            headers.get(http::header::AUTHORIZATION),
+            reused_headers.get(http::header::AUTHORIZATION)
+        );
+        let requests = server
+            .received_requests()
+            .await
+            .expect("failed to fetch task registration request");
+        let request_body = requests[0]
+            .body_json::<serde_json::Value>()
+            .expect("task registration request should be JSON");
+        assert_eq!(request_body.get("external_task_ref"), None);
     }
 
     #[tokio::test]
