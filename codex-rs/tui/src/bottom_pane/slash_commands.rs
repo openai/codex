@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use codex_utils_fuzzy_match::fuzzy_match;
 
+use crate::custom_slash_command::CustomSlashCommand;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 
@@ -57,11 +58,43 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
     .then_some(cmd)
 }
 
+pub(crate) fn is_builtin_command_name(name: &str) -> bool {
+    SlashCommand::from_str(name).is_ok()
+}
+
+pub(crate) fn custom_commands_for_input(
+    custom_commands: &[CustomSlashCommand],
+) -> impl Iterator<Item = &CustomSlashCommand> {
+    custom_commands
+        .iter()
+        .filter(|command| !is_builtin_command_name(&command.name))
+}
+
+pub(crate) fn find_custom_command<'a>(
+    name: &str,
+    custom_commands: &'a [CustomSlashCommand],
+) -> Option<&'a CustomSlashCommand> {
+    if is_builtin_command_name(name) {
+        return None;
+    }
+    custom_commands.iter().find(|command| command.name == name)
+}
+
 /// Whether any visible built-in fuzzily matches the provided prefix.
 pub(crate) fn has_builtin_prefix(name: &str, flags: BuiltinCommandFlags) -> bool {
     builtins_for_input(flags)
         .into_iter()
         .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+}
+
+pub(crate) fn has_command_prefix(
+    name: &str,
+    flags: BuiltinCommandFlags,
+    custom_commands: &[CustomSlashCommand],
+) -> bool {
+    has_builtin_prefix(name, flags)
+        || custom_commands_for_input(custom_commands)
+            .any(|command| fuzzy_match(&command.name, name).is_some())
 }
 
 #[cfg(test)]

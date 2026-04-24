@@ -99,6 +99,10 @@ Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
 popup so gating stays in sync.
 
+Private prompt commands are loaded from `$CODEX_HOME/commands/` and threaded through the same
+composer/popup path. They expand their Markdown prompt template and submit it as ordinary prompt
+text; they do not run local shell substitutions before submission.
+
 ## Submission flow (Enter/Tab)
 
 There are multiple submission paths, but they share the same core rules:

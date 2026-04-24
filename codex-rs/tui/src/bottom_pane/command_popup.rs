@@ -7,6 +7,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
 use super::slash_commands;
+use crate::custom_slash_command::CustomSlashCommand;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
@@ -16,15 +17,31 @@ use crate::slash_command::SlashCommand;
 // `approvals` is an alias of `permissions`.
 const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
 
-/// A selectable item in the popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommandItem {
+enum CommandItem {
     Builtin(SlashCommand),
+    Custom(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelectedCommand {
+    Builtin(SlashCommand),
+    Custom(CustomSlashCommand),
+}
+
+impl SelectedCommand {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            SelectedCommand::Builtin(cmd) => cmd.command(),
+            SelectedCommand::Custom(cmd) => &cmd.name,
+        }
+    }
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
+    custom_commands: Vec<CustomSlashCommand>,
     state: ScrollState,
 }
 
@@ -58,7 +75,15 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 }
 
 impl CommandPopup {
+    #[cfg(test)]
     pub(crate) fn new(flags: CommandPopupFlags) -> Self {
+        Self::new_with_custom(flags, &[])
+    }
+
+    pub(crate) fn new_with_custom(
+        flags: CommandPopupFlags,
+        custom_commands: &[CustomSlashCommand],
+    ) -> Self {
         // Keep built-in availability in sync with the composer.
         let builtins: Vec<(&'static str, SlashCommand)> =
             slash_commands::builtins_for_input(flags.into())
@@ -69,6 +94,9 @@ impl CommandPopup {
         Self {
             command_filter: String::new(),
             builtins,
+            custom_commands: slash_commands::custom_commands_for_input(custom_commands)
+                .cloned()
+                .collect(),
             state: ScrollState::new(),
         }
     }
@@ -126,6 +154,9 @@ impl CommandPopup {
                 }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
+            for idx in 0..self.custom_commands.len() {
+                out.push((CommandItem::Custom(idx), None));
+            }
             return out;
         }
 
@@ -159,6 +190,9 @@ impl CommandPopup {
         for (_, cmd) in self.builtins.iter() {
             push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
+        for (idx, command) in self.custom_commands.iter().enumerate() {
+            push_match(CommandItem::Custom(idx), &command.name, None, 0);
+        }
 
         out.extend(exact);
         out.extend(prefix);
@@ -175,21 +209,38 @@ impl CommandPopup {
     ) -> Vec<GenericDisplayRow> {
         matches
             .into_iter()
-            .map(|(item, indices)| {
-                let CommandItem::Builtin(cmd) = item;
-                let name = format!("/{}", cmd.command());
-                let description = cmd.description().to_string();
-                GenericDisplayRow {
+            .filter_map(|(item, indices)| {
+                let (name, description, category_tag) = match item {
+                    CommandItem::Builtin(cmd) => (
+                        format!("/{}", cmd.command()),
+                        cmd.description().to_string(),
+                        None,
+                    ),
+                    CommandItem::Custom(idx) => {
+                        let command = self.custom_commands.get(idx)?;
+                        let suffix = command
+                            .argument_hint
+                            .as_ref()
+                            .map(|hint| format!(" {hint}"))
+                            .unwrap_or_default();
+                        (
+                            format!("/{}{}", command.name, suffix),
+                            command.description.clone(),
+                            Some("private".to_string()),
+                        )
+                    }
+                };
+                Some(GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
-                    category_tag: None,
+                    category_tag,
                     wrap_indent: None,
                     is_disabled: false,
                     disabled_reason: None,
-                }
+                })
             })
             .collect()
     }
@@ -210,11 +261,22 @@ impl CommandPopup {
     }
 
     /// Return currently selected command, if any.
-    pub(crate) fn selected_item(&self) -> Option<CommandItem> {
+    fn selected_item(&self) -> Option<CommandItem> {
         let matches = self.filtered_items();
         self.state
             .selected_idx
             .and_then(|idx| matches.get(idx).copied())
+    }
+
+    pub(crate) fn selected_command(&self) -> Option<SelectedCommand> {
+        match self.selected_item()? {
+            CommandItem::Builtin(cmd) => Some(SelectedCommand::Builtin(cmd)),
+            CommandItem::Custom(idx) => self
+                .custom_commands
+                .get(idx)
+                .cloned()
+                .map(SelectedCommand::Custom),
+        }
     }
 }
 
@@ -237,7 +299,16 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::custom_slash_command::load_custom_slash_commands;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    fn builtin_name(item: CommandItem) -> Option<&'static str> {
+        match item {
+            CommandItem::Builtin(cmd) => Some(cmd.command()),
+            CommandItem::Custom(_) => None,
+        }
+    }
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -249,8 +320,9 @@ mod tests {
         // Access the filtered list via the selected command and ensure that
         // one of the matches is the new "init" command.
         let matches = popup.filtered_items();
-        let has_init = matches.iter().any(|item| match item {
+        let has_init = matches.iter().copied().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
+            CommandItem::Custom(_) => false,
         });
         assert!(
             has_init,
@@ -268,7 +340,7 @@ mod tests {
         let selected = popup.selected_item();
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
-            None => panic!("expected a selected command for exact match"),
+            other => panic!("expected init to be selected for exact match, got {other:?}"),
         }
     }
 
@@ -279,7 +351,31 @@ mod tests {
         let matches = popup.filtered_items();
         match matches.first() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
-            None => panic!("expected at least one match for '/mo'"),
+            other => panic!("expected model to be first match for '/mo', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_commands_are_filterable() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let commands_dir = codex_home.path().join("commands");
+        std::fs::create_dir_all(&commands_dir).expect("commands dir");
+        std::fs::write(
+            commands_dir.join("orient.md"),
+            "---\ndescription: Rebuild working context\nargument-hint: [focus]\n---\nOrient around $ARGUMENTS.",
+        )
+        .expect("command file");
+        let commands = load_custom_slash_commands(codex_home.path());
+        let mut popup = CommandPopup::new_with_custom(CommandPopupFlags::default(), &commands);
+
+        popup.on_composer_text_change("/ori".to_string());
+
+        match popup.selected_command() {
+            Some(SelectedCommand::Custom(command)) => {
+                assert_eq!(command.name, "orient");
+                assert_eq!(command.argument_hint.as_deref(), Some("[focus]"));
+            }
+            other => panic!("expected custom orient command to be selected, got {other:?}"),
         }
     }
 
@@ -291,9 +387,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
         assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
     }
@@ -306,9 +400,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
         assert!(
             !cmds.contains(&"compact"),
@@ -336,9 +428,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
         assert!(
             !cmds.contains(&"collab"),
@@ -410,9 +500,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
         assert!(
             !cmds.contains(&"personality"),
@@ -459,9 +547,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
 
         assert!(
@@ -476,9 +562,7 @@ mod tests {
         let cmds: Vec<&str> = popup
             .filtered_items()
             .into_iter()
-            .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
-            })
+            .filter_map(builtin_name)
             .collect();
 
         assert!(

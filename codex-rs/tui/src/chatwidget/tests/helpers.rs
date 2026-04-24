@@ -169,6 +169,7 @@ pub(super) async fn make_chatwidget_manual(
         skills: None,
     });
     bottom.set_collaboration_modes_enabled(/*enabled*/ true);
+    bottom.set_custom_slash_commands(load_custom_slash_commands(cfg.codex_home.as_path()));
     let model_catalog = test_model_catalog(&cfg);
     let reasoning_effort = None;
     let base_mode = CollaborationMode {

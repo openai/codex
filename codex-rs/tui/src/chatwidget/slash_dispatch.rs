@@ -8,6 +8,7 @@
 use super::*;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
+use crate::custom_slash_command::CustomSlashCommand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -52,6 +53,46 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         self.dispatch_command_with_args(cmd, args, text_elements);
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    pub(super) fn handle_custom_slash_command_dispatch(&mut self, cmd: CustomSlashCommand) {
+        self.dispatch_prepared_custom_slash_command(
+            cmd,
+            PreparedSlashCommandArgs {
+                args: String::new(),
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: Vec::new(),
+                source: SlashCommandDispatchSource::Live,
+            },
+        );
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    pub(super) fn handle_custom_slash_command_with_args_dispatch(
+        &mut self,
+        cmd: CustomSlashCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+    ) {
+        let Some((prepared_args, prepared_elements)) =
+            self.prepare_live_inline_args(args, text_elements)
+        else {
+            return;
+        };
+        self.dispatch_prepared_custom_slash_command(
+            cmd,
+            PreparedSlashCommandArgs {
+                args: prepared_args,
+                text_elements: prepared_elements,
+                local_images: Vec::new(),
+                remote_image_urls: Vec::new(),
+                mention_bindings: Vec::new(),
+                source: SlashCommandDispatchSource::Live,
+            },
+        );
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -618,6 +659,44 @@ impl ChatWidget {
         }
     }
 
+    fn dispatch_prepared_custom_slash_command(
+        &mut self,
+        command: CustomSlashCommand,
+        prepared: PreparedSlashCommandArgs,
+    ) {
+        let PreparedSlashCommandArgs {
+            args,
+            text_elements: _,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+            source,
+        } = prepared;
+        let user_message = self.prepared_inline_user_message(
+            command.expanded_prompt(args.trim()),
+            Vec::new(),
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+            source,
+        );
+        if self.is_session_configured() {
+            self.submit_user_message_with_shell_escape_policy(
+                user_message,
+                ShellEscapePolicy::Disallow,
+            );
+        } else {
+            self.queue_user_message_with_options_and_shell_escape_policy(
+                user_message,
+                QueuedInputAction::Plain,
+                ShellEscapePolicy::Disallow,
+            );
+        }
+        if source == SlashCommandDispatchSource::Live {
+            self.bottom_pane.drain_pending_submission_state();
+        }
+    }
+
     pub(super) fn submit_queued_slash_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
         let UserMessage {
             text,
@@ -648,8 +727,24 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
-        else {
+        let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags());
+        let custom_command =
+            slash_commands::find_custom_command(name, self.bottom_pane.custom_slash_commands());
+        let Some(cmd) = cmd else {
+            if let Some(command) = custom_command {
+                self.dispatch_prepared_custom_slash_command(
+                    command.clone(),
+                    PreparedSlashCommandArgs {
+                        args: rest.trim().to_string(),
+                        text_elements: Vec::new(),
+                        local_images,
+                        remote_image_urls,
+                        mention_bindings,
+                        source: SlashCommandDispatchSource::Queued,
+                    },
+                );
+                return QueueDrain::Stop;
+            }
             self.add_info_message(
                 format!(
                     r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#

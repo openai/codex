@@ -166,6 +166,59 @@ async fn queued_slash_review_with_args_restores_for_edit() {
 }
 
 #[tokio::test]
+async fn private_slash_command_expands_prompt_with_args() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let commands_dir = chat.config.codex_home.join("commands");
+    std::fs::create_dir_all(&commands_dir).expect("commands dir");
+    std::fs::write(
+        commands_dir.join("orient.md"),
+        "---\ndescription: Rebuild local context\nargument-hint: [focus]\n---\nLoad current context for $ARGUMENTS.",
+    )
+    .expect("command file");
+    chat.bottom_pane
+        .set_custom_slash_commands(load_custom_slash_commands(chat.config.codex_home.as_path()));
+
+    submit_composer_text(&mut chat, "/orient auth flow");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Load current context for auth flow.".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected private slash command to submit user turn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn private_slash_command_prompt_is_not_shell_escape() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let commands_dir = chat.config.codex_home.join("commands");
+    std::fs::create_dir_all(&commands_dir).expect("commands dir");
+    std::fs::write(commands_dir.join("literal-shell.md"), "!echo $ARGUMENTS")
+        .expect("command file");
+    chat.bottom_pane
+        .set_custom_slash_commands(load_custom_slash_commands(chat.config.codex_home.as_path()));
+
+    submit_composer_text(&mut chat, "/literal-shell hello");
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "!echo hello".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected private slash command to submit user turn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn queued_bang_shell_dispatches_after_active_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

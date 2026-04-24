@@ -336,6 +336,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
+use crate::custom_slash_command::load_custom_slash_commands;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -1098,13 +1099,23 @@ enum ShellEscapePolicy {
 struct QueuedUserMessage {
     user_message: UserMessage,
     action: QueuedInputAction,
+    shell_escape_policy: ShellEscapePolicy,
 }
 
 impl QueuedUserMessage {
     fn new(user_message: UserMessage, action: QueuedInputAction) -> Self {
+        Self::new_with_shell_escape_policy(user_message, action, ShellEscapePolicy::Allow)
+    }
+
+    fn new_with_shell_escape_policy(
+        user_message: UserMessage,
+        action: QueuedInputAction,
+        shell_escape_policy: ShellEscapePolicy,
+    ) -> Self {
         Self {
             user_message,
             action,
+            shell_escape_policy,
         }
     }
 
@@ -5168,6 +5179,7 @@ impl ChatWidget {
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = config.service_tier;
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
+        let custom_slash_commands = load_custom_slash_commands(config.codex_home.as_path());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -5311,6 +5323,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
+        widget
+            .bottom_pane
+            .set_custom_slash_commands(custom_slash_commands);
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -5526,6 +5541,16 @@ impl ChatWidget {
                     }
                     InputResult::CommandWithArgs(cmd, args, text_elements) => {
                         self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+                    }
+                    InputResult::CustomCommand(cmd) => {
+                        self.handle_custom_slash_command_dispatch(cmd);
+                    }
+                    InputResult::CustomCommandWithArgs(cmd, args, text_elements) => {
+                        self.handle_custom_slash_command_with_args_dispatch(
+                            cmd,
+                            args,
+                            text_elements,
+                        );
                     }
                     InputResult::None => {}
                 }
@@ -5756,12 +5781,29 @@ impl ChatWidget {
         user_message: UserMessage,
         action: QueuedInputAction,
     ) {
+        self.queue_user_message_with_options_and_shell_escape_policy(
+            user_message,
+            action,
+            ShellEscapePolicy::Allow,
+        );
+    }
+
+    fn queue_user_message_with_options_and_shell_escape_policy(
+        &mut self,
+        user_message: UserMessage,
+        action: QueuedInputAction,
+        shell_escape_policy: ShellEscapePolicy,
+    ) {
         if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
             self.queued_user_messages
-                .push_back(QueuedUserMessage::new(user_message, action));
+                .push_back(QueuedUserMessage::new_with_shell_escape_policy(
+                    user_message,
+                    action,
+                    shell_escape_policy,
+                ));
             self.refresh_pending_input_preview();
         } else {
-            self.submit_user_message(user_message);
+            self.submit_user_message_with_shell_escape_policy(user_message, shell_escape_policy);
         }
     }
 
@@ -5804,7 +5846,11 @@ impl ChatWidget {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages
-                .push_front(QueuedUserMessage::from(user_message));
+                .push_front(QueuedUserMessage::new_with_shell_escape_policy(
+                    user_message,
+                    QueuedInputAction::Plain,
+                    shell_escape_policy,
+                ));
             self.refresh_pending_input_preview();
             return None;
         }
@@ -7559,7 +7605,11 @@ impl ChatWidget {
             };
             match queued_message.action {
                 QueuedInputAction::Plain => {
-                    self.submit_user_message(queued_message.into_user_message());
+                    let shell_escape_policy = queued_message.shell_escape_policy;
+                    self.submit_user_message_with_shell_escape_policy(
+                        queued_message.into_user_message(),
+                        shell_escape_policy,
+                    );
                     break;
                 }
                 QueuedInputAction::ParseSlash => {
