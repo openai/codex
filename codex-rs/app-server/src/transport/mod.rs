@@ -11,9 +11,12 @@ use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use codex_core::config::find_codex_home;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -32,16 +35,32 @@ pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
 mod remote_control;
 mod stdio;
+mod unix_socket;
+#[cfg(test)]
+mod unix_socket_tests;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
 pub(crate) use remote_control::start_remote_control;
 pub(crate) use stdio::start_stdio_connection;
+pub(crate) use unix_socket::start_control_socket_acceptor;
 pub(crate) use websocket::start_websocket_acceptor;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
+const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
+
+pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path(
+        codex_home
+            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
+            .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
+    )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
     Stdio,
+    UnixSocket { socket_path: AbsolutePathBuf },
     WebSocket { bind_address: SocketAddr },
     Off,
 }
@@ -49,6 +68,7 @@ pub enum AppServerTransport {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AppServerTransportParseError {
     UnsupportedListenUrl(String),
+    InvalidUnixSocketPath { listen_url: String, message: String },
     InvalidWebSocketListenUrl(String),
 }
 
@@ -57,7 +77,14 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `ws://IP:PORT`, or `off`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
+            ),
+            AppServerTransportParseError::InvalidUnixSocketPath {
+                listen_url,
+                message,
+            } => write!(
+                f,
+                "invalid unix socket --listen URL `{listen_url}`; failed to resolve socket path: {message}"
             ),
             AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -75,6 +102,31 @@ impl AppServerTransport {
     pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
         if listen_url == Self::DEFAULT_LISTEN_URL {
             return Ok(Self::Stdio);
+        }
+
+        if let Some(raw_socket_path) = listen_url.strip_prefix("unix://") {
+            let socket_path = if raw_socket_path.is_empty() {
+                let codex_home = find_codex_home().map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: format!("failed to resolve CODEX_HOME: {err}"),
+                    }
+                })?;
+                app_server_control_socket_path(&codex_home).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
+            } else {
+                AbsolutePathBuf::relative_to_current_dir(raw_socket_path).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
+            };
+            return Ok(Self::UnixSocket { socket_path });
         }
 
         if listen_url == "off" {

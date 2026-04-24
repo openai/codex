@@ -19,6 +19,7 @@ mod fs;
 mod initialize;
 mod marketplace_add;
 mod marketplace_remove;
+mod marketplace_upgrade;
 mod mcp_resource;
 mod mcp_server_elicitation;
 mod mcp_server_status;

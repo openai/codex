@@ -1,5 +1,5 @@
-use super::OPENAI_CURATED_MARKETPLACE_NAME;
-use super::marketplace_install_root;
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::installed_marketplaces::marketplace_install_root;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;
