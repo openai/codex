@@ -56,9 +56,13 @@ pub(crate) struct SessionConfiguration {
     /// When to escalate for approval for execution
     pub(super) approval_policy: Constrained<AskForApproval>,
     pub(super) approvals_reviewer: ApprovalsReviewer,
-    /// How to sandbox commands executed in the system
+    /// Canonical permission profile for the session.
+    pub(super) permission_profile: Constrained<PermissionProfile>,
+    /// Legacy sandbox projection retained while lower-level callers migrate.
     pub(super) sandbox_policy: Constrained<SandboxPolicy>,
+    /// Filesystem sandbox projection of `permission_profile`.
     pub(super) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    /// Network sandbox projection of `permission_profile`.
     pub(super) network_sandbox_policy: NetworkSandboxPolicy,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
@@ -94,11 +98,7 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
-            &self.file_system_sandbox_policy,
-            self.network_sandbox_policy,
-        )
+        self.permission_profile.get().clone()
     }
 
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -170,23 +170,10 @@ impl SessionConfiguration {
         }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
-            let sandbox_policy = permission_profile
-                .to_legacy_sandbox_policy(&next_configuration.cwd)
-                .map_err(|err| ConstraintError::InvalidValue {
-                    field_name: "permission_profile",
-                    candidate: format!("{permission_profile:?}"),
-                    allowed: format!(
-                        "permission profiles that can be represented by the active sandbox constraints: {err}"
-                    ),
-                    requirement_source: codex_config::RequirementSource::Unknown,
-                })?;
-            next_configuration.sandbox_policy.set(sandbox_policy)?;
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                permission_profile.to_runtime_permissions();
-            file_system_sandbox_policy
-                .preserve_deny_read_restrictions_from(&self.file_system_sandbox_policy);
-            next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
-            next_configuration.network_sandbox_policy = network_sandbox_policy;
+            next_configuration.set_permission_profile_projection(
+                permission_profile,
+                Some(&self.file_system_sandbox_policy),
+            )?;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
             next_configuration.file_system_sandbox_policy =
@@ -197,6 +184,15 @@ impl SessionConfiguration {
                 );
             next_configuration.network_sandbox_policy =
                 NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
+            next_configuration.permission_profile.set(
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    SandboxEnforcement::from_legacy_sandbox_policy(
+                        next_configuration.sandbox_policy.get(),
+                    ),
+                    &next_configuration.file_system_sandbox_policy,
+                    next_configuration.network_sandbox_policy,
+                ),
+            )?;
         } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
@@ -205,6 +201,15 @@ impl SessionConfiguration {
                     next_configuration.sandbox_policy.get(),
                     &next_configuration.cwd,
                 );
+            next_configuration.permission_profile.set(
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    SandboxEnforcement::from_legacy_sandbox_policy(
+                        next_configuration.sandbox_policy.get(),
+                    ),
+                    &next_configuration.file_system_sandbox_policy,
+                    next_configuration.network_sandbox_policy,
+                ),
+            )?;
         }
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
@@ -213,6 +218,41 @@ impl SessionConfiguration {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
         Ok(next_configuration)
+    }
+
+    fn set_permission_profile_projection(
+        &mut self,
+        permission_profile: PermissionProfile,
+        preserve_deny_reads_from: Option<&FileSystemSandboxPolicy>,
+    ) -> ConstraintResult<()> {
+        let enforcement = permission_profile.enforcement();
+        let (mut file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        if let Some(existing_file_system_policy) = preserve_deny_reads_from {
+            file_system_sandbox_policy
+                .preserve_deny_read_restrictions_from(existing_file_system_policy);
+        }
+        let effective_permission_profile =
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                enforcement,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+            );
+        let sandbox_policy = effective_permission_profile
+            .to_legacy_sandbox_policy(&self.cwd)
+            .map_err(|err| ConstraintError::InvalidValue {
+                field_name: "permission_profile",
+                candidate: format!("{effective_permission_profile:?}"),
+                allowed: format!(
+                    "permission profiles that can be represented by the active sandbox constraints: {err}"
+                ),
+                requirement_source: codex_config::RequirementSource::Unknown,
+            })?;
+        self.permission_profile.set(effective_permission_profile)?;
+        self.sandbox_policy.set(sandbox_policy)?;
+        self.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.network_sandbox_policy = network_sandbox_policy;
+        Ok(())
     }
 }
 

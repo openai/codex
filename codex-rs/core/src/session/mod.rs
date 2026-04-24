@@ -634,6 +634,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
+            permission_profile: config.permissions.permission_profile.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
             file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
             network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2548,8 +2549,8 @@ impl Session {
         }
         if turn_context.config.include_permissions_instructions {
             developer_sections.push(
-                PermissionsInstructions::from_policy(
-                    turn_context.sandbox_policy.get(),
+                PermissionsInstructions::from_permission_profile(
+                    &turn_context.permission_profile,
                     turn_context.approval_policy.value(),
                     turn_context.config.approvals_reviewer,
                     self.services.exec_policy.current().as_ref(),
