@@ -2,7 +2,9 @@ mod client;
 mod events;
 mod facts;
 mod reducer;
+mod response_items;
 
+use serde::Serialize;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -20,6 +22,8 @@ pub use events::GuardianReviewedAction;
 pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;
+pub use facts::CodexResponsesApiCallInput;
+pub use facts::CodexResponsesApiCallStatus;
 pub use facts::CodexTurnSteerEvent;
 pub use facts::CompactionImplementation;
 pub use facts::CompactionPhase;
@@ -50,4 +54,25 @@ pub fn now_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+pub(crate) fn serialized_string<T: Serialize>(value: &T) -> Option<String> {
+    match serde_json::to_value(value).ok()? {
+        serde_json::Value::String(value) => Some(value),
+        value => Some(value.to_string()),
+    }
+}
+
+pub(crate) fn serialized_bytes<T: Serialize>(value: &T) -> Option<i64> {
+    serde_json::to_string(value)
+        .ok()
+        .map(|value| byte_len(&value))
+}
+
+pub(crate) fn nonzero_i64(value: i64) -> Option<i64> {
+    (value > 0).then_some(value)
+}
+
+pub(crate) fn byte_len(value: &str) -> i64 {
+    i64::try_from(value.len()).unwrap_or(i64::MAX)
 }
