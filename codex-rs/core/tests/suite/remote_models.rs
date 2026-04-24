@@ -1,15 +1,12 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
-// unified exec is not supported on Windows OS
-use std::sync::Arc;
-
 use anyhow::Result;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -171,6 +168,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            permission_profile: None,
             personality: None,
             environments: None,
         })
@@ -248,6 +246,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            permission_profile: None,
             personality: None,
             environments: None,
         })
@@ -324,6 +323,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            permission_profile: None,
             personality: None,
             environments: None,
         })
@@ -408,6 +408,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: requested_model.to_string(),
             effort: None,
             summary: None,
@@ -468,6 +469,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: requested_model.to_string(),
             effort: None,
             summary: Some(
@@ -595,6 +597,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
@@ -635,6 +638,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
@@ -840,6 +844,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: Some(model.to_string()),
             effort: None,
@@ -861,6 +866,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: model.to_string(),
             effort: None,
             summary: Some(ReasoningSummary::Auto),
@@ -1198,7 +1204,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> ModelPreset {
+async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> ModelPreset {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {

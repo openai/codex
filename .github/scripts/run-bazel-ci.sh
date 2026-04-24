@@ -306,7 +306,6 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     INCLUDE
     LIB
     LIBPATH
-    PATH
     UCRTVersion
     UniversalCRTSdkDir
     VCINSTALLDIR
@@ -323,6 +322,17 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       post_config_bazel_args+=("--action_env=${env_var}" "--host_action_env=${env_var}")
     fi
   done
+
+  if [[ -z "${CODEX_BAZEL_WINDOWS_PATH:-}" ]]; then
+    echo "CODEX_BAZEL_WINDOWS_PATH must be set for Windows Bazel CI." >&2
+    exit 1
+  fi
+
+  post_config_bazel_args+=(
+    "--action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
+    "--host_action_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
+    "--test_env=PATH=${CODEX_BAZEL_WINDOWS_PATH}"
+  )
 fi
 
 bazel_console_log="$(mktemp)"

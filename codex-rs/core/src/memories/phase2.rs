@@ -27,7 +27,12 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
 use codex_state::StateRuntime;
+<<<<<<< jif/memories-on-file-system
 use std::path::Path;
+=======
+use std::collections::HashMap;
+use std::collections::HashSet;
+>>>>>>> main
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -305,12 +310,19 @@ mod agent {
         agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
         agent_config.memories.use_memories = false;
+        agent_config.include_apps_instructions = false;
+        agent_config.mcp_servers = Constrained::allow_only(HashMap::new());
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
         let _ = agent_config.features.disable(Feature::SpawnCsv);
         let _ = agent_config.features.disable(Feature::Collab);
         let _ = agent_config.features.disable(Feature::MemoryTool);
+        let _ = agent_config.features.disable(Feature::Apps);
+        let _ = agent_config.features.disable(Feature::Plugins);
+        let _ = agent_config
+            .features
+            .disable(Feature::SkillMcpDependencyInstall);
 
         // Sandbox policy
         let writable_roots = vec![root];

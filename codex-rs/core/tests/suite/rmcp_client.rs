@@ -290,6 +290,7 @@ async fn call_cwd_tool(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -424,6 +425,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -618,6 +620,69 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_cwd)]
+async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let server_name = "rmcp_local_fallback_cwd";
+    let expected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
+    let expected_cwd_for_config = Arc::clone(&expected_cwd);
+    let rmcp_test_server_bin = cargo_bin("test_stdio_server")?;
+    let relative_server_path = PathBuf::from("mcp-bin").join(
+        rmcp_test_server_bin
+            .file_name()
+            .expect("test stdio server binary should have a file name"),
+    );
+    let relative_command = relative_server_path.to_string_lossy().into_owned();
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            *expected_cwd_for_config
+                .lock()
+                .expect("expected cwd lock should not be poisoned") =
+                Some(config.cwd.to_path_buf());
+
+            let target_bin = config.cwd.join(&relative_server_path).into_path_buf();
+            let target_dir = target_bin
+                .parent()
+                .expect("relative test server path should include a parent");
+            fs::create_dir_all(target_dir).expect("create relative MCP bin directory");
+            fs::copy(&rmcp_test_server_bin, &target_bin).expect("copy test stdio server");
+
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    relative_command,
+                    Some(HashMap::from([(
+                        "MCP_TEST_VALUE".to_string(),
+                        "local-fallback-cwd".to_string(),
+                    )])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build(&server)
+        .await?;
+
+    let expected_cwd = expected_cwd
+        .lock()
+        .expect("expected cwd lock should not be poisoned")
+        .clone()
+        .expect("test config should record runtime fallback cwd");
+    let structured =
+        call_cwd_tool(&server, &fixture, server_name, "call-local-fallback-cwd").await?;
+
+    assert_cwd_tool_output(&structured, &expected_cwd);
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -793,6 +858,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -926,6 +992,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1026,6 +1093,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1178,6 +1246,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1416,6 +1485,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: text_only_model_slug.to_string(),
             effort: None,
             summary: None,
@@ -1525,6 +1595,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1662,6 +1733,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1772,6 +1844,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1897,6 +1970,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -2114,6 +2188,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

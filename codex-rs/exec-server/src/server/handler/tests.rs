@@ -170,13 +170,12 @@ async fn long_poll_read_fails_after_session_resume() {
         .expect("initialize");
     first_handler.initialized().expect("initialized");
 
+    // Keep the process quiet and alive so the pending read can only complete
+    // after session resume, not because the process produced output or exited.
     first_handler
         .exec(exec_params_with_argv(
             "proc-long-poll",
-            shell_argv(
-                "sleep 0.1; printf resumed",
-                "ping -n 2 127.0.0.1 >NUL && echo resumed",
-            ),
+            shell_argv("sleep 5", "ping -n 6 127.0.0.1 >NUL"),
         ))
         .await
         .expect("start process");
@@ -317,7 +316,7 @@ async fn read_process_until_closed(
     handler: &ExecServerHandler,
     process_id: ProcessId,
 ) -> (String, Option<i32>) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut output = String::new();
     let mut exit_code = None;
     let mut after_seq = None;
@@ -346,7 +345,7 @@ async fn read_process_until_closed(
         after_seq = response.next_seq.checked_sub(1).or(after_seq);
         assert!(
             tokio::time::Instant::now() < deadline,
-            "process should close within 2s"
+            "process should close within 5s"
         );
     }
 }

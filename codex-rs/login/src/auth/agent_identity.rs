@@ -39,6 +39,10 @@ impl AgentIdentityAuth {
         &self.record
     }
 
+    pub fn process_task_id(&self) -> Option<&str> {
+        self.process_task_id.get().map(String::as_str)
+    }
+
     pub async fn ensure_runtime(&self, chatgpt_base_url: Option<String>) -> std::io::Result<()> {
         self.process_task_id
             .get_or_try_init(|| async {

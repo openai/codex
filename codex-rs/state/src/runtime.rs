@@ -55,6 +55,9 @@ use tracing::warn;
 
 mod agent_jobs;
 mod backfill;
+mod device_key;
+#[cfg(test)]
+mod device_key_tests;
 mod logs;
 mod memories;
 mod remote_control;
@@ -62,6 +65,7 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+pub use device_key::DeviceKeyBindingRecord;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 

@@ -192,6 +192,8 @@ mod tests {
         )
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
+        let sandbox_cwd =
+            AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute tempdir");
 
         for (file_name, sandbox_policy) in [
             ("danger.txt", SandboxPolicy::DangerFullAccess),
@@ -210,7 +212,10 @@ mod tests {
                 .write_file(FsWriteFileParams {
                     path: path.clone(),
                     data_base64: STANDARD.encode("ok"),
-                    sandbox: Some(FileSystemSandboxContext::new(sandbox_policy.clone())),
+                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
+                        sandbox_policy.clone(),
+                        sandbox_cwd.clone(),
+                    )),
                 })
                 .await
                 .expect("write file");
@@ -218,7 +223,10 @@ mod tests {
             let response = handler
                 .read_file(FsReadFileParams {
                     path,
-                    sandbox: Some(FileSystemSandboxContext::new(sandbox_policy)),
+                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
+                        sandbox_policy,
+                        sandbox_cwd.clone(),
+                    )),
                 })
                 .await
                 .expect("read file");

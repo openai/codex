@@ -2,6 +2,7 @@
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::NoopThreadConfigLoader;
+use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -31,6 +32,7 @@ use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
@@ -93,6 +95,7 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
+pub use crate::transport::app_server_control_socket_path;
 pub use crate::transport::auth::AppServerWebsocketAuthArgs;
 pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
@@ -106,6 +109,13 @@ enum LogFormat {
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
+
+fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoader> {
+    match config.experimental_thread_config_endpoint.as_deref() {
+        Some(endpoint) => Arc::new(RemoteThreadConfigLoader::new(endpoint)),
+        None => Arc::new(NoopThreadConfigLoader),
+    }
+}
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -382,14 +392,13 @@ pub async fn run_main_with_transport(
         )
     })?;
     let codex_home = find_codex_home()?;
-    let thread_config_loader: Arc<dyn ThreadConfigLoader> = Arc::new(NoopThreadConfigLoader);
     let config_manager = ConfigManager::new(
         codex_home.to_path_buf(),
         cli_kv_overrides.clone(),
         loader_overrides,
         Default::default(),
         arg0_paths.clone(),
-        thread_config_loader.clone(),
+        Arc::new(NoopThreadConfigLoader),
     );
     match config_manager
         .load_latest_config(/*fallback_cwd*/ None)
@@ -413,6 +422,9 @@ pub async fn run_main_with_transport(
                 }
             }
 
+            let discovered_thread_config_loader = configured_thread_config_loader(&config);
+            config_manager
+                .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
             let auth_manager =
                 AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
             config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
@@ -542,7 +554,7 @@ pub async fn run_main_with_transport(
     let graceful_signal_restart_enabled = !single_client_mode;
     let mut app_server_client_name_rx = None;
 
-    match transport {
+    match &transport {
         AppServerTransport::Stdio => {
             let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
             app_server_client_name_rx = Some(stdio_client_name_rx);
@@ -553,9 +565,18 @@ pub async fn run_main_with_transport(
             )
             .await?;
         }
+        AppServerTransport::UnixSocket { socket_path } => {
+            let accept_handle = start_control_socket_acceptor(
+                socket_path.clone(),
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+            )
+            .await?;
+            transport_accept_handles.push(accept_handle);
+        }
         AppServerTransport::WebSocket { bind_address } => {
             let accept_handle = start_websocket_acceptor(
-                bind_address,
+                *bind_address,
                 transport_event_tx.clone(),
                 transport_shutdown_token.clone(),
                 policy_from_settings(&auth)?,
@@ -660,7 +681,7 @@ pub async fn run_main_with_transport(
             config_warnings,
             session_source,
             auth_manager,
-            rpc_transport: analytics_rpc_transport(transport),
+            rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle),
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -772,7 +793,7 @@ pub async fn run_main_with_transport(
                                             .process_request(
                                                 connection_id,
                                                 request,
-                                                transport,
+                                                &transport,
                                                 Arc::clone(&connection_state.session),
                                             )
                                             .await;
@@ -892,12 +913,12 @@ pub async fn run_main_with_transport(
     Ok(())
 }
 
-fn analytics_rpc_transport(transport: AppServerTransport) -> AppServerRpcTransport {
+fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
     match transport {
         AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::WebSocket { .. } | AppServerTransport::Off => {
-            AppServerRpcTransport::Websocket
-        }
+        AppServerTransport::UnixSocket { .. }
+        | AppServerTransport::WebSocket { .. }
+        | AppServerTransport::Off => AppServerRpcTransport::Websocket,
     }
 }
 

@@ -5,8 +5,8 @@ expression: popup
   Approaching rate limits
   Switch to gpt-5.4-mini for lower credit usage?
 
-› 1. Switch to gpt-5.4-mini                 Smaller frontier agentic coding
-                                            model.
+› 1. Switch to gpt-5.4-mini                 Small, fast, and cost-efficient
+                                            model for simpler coding tasks.
   2. Keep current model
   3. Keep current model (never show again)  Hide future rate limit reminders
                                             about switching models.
