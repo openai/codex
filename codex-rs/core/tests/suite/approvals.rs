@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
@@ -568,6 +569,15 @@ struct ScenarioSpec {
     model_override: Option<&'static str>,
     outcome: Outcome,
     expectation: Expectation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScenarioGroup {
+    DangerFullAccess,
+    ReadOnly,
+    WorkspaceWrite,
+    ApplyPatch,
+    UnifiedExec,
 }
 
 struct CommandResult {
@@ -1661,14 +1671,64 @@ fn scenarios() -> Vec<ScenarioSpec> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes() -> Result<()> {
+async fn approval_matrix_covers_danger_full_access_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::DangerFullAccess).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_read_only_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::ReadOnly).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_workspace_write_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::WorkspaceWrite).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_apply_patch_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::ApplyPatch).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_unified_exec_modes() -> Result<()> {
+    run_scenario_group(ScenarioGroup::UnifiedExec).await
+}
+
+async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for scenario in scenarios() {
-        run_scenario(&scenario).await?;
+    let scenarios = scenarios()
+        .into_iter()
+        .filter(|scenario| scenario_group(scenario) == group)
+        .collect::<Vec<_>>();
+    assert!(!scenarios.is_empty(), "expected scenarios for {group:?}");
+
+    for scenario in scenarios {
+        run_scenario(&scenario)
+            .await
+            .with_context(|| format!("approval scenario failed: {}", scenario.name))?;
     }
 
     Ok(())
+}
+
+fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
+    match &scenario.action {
+        ActionKind::ApplyPatchFunction { .. } | ActionKind::ApplyPatchShell { .. } => {
+            ScenarioGroup::ApplyPatch
+        }
+        ActionKind::RunUnifiedExecCommand { .. } => ScenarioGroup::UnifiedExec,
+        ActionKind::WriteFile { .. }
+        | ActionKind::FetchUrlNoProxy { .. }
+        | ActionKind::FetchUrl { .. }
+        | ActionKind::RunCommand { .. } => match &scenario.sandbox_policy {
+            SandboxPolicy::DangerFullAccess => ScenarioGroup::DangerFullAccess,
+            SandboxPolicy::ReadOnly { .. } => ScenarioGroup::ReadOnly,
+            SandboxPolicy::WorkspaceWrite { .. } => ScenarioGroup::WorkspaceWrite,
+            SandboxPolicy::ExternalSandbox { .. } => ScenarioGroup::WorkspaceWrite,
+        },
+    }
 }
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
