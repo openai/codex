@@ -9,6 +9,7 @@ use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -847,8 +848,19 @@ pub(crate) fn build_guardian_review_session_config(
     );
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    guardian_config.permissions.sandbox_policy =
-        Constrained::allow_only(SandboxPolicy::new_read_only_policy());
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    guardian_config.permissions.permission_profile =
+        Constrained::allow_only(PermissionProfile::from_legacy_sandbox_policy(
+            &sandbox_policy,
+            guardian_config.cwd.as_path(),
+        ));
+    guardian_config.permissions.sandbox_policy = Constrained::allow_only(sandbox_policy.clone());
+    guardian_config
+        .permissions
+        .set_legacy_sandbox_policy(sandbox_policy, guardian_config.cwd.as_path())
+        .map_err(|err| {
+            anyhow::anyhow!("guardian review session could not set sandbox policy: {err}")
+        })?;
     guardian_config.include_apps_instructions = false;
     guardian_config
         .mcp_servers
