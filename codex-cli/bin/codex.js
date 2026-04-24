@@ -92,15 +92,25 @@ try {
   if (existsSync(localBinaryPath)) {
     vendorRoot = localVendorRoot;
   } else {
+    const packageManager = detectPackageManager();
+    const updateCommand =
+      packageManager === "bun"
+        ? "bun install -g @openai/codex@latest"
+        : "npm install -g @openai/codex@latest";
     throw new Error(
-      `Missing optional dependency ${platformPackage}. ${reinstallCodexHint()}`,
+      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
     );
   }
 }
 
 if (!vendorRoot) {
+  const packageManager = detectPackageManager();
+  const updateCommand =
+    packageManager === "bun"
+      ? "bun install -g @openai/codex@latest"
+      : "npm install -g @openai/codex@latest";
   throw new Error(
-    `Missing optional dependency ${platformPackage}. ${reinstallCodexHint()}`,
+    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
 }
 
@@ -147,18 +157,6 @@ function detectPackageManager() {
 
   return userAgent ? "npm" : null;
 }
-
-function reinstallCodexHint() {
-  const packageManager = detectPackageManager();
-  if (packageManager === "bun") {
-    return "Reinstall Codex with Bun.";
-  }
-  if (packageManager === "npm") {
-    return "Reinstall Codex with npm.";
-  }
-  return "Reinstall Codex with the package manager you originally used.";
-}
-
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
