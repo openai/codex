@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+codex-code-mode = { workspace = true }
 codex-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -1,7 +1,7 @@
-use crate::plugins::marketplace_install_root;
-use crate::plugins::validate_plugin_segment;
+use crate::installed_marketplaces::marketplace_install_root;
 use codex_config::RemoveMarketplaceConfigOutcome;
 use codex_config::remove_user_marketplace_config;
+use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;

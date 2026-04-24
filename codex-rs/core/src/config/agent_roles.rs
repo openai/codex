@@ -33,7 +33,8 @@ pub(crate) async fn load_agent_roles(
     for layer in layers {
         let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
         let mut declared_role_files = BTreeSet::new();
-        let agents_toml = match agents_toml_from_layer(&layer.config) {
+        let config_folder = layer.config_folder();
+        let agents_toml = match agents_toml_from_layer(&layer.config, config_folder.as_deref()) {
             Ok(agents_toml) => agents_toml,
             Err(err) => {
                 push_agent_role_warning(startup_warnings, err);
@@ -169,11 +170,16 @@ fn merge_missing_role_fields(role: &mut AgentRoleConfig, fallback: &AgentRoleCon
         .or(fallback.nickname_candidates.clone());
 }
 
-fn agents_toml_from_layer(layer_toml: &TomlValue) -> std::io::Result<Option<AgentsToml>> {
+fn agents_toml_from_layer(
+    layer_toml: &TomlValue,
+    config_base_dir: Option<&Path>,
+) -> std::io::Result<Option<AgentsToml>> {
     let Some(agents_toml) = layer_toml.get("agents") else {
         return Ok(None);
     };
 
+    // AbsolutePathBufGuard resolves relative paths while it remains in scope.
+    let _guard = config_base_dir.map(AbsolutePathBufGuard::new);
     agents_toml
         .clone()
         .try_into()

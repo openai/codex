@@ -55,8 +55,6 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
-use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -810,20 +808,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 async fn permission_profile_override_populates_runtime_permissions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    let permission_profile = PermissionProfile {
-        network: Some(NetworkPermissions {
-            enabled: Some(true),
-        }),
-        file_system: Some(FileSystemPermissions {
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                access: FileSystemAccessMode::Write,
-            }],
-            glob_scan_max_depth: None,
-        }),
-    };
+    let permission_profile = PermissionProfile::Disabled;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -848,20 +833,7 @@ async fn permission_profile_override_populates_runtime_permissions() -> std::io:
 async fn permission_profile_override_preserves_configured_network_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    let permission_profile = PermissionProfile {
-        network: Some(NetworkPermissions {
-            enabled: Some(true),
-        }),
-        file_system: Some(FileSystemPermissions {
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                access: FileSystemAccessMode::Write,
-            }],
-            glob_scan_max_depth: None,
-        }),
-    };
+    let permission_profile = PermissionProfile::Disabled;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
@@ -3969,6 +3941,7 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4040,6 +4013,63 @@ nickname_candidates = ["Hypatia", "Noether"]
             .and_then(|role| role.nickname_candidates.as_ref())
             .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
         Some(vec!["Hypatia", "Noether"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_role_relative_config_file_resolves_from_config_layer() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"",
+    )
+    .await?;
+    let layer_config = toml::from_str(
+        r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+"#,
+    )
+    .expect("agent role layer config should parse");
+    let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
+        vec![crate::config_loader::ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User {
+                file: codex_home.path().join(CONFIG_TOML_FILE).abs(),
+            },
+            layer_config,
+        )],
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml::default(),
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        config_layer_stack,
+    )
+    .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&role_config_path)
     );
 
     Ok(())
@@ -4828,6 +4858,29 @@ model = "gpt-5-mini"
 }
 
 #[tokio::test]
+async fn load_config_resolves_agent_interrupt_message() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        agents: Some(AgentsToml {
+            interrupt_message: Some(false),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.agent_interrupt_message_enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
@@ -4835,6 +4888,7 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4877,6 +4931,7 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4913,6 +4968,7 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4949,6 +5005,7 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -5205,6 +5262,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_interrupt_message_enabled: true,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
@@ -5237,6 +5295,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             experimental_thread_store_endpoint: None,
+            experimental_thread_config_endpoint: None,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5401,6 +5460,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_interrupt_message_enabled: true,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
@@ -5433,6 +5493,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5551,6 +5612,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_interrupt_message_enabled: true,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
@@ -5583,6 +5645,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5686,6 +5749,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_interrupt_message_enabled: true,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
@@ -5718,6 +5782,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -7236,6 +7301,35 @@ experimental_realtime_start_instructions = "start instructions from config"
     assert_eq!(
         config.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_thread_config_endpoint_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_thread_config_endpoint = "http://127.0.0.1:8061"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
     );
     Ok(())
 }

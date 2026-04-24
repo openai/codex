@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::DeviceKeyAlgorithm;
@@ -13,6 +14,7 @@ use codex_app_server_protocol::DeviceKeySignPayload;
 use codex_app_server_protocol::DeviceKeySignResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_device_key::DeviceKeyBinding;
+use codex_device_key::DeviceKeyBindingStore;
 use codex_device_key::DeviceKeyCreateRequest;
 use codex_device_key::DeviceKeyError;
 use codex_device_key::DeviceKeyGetPublicRequest;
@@ -24,14 +26,29 @@ use codex_device_key::RemoteControlClientConnectionAudience;
 use codex_device_key::RemoteControlClientConnectionSignPayload;
 use codex_device_key::RemoteControlClientEnrollmentAudience;
 use codex_device_key::RemoteControlClientEnrollmentSignPayload;
+use codex_state::DeviceKeyBindingRecord;
+use codex_state::StateRuntime;
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct DeviceKeyApi {
     store: DeviceKeyStore,
 }
 
 impl DeviceKeyApi {
-    pub(crate) fn create(
+    pub(crate) fn new(sqlite_home: PathBuf, default_provider: String) -> Self {
+        Self {
+            store: DeviceKeyStore::new(Arc::new(StateDeviceKeyBindingStore::new(
+                sqlite_home,
+                default_provider,
+            ))),
+        }
+    }
+
+    pub(crate) async fn create(
         &self,
         params: DeviceKeyCreateParams,
     ) -> Result<DeviceKeyCreateResponse, JSONRPCErrorError> {
@@ -44,11 +61,12 @@ impl DeviceKeyApi {
                     client_id: params.client_id,
                 },
             })
+            .await
             .map_err(map_device_key_error)?;
         Ok(create_response_from_info(info))
     }
 
-    pub(crate) fn public(
+    pub(crate) async fn public(
         &self,
         params: DeviceKeyPublicParams,
     ) -> Result<DeviceKeyPublicResponse, JSONRPCErrorError> {
@@ -57,11 +75,12 @@ impl DeviceKeyApi {
             .get_public(DeviceKeyGetPublicRequest {
                 key_id: params.key_id,
             })
+            .await
             .map_err(map_device_key_error)?;
         Ok(public_response_from_info(info))
     }
 
-    pub(crate) fn sign(
+    pub(crate) async fn sign(
         &self,
         params: DeviceKeySignParams,
     ) -> Result<DeviceKeySignResponse, JSONRPCErrorError> {
@@ -71,12 +90,84 @@ impl DeviceKeyApi {
                 key_id: params.key_id,
                 payload: payload_from_params(params.payload),
             })
+            .await
             .map_err(map_device_key_error)?;
         Ok(DeviceKeySignResponse {
             signature_der_base64: STANDARD.encode(signature.signature_der),
             signed_payload_base64: STANDARD.encode(signature.signed_payload),
             algorithm: algorithm_from_store(signature.algorithm),
         })
+    }
+}
+
+struct StateDeviceKeyBindingStore {
+    sqlite_home: PathBuf,
+    default_provider: String,
+    state_db: OnceCell<Arc<StateRuntime>>,
+}
+
+impl StateDeviceKeyBindingStore {
+    fn new(sqlite_home: PathBuf, default_provider: String) -> Self {
+        Self {
+            sqlite_home,
+            default_provider,
+            state_db: OnceCell::new(),
+        }
+    }
+
+    async fn state_db(&self) -> Result<Arc<StateRuntime>, DeviceKeyError> {
+        let sqlite_home = self.sqlite_home.clone();
+        let default_provider = self.default_provider.clone();
+        self.state_db
+            .get_or_try_init(|| async move {
+                StateRuntime::init(sqlite_home, default_provider)
+                    .await
+                    .map_err(|err| DeviceKeyError::Platform(err.to_string()))
+            })
+            .await
+            .cloned()
+    }
+}
+
+impl fmt::Debug for StateDeviceKeyBindingStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StateDeviceKeyBindingStore")
+            .field("sqlite_home", &self.sqlite_home)
+            .field("default_provider", &self.default_provider)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl DeviceKeyBindingStore for StateDeviceKeyBindingStore {
+    async fn get_binding(&self, key_id: &str) -> Result<Option<DeviceKeyBinding>, DeviceKeyError> {
+        let state_db = self.state_db().await?;
+        state_db
+            .get_device_key_binding(key_id)
+            .await
+            .map(|record| {
+                record.map(|record| DeviceKeyBinding {
+                    account_user_id: record.account_user_id,
+                    client_id: record.client_id,
+                })
+            })
+            .map_err(|err| DeviceKeyError::Platform(err.to_string()))
+    }
+
+    async fn put_binding(
+        &self,
+        key_id: &str,
+        binding: &DeviceKeyBinding,
+    ) -> Result<(), DeviceKeyError> {
+        let state_db = self.state_db().await?;
+        state_db
+            .upsert_device_key_binding(&DeviceKeyBindingRecord {
+                key_id: key_id.to_string(),
+                account_user_id: binding.account_user_id.clone(),
+                client_id: binding.client_id.clone(),
+            })
+            .await
+            .map_err(|err| DeviceKeyError::Platform(err.to_string()))
     }
 }
 

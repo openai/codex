@@ -61,6 +61,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -1643,7 +1644,10 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approvals_reviewer
     );
     assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(app.runtime_sandbox_policy_override, None);
+    assert_eq!(
+        app.runtime_sandbox_policy_override,
+        Some(auto_review.sandbox_policy.clone())
+    );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
@@ -2473,7 +2477,7 @@ async fn inactive_thread_exec_approval_preserves_context() {
     );
     assert_eq!(
         additional_permissions,
-        Some(PermissionProfile {
+        Some(CoreAdditionalPermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),

@@ -151,11 +151,11 @@ async fn guardian_test_session_and_turn_with_base_url(
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
     let config = Arc::new(config);
-    let models_manager = Arc::new(test_support::models_manager_with_provider(
+    let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
@@ -1052,7 +1052,23 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
             risk_level: GuardianRiskLevel::Low,
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Allow,
-            rationale: "Guardian returned a low-risk allow decision.".to_string(),
+            rationale: "Auto-review returned a low-risk allow decision.".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
+    let parsed =
+        parse_guardian_assessment(Some(r#"{"outcome":"deny"}"#)).expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
+            rationale: "Auto-review returned a deny decision without a rationale.".to_string(),
         }
     );
 }
@@ -1118,11 +1134,11 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     config.cwd = temp_cwd.abs();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
-    let models_manager = Arc::new(test_support::models_manager_with_provider(
+    let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
@@ -1590,11 +1606,11 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     config.user_instructions = None;
     let config = Arc::new(config);
-    let models_manager = Arc::new(test_support::models_manager_with_provider(
+    let models_manager = test_support::models_manager_with_provider(
         config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
-    ));
+    );
     Arc::get_mut(&mut session)
         .expect("session should be uniquely owned")
         .services

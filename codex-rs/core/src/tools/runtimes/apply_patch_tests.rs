@@ -1,6 +1,7 @@
 use super::*;
 use crate::tools::sandboxing::SandboxAttempt;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -9,7 +10,8 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -116,7 +118,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
     let path = std::env::temp_dir()
         .join("apply-patch-runtime-attempt.txt")
         .abs();
-    let additional_permissions = PermissionProfile {
+    let additional_permissions = AdditionalPermissionProfile {
         network: None,
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![path.clone()]),
@@ -154,15 +156,14 @@ fn file_system_sandbox_context_uses_active_attempt() {
     let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
         .expect("sandbox context");
 
-    let base_permissions = PermissionProfile::from_runtime_permissions(
-        &file_system_policy,
+    let file_system_policy =
+        effective_file_system_sandbox_policy(&file_system_policy, Some(&additional_permissions));
+    let network_policy = effective_network_sandbox_policy(
         NetworkSandboxPolicy::Restricted,
+        Some(&additional_permissions),
     );
-    let Some(expected_permissions) =
-        merge_permission_profiles(Some(&base_permissions), Some(&additional_permissions))
-    else {
-        panic!("merged permissions should not be empty");
-    };
+    let expected_permissions =
+        PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
     assert_eq!(sandbox.permissions, expected_permissions);
     assert_eq!(sandbox.cwd, Some(path.clone()));
     assert_eq!(
