@@ -14,10 +14,12 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -571,7 +573,11 @@ async fn shell_enforces_glob_deny_read_policy() -> Result<()> {
                     },
                     access: FileSystemAccessMode::None,
                 });
-            config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+            config.permissions.permission_profile =
+                Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::Restricted,
+                ));
         });
     let fixture = builder.build(&server).await?;
 
