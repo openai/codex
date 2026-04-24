@@ -56,6 +56,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -6545,6 +6546,62 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
     assert_eq!(
         config.permissions.permission_profile(),
         PermissionProfile::from_legacy_sandbox_policy(&expected_sandbox_policy)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_preserves_split_write_roots() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = codex_home.path().join("workspace");
+    let outside_root = codex_home.path().join("outside-write");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&outside_root)?;
+    let outside_root =
+        AbsolutePathBuf::from_absolute_path(outside_root).expect("outside root is absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: outside_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::Managed,
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
+    );
+    assert!(matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::WorkspaceWrite { .. }
+    ));
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
     );
     Ok(())
 }
