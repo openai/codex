@@ -2093,6 +2093,42 @@
       },
       "type": "object"
     },
+    "ThreadStoreToml": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remote"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "endpoint",
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2488,6 +2524,14 @@
     "experimental_thread_config_endpoint": {
       "description": "Experimental / do not use. When set, app-server fetches thread-scoped config from a remote service at this endpoint.",
       "type": "string"
+    },
+    "experimental_thread_store": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ThreadStoreToml"
+        }
+      ],
+      "description": "Experimental / do not use. Selects the thread store implementation."
     },
     "experimental_thread_store_endpoint": {
       "description": "Experimental / do not use. When set, app-server uses a remote thread store at this endpoint instead of the local filesystem/SQLite store.",

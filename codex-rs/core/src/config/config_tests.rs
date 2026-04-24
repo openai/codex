@@ -1,5 +1,6 @@
 use crate::agents_md::DEFAULT_AGENTS_MD_FILENAME;
 use crate::agents_md::LOCAL_AGENTS_MD_FILENAME;
+use crate::config::ThreadStoreConfig;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
@@ -5294,8 +5295,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
-            experimental_thread_store_endpoint: None,
             experimental_thread_config_endpoint: None,
+            experimental_thread_store: ThreadStoreConfig::Local,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5492,8 +5493,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        experimental_thread_store_endpoint: None,
         experimental_thread_config_endpoint: None,
+        experimental_thread_store: ThreadStoreConfig::Local,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5644,8 +5645,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        experimental_thread_store_endpoint: None,
         experimental_thread_config_endpoint: None,
+        experimental_thread_store: ThreadStoreConfig::Local,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5781,8 +5782,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        experimental_thread_store_endpoint: None,
         experimental_thread_config_endpoint: None,
+        experimental_thread_store: ThreadStoreConfig::Local,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,

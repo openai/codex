@@ -27,6 +27,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
@@ -228,6 +229,19 @@ impl Permissions {
             self.network_sandbox_policy,
         )
     }
+}
+
+/// Configured thread persistence backend.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ThreadStoreConfig {
+    /// Persist threads locally using rollout JSONL files and sqlite metadata.
+    #[default]
+    Local,
+    /// Persist threads through the remote thread-store service.
+    Remote { endpoint: String },
+    /// Test-only in-memory thread store.
+    #[cfg(any(test, debug_assertions))]
+    InMemory { id: String },
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -545,13 +559,12 @@ pub struct Config {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
-    /// Experimental / do not use. When set, app-server uses a remote thread
-    /// store at this endpoint instead of the local filesystem/SQLite store.
-    pub experimental_thread_store_endpoint: Option<String>,
-
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Experimental / do not use. Selects the thread persistence backend.
+    pub experimental_thread_store: ThreadStoreConfig,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1295,6 +1308,21 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
         .collect();
 
     ToolSuggestConfig { discoverables }
+}
+
+fn thread_store_config(
+    thread_store: Option<ThreadStoreToml>,
+    legacy_remote_endpoint: Option<String>,
+) -> ThreadStoreConfig {
+    match thread_store {
+        Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
+        Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
+        #[cfg(any(test, debug_assertions))]
+        Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
+        None => legacy_remote_endpoint.map_or(ThreadStoreConfig::Local, |endpoint| {
+            ThreadStoreConfig::Remote { endpoint }
+        }),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2434,8 +2462,11 @@ impl Config {
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
-            experimental_thread_store_endpoint: cfg.experimental_thread_store_endpoint,
             experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
+            experimental_thread_store: thread_store_config(
+                cfg.experimental_thread_store,
+                cfg.experimental_thread_store_endpoint,
+            ),
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,

@@ -2,6 +2,7 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
@@ -52,6 +53,8 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+#[cfg(any(test, debug_assertions))]
+use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::ThreadStore;
@@ -251,14 +254,14 @@ pub fn build_models_manager(
 }
 
 fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
-        #[cfg(any(test, debug_assertions))]
-        if let Some(store) = codex_thread_store::test_thread_store(endpoint) {
-            return store;
+    match &config.experimental_thread_store {
+        ThreadStoreConfig::Local => {
+            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
         }
-        return Arc::new(RemoteThreadStore::new(endpoint));
+        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
+        #[cfg(any(test, debug_assertions))]
+        ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
-    Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
 }
 
 impl ThreadManager {

@@ -5,27 +5,25 @@
 //! any other backing store.
 
 mod error;
+#[cfg(any(test, debug_assertions))]
+mod in_memory;
 mod live_thread;
 mod local;
 mod remote;
 mod store;
-#[cfg(any(test, debug_assertions))]
-mod test_registry;
 mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
+#[cfg(any(test, debug_assertions))]
+pub use in_memory::InMemoryThreadStore;
+#[cfg(any(test, debug_assertions))]
+pub use in_memory::InMemoryThreadStoreCalls;
 pub use live_thread::LiveThread;
 pub use live_thread::LiveThreadInitGuard;
 pub use local::LocalThreadStore;
 pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;
-#[cfg(any(test, debug_assertions))]
-pub use test_registry::register_test_thread_store;
-#[cfg(any(test, debug_assertions))]
-pub use test_registry::remove_test_thread_store;
-#[cfg(any(test, debug_assertions))]
-pub use test_registry::test_thread_store;
 pub use types::AppendThreadItemsParams;
 pub use types::ArchiveThreadParams;
 pub use types::CreateThreadParams;
