@@ -1,13 +1,22 @@
 use super::*;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+
+fn permission_profile_for_policy(
+    sandbox_policy: &SandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> PermissionProfile {
+    PermissionProfile::from_legacy_sandbox_policy(sandbox_policy, cwd.as_path())
+}
 
 #[test]
 fn test_writable_roots_constraint() {
@@ -77,7 +86,7 @@ fn external_sandbox_auto_approves_in_on_request() {
         assess_patch_safety(
             &add_inside,
             AskForApproval::OnRequest,
-            &policy,
+            &permission_profile_for_policy(&policy, &cwd),
             &FileSystemSandboxPolicy::from(&policy),
             &cwd,
             WindowsSandboxLevel::Disabled
@@ -108,7 +117,7 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
         assess_patch_safety(
             &add_outside,
             AskForApproval::OnRequest,
-            &policy_workspace_only,
+            &permission_profile_for_policy(&policy_workspace_only, &cwd),
             &FileSystemSandboxPolicy::from(&policy_workspace_only),
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -125,7 +134,7 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
                 request_permissions: true,
                 mcp_elicitations: true,
             }),
-            &policy_workspace_only,
+            &permission_profile_for_policy(&policy_workspace_only, &cwd),
             &FileSystemSandboxPolicy::from(&policy_workspace_only),
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -159,7 +168,7 @@ fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
                 request_permissions: true,
                 mcp_elicitations: true,
             }),
-            &policy_workspace_only,
+            &permission_profile_for_policy(&policy_workspace_only, &cwd),
             &FileSystemSandboxPolicy::from(&policy_workspace_only),
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -189,7 +198,7 @@ fn read_only_policy_rejects_patch_with_read_only_reason() {
         assess_patch_safety(
             &action,
             AskForApproval::Never,
-            &sandbox_policy,
+            &permission_profile_for_policy(&sandbox_policy, &cwd),
             &file_system_sandbox_policy,
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -233,7 +242,7 @@ fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
-            &sandbox_policy,
+            &permission_profile_for_policy(&sandbox_policy, &cwd),
             &file_system_sandbox_policy,
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -277,7 +286,7 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
-            &sandbox_policy,
+            &permission_profile_for_policy(&sandbox_policy, &cwd),
             &file_system_sandbox_policy,
             &cwd,
             WindowsSandboxLevel::Disabled,
@@ -311,7 +320,7 @@ fn missing_project_dot_codex_config_requires_approval() {
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
-            &sandbox_policy,
+            &permission_profile_for_policy(&sandbox_policy, &cwd),
             &file_system_sandbox_policy,
             &cwd,
             WindowsSandboxLevel::Disabled,
