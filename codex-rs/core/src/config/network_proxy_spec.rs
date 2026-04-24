@@ -16,7 +16,7 @@ use codex_network_proxy::build_config_state;
 use codex_network_proxy::host_and_port_from_network_addr;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -89,7 +89,7 @@ impl NetworkProxySpec {
     pub(crate) fn from_config_and_constraints(
         config: NetworkProxyConfig,
         requirements: Option<NetworkConstraints>,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
     ) -> std::io::Result<Self> {
         let base_config = config.clone();
         let hard_deny_allowlist_misses = requirements
@@ -99,7 +99,7 @@ impl NetworkProxySpec {
             Self::apply_requirements(
                 config,
                 requirements,
-                sandbox_policy,
+                permission_profile,
                 hard_deny_allowlist_misses,
             )
         } else {
@@ -122,7 +122,7 @@ impl NetworkProxySpec {
 
     pub async fn start_proxy(
         &self,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
@@ -133,10 +133,7 @@ impl NetworkProxySpec {
         if enable_network_approval_flow && !self.hard_deny_allowlist_misses {
             if let Some(policy_decider) = policy_decider {
                 builder = builder.policy_decider_arc(policy_decider);
-            } else if matches!(
-                sandbox_policy,
-                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-            ) {
+            } else if Self::managed_sandbox_active(permission_profile) {
                 builder = builder
                     .policy_decider(|_request| async { NetworkDecision::ask("not_allowed") });
             }
@@ -154,14 +151,14 @@ impl NetworkProxySpec {
         Ok(StartedNetworkProxy::new(proxy, handle))
     }
 
-    pub(crate) fn recompute_for_sandbox_policy(
+    pub(crate) fn recompute_for_permission_profile(
         &self,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
     ) -> std::io::Result<Self> {
         Self::from_config_and_constraints(
             self.base_config.clone(),
             self.requirements.clone(),
-            sandbox_policy,
+            permission_profile,
         )
     }
 
@@ -216,13 +213,13 @@ impl NetworkProxySpec {
     fn apply_requirements(
         mut config: NetworkProxyConfig,
         requirements: &NetworkConstraints,
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         hard_deny_allowlist_misses: bool,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
         let allowlist_expansion_enabled =
-            Self::allowlist_expansion_enabled(sandbox_policy, hard_deny_allowlist_misses);
-        let denylist_expansion_enabled = Self::denylist_expansion_enabled(sandbox_policy);
+            Self::allowlist_expansion_enabled(permission_profile, hard_deny_allowlist_misses);
+        let denylist_expansion_enabled = Self::denylist_expansion_enabled(permission_profile);
 
         if let Some(enabled) = requirements.enabled {
             config.network.enabled = enabled;
@@ -322,24 +319,22 @@ impl NetworkProxySpec {
     }
 
     fn allowlist_expansion_enabled(
-        sandbox_policy: &SandboxPolicy,
+        permission_profile: &PermissionProfile,
         hard_deny_allowlist_misses: bool,
     ) -> bool {
-        matches!(
-            sandbox_policy,
-            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-        ) && !hard_deny_allowlist_misses
+        Self::managed_sandbox_active(permission_profile) && !hard_deny_allowlist_misses
     }
 
     fn managed_allowed_domains_only(requirements: &NetworkConstraints) -> bool {
         requirements.managed_allowed_domains_only.unwrap_or(false)
     }
 
-    fn denylist_expansion_enabled(sandbox_policy: &SandboxPolicy) -> bool {
-        matches!(
-            sandbox_policy,
-            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-        )
+    fn denylist_expansion_enabled(permission_profile: &PermissionProfile) -> bool {
+        Self::managed_sandbox_active(permission_profile)
+    }
+
+    fn managed_sandbox_active(permission_profile: &PermissionProfile) -> bool {
+        matches!(permission_profile, PermissionProfile::Managed { .. })
     }
 
     fn merge_domain_lists(mut managed: Vec<String>, user_entries: &[String]) -> Vec<String> {
