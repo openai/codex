@@ -7,6 +7,7 @@ use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -128,6 +129,7 @@ async fn collect_stdout_and_exit(
 }
 
 #[test]
+#[serial(windows_sandbox_legacy_process)]
 fn legacy_non_tty_cmd_emits_output() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
@@ -163,6 +165,7 @@ fn legacy_non_tty_cmd_emits_output() {
 }
 
 #[test]
+#[serial(windows_sandbox_legacy_process)]
 fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -347,6 +350,7 @@ fn runner_resizer_sends_resize_frame() {
 }
 
 #[test]
+#[serial(windows_sandbox_legacy_process)]
 fn legacy_capture_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -383,6 +387,7 @@ fn legacy_capture_powershell_emits_output() {
 }
 
 #[test]
+#[serial(windows_sandbox_legacy_process)]
 fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;
