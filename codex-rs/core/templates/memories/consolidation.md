@@ -154,6 +154,9 @@ Incremental update and forgetting mechanism:
 
 - Use the git-style diff in `{{ phase2_workspace_diff_file }}` to identify relevant changed
   sections and deleted inputs.
+- Every changes in `{{ phase2_workspace_diff_file }}` are authoritative and must propagated and consolidated. If a 
+  changes appears to be randomly placed in the files, it is probably a user change and you shouldn't just drop it.
+  Make sure to add it to the overall memories consolidation
 - Do not open raw sessions / original rollout transcripts.
 - For added or modified `raw_memories.md` and `rollout_summaries/*.md` files, read the changed
   raw-memory sections and the corresponding rollout summaries only when needed for stronger
