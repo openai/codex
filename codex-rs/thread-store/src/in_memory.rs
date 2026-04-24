@@ -17,6 +17,7 @@ use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
@@ -53,6 +54,7 @@ pub struct InMemoryThreadStoreCalls {
     pub discard_thread: usize,
     pub load_history: usize,
     pub read_thread: usize,
+    pub read_thread_by_rollout_path: usize,
     pub list_threads: usize,
     pub update_thread_metadata: usize,
     pub archive_thread: usize,
@@ -75,6 +77,7 @@ struct InMemoryThreadStoreState {
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
     names: HashMap<ThreadId, Option<String>>,
+    rollout_paths: HashMap<PathBuf, ThreadId>,
 }
 
 impl InMemoryThreadStore {
@@ -117,6 +120,9 @@ impl ThreadStore for InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
         state.histories.entry(params.thread_id).or_default();
+        if let Some(rollout_path) = params.rollout_path {
+            state.rollout_paths.insert(rollout_path, params.thread_id);
+        }
         Ok(())
     }
 
@@ -172,6 +178,23 @@ impl ThreadStore for InMemoryThreadStore {
         let mut state = self.state.lock().await;
         state.calls.read_thread += 1;
         stored_thread_from_state(&state, params.thread_id, params.include_history)
+    }
+
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread> {
+        let mut state = self.state.lock().await;
+        state.calls.read_thread_by_rollout_path += 1;
+        let Some(thread_id) = state.rollout_paths.get(&params.rollout_path).copied() else {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "in-memory thread store does not know rollout path {}",
+                    params.rollout_path.display()
+                ),
+            });
+        };
+        stored_thread_from_state(&state, thread_id, params.include_history)
     }
 
     async fn list_threads(&self, _params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
