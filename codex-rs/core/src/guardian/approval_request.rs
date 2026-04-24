@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use codex_analytics::GuardianReviewedAction;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -67,6 +68,14 @@ pub(crate) enum GuardianApprovalRequest {
         tool_title: Option<String>,
         tool_description: Option<String>,
         annotations: Option<GuardianMcpAnnotations>,
+    },
+    McpElicitation {
+        id: String,
+        turn_id: String,
+        server_name: String,
+        request: ElicitationRequest,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
     },
     RequestPermissions {
         id: String,
@@ -146,6 +155,17 @@ struct McpToolCallApprovalAction<'a> {
     tool_description: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     annotations: Option<&'a GuardianMcpAnnotations>,
+}
+
+#[derive(Serialize)]
+struct McpElicitationApprovalAction<'a> {
+    tool: &'static str,
+    server_name: &'a str,
+    request: &'a ElicitationRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_id: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_name: Option<&'a String>,
 }
 
 #[derive(Serialize)]
@@ -358,6 +378,20 @@ pub(crate) fn guardian_approval_request_to_json(
             tool_description: tool_description.as_ref(),
             annotations: annotations.as_ref(),
         }),
+        GuardianApprovalRequest::McpElicitation {
+            id: _,
+            turn_id: _,
+            server_name,
+            request,
+            connector_id,
+            connector_name,
+        } => serialize_guardian_action(McpElicitationApprovalAction {
+            tool: "mcp_elicitation",
+            server_name,
+            request,
+            connector_id: connector_id.as_ref(),
+            connector_name: connector_name.as_ref(),
+        }),
         GuardianApprovalRequest::RequestPermissions {
             id: _,
             turn_id,
@@ -429,6 +463,18 @@ pub(crate) fn guardian_assessment_action(
             connector_name: connector_name.clone(),
             tool_title: tool_title.clone(),
         },
+        GuardianApprovalRequest::McpElicitation {
+            server_name,
+            request,
+            connector_id,
+            connector_name,
+            ..
+        } => GuardianAssessmentAction::McpElicitation {
+            server_name: server_name.clone(),
+            message: request.message().to_string(),
+            connector_id: connector_id.clone(),
+            connector_name: connector_name.clone(),
+        },
         GuardianApprovalRequest::RequestPermissions {
             reason,
             permissions,
@@ -494,6 +540,16 @@ pub(crate) fn guardian_reviewed_action(
             connector_name: connector_name.clone(),
             tool_title: tool_title.clone(),
         },
+        GuardianApprovalRequest::McpElicitation {
+            server_name,
+            connector_id,
+            connector_name,
+            ..
+        } => GuardianReviewedAction::McpElicitation {
+            server_name: server_name.clone(),
+            connector_id: connector_id.clone(),
+            connector_name: connector_name.clone(),
+        },
         GuardianApprovalRequest::RequestPermissions { .. } => {
             GuardianReviewedAction::RequestPermissions {}
         }
@@ -507,7 +563,8 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         | GuardianApprovalRequest::ApplyPatch { id, .. }
         | GuardianApprovalRequest::McpToolCall { id, .. }
         | GuardianApprovalRequest::RequestPermissions { id, .. } => Some(id),
-        GuardianApprovalRequest::NetworkAccess { .. } => None,
+        GuardianApprovalRequest::NetworkAccess { .. }
+        | GuardianApprovalRequest::McpElicitation { .. } => None,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { id, .. } => Some(id),
     }
@@ -519,6 +576,7 @@ pub(crate) fn guardian_request_turn_id<'a>(
 ) -> &'a str {
     match request {
         GuardianApprovalRequest::NetworkAccess { turn_id, .. }
+        | GuardianApprovalRequest::McpElicitation { turn_id, .. }
         | GuardianApprovalRequest::RequestPermissions { turn_id, .. } => turn_id,
         GuardianApprovalRequest::Shell { .. }
         | GuardianApprovalRequest::ExecCommand { .. }

@@ -99,6 +99,24 @@ use codex_login::CodexAuth;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
 use codex_utils_plugins::mcp_connector::sanitize_name;
 
+/// Elicitation data offered to an out-of-band reviewer before Codex prompts the user.
+#[derive(Clone)]
+pub struct McpElicitationReviewRequest {
+    /// MCP server that issued the elicitation request.
+    pub server_name: String,
+    /// Protocol-level request id used by Codex UI surfaces.
+    pub request_id: ProtocolRequestId,
+    /// Elicitation payload sent by the MCP server.
+    pub request: ElicitationRequest,
+}
+
+/// Optional hook that can resolve an MCP elicitation before it is surfaced to the user.
+pub type McpElicitationReviewer = Arc<
+    dyn Fn(McpElicitationReviewRequest) -> BoxFuture<'static, Option<ElicitationResponse>>
+        + Send
+        + Sync,
+>;
+
 /// Delimiter used to separate MCP tool-name parts.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 
@@ -299,19 +317,33 @@ fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> 
     }
 }
 
+/// Convert an RMCP request id into the protocol id used by Codex UI surfaces.
+pub fn protocol_request_id(id: RequestId) -> ProtocolRequestId {
+    match id {
+        rmcp::model::NumberOrString::String(value) => ProtocolRequestId::String(value.to_string()),
+        rmcp::model::NumberOrString::Number(value) => ProtocolRequestId::Integer(value),
+    }
+}
+
 #[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
     sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
+    reviewer: Option<McpElicitationReviewer>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
+    fn new(
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+        reviewer: Option<McpElicitationReviewer>,
+    ) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
+            reviewer,
         }
     }
 
@@ -334,12 +366,14 @@ impl ElicitationRequestManager {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
         let sandbox_policy = self.sandbox_policy.clone();
+        let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
             let sandbox_policy = sandbox_policy.clone();
+            let reviewer = reviewer.clone();
             async move {
                 let approval_policy = approval_policy
                     .lock()
@@ -367,6 +401,7 @@ impl ElicitationRequestManager {
                     });
                 }
 
+                let protocol_id = protocol_request_id(id.clone());
                 let request = match elicitation {
                     CreateElicitationRequestParams::FormElicitationParams {
                         meta,
@@ -396,6 +431,16 @@ impl ElicitationRequestManager {
                         elicitation_id,
                     },
                 };
+                if let Some(reviewer) = reviewer
+                    && let Some(response) = reviewer(McpElicitationReviewRequest {
+                        server_name: server_name.clone(),
+                        request_id: protocol_id.clone(),
+                        request: request.clone(),
+                    })
+                    .await
+                {
+                    return Ok(response);
+                }
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -407,14 +452,7 @@ impl ElicitationRequestManager {
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             turn_id: None,
                             server_name,
-                            id: match id.clone() {
-                                rmcp::model::NumberOrString::String(value) => {
-                                    ProtocolRequestId::String(value.to_string())
-                                }
-                                rmcp::model::NumberOrString::Number(value) => {
-                                    ProtocolRequestId::Integer(value)
-                                }
-                            },
+                            id: protocol_id,
                             request,
                         }),
                     })
@@ -713,6 +751,7 @@ impl McpConnectionManager {
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 sandbox_policy.get().clone(),
+                /*reviewer*/ None,
             ),
         }
     }
@@ -750,14 +789,18 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
+        elicitation_reviewer: Option<McpElicitationReviewer>,
         auth: Option<&CodexAuth>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests =
-            ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_sandbox_policy,
+            elicitation_reviewer,
+        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth

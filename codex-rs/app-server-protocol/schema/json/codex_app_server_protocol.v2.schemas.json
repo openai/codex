@@ -6091,6 +6091,42 @@
         },
         {
           "properties": {
+            "connectorId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "connectorName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "serverName": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mcpElicitation"
+              ],
+              "title": "McpElicitationGuardianApprovalReviewActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "serverName",
+            "type"
+          ],
+          "title": "McpElicitationGuardianApprovalReviewAction",
+          "type": "object"
+        },
+        {
+          "properties": {
             "permissions": {
               "$ref": "#/definitions/RequestPermissionProfile"
             },

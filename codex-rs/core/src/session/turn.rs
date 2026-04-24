@@ -234,7 +234,7 @@ pub(crate) async fn run_turn(
     }
 
     maybe_prompt_and_install_mcp_dependencies(
-        sess.as_ref(),
+        &sess,
         turn_context.as_ref(),
         &cancellation_token,
         &mentioned_skills,

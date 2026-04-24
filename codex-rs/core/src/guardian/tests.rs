@@ -729,6 +729,55 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
 }
 
 #[test]
+fn guardian_approval_request_to_json_renders_mcp_elicitation_shape() -> serde_json::Result<()> {
+    let action = GuardianApprovalRequest::McpElicitation {
+        id: "mcp_elicitation:browser-use:1".to_string(),
+        turn_id: "turn-1".to_string(),
+        server_name: "browser-use".to_string(),
+        request: codex_protocol::approvals::ElicitationRequest::Form {
+            meta: Some(serde_json::json!({
+                "connector_id": "browser-use",
+                "connector_name": "Browser Use",
+                "origin": "https://example.com",
+            })),
+            message: "Allow Browser Use to access https://example.com?".to_string(),
+            requested_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
+        },
+        connector_id: Some("browser-use".to_string()),
+        connector_name: Some("Browser Use".to_string()),
+    };
+
+    assert_eq!(
+        guardian_approval_request_to_json(&action)?,
+        serde_json::json!({
+            "tool": "mcp_elicitation",
+            "server_name": "browser-use",
+            "request": {
+                "mode": "form",
+                "_meta": {
+                    "connector_id": "browser-use",
+                    "connector_name": "Browser Use",
+                    "origin": "https://example.com",
+                },
+                "message": "Allow Browser Use to access https://example.com?",
+                "requested_schema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+            "connector_id": "browser-use",
+            "connector_name": "Browser Use",
+        })
+    );
+    assert_eq!(guardian_request_target_item_id(&action), None);
+    assert_eq!(guardian_request_turn_id(&action, "fallback-turn"), "turn-1");
+    Ok(())
+}
+
+#[test]
 fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_json::Result<()> {
     let cwd = test_path_buf("/repo").abs();
     let action = GuardianApprovalRequest::NetworkAccess {

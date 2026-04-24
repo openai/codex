@@ -168,6 +168,12 @@ pub enum GuardianAssessmentAction {
         connector_name: Option<String>,
         tool_title: Option<String>,
     },
+    McpElicitation {
+        server_name: String,
+        message: String,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+    },
     RequestPermissions {
         reason: Option<String>,
         permissions: RequestPermissionProfile,
