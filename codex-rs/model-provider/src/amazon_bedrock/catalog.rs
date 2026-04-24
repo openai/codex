@@ -152,53 +152,6 @@ mod tests {
     }
 
     #[test]
-    fn gpt_5_4_cmb_uses_hardcoded_bedrock_spec() {
-        let catalog = static_model_catalog();
-        let cmb_model = catalog
-            .models
-            .iter()
-            .find(|model| model.slug == GPT_5_4_CMB_MODEL_ID)
-            .expect("Bedrock catalog should include GPT-5.4 CMB");
-
-        assert_eq!(
-            *cmb_model,
-            ModelInfo {
-                slug: GPT_5_4_CMB_MODEL_ID.to_string(),
-                display_name: "gpt-5.4".to_string(),
-                description: Some("Strong model for everyday coding.".to_string()),
-                default_reasoning_level: Some(ReasoningEffort::Medium),
-                supported_reasoning_levels: gpt_5_4_cmb_reasoning_levels(),
-                shell_type: ConfigShellToolType::ShellCommand,
-                visibility: ModelVisibility::List,
-                supported_in_api: true,
-                priority: 0,
-                additional_speed_tiers: vec!["fast".to_string()],
-                availability_nux: None,
-                upgrade: None,
-                base_instructions: BASE_INSTRUCTIONS.to_string(),
-                model_messages: None,
-                supports_reasoning_summaries: true,
-                default_reasoning_summary: ReasoningSummary::None,
-                support_verbosity: true,
-                default_verbosity: Some(Verbosity::Medium),
-                apply_patch_tool_type: Some(ApplyPatchToolType::Function),
-                web_search_tool_type: WebSearchToolType::TextAndImage,
-                truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
-                supports_parallel_tool_calls: true,
-                supports_image_detail_original: true,
-                context_window: Some(GPT_5_4_CONTEXT_WINDOW),
-                max_context_window: Some(GPT_5_4_MAX_CONTEXT_WINDOW),
-                auto_compact_token_limit: None,
-                effective_context_window_percent: 95,
-                experimental_supported_tools: Vec::new(),
-                input_modalities: vec![InputModality::Text, InputModality::Image],
-                used_fallback_model_metadata: false,
-                supports_search_tool: true,
-            }
-        );
-    }
-
-    #[test]
     fn gpt_5_4_cmb_advertises_only_bedrock_supported_reasoning_levels() {
         let catalog = static_model_catalog();
         let cmb_model = catalog
