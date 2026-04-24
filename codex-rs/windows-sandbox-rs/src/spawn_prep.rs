@@ -349,7 +349,6 @@ mod tests {
         assert!(!should_apply_network_block(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
-                read_only_access: Default::default(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,

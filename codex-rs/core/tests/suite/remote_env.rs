@@ -4,8 +4,12 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::get_remote_test_env;
@@ -60,37 +64,28 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
 
 fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
     let readable_root = absolute_path(readable_root);
-    // The policy is evaluated in the remote container, so use a container path
-    // for cwd instead of capturing the local test runner cwd.
-    FileSystemSandboxContext::from_legacy_sandbox_policy(
-        SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![readable_root.clone()],
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: readable_root,
             },
-            network_access: false,
-        },
-        readable_root,
-    )
+            access: FileSystemAccessMode::Read,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    ))
 }
 
 fn workspace_write_sandbox(writable_root: PathBuf) -> FileSystemSandboxContext {
     let writable_root = absolute_path(writable_root);
-    // The policy is evaluated in the remote container, so use a container path
-    // for cwd instead of capturing the local test runner cwd.
-    FileSystemSandboxContext::from_legacy_sandbox_policy(
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![writable_root.clone()],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
+    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: writable_root,
             },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
-        writable_root,
-    )
+            access: FileSystemAccessMode::Write,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    ))
 }
 
 fn assert_normalized_path_rejected(error: &std::io::Error) {

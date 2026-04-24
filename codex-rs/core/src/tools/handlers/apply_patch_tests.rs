@@ -239,7 +239,6 @@ fn write_permissions_for_paths_skip_dirs_already_writable_under_workspace_root()
         .expect("nested file path should be absolute");
     let sandbox_policy = FileSystemSandboxPolicy::from(&SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: false,
@@ -262,7 +261,6 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
     let cwd_abs = cwd.abs();
     let sandbox_policy = FileSystemSandboxPolicy::from(&SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
