@@ -3,6 +3,10 @@
 //! The auto cap mirrors documented scrollback defaults for terminals we can identify. Console Host
 //! does not expose its configured screen buffer through terminal metadata, so it usually lands in
 //! the fallback bucket.
+//!
+//! These caps are deliberately conservative: Codex is rebuilding normal terminal scrollback, not an
+//! internal virtual transcript. Replaying more rows than the terminal retains wastes work and can
+//! make interactive resize feel worse without giving the user more usable history.
 
 use codex_config::types::DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS;
 use codex_terminal_detection::TerminalInfo;
@@ -17,6 +21,11 @@ const WINDOWS_TERMINAL_RESIZE_REFLOW_MAX_ROWS: usize = 9_001;
 const WEZTERM_RESIZE_REFLOW_MAX_ROWS: usize = 3_500;
 const ALACRITTY_RESIZE_REFLOW_MAX_ROWS: usize = 10_000;
 
+/// Resolve the configured row cap for resize and initial replay.
+///
+/// `Auto` uses terminal detection plus the VS Code environment probe because VS Code can run shells
+/// whose terminal-name metadata points at the host shell rather than VS Code itself. Returning
+/// `None` means the user explicitly disabled row limiting with `max_rows = 0`.
 pub(crate) fn resize_reflow_max_rows(config: TerminalResizeReflowConfig) -> Option<usize> {
     resize_reflow_max_rows_for(
         config,

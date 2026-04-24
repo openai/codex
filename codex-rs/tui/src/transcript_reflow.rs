@@ -17,6 +17,12 @@ use std::time::Instant;
 
 pub(crate) const TRANSCRIPT_REFLOW_DEBOUNCE: Duration = Duration::from_millis(75);
 
+/// Tracks pending terminal-scrollback repair after a terminal resize.
+///
+/// The state intentionally separates observed terminal width from rebuilt terminal width. Terminal
+/// emulators can report an intermediate size during drag-resize, then settle on the final size after
+/// Codex has already rebuilt scrollback. Keeping those widths distinct lets the next draw request a
+/// final rebuild instead of assuming the latest observed size has already been repaired.
 #[derive(Debug, Default)]
 pub(crate) struct TranscriptReflowState {
     last_observed_width: Option<u16>,
@@ -63,11 +69,12 @@ impl TranscriptReflowState {
         self.last_reflow_width != Some(width) && self.pending_reflow_width != Some(width)
     }
 
-    /// Schedule a trailing-debounced reflow. Returns false because resize events wait for a quiet
-    /// period before rebuilding terminal scrollback.
+    /// Schedule a trailing-debounced reflow and return whether it should run immediately.
     ///
     /// Repeated resize events push the deadline out so dragging a terminal edge rebuilds scrollback
-    /// at the final observed width rather than at intermediate widths.
+    /// at the final observed width rather than at intermediate widths. `target_width` is present
+    /// only for width-changing rebuilds; height-only exposure still needs a rebuild, but it must not
+    /// suppress a later width repair for the same draw cycle.
     pub(crate) fn schedule_debounced(&mut self, target_width: Option<u16>) -> bool {
         let now = Instant::now();
         if let Some(target_width) = target_width {
@@ -130,6 +137,8 @@ impl TranscriptReflowState {
     ///
     /// This captures the case where the debounce did not fire before the stream finished. Without
     /// this flag, consolidation could complete without the final source-backed resize repair.
+    /// Marking the request rather than forcing immediate rendering keeps resize drag behavior
+    /// debounced while still guaranteeing that finalized stream cells replace transient rows.
     pub(crate) fn mark_resize_requested_during_stream(&mut self) {
         self.resize_requested_during_stream = true;
     }

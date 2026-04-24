@@ -9,6 +9,10 @@
 //! stream cells, then consolidate into source-backed finalized cells. Resize work that happens
 //! before consolidation is marked as stream-time work so consolidation can force one final rebuild
 //! from the finalized source.
+//!
+//! The row cap is enforced while rendering from `HistoryCell` source, not after writing to the
+//! terminal. Initial resume replay uses the same display-line buffering contract so large sessions
+//! do not write more retained rows than resize replay would later be willing to rebuild.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -30,6 +34,11 @@ struct ReflowCellDisplay {
     is_stream_continuation: bool,
 }
 
+/// Rendered transcript lines ready to be replayed into terminal scrollback.
+///
+/// This is intentionally line-oriented rather than cell-oriented because the terminal only accepts
+/// already-wrapped rows. Callers should keep treating `transcript_cells` as the source of truth; the
+/// rows here are a transient render product for a single terminal width.
 pub(super) struct ReflowRenderResult {
     pub(super) lines: Vec<Line<'static>>,
 }
@@ -77,12 +86,23 @@ impl App {
         self.config.features.enabled(Feature::TerminalResizeReflow)
     }
 
+    /// Start retaining initial resume replay rows before they are written to scrollback.
+    ///
+    /// Resume replay can insert thousands of already-finalized history cells before the first draw.
+    /// When resize reflow is enabled, buffering here lets the same row cap used by resize rebuilds
+    /// apply to the startup write. Starting this buffer while an overlay owns rendering would split
+    /// transcript ownership, so overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
         if self.terminal_resize_reflow_enabled() && self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(Default::default());
         }
     }
 
+    /// Flush retained initial resume replay rows into terminal scrollback.
+    ///
+    /// The buffer stores display lines, not cells, because the cap is measured in terminal rows.
+    /// This mirrors terminal scrollback behavior and avoids making startup replay cheaper or more
+    /// expensive than a later resize rebuild of the same transcript.
     pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
         let Some(buffer) = self.initial_history_replay_buffer.take() else {
             return;
@@ -120,6 +140,11 @@ impl App {
         }
     }
 
+    /// Retain only the newest rendered rows for initial resume replay.
+    ///
+    /// The oldest rows are dropped first because terminal scrollback caps preserve the tail of the
+    /// transcript. Keeping this policy local to display lines is important: trimming source cells
+    /// here would make copy, transcript overlay, and future replay paths disagree about history.
     pub(super) fn buffer_initial_history_replay_display_lines(
         buffer: &mut InitialHistoryReplayBuffer,
         display: Vec<Line<'static>>,
@@ -354,6 +379,13 @@ impl App {
         Ok(width)
     }
 
+    /// Render transcript cells for the current resize rebuild.
+    ///
+    /// Rendering walks backward from the transcript tail so row-capped sessions avoid formatting the
+    /// full backlog. If the retained suffix begins inside a stream-continuation run, the walk extends
+    /// to include the run's first cell; otherwise separators would be inserted as if the continuation
+    /// were a new top-level history item. The final row trim happens after separators are restored,
+    /// so the returned rows obey the cap exactly.
     pub(super) fn render_transcript_lines_for_reflow(&mut self, width: u16) -> ReflowRenderResult {
         let row_cap = self.resize_reflow_max_rows();
         let mut cell_displays = VecDeque::new();
