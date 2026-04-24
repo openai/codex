@@ -6,6 +6,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::session::turn_context::TurnEnvironment;
 
 pub(crate) struct Handler;
 
@@ -82,21 +83,29 @@ impl ToolHandler for Handler {
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
-        let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
-            config,
-            input_items,
-            Some(thread_spawn_source(
-                session.conversation_id,
-                &turn.session_source,
-                child_depth,
-                role_name,
-                /*task_name*/ None,
-            )?),
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
-            },
-        ))
+        let result = Box::pin(
+            session.services.agent_control.spawn_agent_with_metadata(
+                config,
+                input_items,
+                Some(thread_spawn_source(
+                    session.conversation_id,
+                    &turn.session_source,
+                    child_depth,
+                    role_name,
+                    /*task_name*/ None,
+                )?),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                    fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                    environments: Some(
+                        turn.environments
+                            .iter()
+                            .map(TurnEnvironment::selection)
+                            .collect(),
+                    ),
+                },
+            ),
+        )
         .await
         .map_err(collab_spawn_error);
         let (new_thread_id, new_agent_metadata, status) = match &result {

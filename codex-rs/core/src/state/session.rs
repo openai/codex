@@ -1,6 +1,6 @@
 //! Session-wide mutable state.
 
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
-    granted_permissions: Option<PermissionProfile>,
+    granted_permissions: Option<AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
 
@@ -218,12 +218,12 @@ impl SessionState {
         self.pending_session_start_source.take()
     }
 
-    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+    pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {
         self.granted_permissions =
             merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
     }
 
-    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+    pub(crate) fn granted_permissions(&self) -> Option<AdditionalPermissionProfile> {
         self.granted_permissions.clone()
     }
 }

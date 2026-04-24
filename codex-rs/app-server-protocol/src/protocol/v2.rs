@@ -7,6 +7,7 @@ use crate::RequestId;
 use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
+use codex_protocol::account::ProviderAccount;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
@@ -37,7 +38,9 @@ use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions as CoreManagedFileSystemPermissions;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
@@ -51,6 +54,7 @@ use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMod
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy as CoreNetworkSandboxPolicy;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -1356,7 +1360,7 @@ pub struct AdditionalNetworkPermissions {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PermissionProfileNetworkPermissions {
-    pub enabled: Option<bool>,
+    pub enabled: bool,
 }
 
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
@@ -1375,18 +1379,20 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     }
 }
 
-impl From<CoreNetworkPermissions> for PermissionProfileNetworkPermissions {
-    fn from(value: CoreNetworkPermissions) -> Self {
+impl From<CoreNetworkSandboxPolicy> for PermissionProfileNetworkPermissions {
+    fn from(value: CoreNetworkSandboxPolicy) -> Self {
         Self {
-            enabled: value.enabled,
+            enabled: value.is_enabled(),
         }
     }
 }
 
-impl From<PermissionProfileNetworkPermissions> for CoreNetworkPermissions {
+impl From<PermissionProfileNetworkPermissions> for CoreNetworkSandboxPolicy {
     fn from(value: PermissionProfileNetworkPermissions) -> Self {
-        Self {
-            enabled: value.enabled,
+        if value.enabled {
+            Self::Enabled
+        } else {
+            Self::Restricted
         }
     }
 }
@@ -1534,65 +1540,111 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub struct PermissionProfileFileSystemPermissions {
-    pub entries: Vec<FileSystemSandboxEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub glob_scan_max_depth: Option<NonZeroUsize>,
+pub enum PermissionProfileFileSystemPermissions {
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Restricted {
+        entries: Vec<FileSystemSandboxEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        glob_scan_max_depth: Option<NonZeroUsize>,
+    },
+    Unrestricted,
 }
 
-impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
-    fn from(value: CoreFileSystemPermissions) -> Self {
-        Self {
-            entries: value
-                .entries
-                .into_iter()
-                .map(FileSystemSandboxEntry::from)
-                .collect(),
-            glob_scan_max_depth: value.glob_scan_max_depth,
+impl From<CoreManagedFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreManagedFileSystemPermissions) -> Self {
+        match value {
+            CoreManagedFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(FileSystemSandboxEntry::from)
+                    .collect(),
+                glob_scan_max_depth,
+            },
+            CoreManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
         }
     }
 }
 
-impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+impl From<PermissionProfileFileSystemPermissions> for CoreManagedFileSystemPermissions {
     fn from(value: PermissionProfileFileSystemPermissions) -> Self {
-        Self {
-            entries: value
-                .entries
-                .into_iter()
-                .map(CoreFileSystemSandboxEntry::from)
-                .collect(),
-            glob_scan_max_depth: value.glob_scan_max_depth,
+        match value {
+            PermissionProfileFileSystemPermissions::Restricted {
+                entries,
+                glob_scan_max_depth,
+            } => Self::Restricted {
+                entries: entries
+                    .into_iter()
+                    .map(CoreFileSystemSandboxEntry::from)
+                    .collect(),
+                glob_scan_max_depth,
+            },
+            PermissionProfileFileSystemPermissions::Unrestricted => Self::Unrestricted,
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub struct PermissionProfile {
-    pub network: Option<PermissionProfileNetworkPermissions>,
-    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+pub enum PermissionProfile {
+    /// Codex owns sandbox construction for this profile.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Managed {
+        network: PermissionProfileNetworkPermissions,
+        file_system: PermissionProfileFileSystemPermissions,
+    },
+    /// Do not apply an outer sandbox.
+    Disabled,
+    /// Filesystem isolation is enforced by an external caller.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    External {
+        network: PermissionProfileNetworkPermissions,
+    },
 }
 
 impl From<CorePermissionProfile> for PermissionProfile {
     fn from(value: CorePermissionProfile) -> Self {
-        Self {
-            network: value.network.map(PermissionProfileNetworkPermissions::from),
-            file_system: value
-                .file_system
-                .map(PermissionProfileFileSystemPermissions::from),
+        match value {
+            CorePermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                network: network.into(),
+                file_system: file_system.into(),
+            },
+            CorePermissionProfile::Disabled => Self::Disabled,
+            CorePermissionProfile::External { network } => Self::External {
+                network: network.into(),
+            },
         }
     }
 }
 
 impl From<PermissionProfile> for CorePermissionProfile {
     fn from(value: PermissionProfile) -> Self {
-        Self {
-            network: value.network.map(CoreNetworkPermissions::from),
-            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        match value {
+            PermissionProfile::Managed {
+                file_system,
+                network,
+            } => Self::Managed {
+                file_system: file_system.into(),
+                network: network.into(),
+            },
+            PermissionProfile::Disabled => Self::Disabled,
+            PermissionProfile::External { network } => Self::External {
+                network: network.into(),
+            },
         }
     }
 }
@@ -1601,12 +1653,13 @@ impl From<PermissionProfile> for CorePermissionProfile {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
+    /// Partial overlay used for per-command permission requests.
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl From<CorePermissionProfile> for AdditionalPermissionProfile {
-    fn from(value: CorePermissionProfile) -> Self {
+impl From<CoreAdditionalPermissionProfile> for AdditionalPermissionProfile {
+    fn from(value: CoreAdditionalPermissionProfile) -> Self {
         Self {
             network: value.network.map(AdditionalNetworkPermissions::from),
             file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
@@ -1614,7 +1667,7 @@ impl From<CorePermissionProfile> for AdditionalPermissionProfile {
     }
 }
 
-impl From<AdditionalPermissionProfile> for CorePermissionProfile {
+impl From<AdditionalPermissionProfile> for CoreAdditionalPermissionProfile {
     fn from(value: AdditionalPermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
@@ -1635,7 +1688,7 @@ pub struct GrantedPermissionProfile {
     pub file_system: Option<AdditionalFileSystemPermissions>,
 }
 
-impl From<GrantedPermissionProfile> for CorePermissionProfile {
+impl From<GrantedPermissionProfile> for CoreAdditionalPermissionProfile {
     fn from(value: GrantedPermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
@@ -2016,6 +2069,20 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
+
+    #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
+    #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
+    AmazonBedrock {},
+}
+
+impl From<ProviderAccount> for Account {
+    fn from(account: ProviderAccount) -> Self {
+        match account {
+            ProviderAccount::ApiKey => Self::ApiKey {},
+            ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
+            ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -3299,6 +3366,15 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// Optional sticky environments for this thread.
+    ///
+    /// Omitted selects the default environment when environment access is
+    /// enabled. Empty disables environment access for turns that do not
+    /// provide a turn override. Non-empty selects the first environment as the
+    /// current turn environment.
+    #[experimental("thread/start.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -3356,9 +3432,7 @@ pub struct ThreadStartResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3430,6 +3504,11 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// When true, return only thread metadata and live-resume state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after resuming.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_turns: bool,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/resume.persistFullHistory")]
@@ -3457,9 +3536,7 @@ pub struct ThreadResumeResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3522,6 +3599,11 @@ pub struct ThreadForkParams {
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// When true, return only thread metadata and live fork state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after forking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_turns: bool,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/fork.persistFullHistory")]
@@ -3549,9 +3631,7 @@ pub struct ThreadForkResponse {
     /// `permissionProfile` when present as the canonical active permissions
     /// view.
     pub sandbox: SandboxPolicy,
-    /// Canonical active permissions view for this thread when representable.
-    /// This is `null` for external sandbox policies because external
-    /// enforcement cannot be round-tripped as a `PermissionProfile`.
+    /// Canonical active permissions view for this thread.
     #[serde(default)]
     pub permission_profile: Option<PermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -4190,6 +4270,31 @@ pub struct MarketplaceRemoveParams {
 pub struct MarketplaceRemoveResponse {
     pub marketplace_name: String,
     pub installed_root: Option<AbsolutePathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeParams {
+    #[ts(optional = nullable)]
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeResponse {
+    pub selected_marketplaces: Vec<String>,
+    pub upgraded_roots: Vec<AbsolutePathBuf>,
+    pub errors: Vec<MarketplaceUpgradeErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeErrorInfo {
+    pub marketplace_name: String,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5041,7 +5146,11 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
-    /// Optional turn-scoped environment selections.
+    /// Optional turn-scoped environments.
+    ///
+    /// Omitted uses the thread sticky environments. Empty disables
+    /// environment access for this turn. Non-empty selects the first
+    /// environment as the current turn environment for this turn.
     #[experimental("turn/start.environments")]
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,
@@ -7947,7 +8056,7 @@ mod tests {
 
     #[test]
     fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
-        let core_permissions = CoreFileSystemPermissions {
+        let core_permissions = CoreManagedFileSystemPermissions::Restricted {
             entries: vec![CoreFileSystemSandboxEntry {
                 path: CoreFileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
@@ -7961,7 +8070,7 @@ mod tests {
 
         assert_eq!(
             permissions,
-            PermissionProfileFileSystemPermissions {
+            PermissionProfileFileSystemPermissions::Restricted {
                 entries: vec![FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
                         pattern: "**/*.env".to_string(),
@@ -7972,7 +8081,7 @@ mod tests {
             }
         );
         assert_eq!(
-            CoreFileSystemPermissions::from(permissions),
+            CoreManagedFileSystemPermissions::from(permissions),
             core_permissions
         );
     }
@@ -7980,6 +8089,7 @@ mod tests {
     #[test]
     fn permission_profile_file_system_permissions_rejects_zero_glob_scan_depth() {
         serde_json::from_value::<PermissionProfileFileSystemPermissions>(json!({
+            "type": "restricted",
             "entries": [],
             "globScanMaxDepth": 0,
         }))
@@ -8033,8 +8143,8 @@ mod tests {
         );
 
         assert_eq!(
-            CorePermissionProfile::from(response.permissions),
-            CorePermissionProfile {
+            CoreAdditionalPermissionProfile::from(response.permissions),
+            CoreAdditionalPermissionProfile {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
@@ -9895,6 +10005,36 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: None,
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<MarketplaceUpgradeParams>(json!({})).unwrap(),
+            MarketplaceUpgradeParams {
+                marketplace_name: None,
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: Some("debug".to_string()),
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": "debug",
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
         assert_eq!(
             serde_json::to_value(PluginMarketplaceEntry {
@@ -10136,6 +10276,37 @@ mod tests {
             json!({
                 "marketplaceName": "debug",
                 "installedRoot": null,
+            }),
+        );
+    }
+
+    #[test]
+    fn marketplace_upgrade_response_serializes_camel_case_fields() {
+        let upgraded_root = if cfg!(windows) {
+            r"C:\marketplaces\debug"
+        } else {
+            "/tmp/marketplaces/debug"
+        };
+        let upgraded_root = AbsolutePathBuf::try_from(PathBuf::from(upgraded_root)).unwrap();
+        let upgraded_root_json = upgraded_root.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeResponse {
+                selected_marketplaces: vec!["debug".to_string()],
+                upgraded_roots: vec![upgraded_root],
+                errors: vec![MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "broken".to_string(),
+                    message: "failed to clone".to_string(),
+                }],
+            })
+            .unwrap(),
+            json!({
+                "selectedMarketplaces": ["debug"],
+                "upgradedRoots": [upgraded_root_json],
+                "errors": [{
+                    "marketplaceName": "broken",
+                    "message": "failed to clone",
+                }],
             }),
         );
     }

@@ -23,7 +23,7 @@ use tracing::info_span;
 
 pub(crate) fn request_span(
     request: &JSONRPCRequest,
-    transport: AppServerTransport,
+    transport: &AppServerTransport,
     connection_id: ConnectionId,
     session: &ConnectionSessionState,
 ) -> Span {
@@ -82,9 +82,10 @@ pub(crate) fn typed_request_span(
     span
 }
 
-fn transport_name(transport: AppServerTransport) -> &'static str {
+fn transport_name(transport: &AppServerTransport) -> &'static str {
     match transport {
         AppServerTransport::Stdio => "stdio",
+        AppServerTransport::UnixSocket { .. } => "unix_socket",
         AppServerTransport::WebSocket { .. } => "websocket",
         AppServerTransport::Off => "off",
     }
