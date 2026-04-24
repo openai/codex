@@ -15,6 +15,8 @@ use std::time::Instant;
 
 use codex_features::Feature;
 use color_eyre::eyre::Result;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
 use super::App;
@@ -150,6 +152,97 @@ impl App {
         crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
     }
 
+    pub(super) fn note_resize_reflow_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::PageUp => {
+                self.terminal_scrollback_at_bottom = false;
+            }
+            KeyCode::Char(_)
+            | KeyCode::Enter
+            | KeyCode::Backspace
+            | KeyCode::Delete
+            | KeyCode::Tab
+            | KeyCode::PageDown
+            | KeyCode::End => {
+                self.note_resize_reflow_text_input(tui);
+            }
+            KeyCode::BackTab
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Insert
+            | KeyCode::Home
+            | KeyCode::F(_)
+            | KeyCode::Null
+            | KeyCode::Esc
+            | KeyCode::CapsLock
+            | KeyCode::ScrollLock
+            | KeyCode::NumLock
+            | KeyCode::PrintScreen
+            | KeyCode::Pause
+            | KeyCode::Menu
+            | KeyCode::KeypadBegin
+            | KeyCode::Media(_)
+            | KeyCode::Modifier(_) => {}
+        }
+    }
+
+    pub(super) fn note_resize_reflow_text_input(&mut self, tui: &mut tui::Tui) {
+        let Ok(size) = tui.terminal.size() else {
+            return;
+        };
+        if self.note_resize_reflow_text_input_at_width(size.width) {
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    pub(super) fn note_resize_reflow_text_input_at_width(&mut self, width: u16) -> bool {
+        self.terminal_scrollback_at_bottom = true;
+
+        if self.resize_reflow_skipped_width != Some(width) {
+            return false;
+        }
+        self.resize_reflow_skipped_width = None;
+        if self.terminal_resize_reflow_active()
+            && self.overlay.is_none()
+            && !self.transcript_cells.is_empty()
+        {
+            self.transcript_reflow
+                .schedule_immediate(TranscriptReflowKind::Full);
+            return true;
+        }
+        false
+    }
+
+    fn resize_reflow_may_rebuild_scrollback(&mut self, tui: &mut tui::Tui) -> Result<bool> {
+        if tui.is_alt_screen_active() {
+            return Ok(true);
+        }
+        if !self.terminal_scrollback_at_bottom {
+            return Ok(false);
+        }
+
+        let size = tui.terminal.size()?;
+        let Ok(cursor_pos) = tui.terminal.get_cursor_position() else {
+            return Ok(true);
+        };
+        let viewport_height = tui.terminal.viewport_area.height.min(size.height);
+        let bottom_viewport_top = size.height.saturating_sub(viewport_height);
+        let cursor_is_in_bottom_viewport =
+            cursor_pos.y >= bottom_viewport_top && cursor_pos.y < size.height;
+        if !cursor_is_in_bottom_viewport {
+            self.terminal_scrollback_at_bottom = false;
+        }
+        Ok(cursor_is_in_bottom_viewport)
+    }
+
+    pub(super) fn skip_resize_reflow_for_scrollback_position(&mut self, width: u16) {
+        self.transcript_reflow.clear_pending_reflow();
+        self.transcript_reflow.mark_reflowed_width(width);
+        self.resize_reflow_skipped_width = Some(width);
+    }
+
     fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if tui.is_alt_screen_active() {
             tui.terminal.clear_visible_screen()?;
@@ -230,12 +323,9 @@ impl App {
     /// that split can expose blank or shifted rows even when the inline viewport's logical position
     /// did not move. The first observed width initializes resize tracking without scheduling a
     /// rebuild, because there is no previously emitted width to repair yet.
-    pub(super) fn handle_draw_size_change(
-        &mut self,
-        size: ratatui::layout::Size,
-        last_known_screen_size: ratatui::layout::Size,
-        frame_requester: &tui::FrameRequester,
-    ) -> bool {
+    pub(super) fn handle_draw_size_change(&mut self, tui: &mut tui::Tui) -> Result<bool> {
+        let size = tui.terminal.size()?;
+        let last_known_screen_size = tui.terminal.last_known_screen_size;
         let width = self.transcript_reflow.note_width(size.width);
         let full_reflow_needed = self
             .transcript_reflow
@@ -245,26 +335,33 @@ impl App {
         if width.changed || width.initialized {
             self.chat_widget.on_terminal_resize(size.width);
         }
+        let mut will_rebuild_transcript = false;
         if should_rebuild_transcript {
             if self.terminal_resize_reflow_active() {
-                let reflow_kind = if full_reflow_needed {
-                    TranscriptReflowKind::Full
+                if self.resize_reflow_may_rebuild_scrollback(tui)? {
+                    let reflow_kind = if full_reflow_needed {
+                        TranscriptReflowKind::Full
+                    } else {
+                        TranscriptReflowKind::VisibleRows
+                    };
+                    if matches!(reflow_kind, TranscriptReflowKind::Full)
+                        && self.should_mark_reflow_as_stream_time()
+                    {
+                        self.transcript_reflow.mark_resize_requested_during_stream();
+                    }
+                    let target_width = match reflow_kind {
+                        TranscriptReflowKind::Full => Some(size.width),
+                        TranscriptReflowKind::VisibleRows => None,
+                    };
+                    if self.schedule_resize_reflow(reflow_kind, target_width) {
+                        tui.frame_requester().schedule_frame();
+                    } else {
+                        tui.frame_requester()
+                            .schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+                    }
+                    will_rebuild_transcript = true;
                 } else {
-                    TranscriptReflowKind::VisibleRows
-                };
-                if matches!(reflow_kind, TranscriptReflowKind::Full)
-                    && self.should_mark_reflow_as_stream_time()
-                {
-                    self.transcript_reflow.mark_resize_requested_during_stream();
-                }
-                let target_width = match reflow_kind {
-                    TranscriptReflowKind::Full => Some(size.width),
-                    TranscriptReflowKind::VisibleRows => None,
-                };
-                if self.schedule_resize_reflow(reflow_kind, target_width) {
-                    frame_requester.schedule_frame();
-                } else {
-                    frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+                    self.skip_resize_reflow_for_scrollback_position(size.width);
                 }
             } else if !self.terminal_resize_reflow_enabled() && width.changed {
                 self.transcript_reflow.clear();
@@ -276,7 +373,7 @@ impl App {
         if self.terminal_resize_reflow_active() {
             self.maybe_clear_resize_reflow_without_terminal();
         }
-        should_rebuild_transcript
+        Ok(will_rebuild_transcript)
     }
 
     fn maybe_clear_resize_reflow_without_terminal(&mut self) {
@@ -300,12 +397,7 @@ impl App {
     }
 
     pub(super) fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let size = tui.terminal.size()?;
-        let should_rebuild_transcript = self.handle_draw_size_change(
-            size,
-            tui.terminal.last_known_screen_size,
-            &tui.frame_requester(),
-        );
+        let should_rebuild_transcript = self.handle_draw_size_change(tui)?;
         if should_rebuild_transcript && self.terminal_resize_reflow_active() {
             // Resize-sensitive history inserts queued before this frame may be wrapped for the old
             // viewport or targeted at rows no longer visible. Drop them and let resize reflow
@@ -345,6 +437,11 @@ impl App {
         if self.overlay.is_some() {
             return Ok(());
         }
+        if !self.resize_reflow_may_rebuild_scrollback(tui)? {
+            let width = tui.terminal.size()?.width;
+            self.skip_resize_reflow_for_scrollback_position(width);
+            return Ok(());
+        }
 
         let reflow_kind = self
             .transcript_reflow
@@ -363,6 +460,7 @@ impl App {
             TranscriptReflowKind::VisibleRows => self.repaint_visible_transcript_rows(tui)?,
         };
         self.transcript_reflow.mark_reflowed_width(width);
+        self.resize_reflow_skipped_width = None;
 
         if reflow_ran_during_stream {
             self.transcript_reflow.mark_ran_during_stream();

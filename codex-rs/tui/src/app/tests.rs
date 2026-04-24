@@ -19,6 +19,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
+use crate::transcript_reflow::TranscriptReflowKind;
 use assert_matches::assert_matches;
 
 use crate::legacy_core::config::ConfigBuilder;
@@ -81,6 +82,8 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
@@ -3571,6 +3574,8 @@ async fn make_test_app() -> App {
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
+        terminal_scrollback_at_bottom: true,
+        resize_reflow_skipped_width: None,
         initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
         commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -3630,6 +3635,8 @@ async fn make_test_app_with_channels() -> (
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
+            terminal_scrollback_at_bottom: true,
+            resize_reflow_skipped_width: None,
             initial_history_replay_buffer: None,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -3769,6 +3776,36 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
             "cell 2".to_string(),
         ]
     );
+}
+
+#[tokio::test]
+async fn resize_reflow_skip_records_width_and_clears_pending() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.transcript_cells = vec![plain_line_cell("old width transcript")];
+    app.transcript_reflow
+        .schedule_immediate(TranscriptReflowKind::Full);
+
+    app.skip_resize_reflow_for_scrollback_position(/*width*/ 80);
+
+    assert_eq!(app.transcript_reflow.has_pending_reflow(), false);
+    assert_eq!(app.resize_reflow_skipped_width, Some(80));
+}
+
+#[tokio::test]
+async fn resize_reflow_text_input_retries_skipped_width_at_bottom() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.transcript_cells = vec![plain_line_cell("old width transcript")];
+    app.terminal_scrollback_at_bottom = false;
+    app.resize_reflow_skipped_width = Some(80);
+
+    let scheduled = app.note_resize_reflow_text_input_at_width(/*width*/ 80);
+
+    assert_eq!(app.terminal_scrollback_at_bottom, true);
+    assert_eq!(app.resize_reflow_skipped_width, None);
+    assert_eq!(scheduled, true);
+    assert_eq!(app.transcript_reflow.has_pending_reflow(), true);
 }
 
 #[tokio::test]

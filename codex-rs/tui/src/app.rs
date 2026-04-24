@@ -537,6 +537,8 @@ pub(crate) struct App {
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
+    terminal_scrollback_at_bottom: bool,
+    resize_reflow_skipped_width: Option<u16>,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -924,6 +926,8 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
+            terminal_scrollback_at_bottom: true,
+            resize_reflow_skipped_width: None,
             initial_history_replay_buffer: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
@@ -1132,9 +1136,11 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
+                    self.note_resize_reflow_key_event(tui, key_event);
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
+                    self.note_resize_reflow_text_input(tui);
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783

@@ -31,6 +31,8 @@ pub(super) async fn make_test_app() -> App {
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
+        terminal_scrollback_at_bottom: true,
+        resize_reflow_skipped_width: None,
         initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
         commit_anim_running: Arc::new(AtomicBool::new(false)),
