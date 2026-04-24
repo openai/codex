@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Component;
 use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
@@ -154,8 +155,7 @@ pub fn build_available_skills(
         skills.len(),
         budget,
         SkillPathAliases::default(),
-    )
-    .expect("non-empty skill list should render");
+    )?;
 
     let selected =
         if absolute.report.omitted_count == 0 && absolute.report.truncated_description_chars == 0 {
@@ -672,11 +672,18 @@ fn build_alias_plan(
         return None;
     }
 
+    let plugin_version_skill_counts =
+        plugin_version_skill_counts_for_skill_roots(skill_root_by_path.values());
     let alias_root_by_skill_root = used_roots
         .iter()
-        .map(|root| (root.clone(), alias_root_for_skill_root(root)))
+        .map(|root| {
+            (
+                root.clone(),
+                alias_root_for_skill_root(root, &plugin_version_skill_counts),
+            )
+        })
         .collect::<HashMap<_, _>>();
-    let alias_roots = ordered_alias_roots(&used_roots, &alias_root_by_skill_root);
+    let alias_roots = ordered_alias_roots(&used_roots, &alias_root_by_skill_root)?;
     let root_aliases = alias_roots
         .iter()
         .enumerate()
@@ -704,23 +711,47 @@ fn build_alias_plan(
 fn ordered_alias_roots(
     used_roots: &[AbsolutePathBuf],
     alias_root_by_skill_root: &HashMap<AbsolutePathBuf, AbsolutePathBuf>,
-) -> Vec<AbsolutePathBuf> {
+) -> Option<Vec<AbsolutePathBuf>> {
     let mut seen = HashSet::new();
     let mut alias_roots = Vec::new();
     for root in used_roots {
-        let alias_root = alias_root_by_skill_root
-            .get(root)
-            .expect("alias root should exist for every used root")
-            .clone();
+        let alias_root = alias_root_by_skill_root.get(root)?.clone();
         if seen.insert(alias_root.clone()) {
             alias_roots.push(alias_root);
         }
     }
-    alias_roots
+    Some(alias_roots)
 }
 
-fn alias_root_for_skill_root(root: &AbsolutePathBuf) -> AbsolutePathBuf {
-    plugin_marketplace_base(root.as_path()).unwrap_or_else(|| root.clone())
+fn alias_root_for_skill_root(
+    root: &AbsolutePathBuf,
+    plugin_version_skill_counts: &HashMap<AbsolutePathBuf, usize>,
+) -> AbsolutePathBuf {
+    let Some(plugin_version_base) = plugin_version_base(root.as_path()) else {
+        return root.clone();
+    };
+    let skill_count = plugin_version_skill_counts
+        .get(&plugin_version_base)
+        .copied()
+        .unwrap_or_default();
+    if skill_count > 1 {
+        root.clone()
+    } else {
+        plugin_marketplace_base(root.as_path()).unwrap_or_else(|| root.clone())
+    }
+}
+
+fn plugin_version_skill_counts_for_skill_roots<'a>(
+    skill_roots: impl Iterator<Item = &'a AbsolutePathBuf>,
+) -> HashMap<AbsolutePathBuf, usize> {
+    let mut counts = HashMap::new();
+    for root in skill_roots {
+        if let Some(plugin_version_base) = plugin_version_base(root.as_path()) {
+            let count = counts.entry(plugin_version_base).or_insert(0usize);
+            *count = count.saturating_add(1);
+        }
+    }
+    counts
 }
 
 fn aliased_metadata_overhead_cost(
@@ -766,6 +797,23 @@ fn plugin_marketplace_base(path: &Path) -> Option<AbsolutePathBuf> {
         candidate = parent;
     }
     None
+}
+
+fn plugin_version_base(path: &Path) -> Option<AbsolutePathBuf> {
+    let marketplace_base = plugin_marketplace_base(path)?;
+    let mut relative_components = path
+        .strip_prefix(marketplace_base.as_path())
+        .ok()?
+        .components();
+    let plugin = match relative_components.next()? {
+        Component::Normal(plugin) => plugin,
+        _ => return None,
+    };
+    let version = match relative_components.next()? {
+        Component::Normal(version) => version,
+        _ => return None,
+    };
+    AbsolutePathBuf::from_absolute_path(marketplace_base.join(plugin).join(version)).ok()
 }
 
 fn render_skill_path_with_aliases(skill: &SkillMetadata, plan: &AliasPlan) -> String {
@@ -1127,7 +1175,7 @@ mod tests {
                 skill_with_path(&name, &root.join(format!("skill-{index}/SKILL.md")))
             })
             .collect::<Vec<_>>();
-        let outcome = outcome_with_roots(skills.clone(), vec![root.clone()]);
+        let outcome = outcome_with_roots(skills.clone(), vec![root]);
         let absolute_minimum = skills.iter().fold(0usize, |cost, skill| {
             cost.saturating_add(
                 SkillLine::new(skill).minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
@@ -1164,17 +1212,165 @@ mod tests {
             vec![format!(
                 "- `r0` = `{}`",
                 normalized_path(
-                    &test_path_buf("/Users/xl/.codex/plugins/cache/openai-curated").abs()
+                    &test_path_buf(
+                        "/Users/xl/.codex/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix"
+                    )
+                    .abs()
                 )
             )]
         );
         let rendered_text = rendered.skill_lines.join("\n");
-        assert!(rendered_text.contains(
-            "r0/example/hash1234567890/skills-with-a-very-long-shared-prefix/skill-0/SKILL.md"
+        assert!(rendered_text.contains("r0/skill-0/SKILL.md"));
+        assert!(rendered_text.contains("r0/skill-11/SKILL.md"));
+    }
+
+    #[test]
+    fn outcome_rendering_uses_marketplace_root_for_single_skill_plugin_versions() {
+        let github_root =
+            test_path_buf("/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/skills")
+                .abs();
+        let marketplace_root = test_path_buf("/Users/xl/.codex/plugins/cache/openai-curated").abs();
+        let github = skill_with_path("github:gh-fix-ci", &github_root.join("gh-fix-ci/SKILL.md"));
+        let outcome = outcome_with_roots(vec![github.clone()], vec![github_root.clone()]);
+        let plan = build_alias_plan(
+            &outcome,
+            &[github],
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("alias plan should build");
+
+        assert_eq!(
+            plan.aliases.skill_root_lines,
+            vec![format!("- `r0` = `{}`", normalized_path(&marketplace_root))]
+        );
+        assert_eq!(
+            render_skill_path_with_aliases(
+                &skill_with_path("github:gh-fix-ci", &github_root.join("gh-fix-ci/SKILL.md")),
+                &plan
+            ),
+            "r0/github/hash123/skills/gh-fix-ci/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn outcome_rendering_uses_skill_root_for_multiple_skills_in_one_plugin_version() {
+        let github_root =
+            test_path_buf("/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/skills")
+                .abs();
+        let fix_ci = skill_with_path("github:gh-fix-ci", &github_root.join("gh-fix-ci/SKILL.md"));
+        let yeet = skill_with_path("github:yeet", &github_root.join("yeet/SKILL.md"));
+        let outcome = outcome_with_roots(
+            vec![fix_ci.clone(), yeet.clone()],
+            vec![github_root.clone()],
+        );
+        let plan = build_alias_plan(
+            &outcome,
+            &[fix_ci, yeet],
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("alias plan should build");
+
+        assert_eq!(
+            plan.aliases.skill_root_lines,
+            vec![format!("- `r0` = `{}`", normalized_path(&github_root))]
+        );
+        assert_eq!(
+            render_skill_path_with_aliases(
+                &skill_with_path("github:gh-fix-ci", &github_root.join("gh-fix-ci/SKILL.md")),
+                &plan
+            ),
+            "r0/gh-fix-ci/SKILL.md"
+        );
+        assert_eq!(
+            render_skill_path_with_aliases(
+                &skill_with_path("github:yeet", &github_root.join("yeet/SKILL.md")),
+                &plan
+            ),
+            "r0/yeet/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn outcome_rendering_counts_plugin_version_skills_before_budget_omission() {
+        let root = test_path_buf(
+            "/Users/xl/.codex/plugins/cache/openai-curated/example/hash1234567890/skills-with-a-very-long-shared-prefix",
+        )
+        .abs();
+        let alpha = skill_with_path("alpha-skill", &root.join("alpha/SKILL.md"));
+        let beta = skill_with_path("beta-skill", &root.join("beta/SKILL.md"));
+        let outcome = outcome_with_roots(vec![alpha.clone(), beta.clone()], vec![root.clone()]);
+        let plan = build_alias_plan(
+            &outcome,
+            &[alpha.clone(), beta.clone()],
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("alias plan should build");
+        let alpha_cost = SkillMetadataBudget::Characters(usize::MAX).cost(&format!(
+            "{}\n",
+            SkillLine::with_path(&alpha, render_skill_path_with_aliases(&alpha, &plan))
+                .render_minimum()
         ));
-        assert!(rendered_text.contains(
-            "r0/example/hash1234567890/skills-with-a-very-long-shared-prefix/skill-11/SKILL.md"
-        ));
+        let rendered = build_aliased_available_skills(
+            &outcome,
+            &[alpha, beta],
+            SkillMetadataBudget::Characters(plan.table_cost + alpha_cost),
+        )
+        .expect("skills should render");
+
+        assert_eq!(rendered.report.included_count, 1);
+        assert_eq!(
+            rendered.skill_root_lines,
+            vec![format!("- `r0` = `{}`", normalized_path(&root))]
+        );
+        assert_eq!(
+            rendered.skill_lines,
+            vec!["- alpha-skill: (file: r0/alpha/SKILL.md)"]
+        );
+    }
+
+    #[test]
+    fn outcome_rendering_uses_each_skill_root_for_multiple_roots_in_one_plugin_version() {
+        let skills_root =
+            test_path_buf("/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/skills")
+                .abs();
+        let extra_root = test_path_buf(
+            "/Users/xl/.codex/plugins/cache/openai-curated/github/hash123/extra-skills",
+        )
+        .abs();
+        let fix_ci = skill_with_path("github:gh-fix-ci", &skills_root.join("gh-fix-ci/SKILL.md"));
+        let yeet = skill_with_path("github:yeet", &extra_root.join("yeet/SKILL.md"));
+        let outcome = outcome_with_roots(
+            vec![fix_ci.clone(), yeet.clone()],
+            vec![skills_root.clone(), extra_root.clone()],
+        );
+        let plan = build_alias_plan(
+            &outcome,
+            &[fix_ci, yeet],
+            SkillMetadataBudget::Characters(usize::MAX),
+        )
+        .expect("alias plan should build");
+
+        assert_eq!(
+            plan.aliases.skill_root_lines,
+            vec![
+                format!("- `r0` = `{}`", normalized_path(&skills_root)),
+                format!("- `r1` = `{}`", normalized_path(&extra_root)),
+            ]
+        );
+        assert_eq!(
+            render_skill_path_with_aliases(
+                &skill_with_path("github:gh-fix-ci", &skills_root.join("gh-fix-ci/SKILL.md")),
+                &plan
+            ),
+            "r0/gh-fix-ci/SKILL.md"
+        );
+        assert_eq!(
+            render_skill_path_with_aliases(
+                &skill_with_path("github:yeet", &extra_root.join("yeet/SKILL.md")),
+                &plan
+            ),
+            "r1/yeet/SKILL.md"
+        );
     }
 
     #[test]
