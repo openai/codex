@@ -1018,7 +1018,7 @@ mod tests {
         assert!(!guardian_config.include_skill_instructions);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_times_out_before_future_completes() {
         let outcome = run_before_review_deadline(
             tokio::time::Instant::now() + Duration::from_millis(10),
@@ -1035,7 +1035,7 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_aborts_when_cancelled() {
         let cancel_token = CancellationToken::new();
         let canceller = cancel_token.clone();
@@ -1057,7 +1057,7 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_with_cancel_cancels_token_on_timeout() {
         let cancel_token = CancellationToken::new();
 
@@ -1078,7 +1078,7 @@ mod tests {
         assert!(cancel_token.is_cancelled());
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_with_cancel_cancels_token_on_abort() {
         let external_cancel = CancellationToken::new();
         let external_canceller = external_cancel.clone();

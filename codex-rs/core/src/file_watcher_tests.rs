@@ -20,7 +20,7 @@ fn notify_event(kind: EventKind, paths: Vec<PathBuf>) -> Event {
     event
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn throttled_receiver_coalesces_within_interval() {
     let (tx, rx) = watch_channel();
     let mut throttled = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);

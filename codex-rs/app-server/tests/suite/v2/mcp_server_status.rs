@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -143,6 +145,8 @@ impl ServerHandler for McpStatusServer {
 #[derive(Clone)]
 struct SlowInventoryServer {
     tool_name: Arc<String>,
+    resource_calls: Arc<AtomicUsize>,
+    resource_template_calls: Arc<AtomicUsize>,
 }
 
 impl ServerHandler for SlowInventoryServer {
@@ -186,7 +190,7 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        self.resource_calls.fetch_add(1, Ordering::SeqCst);
         Ok(ListResourcesResult {
             resources: Vec::new(),
             next_cursor: None,
@@ -199,7 +203,7 @@ impl ServerHandler for SlowInventoryServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        self.resource_template_calls.fetch_add(1, Ordering::SeqCst);
         Ok(ListResourceTemplatesResult {
             resource_templates: Vec::new(),
             next_cursor: None,
@@ -211,7 +215,8 @@ impl ServerHandler for SlowInventoryServer {
 #[tokio::test]
 async fn mcp_server_status_list_tools_and_auth_only_skips_slow_inventory_calls() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let (mcp_server_url, mcp_server_handle) = start_slow_inventory_mcp_server("lookup").await?;
+    let (mcp_server_url, mcp_server_handle, resource_calls, resource_template_calls) =
+        start_slow_inventory_mcp_server("lookup").await?;
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -244,7 +249,7 @@ url = "{mcp_server_url}/mcp"
         })
         .await?;
     let response = timeout(
-        Duration::from_millis(500),
+        DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
@@ -260,6 +265,8 @@ url = "{mcp_server_url}/mcp"
     );
     assert_eq!(status.resources, Vec::new());
     assert_eq!(status.resource_templates, Vec::new());
+    assert_eq!(resource_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(resource_template_calls.load(Ordering::SeqCst), 0);
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
@@ -367,14 +374,22 @@ async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
     Ok((format!("http://{addr}"), handle))
 }
 
-async fn start_slow_inventory_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+async fn start_slow_inventory_mcp_server(
+    tool_name: &str,
+) -> Result<(String, JoinHandle<()>, Arc<AtomicUsize>, Arc<AtomicUsize>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());
+    let resource_calls = Arc::new(AtomicUsize::new(0));
+    let resource_template_calls = Arc::new(AtomicUsize::new(0));
+    let resource_calls_for_server = Arc::clone(&resource_calls);
+    let resource_template_calls_for_server = Arc::clone(&resource_template_calls);
     let mcp_service = StreamableHttpService::new(
         move || {
             Ok(SlowInventoryServer {
                 tool_name: Arc::clone(&tool_name),
+                resource_calls: Arc::clone(&resource_calls_for_server),
+                resource_template_calls: Arc::clone(&resource_template_calls_for_server),
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -386,5 +401,10 @@ async fn start_slow_inventory_mcp_server(tool_name: &str) -> Result<(String, Joi
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok((format!("http://{addr}"), handle))
+    Ok((
+        format!("http://{addr}"),
+        handle,
+        resource_calls,
+        resource_template_calls,
+    ))
 }
