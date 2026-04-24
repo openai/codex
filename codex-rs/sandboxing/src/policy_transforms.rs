@@ -1,6 +1,7 @@
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -559,6 +560,22 @@ pub fn effective_network_sandbox_policy(
     } else {
         network_policy
     }
+}
+
+pub fn effective_permission_profile(
+    permission_profile: &PermissionProfile,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
+) -> PermissionProfile {
+    let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
+    let effective_file_system_policy =
+        effective_file_system_sandbox_policy(&file_system_policy, additional_permissions);
+    let effective_network_policy =
+        effective_network_sandbox_policy(network_policy, additional_permissions);
+    PermissionProfile::from_runtime_permissions_with_enforcement(
+        permission_profile.enforcement(),
+        &effective_file_system_policy,
+        effective_network_policy,
+    )
 }
 
 fn sandbox_policy_with_additional_permissions(

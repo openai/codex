@@ -5214,6 +5214,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                     &SandboxPolicy::new_read_only_policy(),
@@ -5412,6 +5413,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -5564,6 +5566,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -5701,6 +5704,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -6524,6 +6528,40 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
     assert_eq!(
         *config.permissions.sandbox_policy.get(),
         SandboxPolicy::new_read_only_policy()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = crate::config_loader::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    let expected_sandbox_policy = SandboxPolicy::new_read_only_policy();
+    assert_eq!(
+        *config.permissions.sandbox_policy.get(),
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::read_only()
     );
     Ok(())
 }

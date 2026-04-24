@@ -1075,9 +1075,7 @@ impl JsReplManager {
         let exec_env = sandbox
             .transform(SandboxTransformRequest {
                 command,
-                policy: &turn.sandbox_policy,
-                file_system_policy: &turn.file_system_sandbox_policy,
-                network_policy: turn.network_sandbox_policy,
+                permissions: &turn.permission_profile,
                 sandbox: sandbox_type,
                 enforce_managed_network: managed_network_active,
                 network: None,
