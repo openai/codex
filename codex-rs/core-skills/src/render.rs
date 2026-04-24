@@ -58,6 +58,30 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
+pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("## Skills".to_string());
+    if skill_root_lines.is_empty() {
+        lines.push(SKILLS_INTRO_WITH_ABSOLUTE_PATHS.to_string());
+    } else {
+        lines.push(SKILLS_INTRO_WITH_ALIASES.to_string());
+        lines.push("### Skill roots".to_string());
+        lines.extend(skill_root_lines.iter().cloned());
+    }
+    lines.push("### Available skills".to_string());
+    lines.extend(skill_lines.iter().cloned());
+
+    lines.push("### How to use skills".to_string());
+    let how_to_use = if skill_root_lines.is_empty() {
+        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
+    } else {
+        SKILLS_HOW_TO_USE_WITH_ALIASES
+    };
+    lines.push(how_to_use.to_string());
+
+    format!("\n{}\n", lines.join("\n"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
     Tokens(usize),
@@ -758,21 +782,12 @@ fn aliased_metadata_overhead_cost(
     budget: SkillMetadataBudget,
     skill_root_lines: &[String],
 ) -> usize {
-    alias_instruction_overhead_cost(budget).saturating_add(lines_cost(budget, skill_root_lines))
-}
-
-fn alias_instruction_overhead_cost(budget: SkillMetadataBudget) -> usize {
-    let absolute_lines = [
-        SKILLS_INTRO_WITH_ABSOLUTE_PATHS.to_string(),
-        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS.to_string(),
-    ];
-    let aliased_lines = vec![
-        SKILLS_INTRO_WITH_ALIASES.to_string(),
-        "### Skill roots".to_string(),
-        SKILLS_HOW_TO_USE_WITH_ALIASES.to_string(),
-    ];
-
-    lines_cost(budget, &aliased_lines).saturating_sub(lines_cost(budget, &absolute_lines))
+    let empty_skill_lines: &[String] = &[];
+    let absolute_body = render_available_skills_body(&[], empty_skill_lines);
+    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines);
+    budget
+        .cost(&aliased_body)
+        .saturating_sub(budget.cost(&absolute_body))
 }
 
 fn build_skill_root_lines(roots: &[AbsolutePathBuf]) -> Vec<String> {
