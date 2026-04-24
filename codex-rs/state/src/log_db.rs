@@ -88,32 +88,20 @@ pub trait LogBatchWriter: Send + 'static {
     ) -> impl Future<Output = ()> + Send + 'a;
 }
 
-pub struct BufferedLogSink<W> {
+#[derive(Clone)]
+pub struct BufferedLogSink {
     sender: mpsc::Sender<LogSinkCommand>,
-    _writer: std::marker::PhantomData<fn() -> W>,
 }
 
-impl<W> Clone for BufferedLogSink<W> {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            _writer: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<W> BufferedLogSink<W>
-where
-    W: LogBatchWriter,
-{
-    pub fn start(writer: W, config: LogSinkQueueConfig) -> Self {
+impl BufferedLogSink {
+    pub fn start<W>(writer: W, config: LogSinkQueueConfig) -> Self
+    where
+        W: LogBatchWriter,
+    {
         let config = config.normalized();
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         tokio::spawn(run_buffered_sink(writer, receiver, config));
-        Self {
-            sender,
-            _writer: std::marker::PhantomData,
-        }
+        Self { sender }
     }
 
     pub fn try_send(&self, entry: LogEntry) {
@@ -155,7 +143,7 @@ impl LogBatchWriter for SqliteLogWriter {
 }
 
 pub struct LogDbLayer {
-    sink: BufferedLogSink<SqliteLogWriter>,
+    sink: BufferedLogSink,
     process_uuid: String,
 }
 
@@ -822,10 +810,7 @@ mod tests {
     #[tokio::test]
     async fn event_queue_drops_new_entries_when_full() {
         let (sender, mut receiver) = mpsc::channel(1);
-        let sink = BufferedLogSink::<TestWriter> {
-            sender,
-            _writer: std::marker::PhantomData,
-        };
+        let sink = BufferedLogSink { sender };
 
         sink.try_send(test_entry("first-queued-log"));
         sink.try_send(test_entry("dropped-log"));
