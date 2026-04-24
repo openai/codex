@@ -90,6 +90,10 @@ pub(crate) async fn start_stdio_connection(
                 error!("Failed to write to stdout: {err}");
                 break;
             }
+            if let Err(err) = stdout.flush().await {
+                error!("Failed to flush stdout: {err}");
+                break;
+            }
             if let Some(write_complete_tx) = queued_message.write_complete_tx {
                 let _ = write_complete_tx.send(());
             }
