@@ -1051,9 +1051,11 @@ impl JsReplManager {
 
         let sandbox = SandboxManager::new();
         let managed_network_active = turn.network.is_some();
+        let file_system_sandbox_policy = turn.file_system_sandbox_policy();
+        let network_sandbox_policy = turn.network_sandbox_policy();
         let sandbox_type = sandbox.select_initial(
-            &turn.file_system_sandbox_policy,
-            turn.network_sandbox_policy,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
             managed_network_active,

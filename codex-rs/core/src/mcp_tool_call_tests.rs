@@ -16,8 +16,8 @@ use codex_config::types::McpServerToolConfig;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -2129,10 +2129,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("test setup should allow updating approval policy");
-    turn_context
-        .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("test setup should allow updating sandbox policy");
+    turn_context.permission_profile = PermissionProfile::Disabled;
     let mut config = (*turn_context.config).clone();
     config.chatgpt_base_url = server.uri();
     turn_context.config = Arc::new(config);

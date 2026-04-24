@@ -631,6 +631,12 @@ impl FileSystemSandboxPolicy {
                 .semantic_signature(cwd)
     }
 
+    /// Returns true when two policies resolve to the same filesystem access
+    /// model for `cwd`, ignoring incidental entry ordering.
+    pub fn is_semantically_equivalent_to(&self, other: &Self, cwd: &Path) -> bool {
+        self.semantic_signature(cwd) == other.semantic_signature(cwd)
+    }
+
     /// Returns the explicit readable roots resolved against the provided cwd.
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         if self.has_full_disk_read_access() {
@@ -949,9 +955,9 @@ impl FileSystemSandboxPolicy {
             has_full_disk_read_access: self.has_full_disk_read_access(),
             has_full_disk_write_access: self.has_full_disk_write_access(),
             include_platform_defaults: self.include_platform_defaults(),
-            readable_roots: self.get_readable_roots_with_cwd(cwd),
-            writable_roots: self.get_writable_roots_with_cwd(cwd),
-            unreadable_roots: self.get_unreadable_roots_with_cwd(cwd),
+            readable_roots: sorted_absolute_paths(self.get_readable_roots_with_cwd(cwd)),
+            writable_roots: sorted_writable_roots(self.get_writable_roots_with_cwd(cwd)),
+            unreadable_roots: sorted_absolute_paths(self.get_unreadable_roots_with_cwd(cwd)),
             unreadable_globs: self.get_unreadable_globs_with_cwd(cwd),
         }
     }
@@ -1255,6 +1261,20 @@ fn dedup_absolute_paths(
         }
     }
     deduped
+}
+
+fn sorted_absolute_paths(mut paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    paths.sort_by(|left, right| left.as_path().cmp(right.as_path()));
+    paths
+}
+
+fn sorted_writable_roots(mut roots: Vec<WritableRoot>) -> Vec<WritableRoot> {
+    for root in &mut roots {
+        root.read_only_subpaths =
+            sorted_absolute_paths(std::mem::take(&mut root.read_only_subpaths));
+    }
+    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
+    roots
 }
 
 fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
@@ -2142,6 +2162,49 @@ mod tests {
         assert!(
             !legacy_workspace_write
                 .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+    }
+
+    #[test]
+    fn legacy_projection_runtime_enforcement_ignores_entry_order() {
+        let cwd = TempDir::new().expect("tempdir");
+        let dot_codex = AbsolutePathBuf::from_absolute_path(cwd.path().join(".codex"))
+            .expect(".codex path should be absolute");
+        let current_working_directory = FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        };
+        let protected_dot_codex = FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: dot_codex },
+            access: FileSystemAccessMode::Read,
+        };
+        let minimal = FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        };
+
+        let legacy_order = FileSystemSandboxPolicy::restricted(vec![
+            minimal.clone(),
+            current_working_directory.clone(),
+            protected_dot_codex.clone(),
+        ]);
+        let reordered = FileSystemSandboxPolicy::restricted(vec![
+            minimal,
+            protected_dot_codex,
+            current_working_directory,
+        ]);
+
+        assert!(
+            legacy_order.is_semantically_equivalent_to(&reordered, cwd.path()),
+            "entry order should not affect filesystem semantics"
+        );
+        assert!(
+            !reordered
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path())
         );
     }
 
