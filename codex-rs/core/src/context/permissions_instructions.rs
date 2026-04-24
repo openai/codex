@@ -2,7 +2,9 @@ use super::ContextualUserFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
@@ -57,7 +59,33 @@ pub struct PermissionsInstructions {
 }
 
 impl PermissionsInstructions {
-    /// Builds permissions instructions from the effective sandbox and approval policy.
+    /// Builds permissions instructions from the effective permission profile and approval policy.
+    pub fn from_permission_profile(
+        permission_profile: &PermissionProfile,
+        approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
+        exec_policy: &Policy,
+        cwd: &Path,
+        exec_permission_approvals_enabled: bool,
+        request_permissions_tool_enabled: bool,
+    ) -> Self {
+        let (sandbox_mode, writable_roots) = sandbox_prompt_from_profile(permission_profile, cwd);
+
+        Self::from_permissions_with_network(
+            sandbox_mode,
+            network_access_from_policy(permission_profile.network_sandbox_policy()),
+            PermissionsPromptConfig {
+                approval_policy,
+                approvals_reviewer,
+                exec_policy,
+                exec_permission_approvals_enabled,
+                request_permissions_tool_enabled,
+            },
+            writable_roots,
+        )
+    }
+
+    /// Builds permissions instructions from a legacy sandbox policy.
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
@@ -67,33 +95,14 @@ impl PermissionsInstructions {
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
     ) -> Self {
-        let network_access = if sandbox_policy.has_full_network_access() {
-            NetworkAccess::Enabled
-        } else {
-            NetworkAccess::Restricted
-        };
-
-        let (sandbox_mode, writable_roots) = match sandbox_policy {
-            SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
-            SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
-                (SandboxMode::WorkspaceWrite, Some(roots))
-            }
-        };
-
-        Self::from_permissions_with_network(
-            sandbox_mode,
-            network_access,
-            PermissionsPromptConfig {
-                approval_policy,
-                approvals_reviewer,
-                exec_policy,
-                exec_permission_approvals_enabled,
-                request_permissions_tool_enabled,
-            },
-            writable_roots,
+        Self::from_permission_profile(
+            &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy, cwd),
+            approval_policy,
+            approvals_reviewer,
+            exec_policy,
+            cwd,
+            exec_permission_approvals_enabled,
+            request_permissions_tool_enabled,
         )
     }
 
@@ -122,6 +131,38 @@ impl PermissionsInstructions {
             text.push('\n');
         }
         Self { text }
+    }
+}
+
+fn sandbox_prompt_from_profile(
+    permission_profile: &PermissionProfile,
+    cwd: &Path,
+) -> (SandboxMode, Option<Vec<WritableRoot>>) {
+    match permission_profile {
+        PermissionProfile::Disabled | PermissionProfile::External { .. } => {
+            (SandboxMode::DangerFullAccess, None)
+        }
+        PermissionProfile::Managed { .. } => {
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                return (SandboxMode::DangerFullAccess, None);
+            }
+
+            let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd);
+            if writable_roots.is_empty() {
+                (SandboxMode::ReadOnly, None)
+            } else {
+                (SandboxMode::WorkspaceWrite, Some(writable_roots))
+            }
+        }
+    }
+}
+
+fn network_access_from_policy(network_policy: NetworkSandboxPolicy) -> NetworkAccess {
+    if network_policy.is_enabled() {
+        NetworkAccess::Enabled
+    } else {
+        NetworkAccess::Restricted
     }
 }
 
