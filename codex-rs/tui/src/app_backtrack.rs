@@ -34,13 +34,14 @@ use crate::app_event::AppEvent;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
-use crate::key_hint::KeyBindingListExt;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 
 /// Aggregates all backtrack-related state used by the App.
@@ -108,51 +109,59 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if let TuiEvent::Key(key_event) = event {
-            let is_repeat = matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat);
-            if self.backtrack.overlay_preview_active && is_repeat {
-                if self
-                    .keymap
-                    .pager
-                    .edit_previous_message
-                    .is_pressed(key_event)
-                {
-                    self.overlay_step_backtrack(tui, TuiEvent::Key(key_event))?;
-                    return Ok(true);
-                }
-                if self.keymap.pager.edit_next_message.is_pressed(key_event) {
-                    self.overlay_step_backtrack_forward(tui, TuiEvent::Key(key_event))?;
-                    return Ok(true);
-                }
-                if key_event.kind == KeyEventKind::Press
-                    && self.keymap.pager.confirm_edit_message.is_pressed(key_event)
-                {
-                    self.overlay_confirm_backtrack(tui);
-                    return Ok(true);
-                }
-            } else if !self.backtrack.overlay_preview_active
-                && is_repeat
-                && self
-                    .keymap
-                    .pager
-                    .edit_previous_message
-                    .is_pressed(key_event)
-            {
-                // First press of the edit-previous key in transcript overlay:
-                // begin backtrack preview at latest user message.
-                self.begin_overlay_backtrack_preview(tui);
-                return Ok(true);
-            }
-        }
-
         if self.backtrack.overlay_preview_active {
-            // In backtrack mode, any non-matching key is forwarded to overlay.
+            match event {
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    self.overlay_step_backtrack(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    self.overlay_step_backtrack(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }) => {
+                    self.overlay_step_backtrack_forward(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    self.overlay_confirm_backtrack(tui);
+                    Ok(true)
+                }
+                _ => {
+                    self.overlay_forward_event(tui, event)?;
+                    Ok(true)
+                }
+            }
+        } else if let TuiEvent::Key(KeyEvent {
+            code: KeyCode::Esc,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        }) = event
+        {
+            // First Esc in transcript overlay: begin backtrack preview at latest user message.
+            self.begin_overlay_backtrack_preview(tui);
+            Ok(true)
+        } else {
+            // Not in backtrack mode: forward events to the overlay widget.
             self.overlay_forward_event(tui, event)?;
-            return Ok(true);
+            Ok(true)
         }
-        // Not in backtrack mode: forward events to the overlay widget.
-        self.overlay_forward_event(tui, event)?;
-        Ok(true)
     }
 
     /// Handle global Esc presses for backtracking when no overlay is present.

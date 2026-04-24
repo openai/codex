@@ -396,7 +396,6 @@ pub(crate) struct ChatComposer {
     toggle_shortcuts_keys: Vec<KeyBinding>,
     editor_keymap: EditorKeymap,
     footer_external_editor_key: Option<KeyBinding>,
-    footer_edit_previous_key: Option<KeyBinding>,
     footer_show_transcript_key: Option<KeyBinding>,
     footer_insert_newline_key: Option<KeyBinding>,
     footer_queue_key: Option<KeyBinding>,
@@ -558,7 +557,6 @@ impl ChatComposer {
             ],
             editor_keymap: default_editor_keymap,
             footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
-            footer_edit_previous_key: Some(key_hint::plain(KeyCode::Esc)),
             footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
             footer_insert_newline_key: footer_insert_newline_key(
                 &default_keymap.editor.insert_newline,
@@ -652,7 +650,6 @@ impl ChatComposer {
         self.editor_keymap = keymap.editor.clone();
         self.textarea.set_keymap_bindings(&self.editor_keymap);
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
-        self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
         self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
         self.footer_insert_newline_key =
             footer_insert_newline_key(&keymap.editor.insert_newline, self.use_shift_enter_hint);
@@ -3256,7 +3253,7 @@ impl ChatComposer {
                 queue: self.footer_queue_key,
                 insert_newline: self.footer_insert_newline_key,
                 external_editor: self.footer_external_editor_key,
-                edit_previous: self.footer_edit_previous_key,
+                edit_previous: Some(key_hint::plain(KeyCode::Esc)),
                 show_transcript: self.footer_show_transcript_key,
             },
             active_agent_label: self.active_agent_label.clone(),

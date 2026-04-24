@@ -145,7 +145,9 @@ impl App {
             return;
         }
 
-        if self.keymap.chat.edit_previous_message.is_pressed(key_event) {
+        if matches!(key_event.code, KeyCode::Esc)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        {
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
@@ -180,15 +182,11 @@ impl App {
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
+                code: KeyCode::Enter,
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
                 && self.backtrack.nth_user_message != usize::MAX
-                && self
-                    .keymap
-                    .chat
-                    .confirm_edit_previous_message
-                    .is_pressed(key_event)
                 && self.chat_widget.composer_is_empty() =>
             {
                 if let Some(selection) = self.confirm_backtrack_from_main() {
@@ -202,9 +200,7 @@ impl App {
                 // Any non-Esc key press should cancel a primed backtrack.
                 // This avoids stale "Esc-primed" state after the user starts typing
                 // (even if they later backspace to empty).
-                if !self.keymap.chat.edit_previous_message.is_pressed(key_event)
-                    && self.backtrack.primed
-                {
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
                     self.reset_backtrack_state();
                 }
                 self.chat_widget.handle_key_event(key_event);

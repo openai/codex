@@ -1008,7 +1008,9 @@ impl ShortcutDescriptor {
             | ShortcutId::PasteImage
             | ShortcutId::HistorySearch
             | ShortcutId::Quit
-            | ShortcutId::ChangeMode => self.binding_for(state).map(|binding| binding.key),
+            | ShortcutId::ChangeMode
+            | ShortcutId::ReasoningDown
+            | ShortcutId::ReasoningUp => self.binding_for(state).map(|binding| binding.key),
         }?;
         let mut line = Line::from(vec![self.prefix.into(), key.into()]);
         match self.id {

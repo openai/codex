@@ -2201,10 +2201,7 @@
               "open_fullscreen": null,
               "open_thread": null
             },
-            "chat": {
-              "confirm_edit_previous_message": null,
-              "edit_previous_message": null
-            },
+            "chat": {},
             "composer": {
               "queue": null,
               "submit": null,
@@ -2229,9 +2226,7 @@
               "yank": null
             },
             "global": {
-              "confirm_edit_previous_message": null,
               "copy": null,
-              "edit_previous_message": null,
               "open_external_editor": null,
               "open_transcript": null,
               "queue": null,
@@ -2247,9 +2242,6 @@
             "pager": {
               "close": null,
               "close_transcript": null,
-              "confirm_edit_message": null,
-              "edit_next_message": null,
-              "edit_previous_message": null,
               "half_page_down": null,
               "half_page_up": null,
               "jump_bottom": null,
@@ -2401,24 +2393,6 @@
     "TuiChatKeymap": {
       "additionalProperties": false,
       "description": "Chat context keybindings. These override corresponding `global` actions.",
-      "properties": {
-        "confirm_edit_previous_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Confirm editing the selected previous message."
-        },
-        "edit_previous_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "In an empty composer, begin or advance \"edit previous message\" flow."
-        }
-      },
       "type": "object"
     },
     "TuiComposerKeymap": {
@@ -2591,14 +2565,6 @@
       "additionalProperties": false,
       "description": "Global keybindings. These are used when a context does not define an override.",
       "properties": {
-        "confirm_edit_previous_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Confirm editing the selected previous message."
-        },
         "copy": {
           "allOf": [
             {
@@ -2606,14 +2572,6 @@
             }
           ],
           "description": "Copy the last agent response to the clipboard."
-        },
-        "edit_previous_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "In an empty composer, begin or advance \"edit previous message\" flow."
         },
         "open_external_editor": {
           "allOf": [
@@ -2685,10 +2643,7 @@
               "$ref": "#/definitions/TuiChatKeymap"
             }
           ],
-          "default": {
-            "confirm_edit_previous_message": null,
-            "edit_previous_message": null
-          }
+          "default": {}
         },
         "composer": {
           "allOf": [
@@ -2734,9 +2689,7 @@
             }
           ],
           "default": {
-            "confirm_edit_previous_message": null,
             "copy": null,
-            "edit_previous_message": null,
             "open_external_editor": null,
             "open_transcript": null,
             "queue": null,
@@ -2766,9 +2719,6 @@
           "default": {
             "close": null,
             "close_transcript": null,
-            "confirm_edit_message": null,
-            "edit_next_message": null,
-            "edit_previous_message": null,
             "half_page_down": null,
             "half_page_up": null,
             "jump_bottom": null,
@@ -2840,30 +2790,6 @@
             }
           ],
           "description": "Close the transcript overlay via its dedicated toggle key."
-        },
-        "confirm_edit_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "In backtrack preview mode, confirm selected message."
-        },
-        "edit_next_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "In backtrack preview mode, step to newer message."
-        },
-        "edit_previous_message": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "In backtrack preview mode, step to older message."
         },
         "half_page_down": {
           "allOf": [

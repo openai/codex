@@ -941,7 +941,7 @@ fn patch_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
 
 fn permissions_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
     let deny_shortcuts = keymap
-        .decline
+        .deny
         .iter()
         .copied()
         .filter(|shortcut| shortcut.parts() != (KeyCode::Esc, KeyModifiers::NONE))
@@ -1722,11 +1722,47 @@ mod tests {
     }
 
     #[test]
+    fn permissions_deny_shortcut_uses_deny_keymap() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+        keymap.approval.deny = vec![key_hint::plain(KeyCode::Char('x'))];
+        keymap.approval.decline = Vec::new();
+        let mut view = make_overlay_with_keymap(
+            make_permissions_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert!(response.permissions.is_empty());
+                assert_eq!(response.scope, PermissionGrantScope::Turn);
+                assert!(!response.strict_auto_review);
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected permission deny shortcut to emit an empty permission response"
+        );
+    }
+
+    #[test]
     fn permissions_strict_auto_review_shortcut_submits_turn_scope_with_strict_review() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view =
-            ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
+        let mut view = make_overlay(make_permissions_request(), tx, Features::with_defaults());
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
 

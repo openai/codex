@@ -21,6 +21,7 @@ use std::sync::Arc;
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
+use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::PagerKeymap;
@@ -30,6 +31,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
@@ -685,19 +687,16 @@ impl TranscriptOverlay {
             vec![(first_or_empty(&self.view.keymap.close), "to quit")];
         if self.highlight_cell.is_some() {
             pairs.push((
-                self.view.keymap.edit_previous_message.clone(),
+                vec![
+                    key_hint::plain(KeyCode::Esc),
+                    key_hint::plain(KeyCode::Left),
+                ],
                 "to edit prev",
             ));
-            pairs.push((self.view.keymap.edit_next_message.clone(), "to edit next"));
-            pairs.push((
-                self.view.keymap.confirm_edit_message.clone(),
-                "to edit message",
-            ));
+            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to edit next"));
+            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to edit message"));
         } else {
-            pairs.push((
-                first_or_empty(&self.view.keymap.edit_previous_message),
-                "to edit prev",
-            ));
+            pairs.push((vec![key_hint::plain(KeyCode::Esc)], "to edit prev"));
         }
         render_key_hints(line2, buf, &pairs);
     }
