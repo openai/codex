@@ -548,7 +548,7 @@ impl AppServerSession {
         let request_id = self.next_request_id();
         let (sandbox_policy, permission_profile) = turn_start_permission_overrides(
             self.thread_params_mode(),
-            sandbox_policy,
+            &sandbox_policy,
             permission_profile,
         );
         self.client
@@ -1107,19 +1107,19 @@ fn sandbox_mode_from_policy(
 }
 
 fn turn_start_permission_overrides(
-    mode: ThreadParamsMode,
-    sandbox_policy: SandboxPolicy,
+    thread_params_mode: ThreadParamsMode,
+    sandbox_policy: &SandboxPolicy,
     permission_profile: Option<PermissionProfile>,
 ) -> (
     Option<codex_app_server_protocol::SandboxPolicy>,
     Option<codex_app_server_protocol::PermissionProfile>,
 ) {
-    match (mode, permission_profile) {
-        (ThreadParamsMode::Embedded, Some(permission_profile)) => {
-            (None, Some(permission_profile.into()))
-        }
-        (ThreadParamsMode::Embedded, None) => (None, None),
-        (ThreadParamsMode::Remote, _) => (Some(sandbox_policy.into()), None),
+    if matches!(thread_params_mode, ThreadParamsMode::Remote)
+        || matches!(sandbox_policy, SandboxPolicy::ExternalSandbox { .. })
+    {
+        (Some(sandbox_policy.clone().into()), None)
+    } else {
+        (None, permission_profile.map(Into::into))
     }
 }
 
@@ -1131,7 +1131,14 @@ fn permission_profile_override_from_config(
         return None;
     }
 
-    Some(config.permissions.permission_profile().into())
+    if matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::ExternalSandbox { .. }
+    ) {
+        None
+    } else {
+        Some(config.permissions.permission_profile().into())
+    }
 }
 
 fn thread_start_params_from_config(
@@ -1502,6 +1509,52 @@ mod tests {
         assert_eq!(params.model_provider, Some(config.model_provider_id));
     }
 
+    #[test]
+    fn embedded_turn_start_permission_overrides_send_runtime_profile_only_when_provided() {
+        let cwd = std::path::Path::new("/tmp/project");
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd);
+
+        assert_eq!(
+            turn_start_permission_overrides(
+                ThreadParamsMode::Embedded,
+                &sandbox_policy,
+                /*permission_profile*/ None,
+            ),
+            (None, None)
+        );
+
+        assert_eq!(
+            turn_start_permission_overrides(
+                ThreadParamsMode::Embedded,
+                &sandbox_policy,
+                Some(permission_profile.clone()),
+            ),
+            (None, Some(permission_profile.into()))
+        );
+    }
+
+    #[test]
+    fn remote_turn_start_permission_overrides_keep_legacy_sandbox_policy() {
+        let cwd = std::path::Path::new("/tmp/project");
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
+        let permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd);
+
+        assert_eq!(
+            turn_start_permission_overrides(
+                ThreadParamsMode::Remote,
+                &sandbox_policy,
+                Some(permission_profile),
+            ),
+            (
+                Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+                None
+            )
+        );
+    }
+
     #[tokio::test]
     async fn thread_start_params_can_mark_clear_source() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1608,7 +1661,7 @@ mod tests {
 
         let (sandbox, profile) = turn_start_permission_overrides(
             ThreadParamsMode::Embedded,
-            workspace_write.clone(),
+            &workspace_write,
             Some(workspace_write_profile.clone()),
         );
         assert_eq!(sandbox, None);
@@ -1616,7 +1669,7 @@ mod tests {
 
         let (sandbox, profile) = turn_start_permission_overrides(
             ThreadParamsMode::Embedded,
-            workspace_write.clone(),
+            &workspace_write,
             /*permission_profile*/ None,
         );
         assert_eq!(sandbox, None);
@@ -1624,12 +1677,12 @@ mod tests {
 
         let (sandbox, profile) = turn_start_permission_overrides(
             ThreadParamsMode::Remote,
-            workspace_write.clone(),
+            &workspace_write,
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &workspace_write,
             )),
         );
-        assert_eq!(sandbox, Some(workspace_write.into()));
+        assert_eq!(sandbox, Some(workspace_write.clone().into()));
         assert_eq!(profile, None);
 
         let external_sandbox = SandboxPolicy::ExternalSandbox {
@@ -1637,16 +1690,13 @@ mod tests {
         };
         let (sandbox, profile) = turn_start_permission_overrides(
             ThreadParamsMode::Embedded,
-            external_sandbox.clone(),
+            &external_sandbox,
             Some(PermissionProfile::from_legacy_sandbox_policy(
                 &external_sandbox,
             )),
         );
-        assert_eq!(sandbox, None);
-        assert_eq!(
-            profile,
-            Some(PermissionProfile::from_legacy_sandbox_policy(&external_sandbox).into())
-        );
+        assert_eq!(sandbox, Some(external_sandbox.into()));
+        assert_eq!(profile, None);
     }
 
     #[tokio::test]

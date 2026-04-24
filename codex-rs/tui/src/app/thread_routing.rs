@@ -497,7 +497,7 @@ impl App {
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
-                permission_profile,
+                permission_profile: _,
                 model,
                 effort,
                 summary,
@@ -581,7 +581,11 @@ impl App {
                             approvals_reviewer
                                 .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
-                            permission_profile.clone(),
+                            runtime_permission_profile_for_turn_start(
+                                self.runtime_sandbox_policy_override.as_ref(),
+                                sandbox_policy,
+                                cwd.as_path(),
+                            ),
                             model.to_string(),
                             effort,
                             *summary,
@@ -1436,5 +1440,58 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         Ok(())
+    }
+}
+
+fn runtime_permission_profile_for_turn_start(
+    runtime_sandbox_policy_override: Option<&SandboxPolicy>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: &std::path::Path,
+) -> Option<codex_protocol::models::PermissionProfile> {
+    runtime_sandbox_policy_override?;
+    match sandbox_policy {
+        SandboxPolicy::ExternalSandbox { .. } => None,
+        SandboxPolicy::ReadOnly { .. }
+        | SandboxPolicy::WorkspaceWrite { .. }
+        | SandboxPolicy::DangerFullAccess => Some(
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                sandbox_policy,
+                cwd,
+            ),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn runtime_permission_profile_for_turn_start_only_when_sandbox_was_overridden() {
+        let cwd = std::path::Path::new("/tmp/project");
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        assert_eq!(
+            runtime_permission_profile_for_turn_start(
+                /*runtime_sandbox_policy_override*/ None,
+                &sandbox_policy,
+                cwd,
+            ),
+            None
+        );
+
+        let profile =
+            runtime_permission_profile_for_turn_start(Some(&sandbox_policy), &sandbox_policy, cwd)
+                .expect("runtime sandbox override should send active permissions");
+
+        assert_eq!(
+            profile,
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                cwd,
+            )
+        );
     }
 }
