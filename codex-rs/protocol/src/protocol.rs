@@ -1415,13 +1415,18 @@ fn default_read_only_subpaths_for_writable_root(
     let top_level_git_is_file = top_level_git.as_path().is_file();
     let top_level_git_is_dir = top_level_git.as_path().is_dir();
     if top_level_git_is_dir || top_level_git_is_file {
-        if top_level_git_is_file
-            && is_git_pointer_file(&top_level_git)
-            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-        {
-            subpaths.push(gitdir);
+        if top_level_git_is_file {
+            // Worktree/submodule pointer files remain read-only because rewriting
+            // them can redirect the sandbox at attacker-controlled git metadata.
+            subpaths.push(top_level_git.clone());
+            if is_git_pointer_file(&top_level_git)
+                && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+            {
+                extend_gitdir_protected_subpaths(&mut subpaths, &gitdir);
+            }
+        } else {
+            extend_gitdir_protected_subpaths(&mut subpaths, &top_level_git);
         }
-        subpaths.push(top_level_git);
     }
 
     let top_level_agents = writable_root.join(".agents");
@@ -1446,6 +1451,18 @@ fn default_read_only_subpaths_for_writable_root(
         }
     }
     deduped
+}
+
+fn extend_gitdir_protected_subpaths(subpaths: &mut Vec<AbsolutePathBuf>, gitdir: &AbsolutePathBuf) {
+    let config = gitdir.join("config");
+    if config.as_path().exists() {
+        subpaths.push(config);
+    }
+
+    let hooks = gitdir.join("hooks");
+    if hooks.as_path().exists() {
+        subpaths.push(hooks);
+    }
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {

@@ -1317,13 +1317,18 @@ fn default_read_only_subpaths_for_writable_root(
     let top_level_git_is_file = top_level_git.as_path().is_file();
     let top_level_git_is_dir = top_level_git.as_path().is_dir();
     if top_level_git_is_dir || top_level_git_is_file {
-        if top_level_git_is_file
-            && is_git_pointer_file(&top_level_git)
-            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-        {
-            subpaths.push(gitdir);
+        if top_level_git_is_file {
+            // Worktree/submodule pointer files remain read-only because rewriting
+            // them can redirect the sandbox at attacker-controlled git metadata.
+            subpaths.push(top_level_git.clone());
+            if is_git_pointer_file(&top_level_git)
+                && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+            {
+                extend_gitdir_protected_subpaths(&mut subpaths, &gitdir);
+            }
+        } else {
+            extend_gitdir_protected_subpaths(&mut subpaths, &top_level_git);
         }
-        subpaths.push(top_level_git);
     }
 
     let top_level_agents = writable_root.join(".agents");
@@ -1341,6 +1346,18 @@ fn default_read_only_subpaths_for_writable_root(
     }
 
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
+}
+
+fn extend_gitdir_protected_subpaths(subpaths: &mut Vec<AbsolutePathBuf>, gitdir: &AbsolutePathBuf) {
+    let config = gitdir.join("config");
+    if config.as_path().exists() {
+        subpaths.push(config);
+    }
+
+    let hooks = gitdir.join("hooks");
+    if hooks.as_path().exists() {
+        subpaths.push(hooks);
+    }
 }
 
 fn append_path_entry_if_missing(
@@ -1788,6 +1805,101 @@ mod tests {
             !writable_roots[0]
                 .read_only_subpaths
                 .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_only_protect_git_config_and_hooks_for_git_dirs() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let git_dir = root.join(".git");
+        let git_config = git_dir.join("config");
+        let git_hooks = git_dir.join("hooks");
+        fs::create_dir_all(&git_hooks).expect("create hooks");
+        fs::write(&git_config, "[core]\n").expect("write config");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let expected_git_config =
+            AbsolutePathBuf::from_absolute_path(&git_config).expect("absolute git config");
+        let expected_git_hooks =
+            AbsolutePathBuf::from_absolute_path(&git_hooks).expect("absolute git hooks");
+        let unexpected_git_dir =
+            AbsolutePathBuf::from_absolute_path(&git_dir).expect("absolute git dir");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root.clone() },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_git_config)
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_git_hooks)
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_git_dir)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_keep_git_pointer_file_read_only_but_relax_gitdir_metadata() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let gitdir = root.join("actual-gitdir");
+        let gitdir_config = gitdir.join("config");
+        let gitdir_hooks = gitdir.join("hooks");
+        let dot_git = root.join(".git");
+        fs::create_dir_all(&gitdir_hooks).expect("create gitdir hooks");
+        fs::write(&gitdir_config, "[core]\n").expect("write gitdir config");
+        fs::write(&dot_git, format!("gitdir: {}\n", gitdir.display())).expect("write .git");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let expected_dot_git =
+            AbsolutePathBuf::from_absolute_path(&dot_git).expect("absolute .git");
+        let expected_gitdir_config =
+            AbsolutePathBuf::from_absolute_path(&gitdir_config).expect("absolute gitdir config");
+        let expected_gitdir_hooks =
+            AbsolutePathBuf::from_absolute_path(&gitdir_hooks).expect("absolute gitdir hooks");
+        let unexpected_gitdir =
+            AbsolutePathBuf::from_absolute_path(&gitdir).expect("absolute gitdir");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root.clone() },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_dot_git)
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_gitdir_config)
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_gitdir_hooks)
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_gitdir)
         );
     }
 

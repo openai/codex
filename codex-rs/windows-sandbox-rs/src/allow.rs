@@ -2,6 +2,7 @@ use crate::policy::SandboxPolicy;
 use dunce::canonicalize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -52,7 +53,19 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
+                let git_entry = canonical.join(".git");
+                if git_entry.is_file() {
+                    add_deny(git_entry.clone());
+                    if is_git_pointer_file(&git_entry)
+                        && let Some(gitdir) = resolve_gitdir_from_file(&git_entry)
+                    {
+                        add_existing_gitdir_protected_paths(&gitdir, add_deny);
+                    }
+                } else if git_entry.is_dir() {
+                    add_existing_gitdir_protected_paths(&git_entry, add_deny);
+                }
+
+                for protected_subdir in [".codex", ".agents"] {
                     let protected_entry = canonical.join(protected_subdir);
                     if protected_entry.exists() {
                         add_deny(protected_entry);
@@ -92,6 +105,36 @@ pub fn compute_allow_paths(
     AllowDenyPaths { allow, deny }
 }
 
+fn add_existing_gitdir_protected_paths(gitdir: &Path, add_deny: &mut dyn FnMut(PathBuf)) {
+    for protected_name in ["config", "hooks"] {
+        let protected_entry = gitdir.join(protected_name);
+        if protected_entry.exists() {
+            add_deny(canonicalize(&protected_entry).unwrap_or(protected_entry));
+        }
+    }
+}
+
+fn is_git_pointer_file(path: &Path) -> bool {
+    path.is_file() && path.file_name() == Some(OsStr::new(".git"))
+}
+
+fn resolve_gitdir_from_file(dot_git: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(dot_git).ok()?;
+    let (_, gitdir_raw) = contents.trim().split_once(':')?;
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+
+    let path = Path::new(gitdir_raw);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        dot_git.parent()?.join(path)
+    };
+    Some(canonicalize(&resolved).unwrap_or(resolved))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,12 +161,16 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&extra_root).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&extra_root).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
@@ -147,21 +194,28 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &env_map);
 
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&command_cwd).unwrap()));
-        assert!(!paths
-            .allow
-            .contains(&dunce::canonicalize(&temp_dir).unwrap()));
+        assert!(
+            paths
+                .allow
+                .contains(&dunce::canonicalize(&command_cwd).unwrap())
+        );
+        assert!(
+            !paths
+                .allow
+                .contains(&dunce::canonicalize(&temp_dir).unwrap())
+        );
         assert!(paths.deny.is_empty(), "no deny paths expected");
     }
 
     #[test]
-    fn denies_git_dir_inside_writable_root() {
+    fn denies_git_config_and_hooks_inside_writable_root() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
         let git_dir = command_cwd.join(".git");
-        let _ = fs::create_dir_all(&git_dir);
+        let git_config = git_dir.join("config");
+        let git_hooks = git_dir.join("hooks");
+        let _ = fs::create_dir_all(&git_hooks);
+        let _ = fs::write(&git_config, "[core]\n");
 
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -175,9 +229,12 @@ mod tests {
         let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
             .into_iter()
             .collect();
-        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_dir).unwrap()]
-            .into_iter()
-            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_config).unwrap(),
+            dunce::canonicalize(&git_hooks).unwrap(),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -188,8 +245,13 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
         let git_file = command_cwd.join(".git");
+        let gitdir = command_cwd.join("actual-gitdir");
+        let gitdir_config = gitdir.join("config");
+        let gitdir_hooks = gitdir.join("hooks");
+        let _ = fs::create_dir_all(&gitdir_hooks);
+        let _ = fs::write(&gitdir_config, "[core]\n");
         let _ = fs::create_dir_all(&command_cwd);
-        let _ = fs::write(&git_file, "gitdir: .git/worktrees/example");
+        let _ = fs::write(&git_file, format!("gitdir: {}\n", gitdir.display()));
 
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -203,9 +265,13 @@ mod tests {
         let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
             .into_iter()
             .collect();
-        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_file).unwrap()]
-            .into_iter()
-            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_file).unwrap(),
+            dunce::canonicalize(&gitdir_config).unwrap(),
+            dunce::canonicalize(&gitdir_hooks).unwrap(),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -259,6 +325,9 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         assert_eq!(paths.allow.len(), 1);
-        assert!(paths.deny.is_empty(), "no deny when protected dirs are absent");
+        assert!(
+            paths.deny.is_empty(),
+            "no deny when protected dirs are absent"
+        );
     }
 }
