@@ -2,6 +2,9 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::environment_selection::default_thread_environment_selections;
+use crate::environment_selection::selected_primary_environment;
+use crate::environment_selection::validate_environment_selections;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
@@ -44,6 +47,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
@@ -201,6 +205,16 @@ enum ShutdownOutcome {
 pub struct ThreadManager {
     state: Arc<ThreadManagerState>,
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
+}
+
+pub struct StartThreadWithToolsOptions {
+    pub config: Config,
+    pub initial_history: InitialHistory,
+    pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    pub persist_extended_history: bool,
+    pub metrics_service_name: Option<String>,
+    pub parent_trace: Option<W3cTraceContext>,
+    pub environments: Vec<TurnEnvironmentSelection>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -394,6 +408,20 @@ impl ThreadManager {
         self.state.environment_manager.clone()
     }
 
+    pub fn default_environment_selections(
+        &self,
+        cwd: &AbsolutePathBuf,
+    ) -> Vec<TurnEnvironmentSelection> {
+        default_thread_environment_selections(self.state.environment_manager.as_ref(), cwd)
+    }
+
+    pub fn validate_environment_selections(
+        &self,
+        environments: &[TurnEnvironmentSelection],
+    ) -> CodexResult<()> {
+        validate_environment_selections(self.state.environment_manager.as_ref(), environments)
+    }
+
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
         self.state.models_manager.clone()
     }
@@ -506,37 +534,40 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_with_tools_and_service_name(
-            config,
-            InitialHistory::New,
-            dynamic_tools,
-            persist_extended_history,
-            /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
-        ))
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
+        Box::pin(
+            self.start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+                config,
+                initial_history: InitialHistory::New,
+                dynamic_tools,
+                persist_extended_history,
+                metrics_service_name: None,
+                parent_trace: None,
+                environments,
+            }),
+        )
         .await
     }
 
     pub async fn start_thread_with_tools_and_service_name(
         &self,
-        config: Config,
-        initial_history: InitialHistory,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-        persist_extended_history: bool,
-        metrics_service_name: Option<String>,
-        parent_trace: Option<W3cTraceContext>,
+        options: StartThreadWithToolsOptions,
     ) -> CodexResult<NewThread> {
-        let thread_store = configured_thread_store(&config);
+        let thread_store = configured_thread_store(&options.config);
         Box::pin(self.state.spawn_thread(
-            config,
+            options.config,
             thread_store,
-            initial_history,
+            options.initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
-            dynamic_tools,
-            persist_extended_history,
-            metrics_service_name,
-            parent_trace,
+            options.dynamic_tools,
+            options.persist_extended_history,
+            options.metrics_service_name,
+            options.parent_trace,
+            options.environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -569,6 +600,10 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&config);
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -579,6 +614,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -590,6 +626,10 @@ impl ThreadManager {
         user_shell_override: crate::shell::Shell,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&config);
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -600,6 +640,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            environments,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -614,6 +655,10 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let thread_store = configured_thread_store(&config);
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -624,6 +669,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            environments,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -724,6 +770,10 @@ impl ThreadManager {
             }
         };
         let thread_store = configured_thread_store(&config);
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
         Box::pin(self.state.spawn_thread(
             config,
             thread_store,
@@ -734,6 +784,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -808,6 +859,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -822,8 +874,12 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&config);
+        let environments = environments.unwrap_or_else(|| {
+            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
+        });
         Box::pin(self.spawn_thread_with_source(
             config,
             thread_store,
@@ -837,6 +893,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -853,6 +910,8 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let thread_store = configured_thread_store(&config);
+        let environments =
+            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
         Box::pin(self.spawn_thread_with_source(
             config,
             thread_store,
@@ -866,6 +925,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -881,8 +941,12 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&config);
+        let environments = environments.unwrap_or_else(|| {
+            default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
+        });
         Box::pin(self.spawn_thread_with_source(
             config,
             thread_store,
@@ -896,6 +960,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            environments,
             /*user_shell_override*/ None,
         ))
         .await
@@ -914,6 +979,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -929,6 +995,7 @@ impl ThreadManagerState {
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
+            environments,
             user_shell_override,
         ))
         .await
@@ -949,9 +1016,11 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
+        environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let environment = self.environment_manager.default_environment();
+        let environment =
+            selected_primary_environment(self.environment_manager.as_ref(), &environments)?;
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -990,6 +1059,7 @@ impl ThreadManagerState {
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
+            environments,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store,
         })

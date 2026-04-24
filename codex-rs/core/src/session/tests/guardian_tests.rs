@@ -775,6 +775,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell_override: None,
         parent_trace: None,
+        environments: Vec::new(),
         analytics_events_client: None,
         thread_store,
     })

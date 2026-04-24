@@ -127,7 +127,7 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata, environments) = match op {
+    let (items, updates, responsesapi_client_metadata) = match op {
         Op::UserTurn {
             cwd,
             approval_policy,
@@ -167,12 +167,12 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
+                    environments,
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
                 },
                 None,
-                environments,
             )
         }
         Op::UserInputWithTurnContext {
@@ -217,12 +217,12 @@ pub(super) async fn user_input_or_turn_inner(
                     reasoning_summary: summary,
                     service_tier,
                     final_output_json_schema: Some(final_output_json_schema),
+                    environments,
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
                 },
                 responsesapi_client_metadata,
-                environments,
             )
         }
         Op::UserInput {
@@ -234,18 +234,15 @@ pub(super) async fn user_input_or_turn_inner(
             items,
             SessionSettingsUpdate {
                 final_output_json_schema: Some(final_output_json_schema),
+                environments,
                 ..Default::default()
             },
             responsesapi_client_metadata,
-            environments,
         ),
         _ => unreachable!(),
     };
 
-    let Ok(current_context) = sess
-        .new_turn_with_sub_id(sub_id.clone(), updates, environments)
-        .await
-    else {
+    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
@@ -543,7 +540,12 @@ pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String
         .await;
     let snapshot = collect_mcp_snapshot_from_manager(
         &mcp_connection_manager,
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await,
+        compute_auth_statuses(
+            mcp_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+            auth.as_ref(),
+        )
+        .await,
     )
     .await;
     let event = Event {

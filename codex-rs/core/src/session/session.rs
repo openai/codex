@@ -71,6 +71,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
+    /// Sticky environments for turns that do not provide a turn-local override.
+    pub(super) environments: Vec<TurnEnvironmentSelection>,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -159,7 +161,12 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
-        next_configuration.cwd = absolute_cwd;
+        next_configuration.cwd = absolute_cwd.clone();
+        if cwd_changed
+            && let Some(primary_environment) = next_configuration.environments.first_mut()
+        {
+            primary_environment.cwd = absolute_cwd;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let sandbox_policy = permission_profile
@@ -238,6 +245,10 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    /// Turn-local environment override. `None` inherits the sticky thread
+    /// environments stored on `SessionConfiguration`; `Some([])` explicitly
+    /// disables environments for this turn.
+    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
@@ -396,6 +407,7 @@ impl Session {
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
+                auth.as_ref(),
             )
             .await;
             (auth, mcp_servers, auth_statuses)
@@ -886,6 +898,7 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 tool_plugin_provenance,
+                auth,
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

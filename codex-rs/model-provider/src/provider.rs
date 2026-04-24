@@ -7,10 +7,41 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::account::ProviderAccount;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
+
+/// Current app-visible account state for a model provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAccountState {
+    pub account: Option<ProviderAccount>,
+    pub requires_openai_auth: bool,
+}
+
+/// Error returned when a provider cannot construct its app-visible account state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAccountError {
+    MissingChatgptAccountDetails,
+}
+
+impl fmt::Display for ProviderAccountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingChatgptAccountDetails => {
+                write!(
+                    f,
+                    "email and plan type are required for chatgpt authentication"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProviderAccountError {}
+
+pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
 /// Runtime provider abstraction used by model execution.
 ///
@@ -32,6 +63,9 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the current provider-scoped auth value, if one is configured.
     async fn auth(&self) -> Option<CodexAuth>;
+
+    /// Returns the current app-visible account state for this provider.
+    fn account_state(&self) -> ProviderAccountResult;
 
     /// Returns provider configuration adapted for the API client.
     async fn api_provider(&self) -> codex_protocol::error::Result<Provider> {
@@ -99,6 +133,38 @@ impl ModelProvider for ConfiguredModelProvider {
             None => None,
         }
     }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        let account = if self.info.requires_openai_auth {
+            self.auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .map(|auth| match &auth {
+                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+                    CodexAuth::Chatgpt(_)
+                    | CodexAuth::ChatgptAuthTokens(_)
+                    | CodexAuth::AgentIdentity(_) => {
+                        let email = auth.get_account_email();
+                        let plan_type = auth.account_plan_type();
+
+                        match (email, plan_type) {
+                            (Some(email), Some(plan_type)) => {
+                                Ok(ProviderAccount::Chatgpt { email, plan_type })
+                            }
+                            _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
+                        }
+                    }
+                })
+                .transpose()?
+        } else {
+            None
+        };
+
+        Ok(ProviderAccountState {
+            account,
+            requires_openai_auth: self.info.requires_openai_auth,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -106,7 +172,9 @@ mod tests {
     use std::num::NonZeroU64;
 
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
+    use codex_model_provider_info::WireApi;
     use codex_protocol::config_types::ModelProviderAuthInfo;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
@@ -154,5 +222,77 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
+    }
+
+    #[test]
+    fn openai_provider_returns_unauthenticated_openai_account_state() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: None,
+                requires_openai_auth: true,
+            })
+        );
+    }
+
+    #[test]
+    fn openai_provider_returns_api_key_account_state() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: Some(ProviderAccount::ApiKey),
+                requires_openai_auth: true,
+            })
+        );
+    }
+
+    #[test]
+    fn custom_non_openai_provider_returns_no_account_state() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Custom".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                wire_api: WireApi::Responses,
+                requires_openai_auth: false,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: None,
+                requires_openai_auth: false,
+            })
+        );
+    }
+
+    #[test]
+    fn amazon_bedrock_provider_returns_bedrock_account_state() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: Some(ProviderAccount::AmazonBedrock),
+                requires_openai_auth: false,
+            })
+        );
     }
 }
