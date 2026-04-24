@@ -10,11 +10,11 @@ use codex_rollout::find_thread_name_by_id;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 use codex_rollout::read_thread_item_from_rollout;
-use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 
 use super::LocalThreadStore;
-use super::helpers::git_info_from_parts;
+use super::helpers::apply_metadata_git_info;
+use super::helpers::git_info_from_metadata;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ReadThreadParams;
 use crate::StoredThread;
@@ -27,7 +27,8 @@ pub(super) async fn read_thread(
     params: ReadThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    if let Some(metadata) = read_sqlite_metadata(store, thread_id).await
+    let sqlite_metadata = read_sqlite_metadata(store, thread_id).await;
+    if let Some(metadata) = sqlite_metadata.as_ref()
         && (params.include_archived || metadata.archived_at.is_none())
         && (!params.include_history
             || sqlite_rollout_path_can_load_history_for_thread(
@@ -37,7 +38,7 @@ pub(super) async fn read_thread(
             )
             .await)
     {
-        let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
+        let mut thread = stored_thread_from_sqlite_metadata(store, metadata.clone()).await;
         attach_history_if_requested(&mut thread, params.include_history).await?;
         return Ok(thread);
     }
@@ -49,6 +50,9 @@ pub(super) async fn read_thread(
         })?;
 
     let mut thread = read_thread_from_rollout_path(store, path).await?;
+    if let Some(metadata) = sqlite_metadata.as_ref() {
+        apply_metadata_git_info(&mut thread, metadata);
+    }
     attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
 }
@@ -82,6 +86,7 @@ pub(super) async fn read_thread_by_rollout_path(
             message: format!("thread {} is archived", thread.thread_id),
         });
     }
+    apply_sqlite_git_info_if_present(store, &mut thread).await;
     attach_history_if_requested(&mut thread, include_history).await?;
     Ok(thread)
 }
@@ -193,13 +198,18 @@ async fn read_sqlite_metadata(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
 ) -> Option<ThreadMetadata> {
-    let runtime = StateRuntime::init(
-        store.config.sqlite_home.clone(),
-        store.config.model_provider_id.clone(),
-    )
-    .await
-    .ok()?;
-    runtime.get_thread(thread_id).await.ok().flatten()
+    codex_rollout::state_db::open_exact_thread_metadata_lookup(&store.config)
+        .await?
+        .get_thread(thread_id)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn apply_sqlite_git_info_if_present(store: &LocalThreadStore, thread: &mut StoredThread) {
+    if let Some(metadata) = read_sqlite_metadata(store, thread.thread_id).await {
+        apply_metadata_git_info(thread, &metadata);
+    }
 }
 
 async fn stored_thread_from_sqlite_metadata(
@@ -217,6 +227,7 @@ async fn stored_thread_from_sqlite_metadata(
         .await
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id);
+    let git_info = git_info_from_metadata(&metadata);
     StoredThread {
         thread_id: metadata.id,
         rollout_path: Some(metadata.rollout_path),
@@ -239,11 +250,7 @@ async fn stored_thread_from_sqlite_metadata(
         agent_nickname: metadata.agent_nickname,
         agent_role: metadata.agent_role,
         agent_path: metadata.agent_path,
-        git_info: git_info_from_parts(
-            metadata.git_sha,
-            metadata.git_branch,
-            metadata.git_origin_url,
-        ),
+        git_info,
         approval_mode: parse_or_default(&metadata.approval_mode, AskForApproval::OnRequest),
         sandbox_policy: parse_or_default(
             &metadata.sandbox_policy,
@@ -431,6 +438,56 @@ mod tests {
             Some(std::fs::canonicalize(active_path).expect("canonical path"))
         );
         assert_eq!(thread.preview, "Hello from user");
+    }
+
+    #[tokio::test]
+    async fn read_thread_by_rollout_path_prefers_sqlite_git_info() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(223);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            active_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.git_branch = Some("sqlite-branch".to_string());
+        let metadata = builder.build(config.model_provider_id.as_str());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                active_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        let git_info = thread.git_info.expect("git info should be present");
+        assert_eq!(git_info.branch.as_deref(), Some("sqlite-branch"));
+        assert_eq!(
+            git_info.commit_hash.as_ref().map(|sha| sha.0.as_str()),
+            Some("abcdef")
+        );
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://example.com/repo.git")
+        );
     }
 
     #[tokio::test]

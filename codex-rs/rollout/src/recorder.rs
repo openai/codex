@@ -62,6 +62,8 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
+use codex_state::ThreadGitInfoFields;
+use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
 
@@ -365,7 +367,9 @@ impl RolloutRecorder {
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
-        let state_db_ctx = state_db::get_state_db(config).await;
+        let state_db = state_db::thread_list_state_db(config).await;
+        let state_db_ctx = state_db.completed;
+        let exact_lookup_state_db_ctx = state_db.exact_lookup;
         let archived = match archive_filter {
             ThreadListArchiveFilter::Active => false,
             ThreadListArchiveFilter::Archived => true,
@@ -436,12 +440,12 @@ impl RolloutRecorder {
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
-            return Ok(page_from_filesystem_scan(
-                fs_page,
-                sort_direction,
-                page_size,
-                sort_key,
-            ));
+            let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
+            return Ok(overlay_thread_item_metadata_from_state_db(
+                exact_lookup_state_db_ctx.as_ref(),
+                page,
+            )
+            .await);
         }
 
         // Warm the DB by repairing every filesystem hit before querying SQLite.
@@ -529,8 +533,8 @@ impl RolloutRecorder {
                     .await;
                 }
                 let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
-                return Ok(fill_missing_thread_item_metadata_from_state_db(
-                    state_db_ctx.as_deref(),
+                return Ok(overlay_thread_item_metadata_from_state_db(
+                    exact_lookup_state_db_ctx.as_ref(),
                     page,
                 )
                 .await);
@@ -539,8 +543,8 @@ impl RolloutRecorder {
         }
         if listing_has_metadata_filters {
             let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
-            return Ok(fill_missing_thread_item_metadata_from_state_db(
-                state_db_ctx.as_deref(),
+            return Ok(overlay_thread_item_metadata_from_state_db(
+                exact_lookup_state_db_ctx.as_ref(),
                 page,
             )
             .await);
@@ -978,11 +982,11 @@ fn page_from_filesystem_scan(
     }
 }
 
-async fn fill_missing_thread_item_metadata_from_state_db(
-    state_db_ctx: Option<&StateRuntime>,
+async fn overlay_thread_item_metadata_from_state_db(
+    exact_lookup: Option<&state_db::ExactThreadMetadataLookup>,
     mut page: ThreadsPage,
 ) -> ThreadsPage {
-    let Some(state_db_ctx) = state_db_ctx else {
+    let Some(exact_lookup) = exact_lookup else {
         return page;
     };
 
@@ -990,7 +994,7 @@ async fn fill_missing_thread_item_metadata_from_state_db(
         let Some(thread_id) = item.thread_id else {
             continue;
         };
-        let metadata = match state_db_ctx.get_thread(thread_id).await {
+        let metadata = match exact_lookup.get_thread(thread_id).await {
             Ok(Some(metadata)) => metadata,
             Ok(None) => continue,
             Err(err) => {
@@ -1000,65 +1004,60 @@ async fn fill_missing_thread_item_metadata_from_state_db(
                 continue;
             }
         };
-        fill_missing_thread_item_metadata(item, thread_item_from_state_metadata(metadata));
+        overlay_thread_item_metadata_from_state(item, &metadata);
     }
 
     page
 }
 
-fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadItem) {
-    let ThreadItem {
-        path: _state_path,
-        thread_id: _state_thread_id,
-        first_user_message,
-        cwd,
-        git_branch,
-        git_sha,
-        git_origin_url,
-        source,
-        agent_nickname,
-        agent_role,
-        model_provider,
-        cli_version,
-        created_at,
-        updated_at,
-    } = state_item;
-
+fn overlay_thread_item_metadata_from_state(item: &mut ThreadItem, metadata: &ThreadMetadata) {
     if item.first_user_message.is_none() {
-        item.first_user_message = first_user_message;
+        item.first_user_message = metadata.first_user_message.clone();
     }
     if item.cwd.is_none() {
-        item.cwd = cwd;
+        item.cwd = Some(metadata.cwd.clone());
     }
-    if item.git_branch.is_none() {
-        item.git_branch = git_branch;
-    }
-    if item.git_sha.is_none() {
-        item.git_sha = git_sha;
-    }
-    if item.git_origin_url.is_none() {
-        item.git_origin_url = git_origin_url;
-    }
+    let mut git_info = ThreadGitInfoFields::new(
+        item.git_sha.clone(),
+        item.git_branch.clone(),
+        item.git_origin_url.clone(),
+    );
+    git_info.overlay_non_null(&metadata.git_info_fields());
+    item.git_sha = git_info.sha;
+    item.git_branch = git_info.branch;
+    item.git_origin_url = git_info.origin_url;
     if item.source.is_none() {
-        item.source = source;
+        item.source = Some(
+            serde_json::from_str(metadata.source.as_str())
+                .or_else(|_| serde_json::from_value(Value::String(metadata.source.clone())))
+                .unwrap_or(SessionSource::Unknown),
+        );
     }
     if item.agent_nickname.is_none() {
-        item.agent_nickname = agent_nickname;
+        item.agent_nickname = metadata.agent_nickname.clone();
     }
     if item.agent_role.is_none() {
-        item.agent_role = agent_role;
+        item.agent_role = metadata.agent_role.clone();
     }
     if item.model_provider.is_none() {
-        item.model_provider = model_provider;
+        item.model_provider = Some(metadata.model_provider.clone());
     }
     if item.cli_version.is_none() {
-        item.cli_version = cli_version;
+        item.cli_version = Some(metadata.cli_version.clone());
     }
     if item.created_at.is_none() {
-        item.created_at = created_at;
+        item.created_at = Some(
+            metadata
+                .created_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        );
     }
     if item.updated_at.is_none() {
-        item.updated_at = updated_at;
+        item.updated_at = Some(
+            metadata
+                .updated_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        );
     }
 }
 

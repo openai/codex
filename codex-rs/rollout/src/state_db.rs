@@ -11,6 +11,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
+use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
@@ -21,6 +22,29 @@ use tracing::warn;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
+
+/// Exact thread metadata lookup that does not require completed backfill.
+///
+/// This intentionally exposes only thread-id lookup, not DB-backed listing.
+#[derive(Clone)]
+pub struct ExactThreadMetadataLookup {
+    runtime: StateDbHandle,
+}
+
+impl ExactThreadMetadataLookup {
+    pub async fn get_thread(&self, thread_id: ThreadId) -> anyhow::Result<Option<ThreadMetadata>> {
+        self.runtime.get_thread(thread_id).await
+    }
+}
+
+/// State DB handles used by thread listing.
+///
+/// `completed` is safe for DB-backed paging. `exact_lookup` may be used only
+/// to overlay metadata for thread IDs already discovered from rollouts.
+pub(crate) struct ThreadListStateDb {
+    pub(crate) completed: Option<StateDbHandle>,
+    pub(crate) exact_lookup: Option<ExactThreadMetadataLookup>,
+}
 
 /// Initialize the state runtime for thread state persistence and backfill checks.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
@@ -62,32 +86,57 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
 
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
-    let state_path = codex_state::state_db_path(config.sqlite_home());
-    if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
-        return None;
+    let runtime = open_state_db_without_backfill_check(
+        config.sqlite_home(),
+        config.model_provider_id().to_string(),
+    )
+    .await?;
+    require_backfill_complete(runtime, config.sqlite_home()).await
+}
+
+pub(crate) async fn thread_list_state_db(config: &impl RolloutConfigView) -> ThreadListStateDb {
+    let exact_lookup = open_exact_thread_metadata_lookup(config).await;
+    let completed = match exact_lookup.as_ref().map(|lookup| lookup.runtime.clone()) {
+        Some(runtime) => require_backfill_complete(runtime, config.sqlite_home()).await,
+        None => None,
+    };
+    ThreadListStateDb {
+        completed,
+        exact_lookup,
     }
-    let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home().to_path_buf(),
+}
+
+pub async fn open_exact_thread_metadata_lookup(
+    config: &impl RolloutConfigView,
+) -> Option<ExactThreadMetadataLookup> {
+    open_state_db_without_backfill_check(
+        config.sqlite_home(),
         config.model_provider_id().to_string(),
     )
     .await
-    .ok()?;
-    require_backfill_complete(runtime, config.sqlite_home()).await
+    .map(|runtime| ExactThreadMetadataLookup { runtime })
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
 ///
 /// This is used for parity checks during the SQLite migration phase.
 pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
-    let db_path = codex_state::state_db_path(codex_home);
-    if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+    let runtime =
+        open_state_db_without_backfill_check(codex_home, default_provider.to_string()).await?;
+    require_backfill_complete(runtime, codex_home).await
+}
+
+async fn open_state_db_without_backfill_check(
+    sqlite_home: &Path,
+    default_provider: String,
+) -> Option<StateDbHandle> {
+    let state_path = codex_state::state_db_path(sqlite_home);
+    if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
-    require_backfill_complete(runtime, codex_home).await
+    codex_state::StateRuntime::init(sqlite_home.to_path_buf(), default_provider)
+        .await
+        .ok()
 }
 
 async fn require_backfill_complete(
