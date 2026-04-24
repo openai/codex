@@ -47,6 +47,7 @@ struct Counters {
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
+    tracing::error!("Phase 2 starts");
     let phase_two_e2e_timer = session
         .services
         .session_telemetry
@@ -54,6 +55,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         .ok();
 
     let Some(db) = session.services.state_db.as_deref() else {
+        tracing::error!("Phase 2 no DB");
         // This should not happen.
         return;
     };
@@ -65,6 +67,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let claim = match job::claim(session, db).await {
         Ok(claim) => claim,
         Err(e) => {
+            tracing::error!("Phase 2 lock unavailable");
             session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
                 /*inc*/ 1,
@@ -76,6 +79,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 2. Ensure the memories root has a git baseline repository.
     if let Err(err) = prepare_memory_workspace(&root).await {
+        tracing::error!("Phase 2 lock failed 1");
         tracing::error!("failed preparing memory workspace: {err}");
         job::failed(session, db, &claim, "failed_prepare_workspace").await;
         return;
@@ -83,6 +87,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 3. Build the locked-down config used by the consolidation agent.
     let Some(agent_config) = agent::get_config(config.as_ref()) else {
+        tracing::error!("Phase 2 lock failed 2");
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(session, db, &claim, "failed_sandbox_policy").await;
@@ -96,6 +101,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     {
         Ok(raw_memories) => raw_memories,
         Err(err) => {
+            tracing::error!("Phase 2 lock failed 3");
             tracing::error!("failed to list stage1 outputs from global: {err}");
             job::failed(session, db, &claim, "failed_load_stage1_outputs").await;
             return;
@@ -106,6 +112,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 5. Sync the current inputs into the memory workspace.
     if let Err(err) = sync_phase2_workspace_inputs(&root, &raw_memories).await {
+        tracing::error!("Phase 2 lock failed 4");
         tracing::error!("failed syncing phase2 workspace inputs: {err}");
         job::failed(session, db, &claim, "failed_sync_workspace_inputs").await;
         return;
@@ -115,12 +122,14 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let workspace_diff = match memory_workspace_diff(&root).await {
         Ok(diff) => diff,
         Err(err) => {
+            tracing::error!("Phase 2 lock failed 5");
             tracing::error!("failed checking memory workspace changes: {err}");
             job::failed(session, db, &claim, "failed_workspace_status").await;
             return;
         }
     };
     if !workspace_diff.has_changes() {
+        tracing::error!("Phase 2 no changes");
         // We check only after sync of the file system.
         job::succeed(
             session,
@@ -133,6 +142,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         .await;
         return;
     }
+    tracing::error!("Workspace diff: {workspace_diff:?}");
 
     // 7. Persist the diff for the consolidation agent to inspect.
     if let Err(err) = write_workspace_diff(&root, &workspace_diff).await {
@@ -189,6 +199,8 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         agent_control,
         phase_two_e2e_timer,
     );
+
+    tracing::error!("Phase 2 is done: {thread_id}");
 
     // 10. Emit dispatch metrics.
     let counters = Counters {
@@ -302,7 +314,7 @@ mod agent {
 
         agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
-        agent_config.ephemeral = true;
+        // agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
         agent_config.memories.use_memories = false;
         // Approval policy
@@ -437,6 +449,7 @@ mod agent {
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }
+            tracing::error!("FINISHING");
 
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
