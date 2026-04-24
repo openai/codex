@@ -38,10 +38,16 @@ sourceKinds?: Array<ThreadSourceKind> | null,
  */
 archived?: boolean | null,
 /**
- * Optional cwd filter; when set, only threads whose session cwd exactly
- * matches this path are returned.
+ * Optional cwd filter or filters; when set, only threads whose session cwd
+ * exactly matches one of these paths are returned.
  */
-cwd?: string | null,
+cwd?: string | Array<string> | null,
+/**
+ * If true, return from the state DB without scanning JSONL rollouts to
+ * repair thread metadata. Omitted or false preserves scan-and-repair
+ * behavior.
+ */
+useStateDbOnly?: boolean,
 /**
  * Optional substring filter for the extracted thread title.
  */

@@ -90,6 +90,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hi".into(),
                 text_elements: Vec::new(),
@@ -99,6 +100,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             approval_policy: codex_protocol::protocol::AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

@@ -6,9 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_login::BackgroundAgentTaskAuthMode;
 use codex_login::CodexAuth;
-use codex_login::cached_background_agent_task_authorization_header_value;
 use codex_login::default_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
@@ -50,11 +48,11 @@ fn as_query_product_surface(product_surface: RemoteSkillProductSurface) -> &'sta
     }
 }
 
-fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth> {
+fn ensure_codex_backend_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth> {
     let Some(auth) = auth else {
         anyhow::bail!("chatgpt authentication required for remote skill scopes");
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         anyhow::bail!(
             "chatgpt authentication required for remote skill scopes; api key auth is not supported"
         );
@@ -96,7 +94,7 @@ pub async fn list_remote_skills(
     enabled: Option<bool>,
 ) -> Result<Vec<RemoteSkillSummary>> {
     let base_url = chatgpt_base_url.trim_end_matches('/');
-    let auth = ensure_chatgpt_auth(auth)?;
+    let auth = ensure_codex_backend_auth(auth)?;
 
     let url = format!("{base_url}/hazelnuts");
     let product_surface = as_query_product_surface(product_surface);
@@ -110,19 +108,11 @@ pub async fn list_remote_skills(
     }
 
     let client = build_reqwest_client();
-    let mut request = client
+    let request = client
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
-        .query(&query_params);
-    let authorization_header_value = authorization_header_value_for_auth(auth)
-        .context("Failed to read auth token for remote skills")?;
-    request = request.header("authorization", authorization_header_value);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    if auth.is_fedramp_account() {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
+        .query(&query_params)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
     let response = request
         .send()
         .await
@@ -154,22 +144,15 @@ pub async fn export_remote_skill(
     auth: Option<&CodexAuth>,
     skill_id: &str,
 ) -> Result<RemoteSkillDownloadResult> {
-    let auth = ensure_chatgpt_auth(auth)?;
+    let auth = ensure_codex_backend_auth(auth)?;
 
     let client = build_reqwest_client();
     let base_url = chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
-    let mut request = client.get(&url).timeout(REMOTE_SKILLS_API_TIMEOUT);
-
-    let authorization_header_value = authorization_header_value_for_auth(auth)
-        .context("Failed to read auth token for remote skills")?;
-    request = request.header("authorization", authorization_header_value);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    if auth.is_fedramp_account() {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
+    let request = client
+        .get(&url)
+        .timeout(REMOTE_SKILLS_API_TIMEOUT)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
 
     let response = request
         .send()
@@ -205,19 +188,6 @@ pub async fn export_remote_skill(
         id: skill_id.to_string(),
         path: output_dir,
     })
-}
-
-fn authorization_header_value_for_auth(auth: &CodexAuth) -> std::io::Result<String> {
-    if let Ok(Some(authorization_header_value)) =
-        cached_background_agent_task_authorization_header_value(
-            auth,
-            BackgroundAgentTaskAuthMode::Disabled,
-        )
-    {
-        Ok(authorization_header_value)
-    } else {
-        auth.get_token().map(|token| format!("Bearer {token}"))
-    }
 }
 
 fn safe_join(base: &Path, name: &str) -> Result<PathBuf> {

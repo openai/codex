@@ -1,7 +1,9 @@
 use super::*;
 use crate::config::test_config;
 use crate::rollout::RolloutRecorder;
+use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
+use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;
@@ -41,6 +43,30 @@ fn assistant_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+fn disabled_environment_manager_for_tests() -> Arc<codex_exec_server::EnvironmentManager> {
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe path"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    Arc::new(codex_exec_server::EnvironmentManager::new(
+        codex_exec_server::EnvironmentManagerArgs {
+            exec_server_url: Some("none".to_string()),
+            local_runtime_paths: runtime_paths,
+        },
+    ))
+}
+
+fn contextual_user_interrupted_marker() -> ResponseItem {
+    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::ContextualUser)
+        .expect("contextual-user interrupted marker should be enabled")
+}
+
+fn developer_interrupted_marker() -> ResponseItem {
+    interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
+        .expect("developer interrupted marker should be enabled")
 }
 
 #[test]
@@ -246,9 +272,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     let thread_1 = manager
         .start_thread(config.clone())
@@ -274,7 +298,132 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
-async fn new_uses_configured_openai_provider_for_model_refresh() {
+async fn start_thread_accepts_explicit_environment_when_default_environment_is_disabled() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        disabled_environment_manager_for_tests(),
+    );
+
+    let thread = manager
+        .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: config.cwd.clone(),
+            }],
+        })
+        .await
+        .expect("explicit sticky environment should resolve by id");
+
+    assert_eq!(manager.list_thread_ids().await, vec![thread.thread_id]);
+}
+
+#[tokio::test]
+async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*analytics_events_client*/ None,
+    );
+    let selected_cwd =
+        AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id: "local".to_string(),
+        cwd: selected_cwd.clone(),
+    }];
+    let default_cwd = config.cwd.clone();
+
+    let source = manager
+        .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: environments.clone(),
+        })
+        .await
+        .expect("start source thread");
+    source.thread.ensure_rollout_materialized().await;
+    source
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let rollout_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+
+    let resumed = manager
+        .resume_thread_from_rollout(
+            config.clone(),
+            rollout_path.clone(),
+            auth_manager,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("resume source thread");
+    let resumed_turn = resumed
+        .thread
+        .codex
+        .session
+        .new_turn_with_sub_id("resume-turn".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("build resumed turn context");
+    assert_eq!(resumed_turn.environments.len(), 1);
+    assert_eq!(resumed_turn.environments[0].cwd, default_cwd);
+    assert_ne!(resumed_turn.environments[0].cwd, selected_cwd);
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            rollout_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork source thread");
+    let forked_turn = forked
+        .thread
+        .codex
+        .session
+        .new_turn_with_sub_id("fork-turn".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("build forked turn context");
+    assert_eq!(forked_turn.environments.len(), 1);
+    assert_eq!(forked_turn.environments[0].cwd, default_cwd);
+    assert_ne!(forked_turn.environments[0].cwd, selected_cwd);
+}
+
+#[tokio::test]
+async fn new_uses_active_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
 
@@ -284,11 +433,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
     config.model_catalog = None;
-    config
-        .model_providers
-        .get_mut("openai")
-        .expect("openai provider should exist")
-        .base_url = Some(server.uri());
+    config.model_provider.base_url = Some(server.uri());
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -297,9 +442,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         auth_manager,
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
 
@@ -314,12 +457,17 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(committed_history, /*turn_id*/ None).get_rollout_items()
+            append_interrupted_boundary(
+                committed_history,
+                /*turn_id*/ None,
+                InterruptedTurnHistoryMarker::ContextualUser,
+            )
+            .get_rollout_items()
         )
         .expect("serialize interrupted fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(user_msg("hello")),
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
                 reason: TurnAbortReason::Interrupted,
@@ -331,11 +479,16 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     );
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(InitialHistory::New, /*turn_id*/ None).get_rollout_items()
+            append_interrupted_boundary(
+                InitialHistory::New,
+                /*turn_id*/ None,
+                InterruptedTurnHistoryMarker::ContextualUser,
+            )
+            .get_rollout_items()
         )
         .expect("serialize interrupted empty fork history"),
         serde_json::to_value(vec![
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
                 reason: TurnAbortReason::Interrupted,
@@ -348,11 +501,59 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 }
 
 #[test]
+fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
+    let committed_history =
+        InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
+
+    assert_eq!(
+        serde_json::to_value(
+            append_interrupted_boundary(
+                committed_history,
+                /*turn_id*/ None,
+                InterruptedTurnHistoryMarker::Disabled,
+            )
+            .get_rollout_items()
+        )
+        .expect("serialize disabled interrupted fork history"),
+        serde_json::to_value(vec![
+            RolloutItem::ResponseItem(user_msg("hello")),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: None,
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            })),
+        ])
+        .expect("serialize expected disabled interrupted fork history"),
+    );
+    assert_eq!(
+        serde_json::to_value(
+            append_interrupted_boundary(
+                InitialHistory::New,
+                /*turn_id*/ None,
+                InterruptedTurnHistoryMarker::Disabled,
+            )
+            .get_rollout_items()
+        )
+        .expect("serialize disabled interrupted empty fork history"),
+        serde_json::to_value(vec![RolloutItem::EventMsg(EventMsg::TurnAborted(
+            TurnAbortedEvent {
+                turn_id: None,
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            },
+        ))])
+        .expect("serialize expected disabled interrupted empty fork history"),
+    );
+}
+
+#[test]
 fn interrupted_snapshot_is_not_mid_turn() {
     let interrupted_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::ResponseItem(assistant_msg("partial")),
-        RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+        RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
         RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
@@ -368,6 +569,24 @@ fn interrupted_snapshot_is_not_mid_turn() {
             active_turn_id: None,
             active_turn_start_index: None,
         },
+    );
+}
+
+#[test]
+fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
+    let marker = developer_interrupted_marker();
+
+    let ResponseItem::Message { role, content, .. } = marker else {
+        panic!("expected interrupted marker to be a message");
+    };
+    assert_eq!(role, "developer");
+    assert!(
+        matches!(
+            content.as_slice(),
+            [ContentItem::InputText { text }]
+                if text.contains(crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
+        ),
+        "expected interrupted marker to use developer InputText content"
     );
 }
 
@@ -434,9 +653,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
 
@@ -488,9 +705,10 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
-    let interrupted_marker_json =
-        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
-            .expect("serialize interrupted marker");
+    let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
+        contextual_user_interrupted_marker(),
+    ))
+    .expect("serialize interrupted marker");
     let interrupted_abort_json = serde_json::to_value(RolloutItem::EventMsg(
         EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: expected_turn_id,
@@ -537,9 +755,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
 
@@ -630,9 +846,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
     );
 
@@ -683,9 +897,10 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .into_iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
-    let interrupted_marker_json =
-        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
-            .expect("serialize interrupted marker");
+    let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
+        contextual_user_interrupted_marker(),
+    ))
+    .expect("serialize interrupted marker");
     assert_eq!(
         forked_rollout_items
             .iter()

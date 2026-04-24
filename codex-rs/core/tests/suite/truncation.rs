@@ -500,6 +500,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
                 text_elements: Vec::new(),
@@ -509,6 +510,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

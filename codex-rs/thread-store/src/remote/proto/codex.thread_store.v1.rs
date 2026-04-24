@@ -2,6 +2,66 @@
 #![allow(clippy::trivially_copy_pass_by_ref)]
 
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Empty {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ThreadIdRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateThreadRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub forked_from_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "3")]
+    pub source: ::core::option::Option<SessionSource>,
+    #[prost(string, tag = "4")]
+    pub base_instructions_json: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "5")]
+    pub dynamic_tools_json: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(enumeration = "ThreadEventPersistenceMode", tag = "6")]
+    pub event_persistence_mode: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResumeThreadRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub rollout_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "3")]
+    pub history_json: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bool, tag = "4")]
+    pub has_history: bool,
+    #[prost(bool, tag = "5")]
+    pub include_archived: bool,
+    #[prost(enumeration = "ThreadEventPersistenceMode", tag = "6")]
+    pub event_persistence_mode: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AppendThreadItemsRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub items_json: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoadThreadHistoryRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(bool, tag = "2")]
+    pub include_archived: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadThreadRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(bool, tag = "2")]
+    pub include_archived: bool,
+    #[prost(bool, tag = "3")]
+    pub include_history: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListThreadsRequest {
     #[prost(uint32, tag = "1")]
     pub page_size: u32,
@@ -17,9 +77,20 @@ pub struct ListThreadsRequest {
     pub archived: bool,
     #[prost(string, optional, tag = "7")]
     pub search_term: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "8")]
+    pub cwd_filter: ::core::option::Option<CwdFilter>,
+    #[prost(bool, tag = "9")]
+    pub use_state_db_only: bool,
+    #[prost(enumeration = "SortDirection", tag = "10")]
+    pub sort_direction: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ModelProviderFilter {
+    #[prost(string, repeated, tag = "1")]
+    pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CwdFilter {
     #[prost(string, repeated, tag = "1")]
     pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
@@ -29,6 +100,18 @@ pub struct ListThreadsResponse {
     pub threads: ::prost::alloc::vec::Vec<StoredThread>,
     #[prost(string, optional, tag = "2")]
     pub next_cursor: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StoredThreadResponse {
+    #[prost(message, optional, tag = "1")]
+    pub thread: ::core::option::Option<StoredThread>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoredThreadHistory {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub items_json: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoredThread {
@@ -71,6 +154,16 @@ pub struct StoredThread {
     pub reasoning_effort: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "18")]
     pub first_user_message: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "19")]
+    pub rollout_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "20")]
+    pub approval_mode_json: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "21")]
+    pub sandbox_policy_json: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "22")]
+    pub token_usage_json: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "23")]
+    pub history: ::core::option::Option<StoredThreadHistory>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionSource {
@@ -100,6 +193,45 @@ pub struct GitInfo {
     #[prost(string, optional, tag = "3")]
     pub origin_url: ::core::option::Option<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateThreadMetadataRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub patch: ::core::option::Option<ThreadMetadataPatch>,
+    #[prost(bool, tag = "3")]
+    pub include_archived: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ThreadMetadataPatch {
+    #[prost(string, optional, tag = "1")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration = "ThreadMemoryMode", optional, tag = "2")]
+    pub memory_mode: ::core::option::Option<i32>,
+    #[prost(message, optional, tag = "3")]
+    pub git_info: ::core::option::Option<GitInfoPatch>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GitInfoPatch {
+    #[prost(message, optional, tag = "1")]
+    pub sha: ::core::option::Option<OptionalStringPatch>,
+    #[prost(message, optional, tag = "2")]
+    pub branch: ::core::option::Option<OptionalStringPatch>,
+    #[prost(message, optional, tag = "3")]
+    pub origin_url: ::core::option::Option<OptionalStringPatch>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OptionalStringPatch {
+    #[prost(enumeration = "OptionalStringPatchKind", tag = "1")]
+    pub kind: i32,
+    #[prost(string, optional, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArchiveThreadRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: ::prost::alloc::string::String,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ThreadSortKey {
@@ -122,6 +254,32 @@ impl ThreadSortKey {
         match value {
             "THREAD_SORT_KEY_CREATED_AT" => Some(Self::CreatedAt),
             "THREAD_SORT_KEY_UPDATED_AT" => Some(Self::UpdatedAt),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SortDirection {
+    Asc = 0,
+    Desc = 1,
+}
+impl SortDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Asc => "SORT_DIRECTION_ASC",
+            Self::Desc => "SORT_DIRECTION_DESC",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SORT_DIRECTION_ASC" => Some(Self::Asc),
+            "SORT_DIRECTION_DESC" => Some(Self::Desc),
             _ => None,
         }
     }
@@ -179,6 +337,87 @@ impl SessionSourceKind {
                 Some(Self::SubAgentMemoryConsolidation)
             }
             "SESSION_SOURCE_KIND_SUB_AGENT_OTHER" => Some(Self::SubAgentOther),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ThreadMemoryMode {
+    Enabled = 0,
+    Disabled = 1,
+}
+impl ThreadMemoryMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Enabled => "THREAD_MEMORY_MODE_ENABLED",
+            Self::Disabled => "THREAD_MEMORY_MODE_DISABLED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "THREAD_MEMORY_MODE_ENABLED" => Some(Self::Enabled),
+            "THREAD_MEMORY_MODE_DISABLED" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum OptionalStringPatchKind {
+    Unset = 0,
+    Clear = 1,
+    Set = 2,
+}
+impl OptionalStringPatchKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unset => "OPTIONAL_STRING_PATCH_KIND_UNSET",
+            Self::Clear => "OPTIONAL_STRING_PATCH_KIND_CLEAR",
+            Self::Set => "OPTIONAL_STRING_PATCH_KIND_SET",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "OPTIONAL_STRING_PATCH_KIND_UNSET" => Some(Self::Unset),
+            "OPTIONAL_STRING_PATCH_KIND_CLEAR" => Some(Self::Clear),
+            "OPTIONAL_STRING_PATCH_KIND_SET" => Some(Self::Set),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ThreadEventPersistenceMode {
+    Limited = 0,
+    Extended = 1,
+}
+impl ThreadEventPersistenceMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Limited => "THREAD_EVENT_PERSISTENCE_MODE_LIMITED",
+            Self::Extended => "THREAD_EVENT_PERSISTENCE_MODE_EXTENDED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "THREAD_EVENT_PERSISTENCE_MODE_LIMITED" => Some(Self::Limited),
+            "THREAD_EVENT_PERSISTENCE_MODE_EXTENDED" => Some(Self::Extended),
             _ => None,
         }
     }
@@ -273,6 +512,170 @@ pub mod thread_store_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
+        pub async fn create_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/CreateThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "CreateThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn resume_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ResumeThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/ResumeThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "ResumeThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn append_items(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AppendThreadItemsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/AppendItems",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "AppendItems",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn persist_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/PersistThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "PersistThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn flush_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/FlushThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "FlushThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn shutdown_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/ShutdownThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "ShutdownThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn discard_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/DiscardThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "DiscardThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn load_history(
+            &mut self,
+            request: impl tonic::IntoRequest<super::LoadThreadHistoryRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadHistory>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/LoadHistory",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "LoadHistory",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn read_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ReadThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/ReadThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "ReadThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn list_threads(
             &mut self,
             request: impl tonic::IntoRequest<super::ListThreadsRequest>,
@@ -292,6 +695,62 @@ pub mod thread_store_client {
             ));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn update_thread_metadata(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateThreadMetadataRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/UpdateThreadMetadata",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "UpdateThreadMetadata",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn archive_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ArchiveThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/ArchiveThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "ArchiveThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn unarchive_thread(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ArchiveThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/codex.thread_store.v1.ThreadStore/UnarchiveThread",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "codex.thread_store.v1.ThreadStore",
+                "UnarchiveThread",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -307,10 +766,98 @@ pub mod thread_store_server {
     /// Generated trait containing gRPC methods that should be implemented for use with ThreadStoreServer.
     #[async_trait]
     pub trait ThreadStore: std::marker::Send + std::marker::Sync + 'static {
+        async fn create_thread(
+            &self,
+            request: tonic::Request<super::CreateThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn resume_thread(
+            &self,
+            request: tonic::Request<super::ResumeThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn append_items(
+            &self,
+            request: tonic::Request<super::AppendThreadItemsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn persist_thread(
+            &self,
+            request: tonic::Request<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn flush_thread(
+            &self,
+            request: tonic::Request<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn shutdown_thread(
+            &self,
+            request: tonic::Request<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn discard_thread(
+            &self,
+            request: tonic::Request<super::ThreadIdRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn load_history(
+            &self,
+            request: tonic::Request<super::LoadThreadHistoryRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadHistory>, tonic::Status>
+        {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn read_thread(
+            &self,
+            request: tonic::Request<super::ReadThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
         async fn list_threads(
             &self,
             request: tonic::Request<super::ListThreadsRequest>,
         ) -> std::result::Result<tonic::Response<super::ListThreadsResponse>, tonic::Status>;
+        async fn update_thread_metadata(
+            &self,
+            request: tonic::Request<super::UpdateThreadMetadataRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn archive_thread(
+            &self,
+            request: tonic::Request<super::ArchiveThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::Empty>, tonic::Status> {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
+        async fn unarchive_thread(
+            &self,
+            request: tonic::Request<super::ArchiveThreadRequest>,
+        ) -> std::result::Result<tonic::Response<super::StoredThreadResponse>, tonic::Status>
+        {
+            let _ = request;
+            Err(tonic::Status::unimplemented("not implemented"))
+        }
     }
     #[derive(Debug)]
     pub struct ThreadStoreServer<T> {
@@ -384,7 +931,98 @@ pub mod thread_store_server {
             Poll::Ready(Ok(()))
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            macro_rules! unary_service {
+                ($svc:ident, $request:ty, $response:ty, $method:ident) => {{
+                    #[allow(non_camel_case_types)]
+                    struct $svc<T: ThreadStore>(pub Arc<T>);
+                    impl<T: ThreadStore> tonic::server::UnaryService<$request> for $svc<T> {
+                        type Response = $response;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(&mut self, request: tonic::Request<$request>) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut =
+                                async move { <T as ThreadStore>::$method(&inner, request).await };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = $svc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }};
+            }
             match req.uri().path() {
+                "/codex.thread_store.v1.ThreadStore/CreateThread" => unary_service!(
+                    CreateThreadSvc,
+                    super::CreateThreadRequest,
+                    super::Empty,
+                    create_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/ResumeThread" => unary_service!(
+                    ResumeThreadSvc,
+                    super::ResumeThreadRequest,
+                    super::Empty,
+                    resume_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/AppendItems" => unary_service!(
+                    AppendItemsSvc,
+                    super::AppendThreadItemsRequest,
+                    super::Empty,
+                    append_items
+                ),
+                "/codex.thread_store.v1.ThreadStore/PersistThread" => unary_service!(
+                    PersistThreadSvc,
+                    super::ThreadIdRequest,
+                    super::Empty,
+                    persist_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/FlushThread" => unary_service!(
+                    FlushThreadSvc,
+                    super::ThreadIdRequest,
+                    super::Empty,
+                    flush_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/ShutdownThread" => unary_service!(
+                    ShutdownThreadSvc,
+                    super::ThreadIdRequest,
+                    super::Empty,
+                    shutdown_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/DiscardThread" => unary_service!(
+                    DiscardThreadSvc,
+                    super::ThreadIdRequest,
+                    super::Empty,
+                    discard_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/LoadHistory" => unary_service!(
+                    LoadHistorySvc,
+                    super::LoadThreadHistoryRequest,
+                    super::StoredThreadHistory,
+                    load_history
+                ),
+                "/codex.thread_store.v1.ThreadStore/ReadThread" => unary_service!(
+                    ReadThreadSvc,
+                    super::ReadThreadRequest,
+                    super::StoredThreadResponse,
+                    read_thread
+                ),
                 "/codex.thread_store.v1.ThreadStore/ListThreads" => {
                     #[allow(non_camel_case_types)]
                     struct ListThreadsSvc<T: ThreadStore>(pub Arc<T>);
@@ -424,6 +1062,24 @@ pub mod thread_store_server {
                     };
                     Box::pin(fut)
                 }
+                "/codex.thread_store.v1.ThreadStore/UpdateThreadMetadata" => unary_service!(
+                    UpdateThreadMetadataSvc,
+                    super::UpdateThreadMetadataRequest,
+                    super::StoredThreadResponse,
+                    update_thread_metadata
+                ),
+                "/codex.thread_store.v1.ThreadStore/ArchiveThread" => unary_service!(
+                    ArchiveThreadSvc,
+                    super::ArchiveThreadRequest,
+                    super::Empty,
+                    archive_thread
+                ),
+                "/codex.thread_store.v1.ThreadStore/UnarchiveThread" => unary_service!(
+                    UnarchiveThreadSvc,
+                    super::ArchiveThreadRequest,
+                    super::StoredThreadResponse,
+                    unarchive_thread
+                ),
                 _ => Box::pin(async move {
                     let mut response = http::Response::new(tonic::body::Body::default());
                     let headers = response.headers_mut();

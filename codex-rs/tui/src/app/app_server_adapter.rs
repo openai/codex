@@ -400,6 +400,9 @@ fn server_notification_thread_target(
         }
         ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::ModelVerification(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadRealtimeStarted(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -425,6 +428,7 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::Warning(notification) => notification.thread_id.as_deref(),
+        ServerNotification::GuardianWarning(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerStatusUpdated(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
@@ -785,6 +789,7 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
                 last_agent_message: None,
                 completed_at: turn.completed_at,
                 duration_ms: turn.duration_ms,
+                time_to_first_token_ms: None,
             }),
         }),
         TurnStatus::Interrupted => events.push(Event {
@@ -816,6 +821,7 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
                     last_agent_message: None,
                     completed_at: turn.completed_at,
                     duration_ms: turn.duration_ms,
+                    time_to_first_token_ms: None,
                 }),
             });
         }
@@ -1065,6 +1071,7 @@ mod tests {
     use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_app_server_protocol::CommandExecutionStatus;
+    use codex_app_server_protocol::GuardianWarningNotification;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ItemStartedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -1677,6 +1684,19 @@ mod tests {
         let thread_id = ThreadId::new();
         let notification = ServerNotification::Warning(WarningNotification {
             thread_id: Some(thread_id.to_string()),
+            message: "warning".to_string(),
+        });
+
+        let target = server_notification_thread_target(&notification);
+
+        assert_eq!(target, ServerNotificationThreadTarget::Thread(thread_id));
+    }
+
+    #[test]
+    fn guardian_warning_notifications_route_to_threads() {
+        let thread_id = ThreadId::new();
+        let notification = ServerNotification::GuardianWarning(GuardianWarningNotification {
+            thread_id: thread_id.to_string(),
             message: "warning".to_string(),
         });
 

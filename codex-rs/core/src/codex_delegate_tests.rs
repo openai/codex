@@ -154,6 +154,32 @@ async fn forward_ops_preserves_submission_trace_context() {
 }
 
 #[tokio::test]
+async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let result = timeout(
+        Duration::from_secs(/*secs*/ 1),
+        run_codex_thread_interactive(
+            parent_ctx.config.as_ref().clone(),
+            Arc::clone(&parent_session.services.auth_manager),
+            Arc::clone(&parent_session.services.models_manager),
+            parent_session,
+            parent_ctx,
+            cancel_token,
+            SubAgentSource::Review,
+            /*initial_history*/ None,
+        ),
+    )
+    .await
+    .expect("cancelled delegate spawn should not hang");
+
+    assert!(matches!(result, Err(CodexErr::TurnAborted)));
+}
+
+#[tokio::test]
 async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
@@ -179,6 +205,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
             ..RequestPermissionProfile::default()
         },
         scope: PermissionGrantScope::Turn,
+        strict_auto_review: false,
     };
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
     let cancel_token = CancellationToken::new();
@@ -251,7 +278,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     parent_ctx.config = Arc::new(config);
     parent_ctx
         .approval_policy
@@ -363,7 +390,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     parent_ctx.config = Arc::new(config);
     parent_ctx
         .approval_policy

@@ -10,6 +10,7 @@ use std::sync::mpsc as std_mpsc;
 use std::thread;
 
 use codex_protocol::ToolName;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
@@ -25,6 +26,11 @@ const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
+    /// Runtime cell id for this execution.
+    ///
+    /// Callers allocate this before execution so tracing, waits, and nested tool
+    /// calls can refer to the cell as soon as JavaScript starts.
+    pub cell_id: String,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -40,7 +46,30 @@ pub struct WaitRequest {
     pub terminate: bool,
 }
 
+/// Result of waiting on a code-mode cell.
+///
+/// The wrapped `RuntimeResponse` is the model-facing wait result. The enum
+/// variant carries the extra lifecycle provenance that `RuntimeResponse` cannot:
+/// a failed real cell and a missing-cell wait both use
+/// `RuntimeResponse::Result { error_text: Some(..), .. }`, but only the former
+/// should be treated as a code-cell lifecycle event.
 #[derive(Debug, PartialEq)]
+pub enum WaitOutcome {
+    /// The requested code cell was live when the wait command was accepted.
+    LiveCell(RuntimeResponse),
+    /// The requested code cell was not live.
+    MissingCell(RuntimeResponse),
+}
+
+impl From<WaitOutcome> for RuntimeResponse {
+    fn from(outcome: WaitOutcome) -> Self {
+        match outcome {
+            WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response) => response,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize)]
 pub enum RuntimeResponse {
     Yielded {
         cell_id: String,
@@ -58,14 +87,22 @@ pub enum RuntimeResponse {
     },
 }
 
+/// Nested tool request emitted by one code-mode cell.
+///
+/// Code mode owns the per-cell runtime id. Hosts should preserve it for
+/// provenance/debugging, but should still assign their own runtime tool call id
+/// if their tool-call graph requires globally unique ids.
+#[derive(Debug)]
+pub struct CodeModeNestedToolCall {
+    pub cell_id: String,
+    pub runtime_tool_call_id: String,
+    pub tool_name: ToolName,
+    pub input: Option<JsonValue>,
+}
+
 #[derive(Debug)]
 pub(crate) enum TurnMessage {
-    ToolCall {
-        cell_id: String,
-        id: String,
-        name: ToolName,
-        input: Option<JsonValue>,
-    },
+    ToolCall(CodeModeNestedToolCall),
     Notify {
         cell_id: String,
         call_id: String,
@@ -331,6 +368,7 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
+            cell_id: "1".to_string(),
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),

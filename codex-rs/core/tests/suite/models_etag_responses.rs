@@ -101,6 +101,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please run a tool".into(),
                 text_elements: Vec::new(),
@@ -110,6 +111,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

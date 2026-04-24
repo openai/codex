@@ -108,6 +108,7 @@ pub async fn run_codex_tool_session(
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: initial_prompt.clone(),
                 // MCP tool prompts are plain text with no UI element ranges.
@@ -156,6 +157,7 @@ pub async fn run_codex_tool_session_reply(
         .insert(request_id.clone(), thread_id);
     if let Err(e) = thread
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt,
                 // MCP tool prompts are plain text with no UI element ranges.
@@ -261,7 +263,9 @@ async fn run_codex_tool_session_inner(
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
                     }
-                    EventMsg::Warning(_) => {
+                    EventMsg::Warning(_)
+                    | EventMsg::GuardianWarning(_)
+                    | EventMsg::ModelVerification(_) => {
                         continue;
                     }
                     EventMsg::GuardianAssessment(_) => {

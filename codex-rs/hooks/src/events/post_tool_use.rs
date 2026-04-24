@@ -17,7 +17,6 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PostToolUseCommandInput;
-use crate::schema::PostToolUseToolInput;
 
 #[derive(Debug, Clone)]
 pub struct PostToolUseRequest {
@@ -28,8 +27,9 @@ pub struct PostToolUseRequest {
     pub model: String,
     pub permission_mode: String,
     pub tool_name: String,
+    pub matcher_aliases: Vec<String>,
     pub tool_use_id: String,
-    pub command: String,
+    pub tool_input: Value,
     pub tool_response: Value,
 }
 
@@ -54,10 +54,11 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     request: &PostToolUseRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PostToolUse,
-        Some(&request.tool_name),
+        &matcher_inputs,
     )
     .into_iter()
     .map(|handler| {
@@ -71,10 +72,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: PostToolUseRequest,
 ) -> PostToolUseOutcome {
-    let matched = dispatcher::select_handlers(
+    let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
+    let matched = dispatcher::select_handlers_for_matcher_inputs(
         handlers,
         HookEventName::PostToolUse,
-        Some(&request.tool_name),
+        &matcher_inputs,
     );
     if matched.is_empty() {
         return PostToolUseOutcome {
@@ -86,21 +88,7 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&PostToolUseCommandInput {
-        session_id: request.session_id.to_string(),
-        turn_id: request.turn_id.clone(),
-        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
-        hook_event_name: "PostToolUse".to_string(),
-        model: request.model.clone(),
-        permission_mode: request.permission_mode.clone(),
-        tool_name: "Bash".to_string(),
-        tool_input: PostToolUseToolInput {
-            command: request.command.clone(),
-        },
-        tool_response: request.tool_response.clone(),
-        tool_use_id: request.tool_use_id.clone(),
-    }) {
+    let input_json = match command_input_json(&request) {
         Ok(input_json) => input_json,
         Err(error) => {
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
@@ -151,6 +139,28 @@ pub(crate) async fn run(
         additional_contexts,
         feedback_message,
     }
+}
+
+/// Serializes command stdin for a selected `PostToolUse` hook.
+///
+/// Handler selection may include internal matcher aliases, but hook stdin keeps
+/// the canonical `tool_name` for logs and for consumers that pair pre/post
+/// events across processes. Shell-like tools pass `{ "command": ... }` as
+/// `tool_input`; MCP tools pass their resolved JSON arguments.
+fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&PostToolUseCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "PostToolUse".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        tool_name: request.tool_name.clone(),
+        tool_input: request.tool_input.clone(),
+        tool_response: request.tool_response.clone(),
+        tool_use_id: request.tool_use_id.clone(),
+    })
 }
 
 fn parse_completed(
@@ -314,11 +324,24 @@ mod tests {
     use serde_json::json;
 
     use super::PostToolUseHandlerData;
+    use super::command_input_json;
     use super::parse_completed;
     use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
     use crate::events::common;
+
+    #[test]
+    fn command_input_uses_request_tool_name() {
+        let mut request = request_for_tool_use("call-apply-patch");
+        request.tool_name = "apply_patch".to_string();
+
+        let input_json = command_input_json(&request).expect("serialize command input");
+        let input: serde_json::Value =
+            serde_json::from_str(&input_json).expect("parse command input");
+
+        assert_eq!(input["tool_name"], "apply_patch");
+    }
 
     #[test]
     fn block_decision_stops_normal_processing() {
@@ -520,6 +543,7 @@ mod tests {
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PostToolUse,
+            is_managed: false,
             matcher: Some("^Bash$".to_string()),
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
@@ -551,8 +575,9 @@ mod tests {
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),
             tool_name: "Bash".to_string(),
+            matcher_aliases: Vec::new(),
             tool_use_id: tool_use_id.to_string(),
-            command: "echo hello".to_string(),
+            tool_input: json!({ "command": "echo hello" }),
             tool_response: json!({"ok": true}),
         }
     }

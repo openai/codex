@@ -1,6 +1,7 @@
 #![allow(warnings, clippy::all)]
 
 use async_trait::async_trait;
+use codex_utils_path as path_utils;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::io;
@@ -126,6 +127,7 @@ pub enum ThreadListLayout {
 pub struct ThreadListConfig<'a> {
     pub allowed_sources: &'a [SessionSource],
     pub model_providers: Option<&'a [String]>,
+    pub cwd_filters: Option<&'a [PathBuf]>,
     pub default_provider: &'a str,
     pub layout: ThreadListLayout,
 }
@@ -207,6 +209,7 @@ struct FilesByCreatedAtVisitor<'a> {
     more_matches_available: bool,
     allowed_sources: &'a [SessionSource],
     provider_matcher: Option<&'a ProviderMatcher<'a>>,
+    cwd_filters: Option<&'a [PathBuf]>,
 }
 
 #[async_trait]
@@ -237,6 +240,7 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             path,
             self.allowed_sources,
             self.provider_matcher,
+            self.cwd_filters,
             updated_at,
         )
         .await
@@ -317,6 +321,7 @@ pub async fn get_threads(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filters: Option<&[PathBuf]>,
     default_provider: &str,
 ) -> io::Result<ThreadsPage> {
     let root = codex_home.join(SESSIONS_SUBDIR);
@@ -328,6 +333,7 @@ pub async fn get_threads(
         ThreadListConfig {
             allowed_sources,
             model_providers,
+            cwd_filters,
             default_provider,
             layout: ThreadListLayout::NestedByDate,
         },
@@ -366,6 +372,7 @@ pub async fn get_threads_in_root(
                 sort_key,
                 config.allowed_sources,
                 provider_matcher.as_ref(),
+                config.cwd_filters,
             )
             .await?
         }
@@ -377,6 +384,7 @@ pub async fn get_threads_in_root(
                 sort_key,
                 config.allowed_sources,
                 provider_matcher.as_ref(),
+                config.cwd_filters,
             )
             .await?
         }
@@ -395,6 +403,7 @@ async fn traverse_directories_for_paths(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
@@ -404,6 +413,7 @@ async fn traverse_directories_for_paths(
                 anchor,
                 allowed_sources,
                 provider_matcher,
+                cwd_filters,
             )
             .await
         }
@@ -414,6 +424,7 @@ async fn traverse_directories_for_paths(
                 anchor,
                 allowed_sources,
                 provider_matcher,
+                cwd_filters,
             )
             .await
         }
@@ -427,15 +438,30 @@ async fn traverse_flat_paths(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     match sort_key {
         ThreadSortKey::CreatedAt => {
-            traverse_flat_paths_created(root, page_size, anchor, allowed_sources, provider_matcher)
-                .await
+            traverse_flat_paths_created(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+                cwd_filters,
+            )
+            .await
         }
         ThreadSortKey::UpdatedAt => {
-            traverse_flat_paths_updated(root, page_size, anchor, allowed_sources, provider_matcher)
-                .await
+            traverse_flat_paths_updated(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+                cwd_filters,
+            )
+            .await
         }
     }
 }
@@ -452,6 +478,7 @@ async fn traverse_directories_for_paths_created(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -463,6 +490,7 @@ async fn traverse_directories_for_paths_created(
         more_matches_available,
         allowed_sources,
         provider_matcher,
+        cwd_filters,
     };
     walk_rollout_files(&root, &mut scanned_files, &mut visitor).await?;
     more_matches_available = visitor.more_matches_available;
@@ -499,14 +527,14 @@ async fn traverse_directories_for_paths_updated(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
-    let mut candidates = candidates;
+    let mut candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
     candidates.sort_by_key(|candidate| {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         (Reverse(ts), Reverse(candidate.id))
@@ -527,6 +555,7 @@ async fn traverse_directories_for_paths_updated(
             candidate.path,
             allowed_sources,
             provider_matcher,
+            cwd_filters,
             updated_at_fallback,
         )
         .await
@@ -559,6 +588,7 @@ async fn traverse_flat_paths_created(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -578,8 +608,14 @@ async fn traverse_flat_paths_created(
             .await
             .unwrap_or(None)
             .and_then(format_rfc3339);
-        if let Some(item) =
-            build_thread_item(path, allowed_sources, provider_matcher, updated_at).await
+        if let Some(item) = build_thread_item(
+            path,
+            allowed_sources,
+            provider_matcher,
+            cwd_filters,
+            updated_at,
+        )
+        .await
         {
             items.push(item);
         }
@@ -609,14 +645,14 @@ async fn traverse_flat_paths_updated(
     anchor: Option<Cursor>,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
     let mut anchor_state = AnchorState::new(anchor);
     let mut more_matches_available = false;
 
-    let candidates = collect_flat_files_by_updated_at(&root, &mut scanned_files).await?;
-    let mut candidates = candidates;
+    let mut candidates = collect_flat_files_by_updated_at(&root, &mut scanned_files).await?;
     candidates.sort_by_key(|candidate| {
         let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
         (Reverse(ts), Reverse(candidate.id))
@@ -637,6 +673,7 @@ async fn traverse_flat_paths_updated(
             candidate.path,
             allowed_sources,
             provider_matcher,
+            cwd_filters,
             updated_at_fallback,
         )
         .await
@@ -698,6 +735,7 @@ async fn build_thread_item(
     path: PathBuf,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
+    cwd_filters: Option<&[PathBuf]>,
     updated_at: Option<String>,
 ) -> Option<ThreadItem> {
     // Read head and detect message events; stop once meta + user are found.
@@ -714,6 +752,15 @@ async fn build_thread_item(
     }
     if let Some(matcher) = provider_matcher
         && !matcher.matches(summary.model_provider.as_deref())
+    {
+        return None;
+    }
+    if let Some(cwd_filters) = cwd_filters
+        && !summary.cwd.as_ref().is_some_and(|cwd| {
+            cwd_filters
+                .iter()
+                .any(|filter| path_utils::paths_match_after_normalization(cwd, filter))
+        })
     {
         return None;
     }
@@ -768,6 +815,7 @@ pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> 
         path,
         &[],
         /*provider_matcher*/ None,
+        /*cwd_filters*/ None,
         /*updated_at*/ None,
     )
     .await
@@ -1082,9 +1130,6 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
-            RolloutItem::SessionState(_) => {
-                // Not included in `head`; skip.
-            }
             RolloutItem::EventMsg(ev) => {
                 if let EventMsg::UserMessage(user) = ev {
                     summary.saw_user_event = true;
@@ -1137,7 +1182,6 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                     }
                 }
                 RolloutItem::Compacted(_)
-                | RolloutItem::SessionState(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {}
             }

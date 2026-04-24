@@ -11,7 +11,7 @@ use crate::policy_transforms::effective_network_sandbox_policy;
 use crate::policy_transforms::should_require_platform_sandbox;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -68,7 +68,7 @@ pub struct SandboxCommand {
     pub args: Vec<String>,
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
 #[derive(Debug)]

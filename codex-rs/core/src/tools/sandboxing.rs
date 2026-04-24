@@ -9,6 +9,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::SessionServices;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -133,9 +134,26 @@ pub(crate) struct ApprovalCtx<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PermissionRequestPayload {
-    pub tool_name: String,
-    pub command: String,
-    pub description: Option<String>,
+    pub tool_name: HookToolName,
+    pub tool_input: serde_json::Value,
+}
+
+impl PermissionRequestPayload {
+    pub(crate) fn bash(command: String, description: Option<String>) -> Self {
+        let mut tool_input = serde_json::Map::new();
+        tool_input.insert("command".to_string(), serde_json::Value::String(command));
+        if let Some(description) = description {
+            tool_input.insert(
+                "description".to_string(),
+                serde_json::Value::String(description),
+            );
+        }
+
+        Self {
+            tool_name: HookToolName::bash(),
+            tool_input: serde_json::Value::Object(tool_input),
+        }
+    }
 }
 
 // Specifies what tool orchestrator should do with a given tool call.

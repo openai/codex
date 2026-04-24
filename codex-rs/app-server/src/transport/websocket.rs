@@ -1,4 +1,5 @@
 use super::CHANNEL_CAPACITY;
+use super::ConnectionOrigin;
 use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
@@ -10,10 +11,10 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use axum::Router;
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
-use axum::extract::ws::Message as WebSocketMessage;
-use axum::extract::ws::WebSocket;
+use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::http::HeaderMap;
 use axum::http::Request;
@@ -36,10 +37,16 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Message as TungsteniteWebSocketMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+/// WebSocket clients can briefly lag behind normal turn output bursts while the
+/// writer task is healthy, so give them more headroom than internal channels.
+const WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY: usize = 32 * 1024;
+const _: () = assert!(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY > CHANNEL_CAPACITY);
 
 fn colorize(text: &str, style: Style) -> String {
     text.if_supports_color(Stream::Stderr, |value| value.style(style))
@@ -111,11 +118,12 @@ async fn websocket_upgrade_handler(
         );
         return (err.status_code(), err.message()).into_response();
     }
-    let connection_id = next_connection_id();
     info!(%peer_addr, "websocket client connected");
     websocket
         .on_upgrade(move |stream| async move {
-            run_websocket_connection(connection_id, stream, state.transport_event_tx).await;
+            let (websocket_writer, websocket_reader) = stream.split();
+            run_websocket_connection(websocket_writer, websocket_reader, state.transport_event_tx)
+                .await;
         })
         .into_response()
 }
@@ -161,17 +169,24 @@ pub(crate) async fn start_websocket_acceptor(
     }))
 }
 
-async fn run_websocket_connection(
-    connection_id: ConnectionId,
-    websocket_stream: WebSocket,
+pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
+    websocket_writer: impl futures::sink::Sink<M, Error = SinkError> + Send + 'static,
+    websocket_reader: impl futures::stream::Stream<Item = Result<M, StreamError>> + Send + 'static,
     transport_event_tx: mpsc::Sender<TransportEvent>,
-) {
-    let (writer_tx, writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
+) where
+    M: AppServerWebSocketMessage + Send + 'static,
+    SinkError: Send + 'static,
+    StreamError: std::fmt::Display + Send + 'static,
+{
+    let connection_id = next_connection_id();
+    let (writer_tx, writer_rx) =
+        mpsc::channel::<QueuedOutgoingMessage>(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     let disconnect_token = CancellationToken::new();
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
+            origin: ConnectionOrigin::WebSocket,
             writer: writer_tx,
             disconnect_sender: Some(disconnect_token.clone()),
         })
@@ -181,9 +196,7 @@ async fn run_websocket_connection(
         return;
     }
 
-    let (websocket_writer, websocket_reader) = websocket_stream.split();
-    let (writer_control_tx, writer_control_rx) =
-        mpsc::channel::<WebSocketMessage>(CHANNEL_CAPACITY);
+    let (writer_control_tx, writer_control_rx) = mpsc::channel::<M>(CHANNEL_CAPACITY);
     let mut outbound_task = tokio::spawn(run_websocket_outbound_loop(
         websocket_writer,
         writer_rx,
@@ -215,12 +228,74 @@ async fn run_websocket_connection(
         .await;
 }
 
-async fn run_websocket_outbound_loop(
-    mut websocket_writer: futures::stream::SplitSink<WebSocket, WebSocketMessage>,
+pub(crate) enum IncomingWebSocketMessage {
+    Text(String),
+    Binary,
+    Ping(Bytes),
+    Pong,
+    Close,
+}
+
+/// Converts concrete WebSocket message types into the small message surface the
+/// app-server transport needs, and constructs the only outbound frames it
+/// sends directly.
+pub(crate) trait AppServerWebSocketMessage: Sized {
+    fn text(text: String) -> Self;
+    fn pong(payload: Bytes) -> Self;
+    fn into_incoming(self) -> Option<IncomingWebSocketMessage>;
+}
+
+impl AppServerWebSocketMessage for AxumWebSocketMessage {
+    fn text(text: String) -> Self {
+        Self::Text(text.into())
+    }
+
+    fn pong(payload: Bytes) -> Self {
+        Self::Pong(payload)
+    }
+
+    fn into_incoming(self) -> Option<IncomingWebSocketMessage> {
+        Some(match self {
+            Self::Text(text) => IncomingWebSocketMessage::Text(text.to_string()),
+            Self::Binary(_) => IncomingWebSocketMessage::Binary,
+            Self::Ping(payload) => IncomingWebSocketMessage::Ping(payload),
+            Self::Pong(_) => IncomingWebSocketMessage::Pong,
+            Self::Close(_) => IncomingWebSocketMessage::Close,
+        })
+    }
+}
+
+impl AppServerWebSocketMessage for TungsteniteWebSocketMessage {
+    fn text(text: String) -> Self {
+        Self::Text(text.into())
+    }
+
+    fn pong(payload: Bytes) -> Self {
+        Self::Pong(payload)
+    }
+
+    fn into_incoming(self) -> Option<IncomingWebSocketMessage> {
+        Some(match self {
+            Self::Text(text) => IncomingWebSocketMessage::Text(text.to_string()),
+            Self::Binary(_) => IncomingWebSocketMessage::Binary,
+            Self::Ping(payload) => IncomingWebSocketMessage::Ping(payload),
+            Self::Pong(_) => IncomingWebSocketMessage::Pong,
+            Self::Close(_) => IncomingWebSocketMessage::Close,
+            Self::Frame(_) => return None,
+        })
+    }
+}
+
+async fn run_websocket_outbound_loop<M, SinkError>(
+    websocket_writer: impl futures::sink::Sink<M, Error = SinkError> + Send + 'static,
     mut writer_rx: mpsc::Receiver<QueuedOutgoingMessage>,
-    mut writer_control_rx: mpsc::Receiver<WebSocketMessage>,
+    mut writer_control_rx: mpsc::Receiver<M>,
     disconnect_token: CancellationToken,
-) {
+) where
+    M: AppServerWebSocketMessage + Send + 'static,
+    SinkError: Send + 'static,
+{
+    tokio::pin!(websocket_writer);
     loop {
         tokio::select! {
             _ = disconnect_token.cancelled() => {
@@ -241,7 +316,7 @@ async fn run_websocket_outbound_loop(
                 let Some(json) = serialize_outgoing_message(queued_message.message) else {
                     continue;
                 };
-                if websocket_writer.send(WebSocketMessage::Text(json.into())).await.is_err() {
+                if websocket_writer.send(M::text(json)).await.is_err() {
                     break;
                 }
                 if let Some(write_complete_tx) = queued_message.write_complete_tx {
@@ -252,14 +327,18 @@ async fn run_websocket_outbound_loop(
     }
 }
 
-async fn run_websocket_inbound_loop(
-    mut websocket_reader: futures::stream::SplitStream<WebSocket>,
+async fn run_websocket_inbound_loop<M, StreamError>(
+    websocket_reader: impl futures::stream::Stream<Item = Result<M, StreamError>> + Send + 'static,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     writer_tx_for_reader: mpsc::Sender<QueuedOutgoingMessage>,
-    writer_control_tx: mpsc::Sender<WebSocketMessage>,
+    writer_control_tx: mpsc::Sender<M>,
     connection_id: ConnectionId,
     disconnect_token: CancellationToken,
-) {
+) where
+    M: AppServerWebSocketMessage + Send + 'static,
+    StreamError: std::fmt::Display + Send + 'static,
+{
+    tokio::pin!(websocket_reader);
     loop {
         tokio::select! {
             _ = disconnect_token.cancelled() => {
@@ -267,33 +346,37 @@ async fn run_websocket_inbound_loop(
             }
             incoming_message = websocket_reader.next() => {
                 match incoming_message {
-                    Some(Ok(WebSocketMessage::Text(text))) => {
-                        if !forward_incoming_message(
-                            &transport_event_tx,
-                            &writer_tx_for_reader,
-                            connection_id,
-                            text.as_ref(),
-                        )
-                        .await
-                        {
-                            break;
-                        }
-                    }
-                    Some(Ok(WebSocketMessage::Ping(payload))) => {
-                        match writer_control_tx.try_send(WebSocketMessage::Pong(payload)) {
-                            Ok(()) => {}
-                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
-                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                warn!("websocket control queue full while replying to ping; closing connection");
+                    Some(Ok(message)) => match message.into_incoming() {
+                        Some(IncomingWebSocketMessage::Text(text)) => {
+                            if !forward_incoming_message(
+                                &transport_event_tx,
+                                &writer_tx_for_reader,
+                                connection_id,
+                                &text,
+                            )
+                            .await
+                            {
                                 break;
                             }
                         }
-                    }
-                    Some(Ok(WebSocketMessage::Pong(_))) => {}
-                    Some(Ok(WebSocketMessage::Close(_))) | None => break,
-                    Some(Ok(WebSocketMessage::Binary(_))) => {
-                        warn!("dropping unsupported binary websocket message");
-                    }
+                        Some(IncomingWebSocketMessage::Ping(payload)) => {
+                            match writer_control_tx.try_send(M::pong(payload)) {
+                                Ok(()) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    warn!("websocket control queue full while replying to ping; closing connection");
+                                    break;
+                                }
+                            }
+                        }
+                        Some(IncomingWebSocketMessage::Pong) => {}
+                        Some(IncomingWebSocketMessage::Close) => break,
+                        Some(IncomingWebSocketMessage::Binary) => {
+                            warn!("dropping unsupported binary websocket message");
+                        }
+                        None => {}
+                    },
+                    None => break,
                     Some(Err(err)) => {
                         warn!("websocket receive error: {err}");
                         break;

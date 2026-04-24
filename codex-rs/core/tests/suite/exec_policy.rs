@@ -44,6 +44,7 @@ async fn submit_user_turn(
     let session_model = test.session_configured.model.clone();
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
@@ -53,6 +54,7 @@ async fn submit_user_turn(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -125,6 +127,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     let session_model = test.session_configured.model.clone();
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "run shell command".into(),
                 text_elements: Vec::new(),
@@ -134,6 +137,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

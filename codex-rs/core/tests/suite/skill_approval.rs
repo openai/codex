@@ -44,6 +44,7 @@ async fn submit_turn_with_policies(
 ) -> Result<()> {
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt.to_string(),
                 text_elements: Vec::new(),
@@ -53,6 +54,7 @@ async fn submit_turn_with_policies(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

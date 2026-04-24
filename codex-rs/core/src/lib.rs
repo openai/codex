@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod agent_identity;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
@@ -19,6 +18,7 @@ pub use session::SteerInputError;
 mod codex_thread;
 mod compact_remote;
 pub use codex_thread::CodexThread;
+pub use codex_thread::CodexThreadTurnContextOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
 mod codex_delegate;
@@ -29,6 +29,7 @@ pub mod config_loader;
 pub mod connectors;
 pub mod context;
 mod context_manager;
+mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
@@ -118,6 +119,7 @@ pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
 pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
+pub use thread_manager::StartThreadWithToolsOptions;
 pub use thread_manager::ThreadManager;
 pub use thread_manager::build_models_manager;
 pub use web_search::web_search_action_detail;

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::user_input::UserInput;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::compact::content_items_to_text;
@@ -56,6 +59,7 @@ impl GuardianTranscriptEntryKind {
 pub(crate) struct GuardianPromptItems {
     pub(crate) items: Vec<UserInput>,
     pub(crate) transcript_cursor: GuardianTranscriptCursor,
+    pub(crate) reviewed_action_truncated: bool,
 }
 
 /// Points to the end of the transcript that the guardian has already reviewed.
@@ -176,11 +180,12 @@ pub(crate) async fn build_guardian_prompt_items(
             .to_string(),
     );
     push_text("Planned action JSON:\n".to_string());
-    push_text(format!("{planned_action_json}\n"));
+    push_text(format!("{}\n", planned_action_json.text));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
     Ok(GuardianPromptItems {
         items,
         transcript_cursor,
+        reviewed_action_truncated: planned_action_json.truncated,
     })
 }
 
@@ -240,7 +245,7 @@ fn render_guardian_transcript_entries_with_offset(
             } else {
                 GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS
             };
-            let text = guardian_truncate_text(&entry.text, token_cap);
+            let (text, _) = guardian_truncate_text(&entry.text, token_cap);
             let rendered = format!(
                 "[{}] {}: {}",
                 index + entry_number_offset + 1,
@@ -420,20 +425,20 @@ pub(crate) fn collect_guardian_transcript_entries(
     entries
 }
 
-pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> String {
+pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {
     if content.is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
 
     let max_bytes = approx_bytes_for_tokens(token_cap);
     if content.len() <= max_bytes {
-        return content.to_string();
+        return (content.to_string(), false);
     }
 
     let omitted_tokens = approx_tokens_from_byte_count(content.len().saturating_sub(max_bytes));
     let marker = format!("<{TRUNCATION_TAG} omitted_approx_tokens=\"{omitted_tokens}\" />");
     if max_bytes <= marker.len() {
-        return marker;
+        return (marker, true);
     }
 
     let available_bytes = max_bytes.saturating_sub(marker.len());
@@ -441,7 +446,7 @@ pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> String 
     let suffix_budget = available_bytes.saturating_sub(prefix_budget);
     let (prefix, suffix) = split_guardian_truncation_bounds(content, prefix_budget, suffix_budget);
 
-    format!("{prefix}{marker}{suffix}")
+    (format!("{prefix}{marker}{suffix}"), true)
 }
 
 fn split_guardian_truncation_bounds(
@@ -490,23 +495,58 @@ pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<Gu
     let Some(text) = text else {
         anyhow::bail!("guardian review completed without an assessment payload");
     };
-    if let Ok(assessment) = serde_json::from_str::<GuardianAssessment>(text) {
-        return Ok(assessment);
-    }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
-        && start < end
-        && let Some(slice) = text.get(start..=end)
-    {
-        return Ok(serde_json::from_str::<GuardianAssessment>(slice)?);
-    }
-    anyhow::bail!("guardian assessment was not valid JSON")
+    let parsed_payload =
+        if let Ok(payload) = serde_json::from_str::<GuardianAssessmentPayload>(text) {
+            payload
+        } else if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
+            && start < end
+            && let Some(slice) = text.get(start..=end)
+        {
+            serde_json::from_str::<GuardianAssessmentPayload>(slice)?
+        } else {
+            anyhow::bail!("guardian assessment was not valid JSON");
+        };
+
+    let outcome = parsed_payload.outcome;
+    let risk_level = parsed_payload.risk_level.unwrap_or(match outcome {
+        super::GuardianAssessmentOutcome::Allow => GuardianRiskLevel::Low,
+        super::GuardianAssessmentOutcome::Deny => GuardianRiskLevel::High,
+    });
+    let rationale = parsed_payload
+        .rationale
+        .filter(|rationale| !rationale.trim().is_empty())
+        .unwrap_or_else(|| match outcome {
+            super::GuardianAssessmentOutcome::Allow => {
+                "Auto-review returned a low-risk allow decision.".to_string()
+            }
+            super::GuardianAssessmentOutcome::Deny => {
+                "Auto-review returned a deny decision without a rationale.".to_string()
+            }
+        });
+
+    Ok(GuardianAssessment {
+        risk_level,
+        user_authorization: parsed_payload
+            .user_authorization
+            .unwrap_or(GuardianUserAuthorization::Unknown),
+        outcome,
+        rationale,
+    })
 }
 
-/// JSON schema supplied as `final_output_json_schema` to force a structured
+#[derive(Deserialize)]
+struct GuardianAssessmentPayload {
+    risk_level: Option<GuardianRiskLevel>,
+    user_authorization: Option<GuardianUserAuthorization>,
+    outcome: super::GuardianAssessmentOutcome,
+    rationale: Option<String>,
+}
+
+/// JSON schema supplied as `final_output_json_schema` to guide a structured
 /// final answer from the guardian review session.
 ///
 /// Keep this next to `guardian_output_contract_prompt()` so the prompt text and
-/// enforced schema stay aligned.
+/// output schema stay aligned.
 pub(crate) fn guardian_output_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -528,14 +568,18 @@ pub(crate) fn guardian_output_schema() -> Value {
                 "type": "string"
             }
         },
-        "required": ["risk_level", "user_authorization", "outcome", "rationale"]
+        "required": ["outcome"]
     })
 }
 
-/// Prompt fragment that describes the exact JSON contract enforced by
+/// Prompt fragment that describes the exact JSON contract paired with
 /// `guardian_output_schema()`.
 fn guardian_output_contract_prompt() -> &'static str {
-    r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON with this exact schema:
+    r#"You may use read-only tool checks to gather any additional context you need before deciding. When you are ready to answer, your final message must be strict JSON.
+
+For low-risk actions, give the final answer directly: {"outcome":"allow"}.
+
+For anything else, use this JSON schema:
 {
   "risk_level": "low" | "medium" | "high" | "critical",
   "user_authorization": "unknown" | "low" | "medium" | "high",

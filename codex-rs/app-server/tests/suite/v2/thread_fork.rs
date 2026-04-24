@@ -242,6 +242,54 @@ async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()>
 }
 
 #[tokio::test]
+async fn thread_fork_can_exclude_turns_and_skip_restored_token_usage() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout_with_token_usage(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_eq!(thread.forked_from_id, Some(conversation_id));
+    assert_eq!(thread.preview, "Saved user message");
+    assert!(thread.turns.is_empty());
+
+    let note = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
+    )
+    .await;
+    assert!(
+        note.is_err(),
+        "excludeTurns=true should not replay token usage"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -548,6 +596,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
             source_kinds: None,
             archived: None,
             cwd: None,
+            use_state_db_only: false,
             search_term: None,
         })
         .await?;

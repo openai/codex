@@ -1620,6 +1620,55 @@ await codex.emitImage({ bytes: png });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_emit_image_rejects_unsupported_byte_mime_type() -> anyhow::Result<()> {
+    if !can_run_js_repl_runtime_tests().await {
+        return Ok(());
+    }
+
+    let (session, turn) = make_session_and_context().await;
+    if !turn
+        .model_info
+        .input_modalities
+        .contains(&InputModality::Image)
+    {
+        return Ok(());
+    }
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+    let manager = turn.js_repl.manager().await?;
+    let code = r#"
+await codex.emitImage({
+  bytes: Buffer.from([255, 0, 0, 255]),
+  mimeType: "image/rgba",
+});
+"#;
+
+    let err = manager
+        .execute(
+            Arc::clone(&session),
+            turn,
+            tracker,
+            JsReplArgs {
+                code: code.to_string(),
+                timeout_ms: Some(15_000),
+            },
+        )
+        .await
+        .expect_err("unsupported byte MIME type should fail");
+    assert!(
+        err.to_string()
+            .contains("only supports image/png, image/jpeg, image/webp, or image/gif")
+    );
+    assert!(session.get_pending_input().await.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn js_repl_emit_image_rejects_non_data_url() -> anyhow::Result<()> {
     if !can_run_js_repl_runtime_tests().await {
         return Ok(());
@@ -1660,6 +1709,19 @@ await codex.emitImage("https://example.com/image.png");
     assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
+}
+
+#[test]
+fn validate_emitted_image_url_rejects_unsupported_mime_type() {
+    assert_eq!(
+        validate_emitted_image_url("data:image/rgba;base64,AAAA").expect_err("unsupported MIME"),
+        "codex.emitImage only supports image/png, image/jpeg, image/webp, or image/gif"
+    );
+}
+
+#[test]
+fn validate_emitted_image_url_accepts_supported_mime_type_case_insensitive() {
+    assert!(validate_emitted_image_url("DATA:image/PNG;base64,AAAA").is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

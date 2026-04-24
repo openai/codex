@@ -45,9 +45,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-// Account tests spin up fresh app-server processes repeatedly, which can take
-// longer on slower Bazel macOS runners once the suite is already warm.
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
 // Helper to create a minimal config.toml for the app server
@@ -57,6 +55,8 @@ struct CreateConfigTomlParams {
     forced_workspace_id: Option<String>,
     requires_openai_auth: Option<bool>,
     base_url: Option<String>,
+    model_provider_id: Option<String>,
+    extra_provider_config: Option<String>,
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -79,6 +79,23 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
         Some(false) => String::new(),
         None => String::new(),
     };
+    let model_provider_id = params
+        .model_provider_id
+        .unwrap_or_else(|| "mock_provider".to_string());
+    let provider_section = if model_provider_id == "mock_provider" {
+        format!(
+            r#"[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{base_url}"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+{requires_line}
+"#
+        )
+    } else {
+        params.extra_provider_config.unwrap_or_default()
+    };
     let contents = format!(
         r#"
 model = "mock-model"
@@ -87,18 +104,12 @@ sandbox_mode = "danger-full-access"
 {forced_line}
 {forced_workspace_line}
 
-model_provider = "mock_provider"
+model_provider = "{model_provider_id}"
 
 [features]
 shell_snapshot = false
 
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{base_url}"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-{requires_line}
+{provider_section}
 "#
     );
     std::fs::write(config_toml, contents)
@@ -1541,6 +1552,47 @@ async fn get_account_when_auth_not_required() -> Result<()> {
 
     let expected = GetAccountResponse {
         account: None,
+        requires_openai_auth: false,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_aws_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("amazon-bedrock".to_string()),
+            extra_provider_config: Some(
+                r#"[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-west-2"
+"#
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let params = GetAccountParams {
+        refresh_token: false,
+    };
+    let request_id = mcp.send_get_account_request(params).await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::AmazonBedrock {}),
         requires_openai_auth: false,
     };
     assert_eq!(received, expected);

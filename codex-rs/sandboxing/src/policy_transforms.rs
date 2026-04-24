@@ -1,6 +1,6 @@
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -27,7 +27,7 @@ pub struct EffectiveSandboxPermissions {
 impl EffectiveSandboxPermissions {
     pub fn new(
         sandbox_policy: &SandboxPolicy,
-        additional_permissions: Option<&PermissionProfile>,
+        additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> Self {
         let Some(additional_permissions) = additional_permissions else {
             return Self {
@@ -42,8 +42,8 @@ impl EffectiveSandboxPermissions {
 }
 
 pub fn normalize_additional_permissions(
-    additional_permissions: PermissionProfile,
-) -> Result<PermissionProfile, String> {
+    additional_permissions: AdditionalPermissionProfile,
+) -> Result<AdditionalPermissionProfile, String> {
     let network = additional_permissions
         .network
         .filter(|network| !network.is_empty());
@@ -87,16 +87,16 @@ pub fn normalize_additional_permissions(
         }
         None => None,
     };
-    Ok(PermissionProfile {
+    Ok(AdditionalPermissionProfile {
         network,
         file_system,
     })
 }
 
 pub fn merge_permission_profiles(
-    base: Option<&PermissionProfile>,
-    permissions: Option<&PermissionProfile>,
-) -> Option<PermissionProfile> {
+    base: Option<&AdditionalPermissionProfile>,
+    permissions: Option<&AdditionalPermissionProfile>,
+) -> Option<AdditionalPermissionProfile> {
     let Some(permissions) = permissions else {
         return base.cloned();
     };
@@ -137,7 +137,7 @@ pub fn merge_permission_profiles(
                 (None, None) => None,
             };
 
-            Some(PermissionProfile {
+            Some(AdditionalPermissionProfile {
                 network,
                 file_system,
             })
@@ -148,10 +148,10 @@ pub fn merge_permission_profiles(
 }
 
 pub fn intersect_permission_profiles(
-    requested: PermissionProfile,
-    granted: PermissionProfile,
+    requested: AdditionalPermissionProfile,
+    granted: AdditionalPermissionProfile,
     cwd: &Path,
-) -> PermissionProfile {
+) -> AdditionalPermissionProfile {
     let file_system = requested
         .file_system
         .map(|requested_file_system| {
@@ -159,20 +159,21 @@ pub fn intersect_permission_profiles(
             let requested_policy =
                 FileSystemSandboxPolicy::restricted(requested_file_system.entries.clone());
             let requested_read_deny_matcher = ReadDenyMatcher::new(&requested_policy, cwd);
-            let accepted_entries: Vec<_> = granted_file_system
-                .entries
-                .iter()
-                .filter(|entry| {
-                    granted_file_system_entry_within_request(
-                        &requested_file_system,
-                        &requested_policy,
-                        requested_read_deny_matcher.as_ref(),
-                        entry,
-                        cwd,
-                    )
-                })
-                .map(|entry| materialize_cwd_dependent_entry(entry, cwd))
-                .collect();
+            let mut accepted_entries = Vec::new();
+            for entry in granted_file_system.entries.iter().filter(|entry| {
+                granted_file_system_entry_within_request(
+                    &requested_file_system,
+                    &requested_policy,
+                    requested_read_deny_matcher.as_ref(),
+                    entry,
+                    cwd,
+                )
+            }) {
+                let entry = materialize_cwd_dependent_entry(entry, cwd);
+                if !accepted_entries.contains(&entry) {
+                    accepted_entries.push(entry);
+                }
+            }
             let mut entries = accepted_entries.clone();
             let requested_retained_deny_entries = retain_constraining_deny_entries(
                 &requested_file_system.entries,
@@ -212,7 +213,7 @@ pub fn intersect_permission_profiles(
         _ => None,
     };
 
-    PermissionProfile {
+    AdditionalPermissionProfile {
         network,
         file_system,
     }
@@ -383,9 +384,15 @@ fn materialize_cwd_dependent_entry(
                 access: entry.access,
             })
             .unwrap_or_else(|| entry.clone()),
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GlobPattern { .. }
-        | FileSystemPath::Special { .. } => entry.clone(),
+        FileSystemPath::GlobPattern { pattern } => FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: AbsolutePathBuf::resolve_path_against_base(pattern, cwd)
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            access: entry.access,
+        },
+        FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => entry.clone(),
     }
 }
 
@@ -451,7 +458,7 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
 }
 
 fn additional_permission_roots(
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile,
 ) -> (Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>) {
     (
         dedup_absolute_paths(
@@ -509,7 +516,7 @@ fn merge_file_system_policy_with_additional_permissions(
 
 pub fn effective_file_system_sandbox_policy(
     file_system_policy: &FileSystemSandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> FileSystemSandboxPolicy {
     let Some(additional_permissions) = additional_permissions else {
         return file_system_policy.clone();
@@ -550,7 +557,7 @@ fn merge_read_only_access_with_additional_reads(
 
 fn merge_network_access(
     base_network_access: bool,
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile,
 ) -> bool {
     base_network_access
         || additional_permissions
@@ -562,7 +569,7 @@ fn merge_network_access(
 
 pub fn effective_network_sandbox_policy(
     network_policy: NetworkSandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> NetworkSandboxPolicy {
     if additional_permissions
         .is_some_and(|permissions| merge_network_access(network_policy.is_enabled(), permissions))
@@ -577,7 +584,7 @@ pub fn effective_network_sandbox_policy(
 
 fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile,
 ) -> SandboxPolicy {
     if additional_permissions.is_empty() {
         return sandbox_policy.clone();
@@ -647,7 +654,7 @@ fn sandbox_policy_with_additional_permissions(
 
 fn effective_sandbox_policy(
     sandbox_policy: &SandboxPolicy,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> SandboxPolicy {
     additional_permissions.map_or_else(
         || sandbox_policy.clone(),
