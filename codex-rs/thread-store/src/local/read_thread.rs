@@ -14,7 +14,9 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 
 use super::LocalThreadStore;
+use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ReadThreadParams;
 use crate::StoredThread;
@@ -206,7 +208,7 @@ async fn stored_thread_from_sqlite_metadata(
     store: &LocalThreadStore,
     metadata: ThreadMetadata,
 ) -> StoredThread {
-    let name = match distinct_title(&metadata) {
+    let name = match distinct_thread_metadata_title(&metadata) {
         Some(title) => Some(title),
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
@@ -316,22 +318,6 @@ fn stored_thread_from_meta_line(
         first_user_message: None,
         history: None,
     }
-}
-
-fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
-        None
-    } else {
-        Some(title.to_string())
-    }
-}
-
-fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
-    if title.trim().is_empty() || thread.preview.trim() == title.trim() {
-        return;
-    }
-    thread.name = Some(title);
 }
 
 fn parse_session_source(source: &str) -> SessionSource {

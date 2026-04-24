@@ -30,6 +30,9 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::StoredThreadHistory;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
@@ -305,6 +308,20 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    pub async fn load_history(
+        &self,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredThreadHistory> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("load history")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.load_history(include_archived).await
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
