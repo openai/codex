@@ -328,7 +328,13 @@ export_lines=$(export -p | awk '
   line=$0
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
-  sub(/=.*/, "", name)
+  if (name ~ /^-T [A-Za-z_][A-Za-z0-9_]* [A-Za-z_][A-Za-z0-9_]*=/) {
+    # Zsh prints tied parameters like PATH/path as `export -T NAME tied=(...)`.
+    sub(/^-T /, "", name)
+    sub(/ .*/, "", name)
+  } else {
+    sub(/=.*/, "", name)
+  }
   if (name ~ /^(EXCLUDED_EXPORTS)$/) {
     next
   }
