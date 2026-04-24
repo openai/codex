@@ -6,8 +6,8 @@ expression: rendered
 
 Intro paragraph with bold text, italic text, and inline code x=1.
 Combined bold-italic both and escaped asterisks *literal*.
-Auto-link: https://example.com (https://example.com) and reference link [ref][r1].
-Link with title: hover me (https://example.com) and mailto mailto:test@example.com (mailto:test@example.com).
+Auto-link: https://example.com - https://example.com and reference link [ref][r1].
+Link with title: hover me - https://example.com and mailto mailto:test@example.com - mailto:test@example.com.
 Image: alt text
 
 > Blockquote level 1
@@ -23,7 +23,7 @@ Image: alt text
     1. Alt-numbered subitem
 
 - [ ] Task: unchecked
-- [x] Task: checked with link home (https://example.org)
+- [x] Task: checked with link home - https://example.org
 
 ———
 
