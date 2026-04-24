@@ -21,12 +21,12 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![
             gpt_5_4_cmb_bedrock_model(/*priority*/ 0),
-            bedrock_model(
+            bedrock_oss_model(
                 "openai.gpt-oss-120b",
                 "GPT OSS 120B on Bedrock",
                 /*priority*/ 1,
             ),
-            bedrock_model(
+            bedrock_oss_model(
                 "openai.gpt-oss-20b",
                 "GPT OSS 20B on Bedrock",
                 /*priority*/ 2,
@@ -71,7 +71,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
     }
 }
 
-fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
+fn bedrock_oss_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: display_name.to_string(),
