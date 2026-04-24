@@ -205,8 +205,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
-    let current_preset = get_available_model(&chat, "gpt-5.4");
-    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
     let preset = get_available_model(&chat, "gpt-5.4");
     chat.open_reasoning_popup(preset);

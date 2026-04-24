@@ -7,6 +7,7 @@ use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::LoadedPlugin;
 use crate::plugins::PluginLoadOutcome;
+use crate::plugins::test_support::TEST_CURATED_PLUGIN_CACHE_VERSION;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
@@ -1020,6 +1021,42 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
     let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
     assert!(config.contains("enabled = true"));
+}
+
+#[tokio::test]
+async fn install_openai_curated_plugin_uses_short_sha_cache_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+
+    let result = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "slack".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                curated_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let installed_path = tmp.path().join(format!(
+        "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
+    ));
+    assert_eq!(
+        result,
+        PluginInstallOutcome {
+            plugin_id: PluginId::new(
+                "slack".to_string(),
+                OPENAI_CURATED_MARKETPLACE_NAME.to_string()
+            )
+            .unwrap(),
+            plugin_version: TEST_CURATED_PLUGIN_CACHE_VERSION.to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path).unwrap(),
+            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+        }
+    );
 }
 
 #[tokio::test]
@@ -2660,7 +2697,7 @@ plugins = true
     );
     assert_eq!(
         fs::read_to_string(tmp.path().join(format!(
-            "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}/marker.txt"
+            "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_CACHE_VERSION}/marker.txt"
         )))
         .unwrap(),
         "first"
@@ -2739,7 +2776,7 @@ plugins = true
 }
 
 #[test]
-fn refresh_curated_plugin_cache_replaces_existing_local_version_with_sha() {
+fn refresh_curated_plugin_cache_replaces_existing_local_version_with_short_sha_version() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -2768,14 +2805,14 @@ fn refresh_curated_plugin_cache_replaces_existing_local_version_with_sha() {
     assert!(
         tmp.path()
             .join(format!(
-                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_SHA}"
+                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
             ))
             .is_dir()
     );
 }
 
 #[test]
-fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_current_sha() {
+fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_current_short_version() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -2794,7 +2831,7 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
     assert!(
         tmp.path()
             .join(format!(
-                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_SHA}"
+                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
             ))
             .is_dir()
     );
@@ -2849,13 +2886,49 @@ fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_curren
     .unwrap();
     write_plugin(
         &tmp.path().join("plugins/cache/openai-curated"),
-        &format!("slack/{TEST_CURATED_PLUGIN_SHA}"),
+        &format!("slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"),
         "slack",
     );
 
     assert!(
         !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
             .expect("cache refresh should be a no-op when configured plugins are current")
+    );
+}
+
+#[test]
+fn refresh_curated_plugin_cache_migrates_full_sha_cache_version_to_short_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    let plugin_id = PluginId::new(
+        "slack".to_string(),
+        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
+        &format!("slack/{TEST_CURATED_PLUGIN_SHA}"),
+        "slack",
+    );
+
+    assert!(
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should migrate the full sha cache version")
+    );
+    assert!(
+        !tmp.path()
+            .join(format!(
+                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_SHA}"
+            ))
+            .exists()
+    );
+    assert!(
+        tmp.path()
+            .join(format!(
+                "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_CACHE_VERSION}"
+            ))
+            .is_dir()
     );
 }
 

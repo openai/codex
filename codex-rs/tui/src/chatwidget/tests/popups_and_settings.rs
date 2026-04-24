@@ -432,6 +432,34 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
 }
 
 #[tokio::test]
+async fn plugin_detail_error_popup_skips_disabled_row_numbering() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-figma",
+            "figma",
+            Some("Figma"),
+            Some("Design handoff."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Err("Failed to load plugin details.".to_string()),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugin_detail_error_popup", popup);
+}
+
+#[tokio::test]
 async fn plugins_popup_refresh_preserves_selected_row_position() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);

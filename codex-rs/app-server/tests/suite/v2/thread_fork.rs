@@ -181,9 +181,16 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         Some(&Value::Null),
         "thread/started must serialize `name: null` when unset"
     );
+    assert_eq!(
+        started_thread_json.get("turns"),
+        Some(&json!([])),
+        "thread/started must not emit copied fork turns"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread;
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
 
     Ok(())
 }
@@ -582,9 +589,16 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         Some(true),
         "thread/started should serialize `ephemeral: true` for ephemeral forks"
     );
+    assert_eq!(
+        started_thread_json.get("turns"),
+        Some(&json!([])),
+        "thread/started must not emit copied ephemeral fork turns"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread;
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
 
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {

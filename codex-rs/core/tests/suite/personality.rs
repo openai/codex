@@ -1,7 +1,7 @@
 use codex_config::types::Personality;
 use codex_features::Feature;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -28,7 +28,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -933,7 +932,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     Ok(())
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) {
+async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;

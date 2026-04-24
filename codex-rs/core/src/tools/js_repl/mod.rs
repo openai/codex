@@ -1798,13 +1798,30 @@ fn emitted_image_content_item(
 }
 
 fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
-    if image_url
+    if !image_url
         .get(..5)
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
     {
+        return Err("codex.emitImage only accepts data URLs".to_string());
+    }
+
+    let media_type = image_url
+        .split_once(',')
+        .and_then(|(header, _)| header.get(5..))
+        .and_then(|header| header.split(';').next())
+        .filter(|media_type| !media_type.is_empty())
+        .ok_or_else(|| "codex.emitImage expected a valid image data URL".to_string())?;
+
+    if matches!(
+        media_type.to_ascii_lowercase().as_str(),
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+    ) {
         Ok(())
     } else {
-        Err("codex.emitImage only accepts data URLs".to_string())
+        Err(
+            "codex.emitImage only supports image/png, image/jpeg, image/webp, or image/gif"
+                .to_string(),
+        )
     }
 }
 

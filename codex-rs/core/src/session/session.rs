@@ -71,6 +71,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
+    /// Sticky environments for turns that do not provide a turn-local override.
+    pub(super) environments: Vec<TurnEnvironmentSelection>,
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
@@ -92,7 +94,8 @@ impl SessionConfiguration {
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
             &self.file_system_sandbox_policy,
             self.network_sandbox_policy,
         )
@@ -159,7 +162,12 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.cwd.clone());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
-        next_configuration.cwd = absolute_cwd;
+        next_configuration.cwd = absolute_cwd.clone();
+        if cwd_changed
+            && let Some(primary_environment) = next_configuration.environments.first_mut()
+        {
+            primary_environment.cwd = absolute_cwd;
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let sandbox_policy = permission_profile
@@ -175,26 +183,8 @@ impl SessionConfiguration {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-                file_system_sandbox_policy.glob_scan_max_depth =
-                    self.file_system_sandbox_policy.glob_scan_max_depth;
-            }
-            for deny_entry in self
-                .file_system_sandbox_policy
-                .entries
-                .iter()
-                .filter(|entry| {
-                    entry.access == codex_protocol::permissions::FileSystemAccessMode::None
-                })
-            {
-                if !file_system_sandbox_policy
-                    .entries
-                    .iter()
-                    .any(|entry| entry == deny_entry)
-                {
-                    file_system_sandbox_policy.entries.push(deny_entry.clone());
-                }
-            }
+            file_system_sandbox_policy
+                .preserve_deny_read_restrictions_from(&self.file_system_sandbox_policy);
             next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
             next_configuration.network_sandbox_policy = network_sandbox_policy;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
@@ -238,6 +228,10 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) service_tier: Option<Option<ServiceTier>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
+    /// Turn-local environment override. `None` inherits the sticky thread
+    /// environments stored on `SessionConfiguration`; `Some([])` explicitly
+    /// disables environments for this turn.
+    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
@@ -259,7 +253,7 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
-        models_manager: Arc<ModelsManager>,
+        models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
@@ -273,7 +267,7 @@ impl Session {
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
-        inherited_rollout_trace: RolloutTraceRecorder,
+        parent_rollout_thread_trace: ThreadTraceContext,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -396,6 +390,7 @@ impl Session {
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
+                auth.as_ref(),
             )
             .await;
             (auth, mcp_servers, auth_statuses)
@@ -449,18 +444,17 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value().to_string(),
                 sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
             };
-            let rollout_trace = if matches!(
+            let rollout_thread_trace = if matches!(
                 session_configuration.session_source,
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
             ) {
-                // Spawned child threads are part of their root rollout tree. If
-                // the parent had no trace recorder, do not create an orphan child
-                // bundle that looks like an independent rollout.
-                inherited_rollout_trace
+                // Spawned child threads are part of their root rollout tree. If the
+                // parent had no trace bundle, do not create an orphan child bundle
+                // that looks like an independent rollout.
+                parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
             } else {
-                RolloutTraceRecorder::create_root_or_disabled(conversation_id)
+                ThreadTraceContext::start_root_or_disabled(trace_metadata)
             };
-            rollout_trace.record_thread_started(trace_metadata);
 
             let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -739,7 +733,7 @@ impl Session {
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
                 analytics_events_client,
                 hooks,
-                rollout_trace,
+                rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -814,14 +808,6 @@ impl Session {
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
             let initial_messages = initial_history.get_event_msgs();
-            let permission_profile = if matches!(
-                session_configuration.file_system_sandbox_policy.kind,
-                FileSystemSandboxKind::ExternalSandbox
-            ) {
-                None
-            } else {
-                Some(session_configuration.permission_profile())
-            };
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -834,7 +820,7 @@ impl Session {
                     approval_policy: session_configuration.approval_policy.value(),
                     approvals_reviewer: session_configuration.approvals_reviewer,
                     sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-                    permission_profile,
+                    permission_profile: Some(session_configuration.permission_profile()),
                     cwd: session_configuration.cwd.clone(),
                     reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                     history_log_id,
@@ -887,6 +873,7 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 tool_plugin_provenance,
+                auth,
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",
