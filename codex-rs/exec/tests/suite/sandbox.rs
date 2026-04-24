@@ -44,7 +44,7 @@ async fn spawn_command_under_sandbox(
             arg0: None,
         },
         sandbox_policy,
-        &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd),
+        &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, sandbox_cwd),
         NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_cwd,
         &codex_linux_sandbox_exe,

@@ -718,7 +718,7 @@ mod phase2 {
         let turn_context = subagent.codex.session.new_default_turn().await;
         pretty_assertions::assert_eq!(
             turn_context.file_system_sandbox_policy,
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 &config_snapshot.sandbox_policy,
                 config_snapshot.cwd.as_path(),
             ),

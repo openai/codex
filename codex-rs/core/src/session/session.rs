@@ -121,7 +121,7 @@ impl SessionConfiguration {
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         let file_system_policy_matches_legacy = self.file_system_sandbox_policy
-            == FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            == FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 self.sandbox_policy.get(),
                 &self.cwd,
             );
@@ -201,7 +201,7 @@ impl SessionConfiguration {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                     next_configuration.sandbox_policy.get(),
                     &next_configuration.cwd,
                 );

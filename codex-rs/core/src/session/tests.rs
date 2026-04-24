@@ -1496,7 +1496,6 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     let expected_permission_profile =
         codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
             &expected_sandbox_policy,
-            test.session_configured.cwd.as_path(),
         );
     assert_eq!(
         test.session_configured.permission_profile,
@@ -2886,15 +2885,16 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         },
         access: FileSystemAccessMode::None,
     };
-    let mut existing_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-        &workspace_policy,
-        session_configuration.cwd.as_path(),
-    );
+    let mut existing_file_system_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            &workspace_policy,
+            session_configuration.cwd.as_path(),
+        );
     existing_file_system_policy.glob_scan_max_depth = Some(2);
     existing_file_system_policy.entries.push(deny_entry.clone());
     session_configuration.file_system_sandbox_policy = existing_file_system_policy;
 
-    let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+    let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &workspace_policy,
         session_configuration.cwd.as_path(),
     );
@@ -3027,7 +3027,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
             exclude_slash_tmp: true,
         });
     session_configuration.file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
             session_configuration.sandbox_policy.get(),
             &session_configuration.cwd,
         );
@@ -3041,7 +3041,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 
     assert_eq!(
         updated.file_system_sandbox_policy,
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
             updated.sandbox_policy.get(),
             &project_root,
         )
@@ -5460,7 +5460,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 }
 
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
-    let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+    let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         turn_context.sandbox_policy.get(),
         &turn_context.cwd,
     );
@@ -5476,10 +5476,11 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
 #[tokio::test]
 async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() {
     let (_session, mut turn_context) = make_session_and_context().await;
-    turn_context.file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-        turn_context.sandbox_policy.get(),
-        &turn_context.cwd,
-    );
+    turn_context.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            turn_context.sandbox_policy.get(),
+            &turn_context.cwd,
+        );
 
     let item = turn_context.to_turn_context_item();
 
