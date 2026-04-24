@@ -76,9 +76,58 @@ impl CloudEnvironmentClient {
     pub async fn reconnect_executor(
         &self,
         executor_id: &str,
-    ) -> Result<CloudEnvironmentExecutorRegistrationResponse, ExecServerError> {
+    ) -> Result<CloudAgentEnvironmentExecutorRegistrationResponse, ExecServerError> {
         let path = format!("/api/cloud/executor/{executor_id}");
         self.post_json(&path, &EmptyRequest {}).await
+    }
+
+    pub async fn list_environments(
+        &self,
+        params: &CloudAgentEnvironmentListParams,
+    ) -> Result<CloudAgentEnvironmentListResponse, ExecServerError> {
+        self.get_json(list_environments_url(&self.base_url, params)?)
+            .await
+    }
+
+    pub async fn get_environment(
+        &self,
+        environment_id: &str,
+    ) -> Result<CloudAgentEnvironmentDetailResponse, ExecServerError> {
+        let path = format!("/api/cloud/environment/{environment_id}");
+        self.get_json(endpoint_url(&self.base_url, &path)).await
+    }
+
+    async fn get_json<R>(&self, url: String) -> Result<R, ExecServerError>
+    where
+        R: for<'de> Deserialize<'de>,
+    {
+        for attempt in 0..=1 {
+            let auth = cloud_environment_chatgpt_auth(&self.auth_manager).await?;
+            let response = self
+                .http
+                .get(url.clone())
+                .bearer_auth(chatgpt_bearer_token(&auth)?)
+                .header("chatgpt-account-id", chatgpt_account_id(&auth)?)
+                .send()
+                .await?;
+
+            if response.status().is_success() {
+                return response.json::<R>().await.map_err(ExecServerError::from);
+            }
+
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                && attempt == 0
+                && recover_unauthorized(&self.auth_manager).await
+            {
+                continue;
+            }
+
+            return Err(cloud_http_error(status, &body));
+        }
+
+        unreachable!("cloud environments request loop is bounded to two attempts")
     }
 
     async fn post_json<T, R>(&self, path: &str, request: &T) -> Result<R, ExecServerError>
@@ -118,7 +167,7 @@ impl CloudEnvironmentClient {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
-pub struct CloudEnvironmentRegisterExecutorRequest {
+pub struct CloudAgentEnvironmentRegisterExecutorRequest {
     pub idempotency_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_id: Option<String>,
@@ -129,18 +178,90 @@ pub struct CloudEnvironmentRegisterExecutorRequest {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
-pub struct CloudEnvironmentConnectResponse {
+pub struct CloudAgentEnvironmentConnectResponse {
     pub environment_id: String,
     pub executor_id: String,
     pub url: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
-pub struct CloudEnvironmentExecutorRegistrationResponse {
+pub struct CloudAgentEnvironmentExecutorRegistrationResponse {
     pub id: String,
     pub environment_id: String,
     pub url: String,
 }
+
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize)]
+pub struct CloudAgentEnvironmentListParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<CloudAgentEnvironmentStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentEnvironmentStatus {
+    Online,
+    Offline,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAgentEnvironmentType {
+    SingleHost,
+    StaticPool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+pub struct CloudAgentEnvironmentExecutorCounts {
+    pub online: u32,
+    pub offline: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+pub struct CloudAgentEnvironmentExecutorResponse {
+    pub id: String,
+    pub name: Option<String>,
+    pub labels: BTreeMap<String, String>,
+    pub metadata: Value,
+    pub status: CloudAgentEnvironmentStatus,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+pub struct CloudAgentEnvironmentSummaryResponse {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub environment_type: CloudAgentEnvironmentType,
+    pub labels: BTreeMap<String, String>,
+    pub status: CloudAgentEnvironmentStatus,
+    pub executor_counts: CloudAgentEnvironmentExecutorCounts,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+pub struct CloudAgentEnvironmentListResponse {
+    pub data: Vec<CloudAgentEnvironmentSummaryResponse>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+pub struct CloudAgentEnvironmentDetailResponse {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub environment_type: CloudAgentEnvironmentType,
+    pub labels: BTreeMap<String, String>,
+    pub status: CloudAgentEnvironmentStatus,
+    pub executors: Vec<CloudAgentEnvironmentExecutorResponse>,
+}
+
+pub type CloudEnvironmentRegisterExecutorRequest = CloudAgentEnvironmentRegisterExecutorRequest;
+pub type CloudEnvironmentConnectResponse = CloudAgentEnvironmentConnectResponse;
+pub type CloudEnvironmentExecutorRegistrationResponse =
+    CloudAgentEnvironmentExecutorRegistrationResponse;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CloudExecutorConfig {
@@ -353,6 +474,40 @@ fn endpoint_url(base_url: &str, path: &str) -> String {
     format!("{base_url}/{}", path.trim_start_matches('/'))
 }
 
+fn list_environments_url(
+    base_url: &str,
+    params: &CloudAgentEnvironmentListParams,
+) -> Result<String, ExecServerError> {
+    let mut url =
+        reqwest::Url::parse(&endpoint_url(base_url, "/api/cloud/environment")).map_err(|err| {
+            ExecServerError::CloudEnvironmentConfig(format!(
+                "invalid cloud environments base URL: {err}"
+            ))
+        })?;
+    {
+        let mut query = url.query_pairs_mut();
+        if let Some(status) = params.status {
+            query.append_pair("status", status.as_query_value());
+        }
+        if let Some(cursor) = &params.cursor {
+            query.append_pair("cursor", cursor);
+        }
+        if let Some(limit) = params.limit {
+            query.append_pair("limit", &limit.to_string());
+        }
+    }
+    Ok(url.to_string())
+}
+
+impl CloudAgentEnvironmentStatus {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Offline => "offline",
+        }
+    }
+}
+
 fn cloud_http_error(status: StatusCode, body: &str) -> ExecServerError {
     let parsed = serde_json::from_str::<CloudErrorBody>(body).ok();
     let (code, message) = parsed
@@ -435,12 +590,15 @@ mod tests {
     use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
 
     use super::*;
 
     const TEST_ACCESS_TOKEN: &str = "test-access-token";
     const TEST_REFRESHED_ACCESS_TOKEN: &str = "test-refreshed-access-token";
     const TEST_ACCOUNT_ID: &str = "acct-1";
+    const TEST_ENVIRONMENT_ID: &str = "ccaenv_b64_ZW52LTE";
+    const TEST_EXECUTOR_ID: &str = "ccaexe_b64_ZXhlYy0x";
 
     fn auth_manager() -> Arc<AuthManager> {
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -504,41 +662,77 @@ mod tests {
         .expect("client");
 
         assert_eq!(
-            client.endpoint_url("/api/cloud/environment/env-1"),
-            "https://cloud.example.test/root/api/cloud/environment/env-1"
+            client.endpoint_url(&format!("/api/cloud/environment/{TEST_ENVIRONMENT_ID}")),
+            format!("https://cloud.example.test/root/api/cloud/environment/{TEST_ENVIRONMENT_ID}")
         );
     }
 
     #[test]
     fn cloud_response_serde_matches_service_shape() {
         let connect: CloudEnvironmentConnectResponse = serde_json::from_value(json!({
-            "environment_id": "env-1",
-            "executor_id": "exec-1",
-            "url": "wss://rendezvous.test/executor/exec-1?role=harness&sig=abc"
+            "environment_id": TEST_ENVIRONMENT_ID,
+            "executor_id": TEST_EXECUTOR_ID,
+            "url": format!("wss://rendezvous.test/cloud-agent/c1/ws/executor/{TEST_EXECUTOR_ID}?role=harness&sig=abc")
         }))
         .expect("connect response");
         let registration: CloudEnvironmentExecutorRegistrationResponse =
             serde_json::from_value(json!({
-                "id": "exec-1",
-                "environment_id": "env-1",
-                "url": "wss://rendezvous.test/executor/exec-1?role=executor&sig=abc"
+                "id": TEST_EXECUTOR_ID,
+                "environment_id": TEST_ENVIRONMENT_ID,
+                "url": format!("wss://rendezvous.test/cloud-agent/c1/ws/executor/{TEST_EXECUTOR_ID}?role=executor&sig=abc")
             }))
             .expect("registration response");
+        let detail: CloudAgentEnvironmentDetailResponse = serde_json::from_value(json!({
+            "id": TEST_ENVIRONMENT_ID,
+            "name": "Laptop",
+            "type": "single_host",
+            "labels": {"os": "darwin"},
+            "status": "offline",
+            "executors": [{
+                "id": TEST_EXECUTOR_ID,
+                "name": "Laptop",
+                "labels": {"os": "darwin"},
+                "metadata": {"protocol": {"version": "0.0.1"}},
+                "status": "offline"
+            }]
+        }))
+        .expect("detail response");
 
         assert_eq!(
             connect,
             CloudEnvironmentConnectResponse {
-                environment_id: "env-1".to_string(),
-                executor_id: "exec-1".to_string(),
-                url: "wss://rendezvous.test/executor/exec-1?role=harness&sig=abc".to_string(),
+                environment_id: TEST_ENVIRONMENT_ID.to_string(),
+                executor_id: TEST_EXECUTOR_ID.to_string(),
+                url: format!(
+                    "wss://rendezvous.test/cloud-agent/c1/ws/executor/{TEST_EXECUTOR_ID}?role=harness&sig=abc"
+                ),
             }
         );
         assert_eq!(
             registration,
             CloudEnvironmentExecutorRegistrationResponse {
-                id: "exec-1".to_string(),
-                environment_id: "env-1".to_string(),
-                url: "wss://rendezvous.test/executor/exec-1?role=executor&sig=abc".to_string(),
+                id: TEST_EXECUTOR_ID.to_string(),
+                environment_id: TEST_ENVIRONMENT_ID.to_string(),
+                url: format!(
+                    "wss://rendezvous.test/cloud-agent/c1/ws/executor/{TEST_EXECUTOR_ID}?role=executor&sig=abc"
+                ),
+            }
+        );
+        assert_eq!(
+            detail,
+            CloudAgentEnvironmentDetailResponse {
+                id: TEST_ENVIRONMENT_ID.to_string(),
+                name: "Laptop".to_string(),
+                environment_type: CloudAgentEnvironmentType::SingleHost,
+                labels: BTreeMap::from([("os".to_string(), "darwin".to_string())]),
+                status: CloudAgentEnvironmentStatus::Offline,
+                executors: vec![CloudAgentEnvironmentExecutorResponse {
+                    id: TEST_EXECUTOR_ID.to_string(),
+                    name: Some("Laptop".to_string()),
+                    labels: BTreeMap::from([("os".to_string(), "darwin".to_string())]),
+                    metadata: json!({"protocol": {"version": "0.0.1"}}),
+                    status: CloudAgentEnvironmentStatus::Offline,
+                }],
             }
         );
     }
@@ -560,7 +754,9 @@ mod tests {
     async fn connect_environment_posts_with_chatgpt_auth_headers() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/cloud/environment/env-1"))
+            .and(path(format!(
+                "/api/cloud/environment/{TEST_ENVIRONMENT_ID}"
+            )))
             .and(header(
                 "authorization",
                 format!("Bearer {TEST_ACCESS_TOKEN}"),
@@ -568,8 +764,8 @@ mod tests {
             .and(header("chatgpt-account-id", TEST_ACCOUNT_ID))
             .and(body_json(json!({})))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "environment_id": "env-1",
-                "executor_id": "exec-1",
+                "environment_id": TEST_ENVIRONMENT_ID,
+                "executor_id": TEST_EXECUTOR_ID,
                 "url": "ws://127.0.0.1:1234"
             })))
             .mount(&server)
@@ -578,16 +774,75 @@ mod tests {
         let client = CloudEnvironmentClient::new(server.uri(), auth_manager).expect("client");
 
         let response = client
-            .connect_environment("env-1")
+            .connect_environment(TEST_ENVIRONMENT_ID)
             .await
             .expect("connect environment");
 
         assert_eq!(
             response,
             CloudEnvironmentConnectResponse {
-                environment_id: "env-1".to_string(),
-                executor_id: "exec-1".to_string(),
+                environment_id: TEST_ENVIRONMENT_ID.to_string(),
+                executor_id: TEST_EXECUTOR_ID.to_string(),
                 url: "ws://127.0.0.1:1234".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn list_environments_gets_with_chatgpt_auth_headers_and_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cloud/environment"))
+            .and(query_param("status", "online"))
+            .and(query_param("limit", "1"))
+            .and(header(
+                "authorization",
+                format!("Bearer {TEST_ACCESS_TOKEN}"),
+            ))
+            .and(header("chatgpt-account-id", TEST_ACCOUNT_ID))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{
+                    "id": TEST_ENVIRONMENT_ID,
+                    "name": "Laptop",
+                    "type": "single_host",
+                    "labels": {"os": "darwin"},
+                    "status": "online",
+                    "executor_counts": {
+                        "online": 1,
+                        "offline": 0
+                    }
+                }],
+                "next_cursor": null
+            })))
+            .mount(&server)
+            .await;
+        let (_codex_home, auth_manager) = auth_manager_with_stored_chatgpt_auth();
+        let client = CloudEnvironmentClient::new(server.uri(), auth_manager).expect("client");
+
+        let response = client
+            .list_environments(&CloudAgentEnvironmentListParams {
+                status: Some(CloudAgentEnvironmentStatus::Online),
+                limit: Some(1),
+                cursor: None,
+            })
+            .await
+            .expect("list environments");
+
+        assert_eq!(
+            response,
+            CloudAgentEnvironmentListResponse {
+                data: vec![CloudAgentEnvironmentSummaryResponse {
+                    id: TEST_ENVIRONMENT_ID.to_string(),
+                    name: "Laptop".to_string(),
+                    environment_type: CloudAgentEnvironmentType::SingleHost,
+                    labels: BTreeMap::from([("os".to_string(), "darwin".to_string())]),
+                    status: CloudAgentEnvironmentStatus::Online,
+                    executor_counts: CloudAgentEnvironmentExecutorCounts {
+                        online: 1,
+                        offline: 0,
+                    },
+                }],
+                next_cursor: None,
             }
         );
     }
@@ -602,7 +857,9 @@ mod tests {
         );
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/cloud/environment/env-1"))
+            .and(path(format!(
+                "/api/cloud/environment/{TEST_ENVIRONMENT_ID}"
+            )))
             .and(header(
                 "authorization",
                 format!("Bearer {TEST_ACCESS_TOKEN}"),
@@ -617,14 +874,16 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/api/cloud/environment/env-1"))
+            .and(path(format!(
+                "/api/cloud/environment/{TEST_ENVIRONMENT_ID}"
+            )))
             .and(header(
                 "authorization",
                 format!("Bearer {TEST_REFRESHED_ACCESS_TOKEN}"),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "environment_id": "env-1",
-                "executor_id": "exec-1",
+                "environment_id": TEST_ENVIRONMENT_ID,
+                "executor_id": TEST_EXECUTOR_ID,
                 "url": "ws://127.0.0.1:1234"
             })))
             .expect(1)
@@ -633,7 +892,7 @@ mod tests {
         let client = CloudEnvironmentClient::new(server.uri(), auth_manager).expect("client");
 
         client
-            .connect_environment("env-1")
+            .connect_environment(TEST_ENVIRONMENT_ID)
             .await
             .expect("connect environment");
     }
