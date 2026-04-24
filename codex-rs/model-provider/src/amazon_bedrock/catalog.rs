@@ -40,6 +40,8 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
     model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
     model.priority = priority;
     model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
+    model.default_reasoning_level = Some(ReasoningEffort::Medium);
+    model.supported_reasoning_levels = gpt_5_4_cmb_reasoning_levels();
     model
 }
 
@@ -96,6 +98,15 @@ fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
     }
 }
 
+fn gpt_5_4_cmb_reasoning_levels() -> Vec<ReasoningEffortPreset> {
+    vec![
+        reasoning_effort_preset(ReasoningEffort::Minimal),
+        reasoning_effort_preset(ReasoningEffort::Low),
+        reasoning_effort_preset(ReasoningEffort::Medium),
+        reasoning_effort_preset(ReasoningEffort::High),
+    ]
+}
+
 fn reasoning_effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
     ReasoningEffortPreset {
         effort,
@@ -140,7 +151,24 @@ mod tests {
         gpt_5_4_model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
         gpt_5_4_model.priority = cmb_model.priority;
         gpt_5_4_model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
+        gpt_5_4_model.default_reasoning_level = Some(ReasoningEffort::Medium);
+        gpt_5_4_model.supported_reasoning_levels = gpt_5_4_cmb_reasoning_levels();
 
         assert_eq!(*cmb_model, gpt_5_4_model);
+    }
+
+    #[test]
+    fn gpt_5_4_cmb_advertises_only_bedrock_supported_reasoning_levels() {
+        let catalog = static_model_catalog();
+        let cmb_model = catalog
+            .models
+            .iter()
+            .find(|model| model.slug == GPT_5_4_CMB_MODEL_ID)
+            .expect("Bedrock catalog should include GPT-5.4 CMB");
+
+        assert_eq!(
+            cmb_model.supported_reasoning_levels,
+            gpt_5_4_cmb_reasoning_levels()
+        );
     }
 }
