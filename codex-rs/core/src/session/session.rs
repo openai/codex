@@ -1,5 +1,4 @@
 use super::*;
-use crate::config::ConstraintError;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -255,16 +254,6 @@ impl SessionConfiguration {
                 &file_system_sandbox_policy,
                 network_sandbox_policy,
             );
-        effective_permission_profile
-            .to_legacy_sandbox_policy(&self.cwd)
-            .map_err(|err| ConstraintError::InvalidValue {
-                field_name: "permission_profile",
-                candidate: format!("{effective_permission_profile:?}"),
-                allowed: format!(
-                    "permission profiles that can be represented by the active sandbox constraints: {err}"
-                ),
-                requirement_source: codex_config::RequirementSource::Unknown,
-            })?;
         self.permission_profile.set(effective_permission_profile)?;
         Ok(())
     }
@@ -721,7 +710,7 @@ impl Session {
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                         spec,
                         current_exec_policy.as_ref(),
-                        config.permissions.sandbox_policy.get(),
+                        config.permissions.permission_profile.get(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
@@ -882,8 +871,8 @@ impl Session {
                     history_entry_count,
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {
-                        Self::managed_network_proxy_active_for_sandbox_policy(
-                            &session_sandbox_policy,
+                        Self::managed_network_proxy_active_for_permission_profile(
+                            session_configuration.permission_profile.get(),
                         )
                     }),
                     rollout_path,
