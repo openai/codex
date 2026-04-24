@@ -134,10 +134,11 @@ pub(crate) fn spawn_runner_transport(
         }
         return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
     }
+    let expected_runner_pid = pi.dwProcessId;
 
     let connect_result = (|| -> Result<()> {
-        connect_pipe(h_pipe_in)?;
-        connect_pipe(h_pipe_out)?;
+        connect_pipe(h_pipe_in, expected_runner_pid)?;
+        connect_pipe(h_pipe_out, expected_runner_pid)?;
         Ok(())
     })();
 
