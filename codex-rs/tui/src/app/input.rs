@@ -161,12 +161,7 @@ impl App {
         }
 
         match key_event {
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
+            _ if self.keymap.app.clear_terminal.is_pressed(key_event) => {
                 if !self.chat_widget.can_run_ctrl_l_clear_now() {
                     return;
                 }

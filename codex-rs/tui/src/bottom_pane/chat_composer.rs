@@ -394,12 +394,17 @@ pub(crate) struct ChatComposer {
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
     toggle_shortcuts_keys: Vec<KeyBinding>,
+    history_search_previous_keys: Vec<KeyBinding>,
+    history_search_next_keys: Vec<KeyBinding>,
     editor_keymap: EditorKeymap,
     footer_external_editor_key: Option<KeyBinding>,
     footer_show_transcript_key: Option<KeyBinding>,
     footer_insert_newline_key: Option<KeyBinding>,
     footer_queue_key: Option<KeyBinding>,
     footer_toggle_shortcuts_key: Option<KeyBinding>,
+    footer_history_search_key: Option<KeyBinding>,
+    footer_reasoning_down_key: Option<KeyBinding>,
+    footer_reasoning_up_key: Option<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -555,6 +560,8 @@ impl ChatComposer {
                 key_hint::plain(KeyCode::Char('?')),
                 key_hint::shift(KeyCode::Char('?')),
             ],
+            history_search_previous_keys: default_keymap.composer.history_search_previous.clone(),
+            history_search_next_keys: default_keymap.composer.history_search_next.clone(),
             editor_keymap: default_editor_keymap,
             footer_external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
             footer_show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
@@ -564,6 +571,15 @@ impl ChatComposer {
             ),
             footer_queue_key: Some(key_hint::plain(KeyCode::Tab)),
             footer_toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
+            footer_history_search_key: primary_binding(
+                &default_keymap.composer.history_search_previous,
+            ),
+            footer_reasoning_down_key: primary_binding(
+                &default_keymap.chat.decrease_reasoning_effort,
+            ),
+            footer_reasoning_up_key: primary_binding(
+                &default_keymap.chat.increase_reasoning_effort,
+            ),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -647,6 +663,8 @@ impl ChatComposer {
         self.submit_keys = keymap.composer.submit.clone();
         self.queue_keys = keymap.composer.queue.clone();
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
+        self.history_search_previous_keys = keymap.composer.history_search_previous.clone();
+        self.history_search_next_keys = keymap.composer.history_search_next.clone();
         self.editor_keymap = keymap.editor.clone();
         self.textarea.set_keymap_bindings(&self.editor_keymap);
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
@@ -655,6 +673,9 @@ impl ChatComposer {
             footer_insert_newline_key(&keymap.editor.insert_newline, self.use_shift_enter_hint);
         self.footer_queue_key = primary_binding(&keymap.composer.queue);
         self.footer_toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
+        self.footer_history_search_key = primary_binding(&keymap.composer.history_search_previous);
+        self.footer_reasoning_down_key = primary_binding(&keymap.chat.decrease_reasoning_effort);
+        self.footer_reasoning_up_key = primary_binding(&keymap.chat.increase_reasoning_effort);
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1472,7 +1493,7 @@ impl ChatComposer {
             return self.handle_history_search_key(key_event);
         }
 
-        if Self::is_history_search_key(&key_event) {
+        if Self::is_history_search_key(&key_event, &self.history_search_previous_keys) {
             return self.begin_history_search();
         }
 
@@ -3255,6 +3276,9 @@ impl ChatComposer {
                 external_editor: self.footer_external_editor_key,
                 edit_previous: Some(key_hint::plain(KeyCode::Esc)),
                 show_transcript: self.footer_show_transcript_key,
+                history_search: self.footer_history_search_key,
+                reasoning_down: self.footer_reasoning_down_key,
+                reasoning_up: self.footer_reasoning_up_key,
             },
             active_agent_label: self.active_agent_label.clone(),
         }
@@ -7063,6 +7087,34 @@ mod tests {
 
         assert_eq!(InputResult::None, result);
         assert_eq!("queue me", composer.textarea.text());
+    }
+
+    #[test]
+    fn remapped_history_search_does_not_fall_back_to_ctrl_r() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.history_search_previous = vec![key_hint::plain(KeyCode::F(2))];
+        composer.set_keymap_bindings(&keymap);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(!composer.history_search_active());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        assert!(composer.history_search_active());
     }
 
     #[test]

@@ -107,6 +107,9 @@ pub(crate) struct FooterKeyHints {
     pub(crate) external_editor: Option<KeyBinding>,
     pub(crate) edit_previous: Option<KeyBinding>,
     pub(crate) show_transcript: Option<KeyBinding>,
+    pub(crate) history_search: Option<KeyBinding>,
+    pub(crate) reasoning_down: Option<KeyBinding>,
+    pub(crate) reasoning_up: Option<KeyBinding>,
 }
 
 impl FooterKeyHints {
@@ -119,6 +122,9 @@ impl FooterKeyHints {
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
             edit_previous: Some(key_hint::plain(KeyCode::Esc)),
             show_transcript: Some(key_hint::ctrl(KeyCode::Char('t'))),
+            history_search: Some(key_hint::ctrl(KeyCode::Char('r'))),
+            reasoning_down: Some(key_hint::alt(KeyCode::Char(','))),
+            reasoning_up: Some(key_hint::alt(KeyCode::Char('.'))),
         }
     }
 }
@@ -1002,15 +1008,15 @@ impl ShortcutDescriptor {
             ShortcutId::ExternalEditor => state.key_hints.external_editor,
             ShortcutId::EditPrevious => state.key_hints.edit_previous,
             ShortcutId::ShowTranscript => state.key_hints.show_transcript,
+            ShortcutId::HistorySearch => state.key_hints.history_search,
+            ShortcutId::ReasoningDown => state.key_hints.reasoning_down,
+            ShortcutId::ReasoningUp => state.key_hints.reasoning_up,
             ShortcutId::Commands
             | ShortcutId::ShellCommands
             | ShortcutId::FilePaths
             | ShortcutId::PasteImage
-            | ShortcutId::HistorySearch
             | ShortcutId::Quit
-            | ShortcutId::ChangeMode
-            | ShortcutId::ReasoningDown
-            | ShortcutId::ReasoningUp => self.binding_for(state).map(|binding| binding.key),
+            | ShortcutId::ChangeMode => self.binding_for(state).map(|binding| binding.key),
         }?;
         let mut line = Line::from(vec![self.prefix.into(), key.into()]);
         match self.id {

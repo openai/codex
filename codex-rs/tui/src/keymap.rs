@@ -41,6 +41,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
+    pub(crate) chat: ChatKeymap,
     pub(crate) composer: ComposerKeymap,
     pub(crate) editor: EditorKeymap,
     pub(crate) pager: PagerKeymap,
@@ -56,6 +57,19 @@ pub(crate) struct AppKeymap {
     pub(crate) open_external_editor: Vec<KeyBinding>,
     /// Copy the last agent response to the clipboard.
     pub(crate) copy: Vec<KeyBinding>,
+    /// Clear the terminal UI.
+    pub(crate) clear_terminal: Vec<KeyBinding>,
+}
+
+/// Main chat-surface keybindings.
+#[derive(Clone, Debug)]
+pub(crate) struct ChatKeymap {
+    /// Decrease the active reasoning effort.
+    pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
+    /// Increase the active reasoning effort.
+    pub(crate) increase_reasoning_effort: Vec<KeyBinding>,
+    /// Edit the most recently queued message.
+    pub(crate) edit_queued_message: Vec<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +80,10 @@ pub(crate) struct ComposerKeymap {
     pub(crate) queue: Vec<KeyBinding>,
     /// Toggle composer shortcut overlay.
     pub(crate) toggle_shortcuts: Vec<KeyBinding>,
+    /// Open reverse history search or move to the previous match.
+    pub(crate) history_search_previous: Vec<KeyBinding>,
+    /// Move to the next match in reverse history search.
+    pub(crate) history_search_next: Vec<KeyBinding>,
 }
 
 /// Editor-specific keybindings used by the composer textarea.
@@ -271,12 +289,42 @@ impl RuntimeKeymap {
                 &defaults.app.copy,
                 "tui.keymap.global.copy",
             )?,
+            clear_terminal: resolve_bindings(
+                keymap.global.clear_terminal.as_ref(),
+                &defaults.app.clear_terminal,
+                "tui.keymap.global.clear_terminal",
+            )?,
+        };
+
+        let chat = ChatKeymap {
+            decrease_reasoning_effort: resolve_bindings(
+                keymap.chat.decrease_reasoning_effort.as_ref(),
+                &defaults.chat.decrease_reasoning_effort,
+                "tui.keymap.chat.decrease_reasoning_effort",
+            )?,
+            increase_reasoning_effort: resolve_bindings(
+                keymap.chat.increase_reasoning_effort.as_ref(),
+                &defaults.chat.increase_reasoning_effort,
+                "tui.keymap.chat.increase_reasoning_effort",
+            )?,
+            edit_queued_message: resolve_bindings(
+                keymap.chat.edit_queued_message.as_ref(),
+                &defaults.chat.edit_queued_message,
+                "tui.keymap.chat.edit_queued_message",
+            )?,
         };
 
         let composer = ComposerKeymap {
             submit: resolve_with_global!(keymap, defaults, composer, submit),
             queue: resolve_with_global!(keymap, defaults, composer, queue),
             toggle_shortcuts: resolve_with_global!(keymap, defaults, composer, toggle_shortcuts),
+            history_search_previous: resolve_local!(
+                keymap,
+                defaults,
+                composer,
+                history_search_previous
+            ),
+            history_search_next: resolve_local!(keymap, defaults, composer, history_search_next),
         };
 
         let editor = EditorKeymap {
@@ -331,6 +379,7 @@ impl RuntimeKeymap {
 
         let resolved = Self {
             app,
+            chat,
             composer,
             editor,
             pager,
@@ -353,6 +402,12 @@ impl RuntimeKeymap {
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
+                clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
+            },
+            chat: ChatKeymap {
+                decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
+                increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
+                edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -361,6 +416,8 @@ impl RuntimeKeymap {
                     plain(KeyCode::Char('?')),
                     shift(KeyCode::Char('?'))
                 ],
+                history_search_previous: default_bindings![ctrl(KeyCode::Char('r'))],
+                history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
             },
             editor: EditorKeymap {
                 insert_newline: default_bindings![
@@ -478,13 +535,74 @@ impl RuntimeKeymap {
                     self.app.open_external_editor.as_slice(),
                 ),
                 ("copy", self.app.copy.as_slice()),
+                ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "chat.decrease_reasoning_effort",
+                    self.chat.decrease_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.increase_reasoning_effort",
+                    self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.edit_queued_message",
+                    self.chat.edit_queued_message.as_slice(),
+                ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
                 (
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
                 ),
+                (
+                    "composer.history_search_previous",
+                    self.composer.history_search_previous.as_slice(),
+                ),
+                (
+                    "composer.history_search_next",
+                    self.composer.history_search_next.as_slice(),
+                ),
             ],
+        )?;
+
+        validate_no_reserved(
+            "main",
+            [
+                ("open_transcript", self.app.open_transcript.as_slice()),
+                (
+                    "open_external_editor",
+                    self.app.open_external_editor.as_slice(),
+                ),
+                ("copy", self.app.copy.as_slice()),
+                ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "chat.decrease_reasoning_effort",
+                    self.chat.decrease_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.increase_reasoning_effort",
+                    self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.edit_queued_message",
+                    self.chat.edit_queued_message.as_slice(),
+                ),
+                ("composer.submit", self.composer.submit.as_slice()),
+                ("composer.queue", self.composer.queue.as_slice()),
+                (
+                    "composer.toggle_shortcuts",
+                    self.composer.toggle_shortcuts.as_slice(),
+                ),
+                (
+                    "composer.history_search_previous",
+                    self.composer.history_search_previous.as_slice(),
+                ),
+                (
+                    "composer.history_search_next",
+                    self.composer.history_search_next.as_slice(),
+                ),
+            ],
+            MAIN_RESERVED_BINDINGS,
         )?;
 
         validate_no_shadow(
@@ -496,6 +614,7 @@ impl RuntimeKeymap {
                     self.app.open_external_editor.as_slice(),
                 ),
                 ("copy", self.app.copy.as_slice()),
+                ("clear_terminal", self.app.clear_terminal.as_slice()),
             ],
             [
                 ("list.move_up", self.list.move_up.as_slice()),
@@ -564,6 +683,23 @@ impl RuntimeKeymap {
                 ("close", self.pager.close.as_slice()),
                 ("close_transcript", self.pager.close_transcript.as_slice()),
             ],
+        )?;
+
+        validate_no_reserved(
+            "pager",
+            [
+                ("scroll_up", self.pager.scroll_up.as_slice()),
+                ("scroll_down", self.pager.scroll_down.as_slice()),
+                ("page_up", self.pager.page_up.as_slice()),
+                ("page_down", self.pager.page_down.as_slice()),
+                ("half_page_up", self.pager.half_page_up.as_slice()),
+                ("half_page_down", self.pager.half_page_down.as_slice()),
+                ("jump_top", self.pager.jump_top.as_slice()),
+                ("jump_bottom", self.pager.jump_bottom.as_slice()),
+                ("close", self.pager.close.as_slice()),
+                ("close_transcript", self.pager.close_transcript.as_slice()),
+            ],
+            TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS,
         )?;
 
         validate_unique(
@@ -694,6 +830,75 @@ See the Codex keymap documentation for supported actions and examples."
     }
     Ok(())
 }
+
+fn validate_no_reserved<const N: usize>(
+    context: &str,
+    pairs: [(&'static str, &[KeyBinding]); N],
+    reserved: &[(&'static str, KeyBinding)],
+) -> Result<(), String> {
+    for (action, bindings) in pairs {
+        for binding in bindings {
+            let key = binding.parts();
+            if let Some((reserved_action, _)) = reserved
+                .iter()
+                .find(|(_, reserved_binding)| reserved_binding.parts() == key)
+            {
+                return Err(format!(
+                    "Ambiguous `tui.keymap.{context}` bindings: `{action}` uses a key reserved by `{reserved_action}`. \
+Set a different key in `~/.codex/config.toml` and retry.\n\
+See the Codex keymap documentation for supported actions and examples."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
+    (
+        "fixed.interrupt_or_quit",
+        key_hint::ctrl(KeyCode::Char('c')),
+    ),
+    ("fixed.quit", key_hint::ctrl(KeyCode::Char('d'))),
+    ("fixed.paste_image", key_hint::ctrl(KeyCode::Char('v'))),
+    ("fixed.paste_image", key_hint::ctrl_alt(KeyCode::Char('v'))),
+    (
+        "fixed.cycle_collaboration_mode",
+        key_hint::shift(KeyCode::Tab),
+    ),
+    (
+        "fixed.return_from_side_or_backtrack",
+        key_hint::plain(KeyCode::Esc),
+    ),
+    ("fixed.previous_agent", key_hint::alt(KeyCode::Left)),
+    ("fixed.next_agent", key_hint::alt(KeyCode::Right)),
+    ("fixed.slash_command", key_hint::plain(KeyCode::Char('/'))),
+    ("fixed.shell_command", key_hint::plain(KeyCode::Char('!'))),
+    ("fixed.file_paths", key_hint::plain(KeyCode::Char('@'))),
+    (
+        "fixed.connector_mentions",
+        key_hint::plain(KeyCode::Char('$')),
+    ),
+];
+
+const TRANSCRIPT_BACKTRACK_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
+    (
+        "fixed.transcript_edit_previous",
+        key_hint::plain(KeyCode::Esc),
+    ),
+    (
+        "fixed.transcript_edit_previous",
+        key_hint::plain(KeyCode::Left),
+    ),
+    (
+        "fixed.transcript_edit_next",
+        key_hint::plain(KeyCode::Right),
+    ),
+    (
+        "fixed.transcript_confirm_edit",
+        key_hint::plain(KeyCode::Enter),
+    ),
+];
 
 /// Resolve one action with context -> global -> default precedence.
 ///
@@ -966,6 +1171,36 @@ mod tests {
     }
 
     #[test]
+    fn defaults_include_reassignable_main_surface_actions() {
+        let runtime = RuntimeKeymap::defaults();
+
+        assert_eq!(
+            runtime.app.clear_terminal,
+            vec![key_hint::ctrl(KeyCode::Char('l'))]
+        );
+        assert_eq!(
+            runtime.chat.decrease_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+        assert_eq!(
+            runtime.chat.edit_queued_message,
+            vec![key_hint::alt(KeyCode::Up), key_hint::shift(KeyCode::Left)]
+        );
+        assert_eq!(
+            runtime.composer.history_search_previous,
+            vec![key_hint::ctrl(KeyCode::Char('r'))]
+        );
+        assert_eq!(
+            runtime.composer.history_search_next,
+            vec![key_hint::ctrl(KeyCode::Char('s'))]
+        );
+    }
+
+    #[test]
     fn invalid_global_copy_binding_reports_global_path() {
         let mut keymap = TuiKeymap::default();
         keymap.global.copy = Some(one("meta-o"));
@@ -1033,6 +1268,34 @@ mod tests {
         keymap.list.cancel = Some(one("c"));
 
         expect_conflict(&keymap, "list.cancel", "approval.cancel");
+    }
+
+    #[test]
+    fn reassignable_fixed_shortcuts_conflict_until_original_action_is_unbound() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.copy = Some(one("alt-."));
+
+        expect_conflict(&keymap, "copy", "chat.increase_reasoning_effort");
+
+        keymap.chat.increase_reasoning_effort = Some(KeybindingsSpec::Many(vec![]));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("remapped key should be free");
+        assert_eq!(runtime.app.copy, vec![key_hint::alt(KeyCode::Char('.'))]);
+    }
+
+    #[test]
+    fn rejects_main_bindings_that_collide_with_remaining_fixed_shortcuts() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-v"));
+
+        expect_conflict(&keymap, "composer.submit", "fixed.paste_image");
+    }
+
+    #[test]
+    fn rejects_pager_bindings_that_collide_with_transcript_backtrack_keys() {
+        let mut keymap = TuiKeymap::default();
+        keymap.pager.close = Some(one("left"));
+
+        expect_conflict(&keymap, "close", "fixed.transcript_edit_previous");
     }
 
     #[test]

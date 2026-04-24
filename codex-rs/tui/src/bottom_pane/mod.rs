@@ -382,7 +382,7 @@ impl BottomPane {
 
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
-    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
+    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: Option<KeyBinding>) {
         self.pending_input_preview.set_edit_binding(binding);
         self.request_redraw();
     }
