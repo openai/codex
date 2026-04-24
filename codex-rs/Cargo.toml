@@ -40,10 +40,12 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
+    "file-watcher",
     "file-search",
     "linux-sandbox",
     "lmstudio",
     "login",
+    "mcp-tool-approval-templates",
     "codex-mcp",
     "mcp-server",
     "model-provider-info",
@@ -146,6 +148,7 @@ codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
+codex-file-watcher = { path = "file-watcher" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
@@ -153,6 +156,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-mcp-tool-approval-templates = { path = "mcp-tool-approval-templates" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }

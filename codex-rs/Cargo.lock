@@ -2361,10 +2361,12 @@ dependencies = [
  "codex-execpolicy",
  "codex-features",
  "codex-feedback",
+ "codex-file-watcher",
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
  "codex-mcp",
+ "codex-mcp-tool-approval-templates",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -2415,7 +2417,6 @@ dependencies = [
  "insta",
  "libc",
  "maplit",
- "notify",
  "once_cell",
  "openssl-sys",
  "opentelemetry",
@@ -2715,6 +2716,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-watcher"
+version = "0.0.0"
+dependencies = [
+ "notify",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
@@ -2885,6 +2897,16 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "codex-mcp-tool-approval-templates"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
