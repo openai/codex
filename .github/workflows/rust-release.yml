@@ -69,14 +69,11 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
+          # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
