@@ -12,6 +12,7 @@ use crate::runner_pipe::find_runner_exe;
 use crate::runner_pipe::pipe_pair;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
+use anyhow::Context;
 use anyhow::Result;
 use std::ffi::c_void;
 use std::fs::File;
@@ -157,7 +158,7 @@ fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
                 &mut connect_thread,
                 &connect_result_rx,
                 thread_handle,
-                pipe_label,
+                &pipe_label,
             )? {
                 result
             } else {
@@ -172,7 +173,7 @@ fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
                         &mut connect_thread,
                         &connect_result_rx,
                         thread_handle,
-                        pipe_label,
+                        &pipe_label,
                     )? {
                         result
                     } else {
