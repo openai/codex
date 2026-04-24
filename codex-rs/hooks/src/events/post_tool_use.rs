@@ -17,7 +17,6 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PostToolUseCommandInput;
-use crate::schema::PostToolUseToolInput;
 
 #[derive(Debug, Clone)]
 pub struct PostToolUseRequest {
@@ -30,7 +29,7 @@ pub struct PostToolUseRequest {
     pub tool_name: String,
     pub matcher_aliases: Vec<String>,
     pub tool_use_id: String,
-    pub command: String,
+    pub tool_input: Value,
     pub tool_response: Value,
 }
 
@@ -146,7 +145,8 @@ pub(crate) async fn run(
 ///
 /// Handler selection may include internal matcher aliases, but hook stdin keeps
 /// the canonical `tool_name` for logs and for consumers that pair pre/post
-/// events across processes.
+/// events across processes. Shell-like tools pass `{ "command": ... }` as
+/// `tool_input`; MCP tools pass their resolved JSON arguments.
 fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json::Error> {
     serde_json::to_string(&PostToolUseCommandInput {
         session_id: request.session_id.to_string(),
@@ -157,9 +157,7 @@ fn command_input_json(request: &PostToolUseRequest) -> Result<String, serde_json
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
         tool_name: request.tool_name.clone(),
-        tool_input: PostToolUseToolInput {
-            command: request.command.clone(),
-        },
+        tool_input: request.tool_input.clone(),
         tool_response: request.tool_response.clone(),
         tool_use_id: request.tool_use_id.clone(),
     })
@@ -545,6 +543,7 @@ mod tests {
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PostToolUse,
+            is_managed: false,
             matcher: Some("^Bash$".to_string()),
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
@@ -578,7 +577,7 @@ mod tests {
             tool_name: "Bash".to_string(),
             matcher_aliases: Vec::new(),
             tool_use_id: tool_use_id.to_string(),
-            command: "echo hello".to_string(),
+            tool_input: json!({ "command": "echo hello" }),
             tool_response: json!({"ok": true}),
         }
     }

@@ -36,6 +36,10 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "interrupt_message": {
+          "description": "Whether to record a model-visible message when an agent turn is interrupted. Defaults to true.",
+          "type": "boolean"
+        },
         "job_max_runtime_seconds": {
           "description": "Default maximum runtime in seconds for agent job workers.",
           "format": "uint64",
@@ -378,6 +382,9 @@
             "collaboration_modes": {
               "type": "boolean"
             },
+            "computer_use": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -631,7 +638,12 @@
           "$ref": "#/definitions/SandboxMode"
         },
         "service_tier": {
-          "$ref": "#/definitions/ServiceTier"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            }
+          ],
+          "description": "Optional explicit service tier preference for new turns (`fast` or `flex`)."
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
@@ -848,6 +860,117 @@
         }
       ]
     },
+    "HookEventsToml": {
+      "properties": {
+        "PermissionRequest": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PostToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "SessionStart": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "Stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
+        "UserPromptSubmit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "HookHandlerConfig": {
+      "oneOf": [
+        {
+          "properties": {
+            "async": {
+              "default": false,
+              "type": "boolean"
+            },
+            "command": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "default": null,
+              "type": "string"
+            },
+            "timeout": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "command"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "prompt"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "agent"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -897,6 +1020,22 @@
         "local"
       ],
       "type": "string"
+    },
+    "MatcherGroup": {
+      "properties": {
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookHandlerConfig"
+          },
+          "type": "array"
+        },
+        "matcher": {
+          "default": null,
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "McpServerEnvVar": {
       "anyOf": [
@@ -1270,6 +1409,10 @@
           },
           "description": "Tracks scopes where external config migration prompts should be suppressed."
         },
+        "fast_default_opt_out": {
+          "description": "Tracks whether the user opted out of Codex-managed fast defaults.",
+          "type": "boolean"
+        },
         "hide_full_access_warning": {
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
           "type": "boolean"
@@ -1570,7 +1713,7 @@
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
-      "description": "Raw MCP config shape used for deserialization and JSON Schema generation.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
+      "description": "Raw MCP config shape used for deserialization and supported-field JSON Schema generation.\n\nFields that are accepted only to produce targeted validation errors should be skipped in the generated schema.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
       "properties": {
         "args": {
           "default": null,
@@ -1578,9 +1721,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "bearer_token": {
-          "type": "string"
         },
         "bearer_token_env_var": {
           "type": "string"
@@ -2345,6 +2485,10 @@
       "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
+    "experimental_thread_config_endpoint": {
+      "description": "Experimental / do not use. When set, app-server fetches thread-scoped config from a remote service at this endpoint.",
+      "type": "string"
+    },
     "experimental_thread_store_endpoint": {
       "description": "Experimental / do not use. When set, app-server uses a remote thread store at this endpoint instead of the local filesystem/SQLite store.",
       "type": "string"
@@ -2394,6 +2538,9 @@
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "computer_use": {
           "type": "boolean"
         },
         "connectors": {
@@ -2633,6 +2780,14 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookEventsToml"
+        }
+      ],
+      "description": "Lifecycle hooks configured inline in TOML."
     },
     "include_apps_instructions": {
       "description": "Whether to inject the `<apps_instructions>` developer block.",

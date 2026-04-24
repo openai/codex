@@ -79,6 +79,7 @@ use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -221,7 +222,8 @@ impl Permissions {
     /// Effective runtime permissions after config requirements and runtime
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
             &self.file_system_sandbox_policy,
             self.network_sandbox_policy,
         )
@@ -430,6 +432,9 @@ pub struct Config {
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
+    /// Whether to record a model-visible message when an agent turn is interrupted.
+    pub agent_interrupt_message_enabled: bool,
+
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
 
@@ -543,6 +548,10 @@ pub struct Config {
     /// Experimental / do not use. When set, app-server uses a remote thread
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
+
+    /// Experimental / do not use. When set, app-server fetches thread-scoped
+    /// config from a remote service at this endpoint.
+    pub experimental_thread_config_endpoint: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1577,6 +1586,7 @@ impl Config {
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
+            managed_hooks: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -1665,7 +1675,11 @@ impl Config {
             },
             feature_overrides,
         );
-        let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
+        let features = ManagedFeatures::from_configured_with_warnings(
+            configured_features,
+            feature_requirements,
+            &mut startup_warnings,
+        )?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
@@ -1764,9 +1778,9 @@ impl Config {
                     })?;
                     let profile = resolve_permission_profile(permissions, default_permissions)?;
 
-                    // PermissionProfile only carries the network enabled bit today. Keep the
-                    // configured proxy/allowlist policy so active profiles can round-trip without
-                    // broadening network behavior.
+                    // PermissionProfile carries the active network sandbox bit, not the configured
+                    // proxy/allowlist policy. Keep that config so active profiles can round-trip
+                    // without broadening network behavior.
                     network_proxy_config_from_profile_network(profile.network.as_ref())
                 } else {
                     NetworkProxyConfig::default()
@@ -1852,7 +1866,8 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            let file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 &sandbox_policy,
                 resolved_cwd.as_path(),
             );
@@ -1943,6 +1958,13 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        if features.enabled(Feature::MultiAgentV2) && agent_max_threads_from_config.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when multi_agent_v2 is enabled",
+            ));
+        }
         let agent_max_threads = cfg
             .agents
             .as_ref()
@@ -1984,6 +2006,11 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
+        let agent_interrupt_message_enabled = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.interrupt_message)
+            .unwrap_or(true);
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
@@ -2030,14 +2057,24 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let service_tier = service_tier_override
-            .unwrap_or_else(|| config_profile.service_tier.or(cfg.service_tier));
+        let mut notices = cfg.notice.unwrap_or_default();
+        let service_tier = match service_tier_override {
+            Some(Some(service_tier)) => Some(service_tier),
+            Some(None) => {
+                // Preserve explicit standard/clear intent after the nested override
+                // collapses into `Config.service_tier = None`.
+                notices.fast_default_opt_out = Some(true);
+                None
+            }
+            None => config_profile.service_tier.or(cfg.service_tier),
+        };
         let service_tier = match service_tier {
             Some(ServiceTier::Fast) if features.enabled(Feature::FastMode) => {
                 Some(ServiceTier::Fast)
             }
+            Some(ServiceTier::Fast) => None,
             Some(ServiceTier::Flex) => Some(ServiceTier::Flex),
-            _ => None,
+            None => None,
         };
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
@@ -2338,6 +2375,7 @@ impl Config {
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,
+            agent_interrupt_message_enabled,
             codex_home,
             sqlite_home,
             log_dir,
@@ -2397,6 +2435,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_store_endpoint: cfg.experimental_thread_store_endpoint,
+            experimental_thread_config_endpoint: cfg.experimental_thread_config_endpoint,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -2413,7 +2452,7 @@ impl Config {
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
-            notices: cfg.notice.unwrap_or_default(),
+            notices,
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             analytics_enabled: config_profile

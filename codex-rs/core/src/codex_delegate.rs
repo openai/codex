@@ -47,8 +47,9 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use codex_login::AuthManager;
-use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
 
@@ -64,7 +65,7 @@ use crate::session::completed_session_loop_termination;
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
+    models_manager: SharedModelsManager,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
@@ -73,7 +74,6 @@ pub(crate) async fn run_codex_thread_interactive(
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
@@ -92,11 +92,18 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
-        inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
+        parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
+        environments: parent_ctx
+            .environments
+            .iter()
+            .map(TurnEnvironment::selection)
+            .collect(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
+        thread_store: Arc::clone(&parent_session.services.thread_store),
     }))
-    .await?;
+    .or_cancel(&cancel_token)
+    .await??;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
         let thread_config = codex.thread_config_snapshot().await;
         let client_metadata = parent_session.app_server_client_metadata().await;
@@ -158,7 +165,7 @@ pub(crate) async fn run_codex_thread_interactive(
 pub(crate) async fn run_codex_thread_one_shot(
     config: Config,
     auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
+    models_manager: SharedModelsManager,
     input: Vec<UserInput>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,

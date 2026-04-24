@@ -76,6 +76,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -1024,6 +1025,7 @@ fn session_configured_from_thread_start_response(
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
+        response.permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -1042,6 +1044,7 @@ fn session_configured_from_thread_resume_response(
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
+        response.permission_profile.clone().map(Into::into),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -1070,6 +1073,7 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
+    permission_profile: Option<PermissionProfile>,
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
@@ -1086,6 +1090,7 @@ fn session_configured_from_thread_response(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile,
         cwd,
         reasoning_effort,
         history_log_id: 0,
@@ -1131,6 +1136,9 @@ fn should_process_notification(
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }
         ServerNotification::ModelRerouted(notification) => {
+            notification.thread_id == thread_id && notification.turn_id == turn_id
+        }
+        ServerNotification::ModelVerification(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }
         ServerNotification::ThreadTokenUsageUpdated(notification) => {

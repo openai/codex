@@ -41,6 +41,7 @@ use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
+use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -432,7 +433,7 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
@@ -537,6 +538,13 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
+        /// Full permissions profile to use for tool calls such as `local_shell`.
+        ///
+        /// When omitted, `sandbox_policy` is used as a legacy compatibility
+        /// projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
         /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
@@ -572,7 +580,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
 
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
     },
@@ -1538,6 +1546,9 @@ pub enum EventMsg {
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
 
+    /// Backend recommends additional account verification for this turn.
+    ModelVerification(ModelVerificationEvent),
+
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
@@ -1964,6 +1975,7 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    CyberPolicy,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -2000,6 +2012,7 @@ impl CodexErrorInfo {
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
+            | Self::CyberPolicy
             | Self::HttpConnectionFailed { .. }
             | Self::ResponseStreamConnectionFailed { .. }
             | Self::InternalServerError
@@ -2181,6 +2194,18 @@ pub struct ModelRerouteEvent {
     pub from_model: String,
     pub to_model: String,
     pub reason: ModelRerouteReason,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ModelVerification {
+    TrustedAccessForCyber,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ModelVerificationEvent {
+    pub verifications: Vec<ModelVerification>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2615,7 +2640,7 @@ pub struct ConversationPathResponseEvent {
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
-    pub rollout_path: PathBuf,
+    pub rollout_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3033,12 +3058,13 @@ impl TurnContextItem {
         self.permission_profile.clone().unwrap_or_else(|| {
             let file_system_sandbox_policy =
                 self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                         &self.sandbox_policy,
                         &self.cwd,
                     )
                 });
-            PermissionProfile::from_runtime_permissions(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::from(&self.sandbox_policy),
             )
@@ -3672,8 +3698,16 @@ pub struct SessionConfiguredEvent {
     #[serde(default)]
     pub approvals_reviewer: ApprovalsReviewer,
 
-    /// How to sandbox commands executed in the system
+    /// Legacy sandbox projection for commands executed in the system.
+    ///
+    /// Consumers should prefer `permission_profile` when it is present. This
+    /// field remains available as a compatibility fallback for older emitters
+    /// and sessions that only expose legacy sandbox state.
     pub sandbox_policy: SandboxPolicy,
+
+    /// Canonical effective permissions for commands executed in the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
 
     /// Working directory that should be treated as the *root* of the
     /// session.
@@ -4610,7 +4644,7 @@ mod tests {
 
         assert_eq!(
             sorted_writable_roots(
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path())
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, cwd.path())
                     .get_writable_roots_with_cwd(cwd.path())
             ),
             vec![(canonical_cwd, vec![expected_dot_codex.to_path_buf()])]
@@ -4702,9 +4736,10 @@ mod tests {
         ];
 
         for expected in policies {
-            let actual = FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected, cwd.path())
-                .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
-                .expect("legacy bridge should preserve legacy policy semantics");
+            let actual =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected, cwd.path())
+                    .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
+                    .expect("legacy bridge should preserve legacy policy semantics");
 
             assert_same_sandbox_policy_semantics(&expected, &actual, cwd.path());
         }
@@ -5249,6 +5284,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,

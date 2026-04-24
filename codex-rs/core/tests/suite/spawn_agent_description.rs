@@ -4,8 +4,8 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -23,7 +23,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::sleep;
@@ -89,7 +88,7 @@ fn test_model_info(
     }
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) {
+async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let available_models = manager.list_models(RefreshStrategy::Online).await;

@@ -30,7 +30,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
 const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
@@ -42,6 +42,22 @@ fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result
         r#"[features]
 plugins = true
 "#,
+    )
+}
+
+fn write_plugins_enabled_config_with_base_url(
+    codex_home: &std::path::Path,
+    base_url: &str,
+) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{base_url}"
+
+[features]
+plugins = true
+"#,
+        ),
     )
 }
 
@@ -241,6 +257,158 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
         response.marketplace_load_errors
     );
     assert!(response.featured_plugin_ids.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    write_plugins_enabled_config_with_base_url(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./demo-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/account-123/settings"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response,
+        PluginListResponse {
+            marketplaces: Vec::new(),
+            marketplace_load_errors: Vec::new(),
+            featured_plugin_ids: Vec::new(),
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(repo_root.path().join("demo-plugin/.codex-plugin"))?;
+    write_plugins_enabled_config_with_base_url(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "local-marketplace",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./demo-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+    std::fs::write(
+        repo_root
+            .path()
+            .join("demo-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"demo-plugin"}"#,
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/account-123/settings"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":true}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    for _ in 0..2 {
+        let request_id = mcp
+            .send_plugin_list_request(PluginListParams {
+                cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            })
+            .await?;
+
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let response: PluginListResponse = to_response(response)?;
+        assert_eq!(response.marketplaces.len(), 1);
+        assert_eq!(response.marketplaces[0].name, "local-marketplace");
+    }
+
+    wait_for_workspace_settings_request_count(&server, /*expected_count*/ 1).await?;
     Ok(())
 }
 
@@ -963,7 +1131,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -997,7 +1165,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     let global_installed_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1027,6 +1195,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/list"))
         .and(query_param("scope", "GLOBAL"))
+        .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(global_directory_body))
@@ -1035,6 +1204,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/list"))
         .and(query_param("scope", "WORKSPACE"))
+        .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
@@ -1085,7 +1255,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         Some("ChatGPT Plugins")
     );
     assert_eq!(remote_marketplace.plugins.len(), 1);
-    assert_eq!(remote_marketplace.plugins[0].id, "linear@chatgpt-global");
+    assert_eq!(remote_marketplace.plugins[0].id, "plugins~Plugin_linear");
     assert_eq!(remote_marketplace.plugins[0].name, "linear");
     assert_eq!(remote_marketplace.plugins[0].source, PluginSource::Remote);
     assert_eq!(remote_marketplace.plugins[0].installed, true);
@@ -1144,7 +1314,7 @@ async fn plugin_list_remote_marketplace_replaces_local_marketplace_with_same_nam
     let global_directory_body = r#"{
   "plugins": [
     {
-      "id": "linear@chatgpt-global",
+      "id": "plugins~Plugin_linear",
       "name": "linear",
       "scope": "GLOBAL",
       "installation_policy": "AVAILABLE",
@@ -1170,30 +1340,27 @@ async fn plugin_list_remote_marketplace_replaces_local_marketplace_with_same_nam
     "next_page_token": null
   }
 }"#;
-    for (path_suffix, scope, body) in [
-        (
-            "/backend-api/ps/plugins/list",
-            "GLOBAL",
-            global_directory_body,
-        ),
-        ("/backend-api/ps/plugins/list", "WORKSPACE", empty_page_body),
-        (
-            "/backend-api/ps/plugins/installed",
-            "GLOBAL",
-            empty_page_body,
-        ),
-        (
-            "/backend-api/ps/plugins/installed",
-            "WORKSPACE",
-            empty_page_body,
-        ),
+    for (scope, body) in [
+        ("GLOBAL", global_directory_body),
+        ("WORKSPACE", empty_page_body),
     ] {
         Mock::given(method("GET"))
-            .and(path(path_suffix))
+            .and(path("/backend-api/ps/plugins/list"))
             .and(query_param("scope", scope))
+            .and(query_param("limit", "200"))
             .and(header("authorization", "Bearer chatgpt-token"))
             .and(header("chatgpt-account-id", "account-123"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+    }
+    for scope in ["GLOBAL", "WORKSPACE"] {
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("scope", scope))
+            .and(header("authorization", "Bearer chatgpt-token"))
+            .and(header("chatgpt-account-id", "account-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
             .mount(&server)
             .await;
     }
@@ -1350,6 +1517,14 @@ async fn wait_for_featured_plugin_request_count(
     expected_count: usize,
 ) -> Result<()> {
     wait_for_remote_plugin_request_count(server, "/plugins/featured", expected_count).await
+}
+
+async fn wait_for_workspace_settings_request_count(
+    server: &MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    wait_for_remote_plugin_request_count(server, "/accounts/account-123/settings", expected_count)
+        .await
 }
 
 async fn wait_for_remote_plugin_request_count(
