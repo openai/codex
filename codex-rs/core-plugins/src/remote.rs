@@ -17,6 +17,7 @@ pub const REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Plugins";
 pub const REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME: &str = "ChatGPT Workspace Plugins";
 
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,6 +568,7 @@ async fn get_remote_plugin_list_page(
     let client = build_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
     request = request.query(&[("scope", scope.api_value())]);
+    request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
     }
@@ -606,7 +608,7 @@ fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth, RemotePlu
     let Some(auth) = auth else {
         return Err(RemotePluginCatalogError::AuthRequired);
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         return Err(RemotePluginCatalogError::UnsupportedAuthMode);
     }
     Ok(auth)
@@ -616,16 +618,9 @@ fn authenticated_request(
     request: RequestBuilder,
     auth: &CodexAuth,
 ) -> Result<RequestBuilder, RemotePluginCatalogError> {
-    let token = auth
-        .get_token()
-        .map_err(RemotePluginCatalogError::AuthToken)?;
-    let mut request = request
+    Ok(request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .bearer_auth(token);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    Ok(request)
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()))
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(

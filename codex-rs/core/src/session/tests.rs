@@ -26,6 +26,8 @@ use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
@@ -43,8 +45,6 @@ use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
-use crate::RolloutRecorderParams;
-use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
@@ -1471,6 +1471,33 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_configured_omits_permission_profile_for_external_sandbox() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let sandbox_policy = SandboxPolicy::ExternalSandbox {
+        network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+    };
+    let expected_sandbox_policy = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.file_system_sandbox_policy = FileSystemSandboxPolicy::external_sandbox();
+        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    });
+
+    let test = builder.build(&server).await?;
+
+    assert_eq!(
+        test.session_configured.sandbox_policy,
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        test.session_configured.permission_profile, None,
+        "ExternalSandbox is enforced outside the PermissionProfile model, so SessionConfigured must \
+         not expose a lossy root-write profile"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     mount_sse_once(
@@ -1676,8 +1703,11 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 
 #[tokio::test]
 async fn thread_rollback_drops_last_turn_from_history() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let rollout_path = attach_rollout_recorder(&sess).await;
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
     let turn_1 = vec![
@@ -1740,8 +1770,11 @@ async fn thread_rollback_drops_last_turn_from_history() {
 
 #[tokio::test]
 async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
     let turn_1 = vec![user_message("turn 1 user")];
@@ -1766,7 +1799,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
 }
 
 #[tokio::test]
-async fn thread_rollback_fails_without_persisted_rollout_path() {
+async fn thread_rollback_fails_without_persisted_thread_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
     let initial_context = sess.build_initial_context(tc.as_ref()).await;
@@ -1778,7 +1811,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
         error_event.message,
-        "thread rollback requires a persisted rollout path"
+        "thread rollback requires persisted thread history"
     );
     assert_eq!(
         error_event.codex_error_info,
@@ -1789,8 +1822,11 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
 
 #[tokio::test]
 async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context_from_replay() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
 
     let first_context_item = tc.to_turn_context_item();
     let first_turn_id = first_context_item
@@ -1900,8 +1936,11 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
 
 #[tokio::test]
 async fn thread_rollback_restores_cleared_reference_context_item_after_compaction() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    attach_rollout_recorder(&sess).await;
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
 
     let first_context_item = tc.to_turn_context_item();
     let first_turn_id = first_context_item
@@ -2005,8 +2044,11 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
 
 #[tokio::test]
 async fn thread_rollback_persists_marker_and_replays_cumulatively() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
-    let rollout_path = attach_rollout_recorder(&sess).await;
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
     let turn_context_item = tc.to_turn_context_item();
 
     sess.persist_rollout_items(&[
@@ -2551,34 +2593,31 @@ async fn wait_for_thread_rollback_failed(rx: &async_channel::Receiver<Event>) ->
     }
 }
 
-async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            session.conversation_id,
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
+async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
+    let live_thread = LiveThread::create(
+        Arc::clone(&session.services.thread_store),
+        CreateThreadParams {
+            thread_id: session.conversation_id,
+            forked_from_id: None,
+            source: SessionSource::Exec,
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            event_persistence_mode: ThreadEventPersistenceMode::Limited,
+        },
     )
     .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    .expect("create thread persistence");
+    session.services.live_thread = Some(live_thread);
     session.ensure_rollout_materialized().await;
     session
         .flush_rollout()
         .await
         .expect("attached rollout should flush");
-    rollout_path
+    session
+        .current_rollout_path()
+        .await
+        .expect("load rollout path")
+        .expect("thread should have rollout path")
 }
 
 fn text_block(s: &str) -> serde_json::Value {
@@ -2614,6 +2653,104 @@ fn session_telemetry(
         "test".to_string(),
         session_source,
     )
+}
+
+#[test]
+fn get_service_tier_defaults_enterprise_accounts_to_fast() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::EnterpriseCbpUsageBased),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Business),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Team),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::SelfServeBusinessUsageBased),
+            /*fast_mode_enabled*/ true,
+        ),
+        Some(ServiceTier::Fast)
+    );
+}
+
+#[test]
+fn get_service_tier_respects_fast_default_opt_out() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ true,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ true,
+        ),
+        None
+    );
+}
+
+#[test]
+fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Pro),
+            /*fast_mode_enabled*/ true,
+        ),
+        None
+    );
+    assert_eq!(
+        get_service_tier(
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ false,
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn session_settings_null_service_tier_update_clears_service_tier() {
+    let session_configuration = make_session_configuration_for_tests().await;
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            service_tier: Some(None),
+            ..Default::default()
+        })
+        .expect("null service tier update should apply");
+
+    assert_eq!(updated.service_tier, None);
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
@@ -3010,6 +3147,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+        )),
         RolloutTraceRecorder::disabled(),
     )
     .await;
@@ -3132,7 +3272,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout: Mutex::new(None),
         rollout_trace: RolloutTraceRecorder::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -3153,9 +3292,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_store: codex_thread_store::LocalThreadStore::new(
+        live_thread: None,
+        thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
-        ),
+        )),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             conversation_id,
@@ -3329,6 +3469,9 @@ async fn make_session_with_config_and_rx(
         AgentControl::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config.as_ref()),
+        )),
         RolloutTraceRecorder::disabled(),
     )
     .await?;
@@ -3896,6 +4039,7 @@ async fn user_turn_updates_approvals_reviewer() {
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
@@ -4444,7 +4588,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             legacy_notify_argv: config.notify.clone(),
             ..HooksConfig::default()
         }),
-        rollout: Mutex::new(None),
         rollout_trace: RolloutTraceRecorder::disabled(),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
@@ -4465,9 +4608,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
         state_db: None,
-        thread_store: codex_thread_store::LocalThreadStore::new(
+        live_thread: None,
+        thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
-        ),
+        )),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             conversation_id,
@@ -5361,7 +5505,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
  {
-    let (session, previous_context) = make_session_and_context().await;
+    let (mut session, previous_context) = make_session_and_context().await;
     let next_model = if previous_context.model_info.slug == "gpt-5.4" {
         "gpt-5.2"
     } else {
@@ -5375,27 +5519,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
     }
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&mut session).await;
 
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
@@ -5440,30 +5564,10 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_split_file_system_policy_to_rollout()
  {
-    let (session, mut turn_context) = make_session_and_context().await;
+    let (mut session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
     turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&mut session).await;
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
@@ -5513,7 +5617,7 @@ async fn build_initial_context_prepends_model_switch_message() {
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_full_reinjection_to_rollout()
  {
-    let (session, previous_context) = make_session_and_context().await;
+    let (mut session, previous_context) = make_session_and_context().await;
     let next_model = if previous_context.model_info.slug == "gpt-5.4" {
         "gpt-5.2"
     } else {
@@ -5522,27 +5626,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     let turn_context = previous_context
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
-    let config = session.get_config().await;
-    let recorder = RolloutRecorder::new(
-        config.as_ref(),
-        RolloutRecorderParams::new(
-            ThreadId::default(),
-            /*forked_from_id*/ None,
-            SessionSource::Exec,
-            BaseInstructions::default(),
-            Vec::new(),
-            EventPersistenceMode::Limited,
-        ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
-    )
-    .await
-    .expect("create rollout recorder");
-    let rollout_path = recorder.rollout_path().to_path_buf();
-    {
-        let mut rollout = session.services.rollout.lock().await;
-        *rollout = Some(recorder);
-    }
+    let rollout_path = attach_thread_persistence(&mut session).await;
 
     session
         .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
@@ -6792,6 +6876,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -6871,6 +6956,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
+            source: crate::tools::context::ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",

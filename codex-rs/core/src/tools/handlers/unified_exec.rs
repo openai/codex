@@ -139,31 +139,30 @@ impl ToolHandler for UnifiedExecHandler {
             .ok()
             .map(|args| PreToolUsePayload {
                 tool_name: HookToolName::bash(),
-                command: args.cmd,
+                tool_input: serde_json::json!({ "command": args.cmd }),
             })
     }
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { .. } = payload else {
+        let ToolPayload::Function { .. } = &invocation.payload else {
             return None;
         };
 
         let command = result.hook_command.clone()?;
         let tool_use_id = if result.event_call_id.is_empty() {
-            call_id.to_string()
+            invocation.call_id.clone()
         } else {
             result.event_call_id.clone()
         };
-        let tool_response = result.post_tool_use_response(&tool_use_id, payload)?;
+        let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_use_id,
-            command,
+            tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
     }

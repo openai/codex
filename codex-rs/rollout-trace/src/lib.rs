@@ -7,6 +7,7 @@
 //! See `README.md` for the system diagram and reducer model.
 
 mod bundle;
+mod code_cell;
 mod compaction;
 mod inference;
 mod model;
@@ -14,10 +15,13 @@ mod payload;
 mod raw_event;
 mod recorder;
 mod reducer;
+mod tool_dispatch;
 mod writer;
 
 /// Conventional reduced-state cache name written next to a raw trace bundle.
 pub use bundle::REDUCED_STATE_FILE_NAME;
+/// No-op-capable handle for recording one code-mode runtime cell.
+pub use code_cell::CodeCellTraceContext;
 /// Raw checkpoint payload for a remote compaction install event.
 pub use compaction::CompactionCheckpointTracePayload;
 /// No-op-capable handle for recording remote-compaction requests.
@@ -54,5 +58,15 @@ pub use recorder::RolloutTraceRecorder;
 pub use recorder::ThreadStartedTraceMetadata;
 /// Replay a raw trace bundle and write/read its reduced `RolloutTrace`.
 pub use reducer::replay_bundle;
+/// Request data for the canonical Codex tool boundary.
+pub use tool_dispatch::ToolDispatchInvocation;
+/// Tool input observed at the registry boundary.
+pub use tool_dispatch::ToolDispatchPayload;
+/// Runtime source that caused a dispatch-level tool call.
+pub use tool_dispatch::ToolDispatchRequester;
+/// Result data returned from a dispatch-level tool call.
+pub use tool_dispatch::ToolDispatchResult;
+/// No-op-capable handle for recording one resolved tool dispatch.
+pub use tool_dispatch::ToolDispatchTraceContext;
 /// Append-only writer used by hot-path Codex instrumentation.
 pub use writer::TraceWriter;

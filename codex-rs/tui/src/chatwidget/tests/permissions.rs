@@ -189,6 +189,7 @@ async fn approvals_popup_shows_disabled_presets() {
 #[tokio::test]
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
@@ -198,25 +199,49 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
-    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
-    // and selection should wrap back to idx 0 (also enabled).
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    let mut disabled_shortcut = None;
+    let mut row_number = 0;
+    for line in popup.lines() {
+        let row = line
+            .trim_start()
+            .strip_prefix('\u{203a}')
+            .unwrap_or_else(|| line.trim_start())
+            .trim_start();
+        let mut chars = row.chars();
+        let has_numeric_shortcut =
+            chars.next().is_some_and(|ch| ch.is_ascii_digit()) && chars.next() == Some('.');
+        if has_numeric_shortcut || row.contains("(disabled)") {
+            row_number += 1;
+            if row.contains("(disabled)") {
+                disabled_shortcut = char::from_digit(row_number, 10);
+                break;
+            }
+        }
+    }
+    let disabled_shortcut = disabled_shortcut
+        .unwrap_or_else(|| panic!("expected at least one disabled selection row: {popup}"));
 
-    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
-    chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
+    for _ in 0..10 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+        let popup = render_bottom_popup(&chat, /*width*/ 80);
+        let selected_disabled = popup
+            .lines()
+            .find(|line| line.trim_start().starts_with('\u{203a}'))
+            .expect("expected a selected selection row")
+            .contains("(disabled)");
+        assert!(
+            !selected_disabled,
+            "navigation should skip disabled rows: {popup}"
+        );
+    }
+
+    // Press the hidden numeric shortcut for a disabled row; it should not close
+    // the popup or accept the preset.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(disabled_shortcut)));
 
     // Ensure the popup remains open and no selection actions were sent.
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("render approvals popup after disabled selection");
-    let screen = terminal.backend().vt100().screen().contents();
+    let screen = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
         screen.contains("Update Model Permissions"),
         "popup should remain open after selecting a disabled entry"
@@ -463,6 +488,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -516,6 +542,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,

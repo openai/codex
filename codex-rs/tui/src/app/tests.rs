@@ -1643,7 +1643,10 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         auto_review.approvals_reviewer
     );
     assert_eq!(app.runtime_approval_policy_override, None);
-    assert_eq!(app.runtime_sandbox_policy_override, None);
+    assert_eq!(
+        app.runtime_sandbox_policy_override,
+        Some(auto_review.sandbox_policy.clone())
+    );
     assert_eq!(
         op_rx.try_recv(),
         Ok(Op::OverrideTurnContext {
@@ -1675,7 +1678,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("guardian_approval = true"));
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
+    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
     Ok(())
@@ -1835,7 +1838,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("approvals_reviewer = \"auto_review\""));
+    assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -1969,7 +1972,7 @@ async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_rev
     );
     assert_eq!(
         profile_config.get("approvals_reviewer"),
-        Some(&TomlValue::String("auto_review".to_string()))
+        Some(&TomlValue::String("guardian_subagent".to_string()))
     );
     Ok(())
 }
@@ -3514,6 +3517,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             history_log_id: 0,
@@ -4122,6 +4126,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4185,6 +4190,7 @@ async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4278,6 +4284,7 @@ async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -4661,6 +4668,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: None,
         history_log_id: 0,
@@ -4773,6 +4781,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,

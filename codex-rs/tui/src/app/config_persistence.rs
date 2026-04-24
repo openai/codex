@@ -72,13 +72,15 @@ impl App {
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
-        {
-            tracing::warn!(%err, "failed to carry forward sandbox policy override");
-            self.chat_widget.add_error_message(format!(
-                "Failed to carry forward sandbox policy override: {err}"
-            ));
+        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref() {
+            if let Err(err) = config.permissions.sandbox_policy.set(policy.clone()) {
+                tracing::warn!(%err, "failed to carry forward sandbox policy override");
+                self.chat_widget.add_error_message(format!(
+                    "Failed to carry forward sandbox policy override: {err}"
+                ));
+            } else {
+                sync_runtime_permissions_from_legacy_sandbox_policy(config);
+            }
         }
     }
 
@@ -117,6 +119,7 @@ impl App {
                 .add_error_message(format!("{user_message_prefix}: {err}"));
             return false;
         }
+        sync_runtime_permissions_from_legacy_sandbox_policy(config);
 
         true
     }
@@ -306,11 +309,17 @@ impl App {
             self.chat_widget
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
+        if sandbox_policy_override.is_some() {
+            self.runtime_sandbox_policy_override =
+                Some(self.config.permissions.sandbox_policy.get().clone());
+        }
 
         if approval_policy_override.is_some()
             || approvals_reviewer_override.is_some()
             || sandbox_policy_override.is_some()
         {
+            self.sync_active_thread_permission_settings_to_cached_session()
+                .await;
             // This uses `OverrideTurnContext` intentionally: toggling the
             // experiment should update the active thread's effective approval
             // settings immediately, just like a `/approvals` selection. Without
@@ -534,6 +543,17 @@ impl App {
     }
 }
 
+fn sync_runtime_permissions_from_legacy_sandbox_policy(config: &mut Config) {
+    let sandbox_policy = config.permissions.sandbox_policy.get();
+    config.permissions.file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            sandbox_policy,
+            &config.cwd,
+        );
+    config.permissions.network_sandbox_policy =
+        codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,6 +658,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,

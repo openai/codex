@@ -3,12 +3,11 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
-    matches!(
-        auth_manager.and_then(AuthManager::auth_mode),
-        Some(AuthMode::Chatgpt)
-    )
+    auth_manager.is_some_and(AuthManager::current_auth_uses_codex_backend)
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +81,8 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
+    pub(crate) server_model_warning_emitted: AtomicBool,
+    pub(crate) model_verification_emitted: AtomicBool,
 }
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -101,13 +102,11 @@ impl TurnContext {
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
-        let is_chatgpt_auth = self
+        let uses_codex_backend = self
             .auth_manager
             .as_deref()
-            .and_then(AuthManager::auth_cached)
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth);
-        self.features.apps_enabled_for_auth(is_chatgpt_auth)
+            .is_some_and(AuthManager::current_auth_uses_codex_backend);
+        self.features.apps_enabled_for_auth(uses_codex_backend)
     }
 
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
@@ -216,6 +215,12 @@ impl TurnContext {
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
+            server_model_warning_emitted: AtomicBool::new(
+                self.server_model_warning_emitted.load(Ordering::Relaxed),
+            ),
+            model_verification_emitted: AtomicBool::new(
+                self.model_verification_emitted.load(Ordering::Relaxed),
+            ),
         }
     }
 
@@ -469,6 +474,8 @@ impl Session {
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
+            server_model_warning_emitted: AtomicBool::new(false),
+            model_verification_emitted: AtomicBool::new(false),
         }
     }
 

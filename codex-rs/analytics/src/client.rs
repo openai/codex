@@ -312,16 +312,9 @@ async fn send_track_events(
     let Some(auth) = auth_manager.auth().await else {
         return;
     };
-    if !auth.is_chatgpt_auth() {
+    if !auth.uses_codex_backend() {
         return;
     }
-    let access_token = match auth.get_token() {
-        Ok(token) => token,
-        Err(_) => return,
-    };
-    let Some(account_id) = auth.get_account_id() else {
-        return;
-    };
 
     let base_url = base_url.trim_end_matches('/');
     let url = format!("{base_url}/codex/analytics-events/events");
@@ -330,8 +323,7 @@ async fn send_track_events(
     let response = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .bearer_auth(&access_token)
-        .header("chatgpt-account-id", &account_id)
+        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()

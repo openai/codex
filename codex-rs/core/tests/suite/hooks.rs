@@ -254,6 +254,74 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn write_pre_tool_use_hook_toml(
+    home: &Path,
+    script_name: &str,
+    log_name: &str,
+    matcher: Option<&str>,
+    mode: &str,
+    reason: &str,
+) -> Result<()> {
+    let script_path = home.join(script_name);
+    let log_path = home.join(log_name);
+    let mode_json = serde_json::to_string(mode).context("serialize pre tool use mode")?;
+    let reason_json = serde_json::to_string(reason).context("serialize pre tool use reason")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+mode = {mode_json}
+reason = {reason_json}
+
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+if mode == "json_deny":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason
+        }}
+    }}))
+elif mode == "exit_2":
+    sys.stderr.write(reason + "\n")
+    raise SystemExit(2)
+"#,
+        log_path = log_path.display(),
+        mode_json = mode_json,
+        reason_json = reason_json,
+    );
+    let matcher_line = matcher
+        .map(|matcher| format!("matcher = '{matcher}'\n"))
+        .unwrap_or_default();
+    let config_toml = format!(
+        r#"[features]
+codex_hooks = true
+
+[hooks]
+
+[[hooks.PreToolUse]]
+{matcher_line}
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 {script_path}'
+statusMessage = "running pre tool use hook"
+"#,
+        matcher_line = matcher_line,
+        script_path = script_path.display(),
+    );
+
+    fs::write(&script_path, script).context("write TOML pre tool use hook script")?;
+    fs::write(home.join("config.toml"), config_toml).context("write config.toml hooks")?;
+    Ok(())
+}
+
 fn write_permission_request_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -546,12 +614,7 @@ fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
 }
 
 fn read_pre_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
-    fs::read_to_string(home.join("pre_tool_use_hook_log.jsonl"))
-        .context("read pre tool use hook log")?
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("parse pre tool use hook log line"))
-        .collect()
+    read_hook_inputs_from_log(home.join("pre_tool_use_hook_log.jsonl").as_path())
 }
 
 fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -605,11 +668,15 @@ fn assert_single_permission_request_hook_input_for_tool(
 }
 
 fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
-    fs::read_to_string(home.join("post_tool_use_hook_log.jsonl"))
-        .context("read post tool use hook log")?
+    read_hook_inputs_from_log(home.join("post_tool_use_hook_log.jsonl").as_path())
+}
+
+fn read_hook_inputs_from_log(log_path: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(log_path)
+        .with_context(|| format!("read hook log {}", log_path.display()))?
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).context("parse post tool use hook log line"))
+        .map(|line| serde_json::from_str(line).context("parse hook log line"))
         .collect()
 }
 
@@ -1781,6 +1848,190 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_tool_use_blocks_shell_when_defined_in_config_toml() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-config-toml";
+    let marker = std::env::temp_dir().join("pretooluse-config-toml-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "config.toml hook blocked it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        if let Err(error) = write_pre_tool_use_hook_toml(
+            home,
+            "pre_tool_use_config_hook.py",
+            "pre_tool_use_config_hook_log.jsonl",
+            Some("^Bash$"),
+            "json_deny",
+            "blocked by config toml hook",
+        ) {
+            panic!("failed to write config.toml hook test fixture: {error}");
+        }
+    });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover config.toml marker")?;
+    }
+
+    test.submit_turn_with_policy(
+        "run the blocked shell command from config toml",
+        codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by config toml hook"),
+        "blocked tool output should surface the config.toml hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "config.toml hook should block command execution"
+    );
+
+    let hook_inputs = read_hook_inputs_from_log(
+        test.codex_home_path()
+            .join("pre_tool_use_config_hook_log.jsonl")
+            .as_path(),
+    )?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_tool_use_merges_hooks_json_and_config_toml() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-merged-sources";
+    let command = "printf merged-hooks".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "merged hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        if let Err(error) = write_pre_tool_use_hook(home, Some("^Bash$"), "allow", "unused") {
+            panic!("failed to write hooks.json hook fixture: {error}");
+        }
+        if let Err(error) = write_pre_tool_use_hook_toml(
+            home,
+            "pre_tool_use_toml_hook.py",
+            "pre_tool_use_toml_hook_log.jsonl",
+            Some("^Bash$"),
+            "allow",
+            "unused",
+        ) {
+            panic!("failed to write config.toml hook fixture: {error}");
+        }
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with merged hook sources")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("merged-hooks"),
+        "shell command output should still reach the model",
+    );
+
+    let json_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?
+        .into_iter()
+        .map(|hook_input| {
+            serde_json::json!({
+                "hook_event_name": hook_input["hook_event_name"],
+                "tool_name": hook_input["tool_name"],
+                "tool_use_id": hook_input["tool_use_id"],
+                "tool_input": hook_input["tool_input"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let toml_hook_inputs = read_hook_inputs_from_log(
+        test.codex_home_path()
+            .join("pre_tool_use_toml_hook_log.jsonl")
+            .as_path(),
+    )?
+    .into_iter()
+    .map(|hook_input| {
+        serde_json::json!({
+            "hook_event_name": hook_input["hook_event_name"],
+            "tool_name": hook_input["tool_name"],
+            "tool_use_id": hook_input["tool_use_id"],
+            "tool_input": hook_input["tool_input"],
+        })
+    })
+    .collect::<Vec<_>>();
+    let expected_hook_inputs = vec![serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_use_id": call_id,
+        "tool_input": {
+            "command": command,
+        },
+    })];
+    assert_eq!(expected_hook_inputs, json_hook_inputs);
+    assert_eq!(expected_hook_inputs, toml_hook_inputs);
 
     Ok(())
 }
