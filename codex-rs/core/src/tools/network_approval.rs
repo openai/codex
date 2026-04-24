@@ -21,11 +21,11 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -127,11 +127,8 @@ fn allows_network_approval_flow(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
 }
 
-fn sandbox_policy_allows_network_approval_flow(policy: &SandboxPolicy) -> bool {
-    matches!(
-        policy,
-        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-    )
+fn permission_profile_allows_network_approval_flow(permission_profile: &PermissionProfile) -> bool {
+    matches!(permission_profile, PermissionProfile::Managed { .. })
 }
 
 impl PendingApprovalDecision {
@@ -359,7 +356,7 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
+        if !permission_profile_allows_network_approval_flow(&turn_context.permission_profile()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(

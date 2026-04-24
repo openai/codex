@@ -56,13 +56,13 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
@@ -756,7 +756,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 
     let memories_root = codex_home.path().join("memories").abs();
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -788,17 +788,13 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![memories_root],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![cwd.path().join("docs").abs(),],
-            },
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         }
     );
     assert_eq!(
-        config.permissions.network_sandbox_policy,
+        config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
     Ok(())
@@ -927,7 +923,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert_eq!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .glob_scan_max_depth,
         Some(2)
     );
@@ -937,7 +933,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .contains(&FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
@@ -949,7 +945,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         !config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .iter()
             .any(|entry| matches!(
@@ -1135,7 +1131,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(
@@ -1149,10 +1145,6 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: Vec::new(),
-            },
             network_access: false,
         }
     );
@@ -1185,7 +1177,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
@@ -1212,16 +1204,12 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: Vec::new(),
-            },
             network_access: false,
         }
     );
@@ -1247,7 +1235,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert!(
@@ -1344,7 +1332,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
     .await?;
 
     assert!(
-        config.permissions.network_sandbox_policy.is_enabled(),
+        config.permissions.network_sandbox_policy().is_enabled(),
         "expected network sandbox policy to be enabled",
     );
     assert!(
@@ -1484,7 +1472,6 @@ trust_level = "trusted"
             resolution,
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root.clone()],
-                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -1525,7 +1512,6 @@ exclude_slash_tmp = true
             resolution,
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![writable_root],
-                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -1582,20 +1568,20 @@ exclude_slash_tmp = true
 
         let sandbox_policy = config.permissions.sandbox_policy.get();
         assert_eq!(
-            config.permissions.file_system_sandbox_policy,
+            config.permissions.file_system_sandbox_policy(),
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
             "case `{name}` should preserve filesystem semantics from legacy config"
         );
         assert_eq!(
-            config.permissions.network_sandbox_policy,
+            config.permissions.network_sandbox_policy(),
             NetworkSandboxPolicy::from(sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
         assert_eq!(
             config
                 .permissions
-                .file_system_sandbox_policy
-                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy, cwd.path())
+                .file_system_sandbox_policy()
+                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy(), cwd.path())
                 .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
             sandbox_policy.clone(),
             "case `{name}` should round-trip through split policies without drift"
@@ -2040,24 +2026,25 @@ fn web_search_mode_disabled_overrides_legacy_request() {
 #[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode =
-        resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::new_read_only_policy());
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy());
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &permission_profile);
 
     assert_eq!(mode, WebSearchMode::Cached);
 }
 
 #[test]
-fn web_search_mode_for_turn_prefers_live_for_danger_full_access() {
+fn web_search_mode_for_turn_prefers_live_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Live);
 }
 
 #[test]
-fn web_search_mode_for_turn_respects_disabled_for_danger_full_access() {
+fn web_search_mode_for_turn_respects_disabled_for_disabled_permissions() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Disabled);
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Disabled);
 }
@@ -2077,7 +2064,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
             })
         }
     })?;
-    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::DangerFullAccess);
+    let mode = resolve_web_search_mode_for_turn(&web_search_mode, &PermissionProfile::Disabled);
 
     assert_eq!(mode, WebSearchMode::Cached);
     Ok(())
@@ -5229,11 +5216,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                    &SandboxPolicy::new_read_only_policy(),
-                ),
-                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5427,11 +5411,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5579,11 +5560,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5716,11 +5694,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -6544,6 +6519,96 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 }
 
 #[tokio::test]
+async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements = crate::config_loader::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        })
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    let expected_sandbox_policy = SandboxPolicy::new_read_only_policy();
+    assert_eq!(
+        *config.permissions.sandbox_policy.get(),
+        expected_sandbox_policy
+    );
+    assert_eq!(
+        config.permissions.permission_profile(),
+        PermissionProfile::read_only()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_preserves_split_write_roots() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = codex_home.path().join("workspace");
+    let outside_root = codex_home.path().join("outside-write");
+    std::fs::create_dir_all(&cwd)?;
+    std::fs::create_dir_all(&outside_root)?;
+    let outside_root =
+        AbsolutePathBuf::from_absolute_path(outside_root).expect("outside root is absolute");
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: outside_root.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::Managed,
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd))
+        .harness_overrides(ConfigOverrides {
+            permission_profile: Some(permission_profile),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(outside_root.as_path(), config.cwd.as_path())
+    );
+    assert!(matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::WorkspaceWrite { .. }
+    ));
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn requirements_web_search_mode_overrides_danger_full_access_default() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
@@ -6571,7 +6636,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     assert_eq!(
         resolve_web_search_mode_for_turn(
             &config.web_search_mode,
-            config.permissions.sandbox_policy.get(),
+            &config.permissions.permission_profile(),
         ),
         WebSearchMode::Cached,
     );

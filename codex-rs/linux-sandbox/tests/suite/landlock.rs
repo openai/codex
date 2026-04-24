@@ -10,13 +10,14 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -87,7 +88,6 @@ async fn run_cmd_result_with_writable_roots(
             .iter()
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
-        read_only_access: Default::default(),
         network_access,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
@@ -134,12 +134,15 @@ async fn run_cmd_result_with_policies(
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
 
     process_exec_tool_call(
         params,
-        &sandbox_policy,
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
+        &permission_profile,
         &sandbox_cwd,
         &codex_linux_sandbox_exe,
         use_legacy_landlock,
@@ -396,11 +399,10 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
     let result = process_exec_tool_call(
         params,
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::from(&sandbox_policy),
+        &permission_profile,
         &sandbox_cwd,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
@@ -561,7 +563,6 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -634,7 +635,6 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -709,7 +709,6 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
     std::fs::write(&blocked_target, "secret").expect("seed blocked file");
 
     let sandbox_policy = SandboxPolicy::ReadOnly {
-        access: ReadOnlyAccess::FullAccess,
         network_access: true,
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![

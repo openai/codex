@@ -2119,20 +2119,6 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
-        let (file_system_sandbox_policy, network_sandbox_policy) = match event
-            .permission_profile
-            .as_ref()
-        {
-            Some(permission_profile) => permission_profile.to_runtime_permissions(),
-            None => (
-                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                    &event.sandbox_policy,
-                    &event.cwd,
-                ),
-                codex_protocol::permissions::NetworkSandboxPolicy::from(&event.sandbox_policy),
-            ),
-        };
-
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -2160,18 +2146,28 @@ impl ChatWidget {
             self.config.permissions.approval_policy =
                 Constrained::allow_only(event.approval_policy);
         }
-        if let Err(err) = self
-            .config
-            .permissions
-            .sandbox_policy
-            .set(event.sandbox_policy.clone())
-        {
-            tracing::warn!(%err, "failed to sync sandbox_policy from SessionConfigured");
+        let permission_sync = match event.permission_profile.clone() {
+            Some(permission_profile) => self
+                .config
+                .permissions
+                .set_permission_profile(permission_profile, event.cwd.as_path()),
+            None => self
+                .config
+                .permissions
+                .set_legacy_sandbox_policy(event.sandbox_policy.clone(), event.cwd.as_path()),
+        };
+        if let Err(err) = permission_sync {
+            tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
+            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &event.sandbox_policy,
+                )
+            });
+            self.config.permissions.permission_profile =
+                Constrained::allow_only(permission_profile);
         }
-        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -9788,16 +9784,9 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config.permissions.sandbox_policy.set(policy)?;
-        let sandbox_policy = self.config.permissions.sandbox_policy.get();
-        self.config.permissions.file_system_sandbox_policy =
-            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                sandbox_policy,
-                &self.config.cwd,
-            );
-        self.config.permissions.network_sandbox_policy =
-            codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
-        Ok(())
+        self.config
+            .permissions
+            .set_legacy_sandbox_policy(policy, self.config.cwd.as_path())
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

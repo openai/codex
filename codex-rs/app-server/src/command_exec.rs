@@ -710,9 +710,7 @@ mod tests {
     use std::collections::HashMap;
 
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
-    use codex_protocol::protocol::ReadOnlyAccess;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -731,12 +729,12 @@ mod tests {
 
     fn windows_sandbox_exec_request() -> ExecRequest {
         let sandbox_policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
             network_access: false,
         };
+        let cwd = AbsolutePathBuf::current_dir().expect("current dir");
         ExecRequest::new(
             vec!["cmd".to_string()],
-            AbsolutePathBuf::current_dir().expect("current dir"),
+            cwd,
             HashMap::new(),
             /*network*/ None,
             ExecExpiration::DefaultTimeout,
@@ -744,9 +742,7 @@ mod tests {
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Disabled,
             /*windows_sandbox_private_desktop*/ false,
-            sandbox_policy.clone(),
-            FileSystemSandboxPolicy::from(&sandbox_policy),
-            NetworkSandboxPolicy::from(&sandbox_policy),
+            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
             /*arg0*/ None,
         )
     }
@@ -837,9 +833,9 @@ mod tests {
             request_id: codex_app_server_protocol::RequestId::Integer(100),
         };
         let sandbox_policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
             network_access: false,
         };
+        let cwd = AbsolutePathBuf::current_dir().expect("current dir");
 
         manager
             .start(StartCommandExecParams {
@@ -848,7 +844,7 @@ mod tests {
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest::new(
                     vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
-                    AbsolutePathBuf::current_dir().expect("current dir"),
+                    cwd.clone(),
                     HashMap::new(),
                     /*network*/ None,
                     ExecExpiration::Cancellation(CancellationToken::new()),
@@ -856,9 +852,7 @@ mod tests {
                     SandboxType::None,
                     WindowsSandboxLevel::Disabled,
                     /*windows_sandbox_private_desktop*/ false,
-                    sandbox_policy.clone(),
-                    FileSystemSandboxPolicy::from(&sandbox_policy),
-                    NetworkSandboxPolicy::from(&sandbox_policy),
+                    PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy),
                     /*arg0*/ None,
                 ),
                 started_network_proxy: None,

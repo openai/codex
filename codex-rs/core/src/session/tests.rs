@@ -37,13 +37,14 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::NonSteerableTurnKind;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -148,6 +149,10 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 mod guardian_tests;
+
+fn permission_profile_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> PermissionProfile {
+    PermissionProfile::from_legacy_sandbox_policy(sandbox_policy)
+}
 
 struct InstructionsTestCase {
     slug: &'static str,
@@ -583,7 +588,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         /*requirements*/ None,
-        &SandboxPolicy::new_workspace_write_policy(),
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
     )?;
     let mut exec_policy = Policy::empty();
     exec_policy.add_network_rule(
@@ -596,7 +601,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
-        &SandboxPolicy::new_workspace_write_policy(),
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
         /*network_policy_decider*/ None,
         /*blocked_request_observer*/ None,
         /*managed_network_requirements_enabled*/ false,
@@ -627,7 +632,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
             managed_allowed_domains_only: Some(true),
             ..Default::default()
         }),
-        &SandboxPolicy::new_workspace_write_policy(),
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
     )?;
     let mut exec_policy = Policy::empty();
     exec_policy.add_network_rule(
@@ -640,7 +645,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
-        &SandboxPolicy::new_workspace_write_policy(),
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy()),
         /*network_policy_decider*/ None,
         /*blocked_request_observer*/ None,
         /*managed_network_requirements_enabled*/ false,
@@ -664,7 +669,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
             enabled: Some(true),
             ..Default::default()
         }),
-        &SandboxPolicy::DangerFullAccess,
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
     let exec_policy = Policy::empty();
     let decider_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -679,7 +684,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
-        &SandboxPolicy::DangerFullAccess,
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
         Some(network_policy_decider),
         /*blocked_request_observer*/ None,
         /*managed_network_requirements_enabled*/ true,
@@ -687,7 +692,9 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
     )
     .await?;
 
-    let spec = spec.recompute_for_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())?;
+    let spec = spec.recompute_for_permission_profile(&permission_profile_for_sandbox_policy(
+        &SandboxPolicy::new_workspace_write_policy(),
+    ))?;
     spec.apply_to_started_proxy(&started_proxy).await?;
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(current_cfg.network.allowed_domains(), None);
@@ -744,12 +751,12 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         network_config,
         Some(requirements),
-        &initial_policy,
+        &permission_profile_for_sandbox_policy(&initial_policy),
     )?;
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &Policy::empty(),
-        &initial_policy,
+        &permission_profile_for_sandbox_policy(&initial_policy),
         /*network_policy_decider*/ None,
         /*blocked_request_observer*/ None,
         /*managed_network_requirements_enabled*/ false,
@@ -770,11 +777,19 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
         let mut state = session.state.lock().await;
         let mut config = (*state.session_configuration.original_config_do_not_use).clone();
         config.permissions.network = Some(spec);
-        config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(initial_policy.clone());
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(initial_policy.clone(), cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         state.session_configuration.original_config_do_not_use = Arc::new(config);
-        state.session_configuration.sandbox_policy =
-            codex_config::Constrained::allow_any(initial_policy);
+        state
+            .session_configuration
+            .permission_profile
+            .set(PermissionProfile::from_legacy_sandbox_policy(
+                &initial_policy,
+            ))
+            .expect("test setup should allow permission profile");
     }
     session.services.network_proxy = Some(started_proxy);
 
@@ -814,12 +829,15 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
             enabled: Some(true),
             ..Default::default()
         }),
-        &SandboxPolicy::DangerFullAccess,
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
     let session = make_session_with_config(move |config| {
-        config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         config.permissions.network = Some(network_spec);
     })
     .await?;
@@ -877,12 +895,15 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             enabled: Some(true),
             ..Default::default()
         }),
-        &SandboxPolicy::DangerFullAccess,
+        &permission_profile_for_sandbox_policy(&SandboxPolicy::DangerFullAccess),
     )?;
 
     let session = make_session_with_config(move |config| {
-        config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         config.permissions.network = Some(network_spec);
 
         let layers = config
@@ -949,11 +970,15 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
             enabled: Some(true),
             ..Default::default()
         }),
-        &sandbox_policy,
+        &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
     let session = make_session_with_config(move |config| {
-        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(sandbox_policy, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         config.permissions.network = Some(network_spec);
     })
     .await?;
@@ -972,11 +997,15 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
             enabled: Some(true),
             ..Default::default()
         }),
-        &sandbox_policy,
+        &permission_profile_for_sandbox_policy(&sandbox_policy),
     )?;
 
     let (session, rx) = make_session_with_config_and_rx(move |config| {
-        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        let cwd = config.cwd.clone();
+        config
+            .permissions
+            .set_legacy_sandbox_policy(sandbox_policy, cwd.as_path())
+            .expect("test setup should allow sandbox policy");
         config.permissions.network = Some(network_spec);
     })
     .await?;
@@ -1483,8 +1512,11 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
     let expected_sandbox_policy = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
-        config.permissions.file_system_sandbox_policy = FileSystemSandboxPolicy::external_sandbox();
-        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+        config.permissions.permission_profile =
+            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::external_sandbox(),
+                NetworkSandboxPolicy::Restricted,
+            ));
     });
 
     let test = builder.build(&server).await?;
@@ -1640,7 +1672,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
-        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        sandbox_policy: turn_context.sandbox_policy(),
         permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
@@ -2238,9 +2270,7 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2342,9 +2372,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2791,9 +2819,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2823,7 +2849,7 @@ fn turn_environments_for_tests(
 }
 
 #[tokio::test]
-async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
+async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd_only_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     let workspace = tempfile::tempdir().expect("create temp dir");
     let project_root = workspace.path().join("project");
@@ -2833,18 +2859,13 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     let docs_dir = docs_dir.abs();
 
     session_configuration.cwd = original_cwd.abs();
-    session_configuration.sandbox_policy =
-        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![docs_dir.clone()],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        });
-    session_configuration.file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::CurrentWorkingDirectory,
@@ -2856,6 +2877,14 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
             access: FileSystemAccessMode::Read,
         },
     ]);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+    session_configuration.permission_profile = codex_config::Constrained::allow_any(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        ),
+    );
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -2865,8 +2894,8 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
         .expect("cwd-only update should succeed");
 
     assert_eq!(
-        updated.file_system_sandbox_policy,
-        session_configuration.file_system_sandbox_policy
+        updated.file_system_sandbox_policy(),
+        file_system_sandbox_policy
     );
 }
 
@@ -2877,8 +2906,6 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
     session_configuration.cwd = cwd.path().abs();
 
     let workspace_policy = SandboxPolicy::new_workspace_write_policy();
-    session_configuration.sandbox_policy =
-        codex_config::Constrained::allow_any(workspace_policy.clone());
     let deny_entry = FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
@@ -2892,7 +2919,13 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
         );
     existing_file_system_policy.glob_scan_max_depth = Some(2);
     existing_file_system_policy.entries.push(deny_entry.clone());
-    session_configuration.file_system_sandbox_policy = existing_file_system_policy;
+    session_configuration.permission_profile = codex_config::Constrained::allow_any(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&workspace_policy),
+            &existing_file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+    );
 
     let requested_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &workspace_policy,
@@ -2913,7 +2946,7 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
     expected_file_system_policy.glob_scan_max_depth = Some(2);
     expected_file_system_policy.entries.push(deny_entry);
     assert_eq!(
-        updated.file_system_sandbox_policy,
+        updated.file_system_sandbox_policy(),
         expected_file_system_policy
     );
 }
@@ -3010,27 +3043,24 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let workspace = tempfile::tempdir().expect("create temp dir");
     let project_root = workspace.path().join("project");
     let original_cwd = project_root.join("subdir");
-    let docs_dir = original_cwd.join("docs");
-    std::fs::create_dir_all(&docs_dir).expect("create docs dir");
-    let docs_dir = docs_dir.abs();
-
     session_configuration.cwd = original_cwd.abs();
-    session_configuration.sandbox_policy =
-        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![docs_dir],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        });
-    session_configuration.file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-            session_configuration.sandbox_policy.get(),
-            &session_configuration.cwd,
-        );
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &sandbox_policy,
+        &session_configuration.cwd,
+    );
+    session_configuration.permission_profile = codex_config::Constrained::allow_any(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            NetworkSandboxPolicy::from(&sandbox_policy),
+        ),
+    );
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
@@ -3039,12 +3069,15 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
         })
         .expect("cwd-only update should succeed");
 
-    assert_eq!(
-        updated.file_system_sandbox_policy,
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-            updated.sandbox_policy.get(),
-            &project_root,
-        )
+    let expected_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &updated.sandbox_policy(),
+        &project_root,
+    );
+    assert!(
+        updated
+            .file_system_sandbox_policy()
+            .is_semantically_equivalent_to(&expected_file_system_policy, &project_root),
+        "cwd-only update should rederive the legacy filesystem policy for the new cwd"
     );
 }
 
@@ -3118,9 +3151,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3224,9 +3255,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -3272,7 +3301,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.sandbox_policy,
+            &config.permissions.permission_profile,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -3444,9 +3473,7 @@ async fn make_session_with_config_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4587,9 +4614,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
-        sandbox_policy: config.permissions.sandbox_policy.clone(),
-        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        permission_profile: config.permissions.permission_profile.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -4635,7 +4660,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
-            &config.permissions.sandbox_policy,
+            &config.permissions.permission_profile,
         ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
@@ -5461,7 +5486,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
 
 fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
     let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-        turn_context.sandbox_policy.get(),
+        &turn_context.sandbox_policy(),
         &turn_context.cwd,
     );
     policy.entries.push(FileSystemSandboxEntry {
@@ -5475,12 +5500,7 @@ fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSy
 
 #[tokio::test]
 async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() {
-    let (_session, mut turn_context) = make_session_and_context().await;
-    turn_context.file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-            turn_context.sandbox_policy.get(),
-            &turn_context.cwd,
-        );
+    let (_session, turn_context) = make_session_and_context().await;
 
     let item = turn_context.to_turn_context_item();
 
@@ -5495,7 +5515,11 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
 async fn turn_context_item_stores_split_file_system_sandbox_policy_when_different() {
     let (_session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &file_system_sandbox_policy,
+        turn_context.network_sandbox_policy(),
+    );
 
     let item = turn_context.to_turn_context_item();
 
@@ -5632,7 +5656,11 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
  {
     let (mut session, mut turn_context) = make_session_and_context().await;
     let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
-    turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+        turn_context.permission_profile.enforcement(),
+        &file_system_sandbox_policy,
+        turn_context.network_sandbox_policy(),
+    );
     let rollout_path = attach_thread_persistence(&mut session).await;
 
     session
@@ -6885,7 +6913,6 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     use crate::tools::sandboxing::ExecApprovalRequirement;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
 
     let (session, mut turn_context_raw) = make_session_and_context().await;
@@ -6972,23 +6999,17 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     // command. Force DangerFullAccess so this check stays focused on approval
     // policy rather than platform-specific sandbox behavior.
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique turn context Arc");
-    turn_context_mut
-        .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("test setup should allow updating sandbox policy");
-    turn_context_mut.file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
-    turn_context_mut.network_sandbox_policy =
-        NetworkSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
+    turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
+    let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
     let exec_approval_requirement = session
         .services
         .exec_policy
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
             command: &params.command,
             approval_policy: turn_context.approval_policy.value(),
-            sandbox_policy: turn_context.sandbox_policy.get(),
-            file_system_sandbox_policy: &turn_context.file_system_sandbox_policy,
+            permission_profile: turn_context.permission_profile(),
+            file_system_sandbox_policy: &file_system_sandbox_policy,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         })

@@ -61,7 +61,7 @@ use codex_login::default_client::originator;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TokenUsage;
@@ -884,7 +884,8 @@ fn codex_turn_event_params(
         session_source: _session_source,
         model,
         model_provider,
-        sandbox_policy,
+        permission_profile,
+        permission_profile_cwd,
         reasoning_effort,
         reasoning_summary,
         service_tier,
@@ -909,7 +910,10 @@ fn codex_turn_event_params(
         parent_thread_id: thread_metadata.parent_thread_id.clone(),
         model: Some(model),
         model_provider,
-        sandbox_policy: Some(sandbox_policy_mode(&sandbox_policy)),
+        sandbox_policy: Some(sandbox_policy_mode(
+            &permission_profile,
+            permission_profile_cwd.as_path(),
+        )),
         reasoning_effort: reasoning_effort.map(|value| value.to_string()),
         reasoning_summary: reasoning_summary_mode(reasoning_summary),
         service_tier: service_tier
@@ -954,12 +958,23 @@ fn codex_turn_event_params(
     }
 }
 
-fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
-    match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "full_access",
-        SandboxPolicy::ReadOnly { .. } => "read_only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace_write",
-        SandboxPolicy::ExternalSandbox { .. } => "external_sandbox",
+fn sandbox_policy_mode(permission_profile: &PermissionProfile, cwd: &Path) -> &'static str {
+    match permission_profile {
+        PermissionProfile::Disabled => "full_access",
+        PermissionProfile::External { .. } => "external_sandbox",
+        PermissionProfile::Managed { .. } => {
+            let file_system_policy = permission_profile.file_system_sandbox_policy();
+            if file_system_policy.has_full_disk_write_access() {
+                "full_access"
+            } else if file_system_policy
+                .get_writable_roots_with_cwd(cwd)
+                .is_empty()
+            {
+                "read_only"
+            } else {
+                "workspace_write"
+            }
+        }
     }
 }
 
