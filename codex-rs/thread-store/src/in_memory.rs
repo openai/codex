@@ -180,7 +180,9 @@ impl ThreadStore for InMemoryThreadStore {
         let mut items = state
             .created_threads
             .keys()
-            .map(|thread_id| stored_thread_from_state(&state, *thread_id, false))
+            .map(|thread_id| {
+                stored_thread_from_state(&state, *thread_id, /*include_history*/ false)
+            })
             .collect::<ThreadStoreResult<Vec<_>>>()?;
         items.sort_by_key(|item| item.thread_id.to_string());
         Ok(ThreadPage {
@@ -198,7 +200,7 @@ impl ThreadStore for InMemoryThreadStore {
         if let Some(name) = params.patch.name {
             state.names.insert(params.thread_id, Some(name));
         }
-        stored_thread_from_state(&state, params.thread_id, false)
+        stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
     }
 
     async fn archive_thread(&self, _params: ArchiveThreadParams) -> ThreadStoreResult<()> {
@@ -212,7 +214,7 @@ impl ThreadStore for InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.unarchive_thread += 1;
-        stored_thread_from_state(&state, params.thread_id, false)
+        stored_thread_from_state(&state, params.thread_id, /*include_history*/ false)
     }
 }
 
