@@ -161,8 +161,6 @@ def main() -> int:
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
-        if package == "codex" and vendor_src is not None:
-            native_components = ["codex"]
         target_filter = PACKAGE_TARGET_FILTERS.get(package)
 
         if native_components:
@@ -180,8 +178,6 @@ def main() -> int:
                 native_components,
                 target_filter={target_filter} if target_filter else None,
             )
-            if package == "codex":
-                make_codex_self_contained(staging_dir)
 
         if release_version:
             staging_dir_str = str(staging_dir)
@@ -417,21 +413,6 @@ def copy_native_binaries(
         if missing_targets:
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
-
-
-def make_codex_self_contained(staging_dir: Path) -> None:
-    package_json_path = staging_dir / "package.json"
-    with open(package_json_path, "r", encoding="utf-8") as fh:
-        package_json = json.load(fh)
-
-    package_json["files"] = ["bin", "vendor"]
-    package_json.pop("optionalDependencies", None)
-
-    with open(package_json_path, "w", encoding="utf-8") as out:
-        json.dump(package_json, out, indent=2)
-        out.write("\n")
-
-
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
