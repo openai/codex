@@ -637,17 +637,8 @@ pub enum TerminalResizeReflowMaxRows {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TerminalResizeReflowReplayMode {
-    #[default]
-    Standard,
-    Direct,
-    Prefill,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TerminalResizeReflowConfig {
     pub max_rows: TerminalResizeReflowMaxRows,
-    pub replay_mode: TerminalResizeReflowReplayMode,
 }
 
 impl AuthManagerConfig for Config {
@@ -1517,17 +1508,6 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
             Some(0) => TerminalResizeReflowMaxRows::Disabled,
             Some(rows) => TerminalResizeReflowMaxRows::Limit(rows),
             None => TerminalResizeReflowMaxRows::Auto,
-        },
-        replay_mode: match tui.terminal_resize_reflow.replay_mode {
-            codex_config::types::TerminalResizeReflowReplayModeToml::Standard => {
-                TerminalResizeReflowReplayMode::Standard
-            }
-            codex_config::types::TerminalResizeReflowReplayModeToml::Direct => {
-                TerminalResizeReflowReplayMode::Direct
-            }
-            codex_config::types::TerminalResizeReflowReplayModeToml::Prefill => {
-                TerminalResizeReflowReplayMode::Prefill
-            }
         },
     }
 }

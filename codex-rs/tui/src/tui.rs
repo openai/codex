@@ -41,7 +41,6 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
-use crate::legacy_core::config::TerminalResizeReflowReplayMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -174,34 +173,12 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
-fn insert_history_mode_for_resize_reflow(
-    replay_mode: TerminalResizeReflowReplayMode,
-    is_zellij: bool,
-) -> crate::insert_history::InsertHistoryMode {
-    match replay_mode {
-        TerminalResizeReflowReplayMode::Standard => {
-            crate::insert_history::InsertHistoryMode::new(is_zellij)
-        }
-        TerminalResizeReflowReplayMode::Direct => {
-            crate::insert_history::InsertHistoryMode::FullScreenReplayDirect
-        }
-        TerminalResizeReflowReplayMode::Prefill => {
-            crate::insert_history::InsertHistoryMode::FullScreenReplayPrefill
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::ResizeReflowDrawRefresh;
-    use super::insert_history_mode_for_resize_reflow;
     use super::keyboard_enhancement_disabled_for;
     use super::parse_bool_env;
-    use super::resize_reflow_draw_refresh;
     use super::should_emit_notification;
     use super::vscode_terminal_detected;
-    use crate::insert_history::InsertHistoryMode;
-    use crate::legacy_core::config::TerminalResizeReflowReplayMode;
     use codex_config::types::NotificationCondition;
 
     #[test]
@@ -218,38 +195,6 @@ mod tests {
             NotificationCondition::Always,
             /*terminal_focused*/ true
         ));
-    }
-
-    #[test]
-    fn resize_reflow_replay_mode_selects_insert_history_mode() {
-        assert_eq!(
-            insert_history_mode_for_resize_reflow(
-                TerminalResizeReflowReplayMode::Standard,
-                /*is_zellij*/ false,
-            ),
-            InsertHistoryMode::Standard
-        );
-        assert_eq!(
-            insert_history_mode_for_resize_reflow(
-                TerminalResizeReflowReplayMode::Standard,
-                /*is_zellij*/ true,
-            ),
-            InsertHistoryMode::Zellij
-        );
-        assert_eq!(
-            insert_history_mode_for_resize_reflow(
-                TerminalResizeReflowReplayMode::Direct,
-                /*is_zellij*/ false,
-            ),
-            InsertHistoryMode::FullScreenReplayDirect
-        );
-        assert_eq!(
-            insert_history_mode_for_resize_reflow(
-                TerminalResizeReflowReplayMode::Prefill,
-                /*is_zellij*/ false,
-            ),
-            InsertHistoryMode::FullScreenReplayPrefill
-        );
     }
 
     #[test]
@@ -320,32 +265,6 @@ mod tests {
         assert!(!vscode_terminal_detected(
             /*linux_term_program*/ None, /*windows_term_program*/ None
         ));
-    }
-
-    #[test]
-    fn resize_reflow_replay_invalidates_without_clearing_after_insert() {
-        assert_eq!(
-            resize_reflow_draw_refresh(
-                /*needs_full_repaint*/ true, /*flushed_reflow_history*/ true
-            ),
-            ResizeReflowDrawRefresh {
-                clear_after_history_flush: false,
-                invalidate_viewport: true,
-            }
-        );
-    }
-
-    #[test]
-    fn resize_reflow_draw_refresh_preserves_legacy_clear_without_replay() {
-        assert_eq!(
-            resize_reflow_draw_refresh(
-                /*needs_full_repaint*/ true, /*flushed_reflow_history*/ false
-            ),
-            ResizeReflowDrawRefresh {
-                clear_after_history_flush: true,
-                invalidate_viewport: true,
-            }
-        );
     }
 }
 
@@ -544,9 +463,6 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
-    // Reflowed transcript rows are written through a separate queue so the feature-on draw path can
-    // preserve the inline viewport while the legacy queue keeps its pre-feature insertion behavior.
-    pending_reflow_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -560,24 +476,6 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ResizeReflowDrawRefresh {
-    clear_after_history_flush: bool,
-    invalidate_viewport: bool,
-}
-
-fn resize_reflow_draw_refresh(
-    needs_full_repaint: bool,
-    flushed_reflow_history: bool,
-) -> ResizeReflowDrawRefresh {
-    ResizeReflowDrawRefresh {
-        // Resize reflow clears the terminal before queueing rebuilt rows. Clearing again after
-        // replay can erase the source-backed tail rows that were just inserted.
-        clear_after_history_flush: needs_full_repaint && !flushed_reflow_history,
-        invalidate_viewport: needs_full_repaint,
-    }
 }
 
 impl Tui {
@@ -603,7 +501,6 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
-            pending_reflow_history_lines: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -782,14 +679,8 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
-    pub(crate) fn insert_reflowed_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_reflow_history_lines.extend(lines);
-        self.frame_requester().schedule_frame();
-    }
-
     pub fn clear_pending_history_lines(&mut self) {
         self.pending_history_lines.clear();
-        self.pending_reflow_history_lines.clear();
     }
 
     /// Resize the inline viewport to `height` rows, scrolling content above it if
@@ -916,31 +807,6 @@ impl Tui {
         Ok(is_zellij)
     }
 
-    /// Write reflowed transcript rows with the configured resize-replay strategy.
-    ///
-    /// These rows come from a source-backed rebuild after Codex has already decided which
-    /// transcript cells should be visible at the new width. Standard replay uses the same
-    /// viewport-aware insertion path as startup replay; full-screen replay modes keep their
-    /// experimental terminal-specific behavior isolated behind the config knob.
-    fn flush_pending_reflow_history_lines(
-        terminal: &mut Terminal,
-        pending_reflow_history_lines: &mut Vec<Line<'static>>,
-        replay_mode: TerminalResizeReflowReplayMode,
-        is_zellij: bool,
-    ) -> Result<bool> {
-        if pending_reflow_history_lines.is_empty() {
-            return Ok(false);
-        }
-
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_reflow_history_lines.clone(),
-            insert_history_mode_for_resize_reflow(replay_mode, is_zellij),
-        )?;
-        pending_reflow_history_lines.clear();
-        Ok(true)
-    }
-
     pub fn draw(
         &mut self,
         height: u16,
@@ -1009,7 +875,6 @@ impl Tui {
     pub fn draw_with_resize_reflow(
         &mut self,
         height: u16,
-        replay_mode: TerminalResizeReflowReplayMode,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -1034,19 +899,8 @@ impl Tui {
                 self.is_zellij,
             )?;
             needs_full_repaint |= flushed_history;
-            let flushed_reflow_history = Self::flush_pending_reflow_history_lines(
-                terminal,
-                &mut self.pending_reflow_history_lines,
-                replay_mode,
-                self.is_zellij,
-            )?;
-            needs_full_repaint |= flushed_reflow_history;
 
-            let refresh = resize_reflow_draw_refresh(needs_full_repaint, flushed_reflow_history);
-            if refresh.clear_after_history_flush {
-                terminal.clear()?;
-            }
-            if refresh.invalidate_viewport {
+            if needs_full_repaint {
                 terminal.invalidate_viewport();
             }
 

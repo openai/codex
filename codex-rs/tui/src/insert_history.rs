@@ -2,8 +2,7 @@
 //!
 //! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
 //! cell is an escape-sequence operation rather than a normal ratatui render. The mode determines
-//! whether new history may move the inline viewport or whether resize reflow should replay rows
-//! through full-screen strategies while preserving the viewport chosen by the reflow draw path.
+//! how to create room for new history above the inline viewport.
 
 use std::fmt;
 use std::io;
@@ -46,8 +45,6 @@ use ratatui::text::Span;
 pub enum InsertHistoryMode {
     Standard,
     Zellij,
-    FullScreenReplayPrefill,
-    FullScreenReplayDirect,
 }
 
 impl InsertHistoryMode {
@@ -79,11 +76,8 @@ where
 /// emits newlines at the screen bottom to create space (since Zellij ignores scroll
 /// region escapes) and writes lines at computed absolute positions. Both modes
 /// update `terminal.viewport_area` so subsequent draw passes know where the
-/// viewport moved to. Resize reflow can also use those viewport-aware modes after
-/// clearing old scrollback. In `FullScreenReplayPrefill` mode blank rows are used
-/// to create scrollback space before replaying content, matching xterm.js behavior.
-/// `FullScreenReplayDirect` keeps the no-prefill strategy isolated for terminals
-/// where the prefilled blank rows become user-visible scrollback.
+/// viewport moved to. Resize reflow uses the same viewport-aware path after
+/// clearing old scrollback.
 pub fn insert_history_lines_with_mode<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
@@ -130,13 +124,9 @@ where
     let wrapped_lines = wrapped_rows as u16;
 
     match mode {
-        InsertHistoryMode::Zellij | InsertHistoryMode::FullScreenReplayPrefill => {
+        InsertHistoryMode::Zellij => {
             let space_below = screen_size.height.saturating_sub(area.bottom());
-            let shift_down = if matches!(mode, InsertHistoryMode::Zellij) {
-                wrapped_lines.min(space_below)
-            } else {
-                0
-            };
+            let shift_down = wrapped_lines.min(space_below);
             let scroll_up_amount = wrapped_lines.saturating_sub(shift_down);
 
             if scroll_up_amount > 0 {
@@ -157,33 +147,6 @@ where
 
             let cursor_top = area.top().saturating_sub(scroll_up_amount + shift_down);
             queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
-
-            for (i, line) in wrapped.iter().enumerate() {
-                if i > 0 {
-                    queue!(writer, Print("\r\n"))?;
-                }
-                write_history_line(writer, line, wrap_width)?;
-            }
-
-            if matches!(mode, InsertHistoryMode::FullScreenReplayPrefill) {
-                let reserve_rows = wrapped_lines
-                    .min(screen_size.height)
-                    .saturating_sub(area.top());
-                if reserve_rows > 0 {
-                    queue!(
-                        writer,
-                        MoveTo(/*x*/ 0, screen_size.height.saturating_sub(1))
-                    )?;
-                    for _ in 0..reserve_rows {
-                        queue!(writer, Print("\n"))?;
-                    }
-                }
-            }
-        }
-        InsertHistoryMode::FullScreenReplayDirect => {
-            // Rebuild scrollback with transcript content itself. Pre-scrolling with blank
-            // newlines creates visible empty scrollback in terminals such as Terminal.app.
-            queue!(writer, MoveTo(/*x*/ 0, /*y*/ 0))?;
 
             for (i, line) in wrapped.iter().enumerate() {
                 if i > 0 {
@@ -876,105 +839,5 @@ mod tests {
         );
         assert_eq!(term.viewport_area, Rect::new(0, 5, width, 2));
         assert_eq!(term.visible_history_rows(), 1);
-    }
-
-    #[test]
-    fn vt100_full_screen_replay_preserves_viewport() {
-        let width: u16 = 32;
-        let height: u16 = 8;
-        let backend = VT100Backend::new(width, height);
-        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 2);
-        term.set_viewport_area(viewport);
-
-        let lines: Vec<Line<'static>> = (0..12)
-            .map(|idx| Line::from(format!("reflow line {idx:02}")))
-            .collect();
-        insert_history_lines_with_mode(
-            &mut term,
-            lines,
-            InsertHistoryMode::FullScreenReplayPrefill,
-        )
-        .expect("insert reflow history");
-
-        let start_row = 0;
-        let rows: Vec<String> = term
-            .backend()
-            .vt100()
-            .screen()
-            .rows(start_row, width)
-            .collect();
-        assert!(
-            rows.iter().any(|row| row.contains("reflow line 11")),
-            "expected replayed history tail in screen output, rows: {rows:?}"
-        );
-        assert_eq!(term.viewport_area, viewport);
-        assert_eq!(term.visible_history_rows(), viewport.top());
-    }
-
-    #[test]
-    fn vt100_full_screen_replay_reserves_viewport_rows_for_tui() {
-        let width: u16 = 32;
-        let height: u16 = 8;
-        let backend = VT100Backend::new(width, height);
-        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 3);
-        term.set_viewport_area(viewport);
-
-        let lines: Vec<Line<'static>> = (0..6)
-            .map(|idx| Line::from(format!("reflow line {idx:02}")))
-            .collect();
-        insert_history_lines_with_mode(
-            &mut term,
-            lines,
-            InsertHistoryMode::FullScreenReplayPrefill,
-        )
-        .expect("insert reflow history");
-
-        let rows: Vec<String> = term
-            .backend()
-            .vt100()
-            .screen()
-            .rows(/*start*/ 0, width)
-            .collect();
-        assert!(
-            rows[viewport.top() as usize - 1].contains("reflow line 05"),
-            "expected replayed tail immediately above viewport, rows: {rows:?}"
-        );
-        assert!(
-            rows[viewport.top() as usize..]
-                .iter()
-                .all(|row| !row.contains("reflow line")),
-            "expected replay not to occupy reserved viewport rows, rows: {rows:?}"
-        );
-        assert_eq!(term.viewport_area, viewport);
-    }
-
-    #[test]
-    fn vt100_full_screen_replay_direct_does_not_reserve_viewport_rows() {
-        let width: u16 = 32;
-        let height: u16 = 8;
-        let backend = VT100Backend::new(width, height);
-        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 3);
-        term.set_viewport_area(viewport);
-
-        let lines: Vec<Line<'static>> = (0..6)
-            .map(|idx| Line::from(format!("reflow line {idx:02}")))
-            .collect();
-        insert_history_lines_with_mode(&mut term, lines, InsertHistoryMode::FullScreenReplayDirect)
-            .expect("insert reflow history");
-
-        let rows: Vec<String> = term
-            .backend()
-            .vt100()
-            .screen()
-            .rows(/*start*/ 0, width)
-            .collect();
-        assert!(
-            rows[viewport.top() as usize].contains("reflow line 04"),
-            "expected direct replay not to prefill blank viewport rows, rows: {rows:?}"
-        );
-        assert_eq!(term.viewport_area, viewport);
     }
 }

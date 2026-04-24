@@ -665,7 +665,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Rebuild Codex-owned transcript scrollback when the terminal width changes.",
             announcement: "",
         },
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,

@@ -1159,16 +1159,12 @@ impl App {
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
                     if terminal_resize_reflow_active {
-                        tui.draw_with_resize_reflow(
-                            desired_height,
-                            self.config.terminal_resize_reflow.replay_mode,
-                            |frame| {
-                                self.chat_widget.render(frame.area(), frame.buffer);
-                                if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                                    frame.set_cursor_position((x, y));
-                                }
-                            },
-                        )?;
+                        tui.draw_with_resize_reflow(desired_height, |frame| {
+                            self.chat_widget.render(frame.area(), frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
+                            }
+                        })?;
                     } else {
                         tui.draw(desired_height, |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);

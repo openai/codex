@@ -534,19 +534,6 @@ pub struct ModelAvailabilityNuxConfig {
 
 pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
 
-/// How resize reflow should rebuild terminal scrollback during this experimental phase.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum TerminalResizeReflowReplayModeToml {
-    /// Rebuild scrollback through the same viewport-aware insertion path used during startup.
-    #[default]
-    Standard,
-    /// Rebuild scrollback using transcript rows directly, without extra blank prefill rows.
-    Direct,
-    /// Rebuild scrollback after reserving blank rows for terminals that need viewport prefill.
-    Prefill,
-}
-
 /// Experimental terminal resize-reflow tuning knobs.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -557,10 +544,6 @@ pub struct TerminalResizeReflowToml {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub max_rows: Option<usize>,
-
-    /// Temporary testing knob for selecting the terminal scrollback replay strategy.
-    #[serde(default)]
-    pub replay_mode: TerminalResizeReflowReplayModeToml,
 }
 
 /// Collection of settings that are specific to the TUI.
