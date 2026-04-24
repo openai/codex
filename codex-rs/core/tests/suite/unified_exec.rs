@@ -1231,6 +1231,196 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.tool_output_token_limit = Some(50);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let call_id = "uexec-clamped-max-output";
+    let args = serde_json::json!({
+        "cmd": "line_number=1; while [ \"$line_number\" -le 999 ]; do printf 'EXEC-LINE-%04d xxxxxxxxxxxxxxxxxxxx\\n' \"$line_number\"; line_number=$((line_number + 1)); done",
+        "yield_time_ms": 3_000,
+        "max_output_tokens": 70_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run clamped max output test",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs
+        .get(call_id)
+        .expect("missing clamped exec_command output");
+
+    assert!(
+        output.output.contains("tokens truncated"),
+        "expected output to be truncated by policy despite large model request: {:?}",
+        output.output
+    );
+    assert!(
+        output.output.len() < 1_000,
+        "expected policy-sized output, got {} bytes",
+        output.output.len()
+    );
+    assert!(
+        output.original_token_count.unwrap_or_default() > 50,
+        "original output should exceed policy budget"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.tool_output_token_limit = Some(50);
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_remote_aware(&server).await?;
+
+    let start_call_id = "uexec-stdin-clamp-start";
+    let start_args = serde_json::json!({
+        "cmd": "printf 'READY\\n'; read trigger; line_number=1; while [ \"$line_number\" -le 999 ]; do printf 'STDIN-LINE-%04d yyyyyyyyyyyyyyyyyyyy\\n' \"$line_number\"; line_number=$((line_number + 1)); done",
+        "yield_time_ms": 500,
+        "tty": true,
+    });
+
+    let stdin_call_id = "uexec-stdin-clamped-max-output";
+    let stdin_args = serde_json::json!({
+        "chars": "go\n",
+        "session_id": 1000,
+        "yield_time_ms": 3_000,
+        "max_output_tokens": 70_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                stdin_call_id,
+                "write_stdin",
+                &serde_json::to_string(&stdin_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "run clamped write_stdin output test",
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let start_output = outputs
+        .get(start_call_id)
+        .expect("missing start exec_command output");
+    assert!(
+        start_output.process_id.is_some(),
+        "start command should leave a running process for write_stdin"
+    );
+
+    let stdin_output = outputs
+        .get(stdin_call_id)
+        .expect("missing clamped write_stdin output");
+    assert!(
+        stdin_output.output.contains("tokens truncated"),
+        "expected write_stdin output to be truncated by policy despite large model request: {:?}",
+        stdin_output.output
+    );
+    assert!(
+        stdin_output.output.len() < 1_000,
+        "expected policy-sized write_stdin output, got {} bytes",
+        stdin_output.output.len()
+    );
+    assert!(
+        stdin_output.original_token_count.unwrap_or_default() > 50,
+        "original write_stdin output should exceed policy budget"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_defaults_to_pipe() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

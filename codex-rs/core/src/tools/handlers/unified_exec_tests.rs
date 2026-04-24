@@ -2,6 +2,7 @@ use super::*;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::unified_exec::DEFAULT_MAX_OUTPUT_TOKENS;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_tools::UnifiedExecShellMode;
@@ -22,6 +23,34 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
+
+#[test]
+fn max_output_tokens_resolves_default_and_clamps_to_policy() {
+    let cases = [
+        (Some(5_000), TruncationPolicy::Tokens(10_000), 5_000),
+        (Some(70_000), TruncationPolicy::Tokens(10_000), 10_000),
+        (None, TruncationPolicy::Tokens(1_000), 1_000),
+        (
+            None,
+            TruncationPolicy::Tokens(20_000),
+            DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        (Some(70_000), TruncationPolicy::Bytes(12_000), 3_000),
+    ];
+
+    let actual = cases
+        .iter()
+        .map(|(max_output_tokens, truncation_policy, _expected)| {
+            effective_max_output_tokens(*max_output_tokens, *truncation_policy)
+        })
+        .collect::<Vec<_>>();
+    let expected = cases
+        .iter()
+        .map(|(_max_output_tokens, _truncation_policy, expected)| *expected)
+        .collect::<Vec<_>>();
+
+    assert_eq!(actual, expected);
+}
 
 async fn invocation_for_payload(
     tool_name: &str,
