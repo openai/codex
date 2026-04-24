@@ -834,7 +834,16 @@ fn build_payload_deny_write_paths(
             }
         })
         .collect();
-    deny_write_paths.extend(allow_deny_paths.deny);
+    // Preserve explicit split-policy deny carveouts, but avoid reintroducing
+    // the legacy top-level `.git` deny into the elevated backend. That legacy
+    // deny causes normal trusted git workflows like `git worktree add` and
+    // `git commit` to bounce out for repeated approvals on Windows.
+    deny_write_paths.extend(
+        allow_deny_paths
+            .deny
+            .into_iter()
+            .filter(|path| path.file_name() != Some(std::ffi::OsStr::new(".git"))),
+    );
     deny_write_paths
 }
 
@@ -1537,10 +1546,8 @@ mod tests {
         let codex_home = tmp.path().join("codex-home");
         let command_cwd = tmp.path().join("workspace");
         let extra_write_root = tmp.path().join("extra-write-root");
-        let command_git = command_cwd.join(".git");
         let extra_codex = extra_write_root.join(".codex");
         let explicit_deny = tmp.path().join("explicit-deny");
-        fs::create_dir_all(&command_git).expect("create command .git");
         fs::create_dir_all(&extra_codex).expect("create extra .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![
@@ -1569,13 +1576,53 @@ mod tests {
 
         assert_eq!(
             [
-                dunce::canonicalize(&command_git).expect("canonical command .git"),
                 dunce::canonicalize(&extra_codex).expect("canonical extra .codex"),
                 explicit_deny,
             ]
             .into_iter()
             .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn payload_deny_write_paths_keeps_non_git_protected_children() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let command_git = command_cwd.join(".git");
+        let command_agents = command_cwd.join(".agents");
+        fs::create_dir_all(&command_git).expect("create command .git");
+        fs::create_dir_all(&command_agents).expect("create command .agents");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let request = super::SandboxSetupRequest {
+            policy: &policy,
+            policy_cwd: &command_cwd,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths = super::build_payload_deny_write_paths(&request, None);
+        let deny_write_paths: HashSet<PathBuf> = deny_write_paths.into_iter().collect();
+
+        assert!(
+            !deny_write_paths.contains(&dunce::canonicalize(&command_git).expect("canonical .git"))
+        );
+        assert!(
+            deny_write_paths
+                .contains(&dunce::canonicalize(&command_agents).expect("canonical .agents"))
         );
     }
 
