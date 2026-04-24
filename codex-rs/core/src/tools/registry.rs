@@ -8,7 +8,8 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
-use crate::sandbox_tags::sandbox_tag;
+use crate::sandbox_tags::permission_profile_policy_tag;
+use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -25,7 +26,6 @@ use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -274,14 +274,17 @@ impl ToolRegistry {
         let metric_tags = [
             (
                 "sandbox",
-                sandbox_tag(
-                    &invocation.turn.sandbox_policy,
+                permission_profile_sandbox_tag(
+                    &invocation.turn.permission_profile,
                     invocation.turn.windows_sandbox_level,
                 ),
             ),
             (
                 "sandbox_policy",
-                sandbox_policy_tag(&invocation.turn.sandbox_policy),
+                permission_profile_policy_tag(
+                    &invocation.turn.permission_profile,
+                    invocation.turn.cwd.as_path(),
+                ),
             ),
         ];
         let (mcp_server, mcp_server_origin) = match &invocation.payload {
@@ -568,15 +571,6 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) ->
     }
 }
 
-fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
-    match policy {
-        SandboxPolicy::ReadOnly { .. } => "read-only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-        SandboxPolicy::DangerFullAccess => "danger-full-access",
-        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
-    }
-}
-
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable
 // and decoupled from core's internal tool runtime representation.
 impl From<&ToolPayload> for HookToolInput {
@@ -661,9 +655,16 @@ async fn dispatch_after_tool_use_hook(
                     success: dispatch.success,
                     duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
                     mutating: dispatch.mutating,
-                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
-                        .to_string(),
-                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+                    sandbox: permission_profile_sandbox_tag(
+                        &turn.permission_profile,
+                        turn.windows_sandbox_level,
+                    )
+                    .to_string(),
+                    sandbox_policy: permission_profile_policy_tag(
+                        &turn.permission_profile,
+                        turn.cwd.as_path(),
+                    )
+                    .to_string(),
                     output_preview: dispatch.output_preview.clone(),
                 },
             },
