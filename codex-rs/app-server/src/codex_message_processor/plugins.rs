@@ -425,7 +425,7 @@ impl CodexMessageProcessor {
                 let auth = self.auth_manager.auth().await;
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.apps_enabled_for_auth(
-                        auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
+                        auth.as_ref().is_some_and(CodexAuth::uses_codex_backend),
                     ) {
                     Vec::new()
                 } else {
