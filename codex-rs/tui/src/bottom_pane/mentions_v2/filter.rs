@@ -23,7 +23,7 @@ pub(super) fn filtered_candidates(
             continue;
         }
         if filter.is_empty() {
-            out.push(candidate.to_result(None, 0));
+            out.push(candidate.to_result(/*match_indices*/ None, /*score*/ 0));
             continue;
         }
 
