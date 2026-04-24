@@ -157,6 +157,7 @@ function detectPackageManager() {
 
   return userAgent ? "npm" : null;
 }
+
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
