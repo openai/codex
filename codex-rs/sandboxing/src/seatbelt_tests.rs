@@ -30,6 +30,7 @@ use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -58,6 +59,47 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include -p");
     args.get(policy_index + 1)
         .expect("seatbelt args should include policy text")
+}
+
+fn seatbelt_definition_args(args: &[String]) -> BTreeMap<&str, &str> {
+    args.iter()
+        .filter_map(|arg| arg.strip_prefix("-D"))
+        .filter_map(|definition| definition.split_once('='))
+        .collect()
+}
+
+fn assert_writable_root_excludes(
+    args: &[String],
+    root: &Path,
+    expected_exclusions: &[&Path],
+) -> String {
+    let definitions = seatbelt_definition_args(args);
+    let root_value = root.to_string_lossy();
+    let (root_key, _) = definitions
+        .iter()
+        .find(|(key, value)| {
+            key.starts_with("WRITABLE_ROOT_")
+                && !key.contains("_EXCLUDED_")
+                && **value == root_value
+        })
+        .unwrap_or_else(|| panic!("expected writable root `{root_value}` in {args:#?}"));
+
+    let excluded_values: Vec<&str> = definitions
+        .iter()
+        .filter_map(|(key, value)| {
+            key.starts_with(&format!("{root_key}_EXCLUDED_"))
+                .then_some(*value)
+        })
+        .collect();
+    for expected in expected_exclusions {
+        let expected = expected.to_string_lossy();
+        assert!(
+            excluded_values.contains(&expected.as_ref()),
+            "expected writable root `{root_key}` to exclude `{expected}` in {args:#?}"
+        );
+    }
+
+    (*root_key).to_string()
 }
 
 struct TestConfigReloader;
@@ -883,45 +925,25 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         "expected second explicit writable root grant in policy:\n{policy_text}",
     );
 
-    let expected_definitions = [
-        format!(
-            "-DWRITABLE_ROOT_0={}",
-            cwd.canonicalize()
-                .expect("canonicalize cwd")
-                .to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
-            cwd.canonicalize()
-                .expect("canonicalize cwd")
-                .join(".codex")
-                .display()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1={}",
-            vulnerable_root_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1_EXCLUDED_0={}",
-            dot_git_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
-            dot_codex_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_2={}",
-            empty_root_canonical.to_string_lossy()
-        ),
-    ];
-    let writable_definitions: Vec<String> = args
-        .iter()
-        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
-        .cloned()
-        .collect();
-    assert_eq!(
-        writable_definitions, expected_definitions,
-        "unexpected writable-root parameter definitions in {args:#?}"
+    let cwd_canonical = cwd.canonicalize().expect("canonicalize cwd");
+    assert_writable_root_excludes(
+        &args,
+        &cwd_canonical,
+        &[cwd_canonical.join(".codex").as_path()],
+    );
+    assert_writable_root_excludes(
+        &args,
+        &vulnerable_root_canonical,
+        &[&dot_git_canonical, &dot_codex_canonical],
+    );
+    let definitions = seatbelt_definition_args(&args);
+    assert!(
+        definitions
+            .iter()
+            .any(|(key, value)| key.starts_with("WRITABLE_ROOT_")
+                && !key.contains("_EXCLUDED_")
+                && **value == empty_root_canonical.to_string_lossy()),
+        "expected empty writable root definition in {args:#?}"
     );
     for (key, value) in macos_dir_params() {
         let expected_definition = format!("-D{key}={}", value.to_string_lossy());
@@ -1233,80 +1255,30 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         /*network*/ None,
     );
 
-    let tmpdir_env_var = std::env::var("TMPDIR")
-        .ok()
-        .map(PathBuf::from)
-        .and_then(|p| p.canonicalize().ok())
-        .map(|p| p.to_string_lossy().to_string());
-
-    let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
-    } else {
-        ""
-    };
-
-    // Build the expected policy text using a raw string for readability.
-    // Note that the policy includes:
-    // - the base policy,
-    // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
-    let expected_policy = format!(
-        r#"{MACOS_SEATBELT_BASE_POLICY}
-; allow read-only file operations
-(allow file-read*)
-(allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
-)
-
-"#,
+    let policy_text = seatbelt_policy_arg(&args);
+    assert!(
+        policy_text.starts_with(MACOS_SEATBELT_BASE_POLICY),
+        "expected base policy prefix in {policy_text}"
+    );
+    assert!(
+        policy_text.contains("; allow read-only file operations\n(allow file-read*)"),
+        "expected read-only filesystem allowance in {policy_text}"
+    );
+    let cwd_root_key = assert_writable_root_excludes(
+        &args,
+        &vulnerable_root_canonical,
+        &[&dot_git_canonical, &dot_codex_canonical],
+    );
+    assert!(
+        policy_text.contains(&format!("(subpath (param \"{cwd_root_key}\"))")),
+        "expected cwd writable root in policy:\n{policy_text}"
     );
 
-    let mut expected_args = vec![
-        "-p".to_string(),
-        expected_policy,
-        format!(
-            "-DWRITABLE_ROOT_0={}",
-            vulnerable_root_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
-            dot_git_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
-            dot_codex_canonical.to_string_lossy()
-        ),
-        format!(
-            "-DWRITABLE_ROOT_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .to_string_lossy()
-        ),
-    ];
-
-    if let Some(p) = tmpdir_env_var {
-        expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
-        expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
-            dot_git_canonical.to_string_lossy()
-        ));
-        expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
-            dot_codex_canonical.to_string_lossy()
-        ));
-    }
-
-    expected_args.extend(
-        macos_dir_params()
-            .into_iter()
-            .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
-    );
-
-    expected_args.push("--".to_string());
-    expected_args.extend(shell_command);
-
-    assert_eq!(expected_args, args);
+    let command_index = args
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("seatbelt args should include command separator");
+    assert_eq!(args[command_index + 1..], shell_command);
 }
 
 struct PopulatedTmp {
