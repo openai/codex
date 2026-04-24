@@ -10,7 +10,7 @@ env:
 jobs:
   linux:
     name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     container:
       image: ${{ matrix.image }}
@@ -24,11 +24,17 @@ jobs:
             variant: ubuntu-24.04
             image: ubuntu:24.04
             archive_name: codex-zsh-x86_64-unknown-linux-musl.tar.gz
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             variant: ubuntu-24.04
             image: arm64v8/ubuntu:24.04
             archive_name: codex-zsh-aarch64-unknown-linux-musl.tar.gz
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
 
     steps:
       - name: Install build prerequisites
@@ -60,7 +66,7 @@ jobs:
 
   darwin:
     name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
 
     strategy:

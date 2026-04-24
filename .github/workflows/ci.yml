@@ -6,7 +6,9 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
     timeout-minutes: 10
     env:
       NODE_OPTIONS: --max-old-space-size=4096

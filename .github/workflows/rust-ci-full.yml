@@ -42,7 +42,9 @@ jobs:
 
   argument_comment_lint_package:
     name: Argument comment lint package
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
     env:
       CARGO_DYLINT_VERSION: 5.0.0
       DYLINT_LINK_VERSION: 5.0.0
@@ -89,6 +91,9 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - name: macOS
             runner: macos-15-xlarge
           - name: Windows
