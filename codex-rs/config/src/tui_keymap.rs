@@ -94,10 +94,6 @@ pub struct TuiGlobalKeymap {
     pub open_external_editor: Option<KeybindingsSpec>,
     /// Copy the last agent response to the clipboard.
     pub copy: Option<KeybindingsSpec>,
-    /// In an empty composer, begin or advance "edit previous message" flow.
-    pub edit_previous_message: Option<KeybindingsSpec>,
-    /// Confirm editing the selected previous message.
-    pub confirm_edit_previous_message: Option<KeybindingsSpec>,
     /// Submit the current composer draft.
     pub submit: Option<KeybindingsSpec>,
     /// Queue the current composer draft while a task is running.
@@ -110,12 +106,7 @@ pub struct TuiGlobalKeymap {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
-pub struct TuiChatKeymap {
-    /// In an empty composer, begin or advance "edit previous message" flow.
-    pub edit_previous_message: Option<KeybindingsSpec>,
-    /// Confirm editing the selected previous message.
-    pub confirm_edit_previous_message: Option<KeybindingsSpec>,
-}
+pub struct TuiChatKeymap {}
 
 /// Composer context keybindings. These override corresponding `global` actions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
@@ -194,12 +185,6 @@ pub struct TuiPagerKeymap {
     pub close: Option<KeybindingsSpec>,
     /// Close the transcript overlay via its dedicated toggle key.
     pub close_transcript: Option<KeybindingsSpec>,
-    /// In backtrack preview mode, step to older message.
-    pub edit_previous_message: Option<KeybindingsSpec>,
-    /// In backtrack preview mode, step to newer message.
-    pub edit_next_message: Option<KeybindingsSpec>,
-    /// In backtrack preview mode, confirm selected message.
-    pub confirm_edit_message: Option<KeybindingsSpec>,
 }
 
 /// List selection context keybindings for popup-style selectable lists.
@@ -445,6 +430,32 @@ mod tests {
             err.to_string().contains("open_transcrip"),
             "expected error to mention misspelled field, got: {err}"
         );
+    }
+
+    #[test]
+    fn removed_backtrack_actions_are_rejected() {
+        for (context, action) in [
+            ("global", "edit_previous_message"),
+            ("global", "confirm_edit_previous_message"),
+            ("chat", "edit_previous_message"),
+            ("chat", "confirm_edit_previous_message"),
+            ("pager", "edit_previous_message"),
+            ("pager", "edit_next_message"),
+            ("pager", "confirm_edit_message"),
+        ] {
+            let toml_input = format!(
+                r#"
+                [{context}]
+                {action} = "ctrl-x"
+                "#
+            );
+            let err = toml::from_str::<TuiKeymap>(&toml_input)
+                .expect_err("expected removed backtrack action to be rejected");
+            assert!(
+                err.to_string().contains(action),
+                "expected error to mention removed field {action}, got: {err}"
+            );
+        }
     }
 
     #[test]

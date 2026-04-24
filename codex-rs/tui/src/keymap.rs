@@ -41,7 +41,6 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
-    pub(crate) chat: ChatKeymap,
     pub(crate) composer: ComposerKeymap,
     pub(crate) editor: EditorKeymap,
     pub(crate) pager: PagerKeymap,
@@ -57,14 +56,6 @@ pub(crate) struct AppKeymap {
     pub(crate) open_external_editor: Vec<KeyBinding>,
     /// Copy the last agent response to the clipboard.
     pub(crate) copy: Vec<KeyBinding>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ChatKeymap {
-    /// Start/advance edit-previous flow when composer is empty.
-    pub(crate) edit_previous_message: Vec<KeyBinding>,
-    /// Confirm edit-previous selection.
-    pub(crate) confirm_edit_previous_message: Vec<KeyBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -114,9 +105,6 @@ pub(crate) struct PagerKeymap {
     pub(crate) jump_bottom: Vec<KeyBinding>,
     pub(crate) close: Vec<KeyBinding>,
     pub(crate) close_transcript: Vec<KeyBinding>,
-    pub(crate) edit_previous_message: Vec<KeyBinding>,
-    pub(crate) edit_next_message: Vec<KeyBinding>,
-    pub(crate) confirm_edit_message: Vec<KeyBinding>,
 }
 
 /// Generic list picker keybindings shared across popup list views.
@@ -285,21 +273,6 @@ impl RuntimeKeymap {
             )?,
         };
 
-        let chat = ChatKeymap {
-            edit_previous_message: resolve_with_global!(
-                keymap,
-                defaults,
-                chat,
-                edit_previous_message
-            ),
-            confirm_edit_previous_message: resolve_with_global!(
-                keymap,
-                defaults,
-                chat,
-                confirm_edit_previous_message
-            ),
-        };
-
         let composer = ComposerKeymap {
             submit: resolve_with_global!(keymap, defaults, composer, submit),
             queue: resolve_with_global!(keymap, defaults, composer, queue),
@@ -336,9 +309,6 @@ impl RuntimeKeymap {
             jump_bottom: resolve_local!(keymap, defaults, pager, jump_bottom),
             close: resolve_local!(keymap, defaults, pager, close),
             close_transcript: resolve_local!(keymap, defaults, pager, close_transcript),
-            edit_previous_message: resolve_local!(keymap, defaults, pager, edit_previous_message),
-            edit_next_message: resolve_local!(keymap, defaults, pager, edit_next_message),
-            confirm_edit_message: resolve_local!(keymap, defaults, pager, confirm_edit_message),
         };
 
         let list = ListKeymap {
@@ -361,7 +331,6 @@ impl RuntimeKeymap {
 
         let resolved = Self {
             app,
-            chat,
             composer,
             editor,
             pager,
@@ -384,10 +353,6 @@ impl RuntimeKeymap {
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
-            },
-            chat: ChatKeymap {
-                edit_previous_message: default_bindings![plain(KeyCode::Esc)],
-                confirm_edit_previous_message: default_bindings![plain(KeyCode::Enter)],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -460,9 +425,6 @@ impl RuntimeKeymap {
                 jump_bottom: default_bindings![plain(KeyCode::End)],
                 close: default_bindings![plain(KeyCode::Char('q')), ctrl(KeyCode::Char('c'))],
                 close_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
-                edit_previous_message: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Left)],
-                edit_next_message: default_bindings![plain(KeyCode::Right)],
-                confirm_edit_message: default_bindings![plain(KeyCode::Enter)],
             },
             list: ListKeymap {
                 move_up: default_bindings![
@@ -502,34 +464,11 @@ impl RuntimeKeymap {
     /// We validate in multiple passes because runtime handling has mixed
     /// precedence:
     ///
-    /// 1. `app` and `chat` actions can be interpreted at the app event layer.
-    /// 2. `app` actions can shadow composer actions because app checks run
+    /// 1. `app` actions can shadow composer actions because app checks run
     ///    before forwarding to the composer.
-    /// 3. `chat` and `composer` are intentionally not treated as one conflict
-    ///    scope because some shared defaults are context-gated (for example
-    ///    backtrack confirm vs submit on Enter). If dispatch order changes,
-    ///    this validation split must be revisited in lockstep.
+    /// 2. Contexts with hard-coded sequence behavior, such as edit-previous
+    ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
-        validate_unique(
-            "app",
-            [
-                ("open_transcript", self.app.open_transcript.as_slice()),
-                (
-                    "open_external_editor",
-                    self.app.open_external_editor.as_slice(),
-                ),
-                ("copy", self.app.copy.as_slice()),
-                (
-                    "edit_previous_message",
-                    self.chat.edit_previous_message.as_slice(),
-                ),
-                (
-                    "confirm_edit_previous_message",
-                    self.chat.confirm_edit_previous_message.as_slice(),
-                ),
-            ],
-        )?;
-
         validate_unique(
             "app",
             [
@@ -624,15 +563,6 @@ impl RuntimeKeymap {
                 ("jump_bottom", self.pager.jump_bottom.as_slice()),
                 ("close", self.pager.close.as_slice()),
                 ("close_transcript", self.pager.close_transcript.as_slice()),
-                (
-                    "edit_previous_message",
-                    self.pager.edit_previous_message.as_slice(),
-                ),
-                ("edit_next_message", self.pager.edit_next_message.as_slice()),
-                (
-                    "confirm_edit_message",
-                    self.pager.confirm_edit_message.as_slice(),
-                ),
             ],
         )?;
 
@@ -908,16 +838,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_bindings() {
-        let mut keymap = TuiKeymap::default();
-        keymap.global.open_transcript = Some(one("ctrl-t"));
-        keymap.chat.edit_previous_message = Some(one("ctrl-t"));
-        let err = RuntimeKeymap::from_config(&keymap).expect_err("expected conflict");
-        assert!(err.contains("Ambiguous"));
-        assert!(err.contains("Codex keymap documentation"));
-    }
-
-    #[test]
     fn rejects_shadowing_composer_binding_in_app_scope() {
         let mut keymap = TuiKeymap::default();
         keymap.global.open_transcript = Some(one("ctrl-t"));
@@ -1052,19 +972,6 @@ mod tests {
 
         let err = RuntimeKeymap::from_config(&keymap).expect_err("expected parse error");
         assert!(err.contains("tui.keymap.global.copy"));
-    }
-
-    #[test]
-    fn rejects_conflicting_chat_bindings() {
-        let mut keymap = TuiKeymap::default();
-        keymap.chat.edit_previous_message = Some(one("ctrl-e"));
-        keymap.chat.confirm_edit_previous_message = Some(one("ctrl-e"));
-
-        expect_conflict(
-            &keymap,
-            "edit_previous_message",
-            "confirm_edit_previous_message",
-        );
     }
 
     #[test]
