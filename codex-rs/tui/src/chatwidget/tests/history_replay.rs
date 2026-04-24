@@ -373,12 +373,12 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
     assert_eq!(
         chat.config_ref()
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .kind,
         FileSystemSandboxKind::ExternalSandbox,
     );
     assert_eq!(
-        chat.config_ref().permissions.network_sandbox_policy,
+        chat.config_ref().permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted,
     );
 }

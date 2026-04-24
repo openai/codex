@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -338,7 +339,12 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
-        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+        let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+        config.permissions.permission_profile =
+            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::Restricted,
+            ));
     });
     let test = builder.build(&server).await?;
 
