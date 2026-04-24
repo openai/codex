@@ -98,3 +98,27 @@ disable_on_external_context = true
     );
     assert_eq!(base, expected);
 }
+
+#[test]
+fn merge_toml_values_empty_mcp_servers_table_clears_base_servers() {
+    let mut base = parse_toml(
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+mcp_servers = {}
+"#,
+    );
+
+    merge_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+mcp_servers = {}
+"#,
+    );
+    assert_eq!(base, expected);
+}

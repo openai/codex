@@ -11,6 +11,11 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
     if let TomlValue::Table(overlay_table) = overlay
         && let TomlValue::Table(base_table) = base
     {
+        if overlay_table.is_empty() && path.as_slice() == ["mcp_servers"] {
+            *base = normalized_with_key_aliases(overlay, path);
+            return;
+        }
+
         normalize_key_aliases(path, base_table);
         let mut overlay_table = overlay_table.clone();
         normalize_key_aliases(path, &mut overlay_table);

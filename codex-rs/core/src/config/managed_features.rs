@@ -123,7 +123,7 @@ impl ManagedFeatures {
     pub(crate) fn pin_disabled(&mut self, feature: Feature) -> ConstraintResult<()> {
         self.pinned_features.insert(feature, false);
         let mut next = self.get().clone();
-        next.set_enabled(feature, false);
+        next.set_enabled(feature, /*enabled*/ false);
         self.set(next)
     }
 }
