@@ -2408,6 +2408,7 @@ dependencies = [
  "env-flags",
  "eventsource-stream",
  "futures",
+ "gix",
  "http 1.4.0",
  "iana-time-zone",
  "image",

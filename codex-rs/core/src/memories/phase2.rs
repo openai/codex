@@ -1,16 +1,20 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::config::Config;
-use crate::memories::extensions::PendingExtensionResourceRemoval;
 use crate::memories::extensions::find_old_extension_resources;
 use crate::memories::extensions::remove_extension_resources;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
+use crate::memories::storage::EmptyArtifactCleanup;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
-use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
+use crate::memories::workspace::commit_all;
+use crate::memories::workspace::has_changes;
+use crate::memories::workspace::prepare_git_repo;
+use crate::memories::workspace::remove_workspace_diff;
+use crate::memories::workspace::write_workspace_diff;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use codex_config::Constrained;
@@ -24,9 +28,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
-use codex_state::Stage1Output;
 use codex_state::StateRuntime;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -73,6 +75,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
 
+    if let Err(err) = prepare_git_repo(&root).await {
+        tracing::error!("failed preparing memory workspace: {err}");
+        job::failed(session, db, &claim, "failed_prepare_workspace").await;
+        return;
+    }
+
     // 2. Get the config for the agent
     let Some(agent_config) = agent::get_config(config.clone()) else {
         // If we can't get the config, we can't consolidate.
@@ -94,15 +102,24 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
     let raw_memories = selection.selected.to_vec();
-    let artifact_memories = artifact_memories_for_phase2(&selection);
+    let artifact_memories = selection.selected.clone();
+    let empty_artifact_cleanup = if selection.removed.is_empty() {
+        EmptyArtifactCleanup::RemoveConsolidated
+    } else {
+        EmptyArtifactCleanup::PreserveConsolidated
+    };
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
-    if let Err(err) =
-        sync_rollout_summaries_from_memories(&root, &artifact_memories, artifact_memories.len())
-            .await
+    if let Err(err) = sync_rollout_summaries_from_memories(
+        &root,
+        &artifact_memories,
+        artifact_memories.len(),
+        empty_artifact_cleanup,
+    )
+    .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
@@ -118,26 +135,40 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         return;
     }
     let pending_extension_resource_removals = find_old_extension_resources(&root).await;
-    let removed_extension_resources = pending_extension_resource_removals
-        .iter()
-        .map(|resource| resource.removed.clone())
-        .collect::<Vec<_>>();
-    if raw_memories.is_empty() && pending_extension_resource_removals.is_empty() {
+    remove_extension_resources(&pending_extension_resource_removals).await;
+
+    let workspace_has_changes = match has_changes(&root).await {
+        Ok(has_changes) => has_changes,
+        Err(err) => {
+            tracing::error!("failed checking memory workspace changes: {err}");
+            job::failed(session, db, &claim, "failed_workspace_status").await;
+            return;
+        }
+    };
+    if !workspace_has_changes {
+        if let Err(err) = remove_workspace_diff(&root).await {
+            tracing::warn!("failed removing stale memory workspace diff file: {err}");
+        }
         // We check only after sync of the file system.
         job::succeed(
             session,
             db,
             &claim,
             new_watermark,
-            &[],
+            &raw_memories,
             "succeeded_no_input",
         )
         .await;
         return;
     }
+    if let Err(err) = write_workspace_diff(&root).await {
+        tracing::error!("failed writing memory workspace diff file: {err}");
+        job::failed(session, db, &claim, "failed_workspace_diff_file").await;
+        return;
+    }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
+    let prompt = agent::get_prompt(config);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let agent_control = session.services.agent_control.detached_registry();
     let thread_id = match agent_control
@@ -179,7 +210,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         claim,
         new_watermark,
         raw_memories.clone(),
-        pending_extension_resource_removals,
+        root,
         thread_id,
         agent_control,
         phase_two_e2e_timer,
@@ -190,22 +221,6 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         input: raw_memories.len() as i64,
     };
     emit_metrics(session, counters);
-}
-
-fn artifact_memories_for_phase2(
-    selection: &codex_state::Phase2InputSelection,
-) -> Vec<Stage1Output> {
-    let mut seen = HashSet::new();
-    let mut memories = selection.selected.clone();
-    for memory in &selection.selected {
-        seen.insert(rollout_summary_file_stem(memory));
-    }
-    for memory in &selection.previous_selected {
-        if seen.insert(rollout_summary_file_stem(memory)) {
-            memories.push(memory.clone());
-        }
-    }
-    memories
 }
 
 mod job {
@@ -348,13 +363,9 @@ mod agent {
         Some(agent_config)
     }
 
-    pub(super) fn get_prompt(
-        config: Arc<Config>,
-        selection: &codex_state::Phase2InputSelection,
-        removed_extension_resources: &[crate::memories::extensions::RemovedExtensionResource],
-    ) -> Vec<UserInput> {
+    pub(super) fn get_prompt(config: Arc<Config>) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root, selection, removed_extension_resources);
+        let prompt = build_consolidation_prompt(&root);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],
@@ -368,7 +379,7 @@ mod agent {
         claim: Claim,
         new_watermark: i64,
         selected_outputs: Vec<codex_state::Stage1Output>,
-        pending_extension_resource_removals: Vec<PendingExtensionResourceRemoval>,
+        memory_root: codex_utils_absolute_path::AbsolutePathBuf,
         thread_id: ThreadId,
         agent_control: crate::agent::AgentControl,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
@@ -405,7 +416,32 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                if job::succeed(
+                // Do not commit if we lost the lock
+                match db
+                    .heartbeat_global_phase2_job(&claim.token, phase_two::JOB_LEASE_SECONDS)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::error!(
+                            "lost global memory consolidation ownership before committing workspace"
+                        );
+                        return;
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "failed confirming global memory consolidation ownership before committing workspace: {err}"
+                        );
+                        job::failed(&session, &db, &claim, "failed_confirm_ownership").await;
+                        return;
+                    }
+                }
+                if let Err(err) = commit_all(&memory_root).await {
+                    tracing::error!("failed committing memory workspace: {err}");
+                    job::failed(&session, &db, &claim, "failed_workspace_commit").await;
+                    return;
+                }
+                if !job::succeed(
                     &session,
                     &db,
                     &claim,
@@ -415,7 +451,9 @@ mod agent {
                 )
                 .await
                 {
-                    remove_extension_resources(&pending_extension_resource_removals).await;
+                    tracing::error!(
+                        "failed marking global memory consolidation job succeeded after committing workspace"
+                    );
                 }
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
