@@ -1036,8 +1036,9 @@ async fn chatgpt_auth_sends_correct_request() {
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
-    assert_eq!(session_id, thread_id.to_string());
-    assert_eq!(thread_id, test.session_configured.session_id.to_string());
+    let expected_id = test.session_configured.session_id.to_string();
+    assert_eq!(session_id, expected_id);
+    assert_eq!(thread_id, expected_id);
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
