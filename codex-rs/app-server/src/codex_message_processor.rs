@@ -8518,6 +8518,16 @@ impl CodexMessageProcessor {
         }
     }
 
+    fn resolve_windows_sandbox_setup_cwd(
+        requested_cwd: Option<PathBuf>,
+        codex_home: &Path,
+    ) -> PathBuf {
+        // A setup request without an explicit workspace should stay scoped to
+        // Codex state, not whatever broad default cwd the desktop app/server
+        // happens to be using before the user has picked a project.
+        requested_cwd.unwrap_or_else(|| codex_home.to_path_buf())
+    }
+
     async fn windows_sandbox_setup_start(
         &self,
         request_id: ConnectionRequestId,
@@ -8536,10 +8546,10 @@ impl CodexMessageProcessor {
         };
         let config = Arc::clone(&self.config);
         let config_manager = self.config_manager.clone();
-        let command_cwd = params
-            .cwd
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.cwd.to_path_buf());
+        let command_cwd = Self::resolve_windows_sandbox_setup_cwd(
+            params.cwd.map(PathBuf::from),
+            config.codex_home.as_path(),
+        );
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
@@ -10313,6 +10323,33 @@ mod tests {
         }];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn windows_sandbox_setup_uses_requested_workspace_cwd() {
+        let requested = PathBuf::from(r"C:\repo");
+        let codex_home = PathBuf::from(r"C:\Users\alice\.codex");
+
+        assert_eq!(
+            CodexMessageProcessor::resolve_windows_sandbox_setup_cwd(
+                Some(requested.clone()),
+                codex_home.as_path(),
+            ),
+            requested
+        );
+    }
+
+    #[test]
+    fn windows_sandbox_setup_defaults_to_codex_home_without_workspace_cwd() {
+        let codex_home = PathBuf::from(r"C:\Users\alice\.codex");
+
+        assert_eq!(
+            CodexMessageProcessor::resolve_windows_sandbox_setup_cwd(
+                None,
+                codex_home.as_path(),
+            ),
+            codex_home
+        );
     }
 
     #[test]
