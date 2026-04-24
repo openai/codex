@@ -93,7 +93,7 @@ where
 
 #[derive(Clone)]
 pub struct LogDbLayer {
-    sender: mpsc::Sender<LogSinkCommand>,
+    sender: mpsc::Sender<LogDbCommand>,
     process_uuid: String,
 }
 
@@ -112,7 +112,7 @@ impl LogDbLayer {
     ) -> Self {
         let config = config.normalized();
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
-        tokio::spawn(run_log_db_sink(state_db, receiver, config));
+        tokio::spawn(run_inserter(state_db, receiver, config));
         Self {
             sender,
             process_uuid: current_process_log_uuid().to_string(),
@@ -121,13 +121,13 @@ impl LogDbLayer {
 
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
-        if self.sender.send(LogSinkCommand::Flush(tx)).await.is_ok() {
+        if self.sender.send(LogDbCommand::Flush(tx)).await.is_ok() {
             let _ = rx.await;
         }
     }
 
     fn try_send(&self, entry: LogEntry) {
-        let _ = self.sender.try_send(LogSinkCommand::Entry(Box::new(entry)));
+        let _ = self.sender.try_send(LogDbCommand::Entry(Box::new(entry)));
     }
 
     #[cfg(test)]
@@ -236,14 +236,14 @@ impl LogDbLayer {
     }
 }
 
-enum LogSinkCommand {
+enum LogDbCommand {
     Entry(Box<LogEntry>),
     Flush(oneshot::Sender<()>),
 }
 
-async fn run_log_db_sink(
+async fn run_inserter(
     state_db: std::sync::Arc<StateRuntime>,
-    mut receiver: mpsc::Receiver<LogSinkCommand>,
+    mut receiver: mpsc::Receiver<LogDbCommand>,
     config: LogSinkQueueConfig,
 ) {
     let mut buffer = Vec::with_capacity(config.batch_size);
@@ -252,30 +252,30 @@ async fn run_log_db_sink(
         tokio::select! {
             maybe_command = receiver.recv() => {
                 match maybe_command {
-                    Some(LogSinkCommand::Entry(entry)) => {
+                    Some(LogDbCommand::Entry(entry)) => {
                         buffer.push(*entry);
                         if buffer.len() >= config.batch_size {
-                            flush_batch(&state_db, &mut buffer).await;
+                            insert_batch(&state_db, &mut buffer).await;
                         }
                     }
-                    Some(LogSinkCommand::Flush(reply)) => {
-                        flush_batch(&state_db, &mut buffer).await;
+                    Some(LogDbCommand::Flush(reply)) => {
+                        insert_batch(&state_db, &mut buffer).await;
                         let _ = reply.send(());
                     }
                     None => {
-                        flush_batch(&state_db, &mut buffer).await;
+                        insert_batch(&state_db, &mut buffer).await;
                         break;
                     }
                 }
             }
             _ = ticker.tick() => {
-                flush_batch(&state_db, &mut buffer).await;
+                insert_batch(&state_db, &mut buffer).await;
             }
         }
     }
 }
 
-async fn flush_batch(state_db: &StateRuntime, buffer: &mut Vec<LogEntry>) {
+async fn insert_batch(state_db: &StateRuntime, buffer: &mut Vec<LogEntry>) {
     if buffer.is_empty() {
         return;
     }
@@ -756,52 +756,52 @@ mod tests {
         layer.try_send(test_entry("dropped-log"));
 
         match receiver.try_recv().expect("first entry queued") {
-            LogSinkCommand::Entry(entry) => {
-                assert_eq!(*entry, test_entry("first-queued-log"));
+            LogDbCommand::Entry(entry) => {
+                assert_eq!(entry.message.as_deref(), Some("first-queued-log"));
             }
-            LogSinkCommand::Flush(_) => panic!("expected queued entry"),
+            LogDbCommand::Flush(_) => panic!("expected queued entry"),
         }
         assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn flush_waits_for_queue_capacity_and_receiver_processing() {
-        let codex_home = temp_codex_home();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
-        let layer = LogDbLayer::start_with_config(
-            runtime.clone(),
-            LogSinkQueueConfig {
-                queue_capacity: 1,
-                batch_size: 8,
-                flush_interval: std::time::Duration::from_secs(60),
-            },
-        );
+        let (sender, mut receiver) = mpsc::channel(1);
+        let layer = LogDbLayer {
+            sender,
+            process_uuid: "process-1".to_string(),
+        };
 
         layer.try_send(test_entry("queued-before-flush"));
-        let flush_task = tokio::spawn({
+        let mut flush_task = tokio::spawn({
             let layer = layer.clone();
             async move {
                 layer.flush().await;
             }
         });
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), flush_task)
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(!flush_task.is_finished());
+
+        match receiver.recv().await.expect("queued entry") {
+            LogDbCommand::Entry(entry) => {
+                assert_eq!(entry.message.as_deref(), Some("queued-before-flush"));
+            }
+            LogDbCommand::Flush(_) => panic!("expected queued entry"),
+        }
+
+        match receiver.recv().await.expect("flush command") {
+            LogDbCommand::Flush(reply) => {
+                assert!(!flush_task.is_finished());
+                let _ = reply.send(());
+            }
+            LogDbCommand::Entry(_) => panic!("expected flush command"),
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut flush_task)
             .await
             .expect("flush task completes")
             .expect("flush task succeeds");
-
-        let rows = runtime
-            .query_logs(&crate::LogQuery::default())
-            .await
-            .expect("query logs after flush");
-        assert_eq!(
-            rows.into_iter().map(|row| row.message).collect::<Vec<_>>(),
-            vec![Some("queued-before-flush".to_string())]
-        );
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]

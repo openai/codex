@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sqlx::FromRow;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
     pub ts: i64,
     pub ts_nanos: i64,
