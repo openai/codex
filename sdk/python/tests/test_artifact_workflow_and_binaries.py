@@ -29,7 +29,9 @@ def _load_runtime_setup_module():
     runtime_setup_path = ROOT / "_runtime_setup.py"
     spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
     if spec is None or spec.loader is None:
-        raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
+        raise AssertionError(
+            f"Failed to load runtime setup module: {runtime_setup_path}"
+        )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -151,12 +153,12 @@ def test_generate_v2_all_uses_titles_for_generated_names() -> None:
 
 
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:
-    runtime_root = ROOT.parent / "python-runtime" / "src" / "codex_cli_bin"
+    runtime_root = ROOT.parent / "python-runtime" / "src"
     assert sorted(
-        path.name
+        str(path.relative_to(runtime_root))
         for path in runtime_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
-    ) == ["__init__.py"]
+    ) == ["codex_app_server_bin/__init__.py", "codex_cli_bin/__init__.py"]
 
 
 def test_examples_readme_matches_pinned_runtime_version() -> None:
@@ -173,15 +175,19 @@ def test_runtime_distribution_name_is_consistent() -> None:
     runtime_setup = _load_runtime_setup_module()
     from codex_app_server import client as client_module
 
-    assert script.RUNTIME_DISTRIBUTION_NAME == "openai-codex-cli-bin"
-    assert runtime_setup.PACKAGE_NAME == "openai-codex-cli-bin"
-    assert client_module.RUNTIME_PKG_NAME == "openai-codex-cli-bin"
-    assert "importlib.metadata.version('codex-cli-bin')" not in (
-        ROOT / "_runtime_setup.py"
-    ).read_text()
+    assert script.RUNTIME_DISTRIBUTION_NAME == "openai-codex-app-server-bin"
+    assert runtime_setup.PACKAGE_NAME == "openai-codex-app-server-bin"
+    assert client_module.RUNTIME_PKG_NAME == "openai-codex-app-server-bin"
+    assert (
+        "importlib.metadata.version('codex-cli-bin')"
+        not in (ROOT / "_runtime_setup.py").read_text()
+    )
+    assert runtime_setup.platform_asset_name().startswith("codex-app-server-")
 
 
-def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_metadata_retries_without_invalid_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime_setup = _load_runtime_setup_module()
     authorizations: list[str | None] = []
 
@@ -252,10 +258,10 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         elif isinstance(node.value, ast.JoinedStr):
             build_data_assignments[node.targets[0].slice.value] = "joined-string"
 
-    assert pyproject["project"]["name"] == "openai-codex-cli-bin"
+    assert pyproject["project"]["name"] == "openai-codex-app-server-bin"
     assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
-        "packages": ["src/codex_cli_bin"],
-        "include": ["src/codex_cli_bin/bin/**"],
+        "packages": ["src/codex_app_server_bin", "src/codex_cli_bin"],
+        "include": ["src/codex_app_server_bin/bin/**"],
         "hooks": {"custom": {}},
     }
     assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
@@ -281,9 +287,33 @@ def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) ->
     )
 
     assert staged == tmp_path / "runtime-stage"
-    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
-    assert 'name = "openai-codex-cli-bin"' in (staged / "pyproject.toml").read_text()
+    assert (
+        script.staged_runtime_bin_path(staged, fake_binary.name).read_text()
+        == "fake codex\n"
+    )
+    assert (
+        'name = "openai-codex-app-server-bin"'
+        in (staged / "pyproject.toml").read_text()
+    )
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
+
+
+def test_stage_runtime_release_preserves_legacy_binary_name(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    legacy_binary = tmp_path / script.legacy_runtime_binary_name()
+    legacy_binary.write_text("fake legacy codex\n")
+
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        legacy_binary,
+    )
+
+    assert staged == tmp_path / "runtime-stage"
+    assert script.staged_runtime_bin_path(staged, legacy_binary.name).read_text() == (
+        "fake legacy codex\n"
+    )
+    assert not script.staged_runtime_bin_path(staged).exists()
 
 
 def test_normalize_codex_version_accepts_release_tags_and_pep440_versions() -> None:
@@ -313,7 +343,10 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
 
     assert staged == staging_dir
     assert not old_file.exists()
-    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    assert (
+        script.staged_runtime_bin_path(staged, fake_binary.name).read_text()
+        == "fake codex\n"
+    )
 
 
 def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> None:
@@ -338,7 +371,7 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
 
     pyproject = (staged / "pyproject.toml").read_text()
     assert 'version = "0.2.1"' in pyproject
-    assert '"openai-codex-cli-bin==1.2.3"' in pyproject
+    assert '"openai-codex-app-server-bin==1.2.3"' in pyproject
     assert '"codex-cli-bin==1.2.3"' not in pyproject
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
@@ -454,61 +487,155 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(
 ) -> None:
     from codex_app_server import client as client_module
 
-    fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
+    fake_binary = tmp_path / (
+        "codex-app-server.exe" if client_module.os.name == "nt" else "codex-app-server"
+    )
     fake_binary.write_text("")
-    ops = client_module.CodexBinResolverOps(
-        installed_codex_path=lambda: fake_binary,
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: fake_binary,
         path_exists=lambda path: path == fake_binary,
     )
 
     config = client_module.AppServerConfig()
+    assert config.app_server_bin is None
     assert config.codex_bin is None
+    assert client_module.resolve_app_server_bin(config, ops) == fake_binary
     assert client_module.resolve_codex_bin(config, ops) == fake_binary
 
 
-def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
+def test_explicit_app_server_bin_override_takes_priority(tmp_path: Path) -> None:
+    from codex_app_server import client as client_module
+
+    explicit_binary = tmp_path / (
+        "custom-app-server.exe"
+        if client_module.os.name == "nt"
+        else "custom-app-server"
+    )
+    explicit_binary.write_text("")
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: (_ for _ in ()).throw(
+            AssertionError("packaged runtime should not be used")
+        ),
+        path_exists=lambda path: path == explicit_binary,
+    )
+
+    config = client_module.AppServerConfig(app_server_bin=str(explicit_binary))
+    assert client_module.resolve_app_server_bin(config, ops) == explicit_binary
+    assert client_module.resolve_codex_bin(config, ops) == explicit_binary
+
+
+def test_legacy_codex_bin_override_remains_supported(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
     explicit_binary = tmp_path / (
         "custom-codex.exe" if client_module.os.name == "nt" else "custom-codex"
     )
     explicit_binary.write_text("")
-    ops = client_module.CodexBinResolverOps(
-        installed_codex_path=lambda: (_ for _ in ()).throw(
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: (_ for _ in ()).throw(
             AssertionError("packaged runtime should not be used")
         ),
         path_exists=lambda path: path == explicit_binary,
     )
 
     config = client_module.AppServerConfig(codex_bin=str(explicit_binary))
-    assert client_module.resolve_codex_bin(config, ops) == explicit_binary
+    assert client_module.resolve_app_server_bin(config, ops) == explicit_binary
 
 
-def test_missing_runtime_package_requires_explicit_codex_bin() -> None:
+def test_conflicting_runtime_bin_overrides_fail(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
-    ops = client_module.CodexBinResolverOps(
-        installed_codex_path=lambda: (_ for _ in ()).throw(
+    explicit_binary = tmp_path / "codex-app-server"
+    explicit_binary.write_text("")
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: explicit_binary,
+        path_exists=lambda path: path == explicit_binary,
+    )
+
+    config = client_module.AppServerConfig(
+        app_server_bin=str(explicit_binary),
+        codex_bin=str(explicit_binary),
+    )
+    with pytest.raises(ValueError, match="Set only one"):
+        client_module.resolve_app_server_bin(config, ops)
+
+
+def test_missing_runtime_package_requires_explicit_app_server_bin() -> None:
+    from codex_app_server import client as client_module
+
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: (_ for _ in ()).throw(
             FileNotFoundError("missing packaged runtime")
         ),
         path_exists=lambda _path: False,
     )
 
     with pytest.raises(FileNotFoundError, match="missing packaged runtime"):
-        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
+        client_module.resolve_app_server_bin(client_module.AppServerConfig(), ops)
 
 
 def test_broken_runtime_package_does_not_fall_back() -> None:
     from codex_app_server import client as client_module
 
-    ops = client_module.CodexBinResolverOps(
-        installed_codex_path=lambda: (_ for _ in ()).throw(
+    ops = client_module.AppServerBinResolverOps(
+        installed_app_server_path=lambda: (_ for _ in ()).throw(
             FileNotFoundError("missing packaged binary")
         ),
         path_exists=lambda _path: False,
     )
 
     with pytest.raises(FileNotFoundError) as exc_info:
-        client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
+        client_module.resolve_app_server_bin(client_module.AppServerConfig(), ops)
 
     assert str(exc_info.value) == ("missing packaged binary")
+
+
+def test_legacy_codex_binary_launch_args_keep_config_overrides() -> None:
+    from codex_app_server import client as client_module
+
+    legacy_binary = Path("codex.exe" if client_module.os.name == "nt" else "codex")
+    config = client_module.AppServerConfig(
+        codex_bin=str(legacy_binary),
+        config_overrides=("model=gpt-5.4", "sandbox=workspace-write"),
+    )
+
+    assert client_module._default_launch_args(legacy_binary, config) == [
+        str(legacy_binary),
+        "--config",
+        "model=gpt-5.4",
+        "--config",
+        "sandbox=workspace-write",
+        "app-server",
+        "--listen",
+        "stdio://",
+    ]
+
+
+def test_standalone_app_server_launch_args_use_direct_binary() -> None:
+    from codex_app_server import client as client_module
+
+    standalone_binary = Path(
+        "codex-app-server.exe" if client_module.os.name == "nt" else "codex-app-server"
+    )
+
+    assert client_module._default_launch_args(
+        standalone_binary,
+        client_module.AppServerConfig(app_server_bin=str(standalone_binary)),
+    ) == [str(standalone_binary), "--listen", "stdio://"]
+
+
+def test_standalone_app_server_rejects_legacy_config_overrides() -> None:
+    from codex_app_server import client as client_module
+
+    standalone_binary = Path(
+        "codex-app-server.exe" if client_module.os.name == "nt" else "codex-app-server"
+    )
+
+    with pytest.raises(ValueError, match="config_overrides"):
+        client_module._default_launch_args(
+            standalone_binary,
+            client_module.AppServerConfig(
+                app_server_bin=str(standalone_binary),
+                config_overrides=("model=gpt-5.4",),
+            ),
+        )

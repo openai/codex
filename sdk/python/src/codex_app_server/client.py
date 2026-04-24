@@ -47,7 +47,7 @@ from .retry import retry_on_overload
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
-RUNTIME_PKG_NAME = "openai-codex-cli-bin"
+RUNTIME_PKG_NAME = "openai-codex-app-server-bin"
 
 
 def _params_dict(
@@ -74,54 +74,75 @@ def _params_dict(
         return dumped
     if isinstance(params, dict):
         return params
-    raise TypeError(f"Expected generated params model or dict, got {type(params).__name__}")
+    raise TypeError(
+        f"Expected generated params model or dict, got {type(params).__name__}"
+    )
 
 
-def _installed_codex_path() -> Path:
+def _installed_app_server_path() -> Path:
     try:
-        from codex_cli_bin import bundled_codex_path
+        from codex_app_server_bin import bundled_app_server_path
     except ImportError as exc:
         raise FileNotFoundError(
             "Unable to locate the pinned Codex runtime. Install the published SDK build "
-            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.codex_bin "
+            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.app_server_bin "
             "explicitly."
         ) from exc
 
-    return bundled_codex_path()
+    return bundled_app_server_path()
 
 
 @dataclass(frozen=True)
-class CodexBinResolverOps:
-    installed_codex_path: Callable[[], Path]
+class AppServerBinResolverOps:
+    installed_app_server_path: Callable[[], Path]
     path_exists: Callable[[Path], bool]
 
 
-def _default_codex_bin_resolver_ops() -> CodexBinResolverOps:
-    return CodexBinResolverOps(
-        installed_codex_path=_installed_codex_path,
+CodexBinResolverOps = AppServerBinResolverOps
+
+
+def _default_app_server_bin_resolver_ops() -> AppServerBinResolverOps:
+    return AppServerBinResolverOps(
+        installed_app_server_path=_installed_app_server_path,
         path_exists=lambda path: path.exists(),
     )
 
 
-def resolve_codex_bin(config: "AppServerConfig", ops: CodexBinResolverOps) -> Path:
-    if config.codex_bin is not None:
-        codex_bin = Path(config.codex_bin)
-        if not ops.path_exists(codex_bin):
+def resolve_app_server_bin(
+    config: "AppServerConfig", ops: AppServerBinResolverOps
+) -> Path:
+    configured_bin = _configured_app_server_bin(config)
+    if configured_bin is not None:
+        app_server_bin = Path(configured_bin)
+        if not ops.path_exists(app_server_bin):
             raise FileNotFoundError(
-                f"Codex binary not found at {codex_bin}. Set AppServerConfig.codex_bin "
-                "to a valid binary path."
+                f"Codex app-server binary not found at {app_server_bin}. Set "
+                "AppServerConfig.app_server_bin to a valid binary path."
             )
-        return codex_bin
+        return app_server_bin
 
-    return ops.installed_codex_path()
+    return ops.installed_app_server_path()
 
 
-def _resolve_codex_bin(config: "AppServerConfig") -> Path:
-    return resolve_codex_bin(config, _default_codex_bin_resolver_ops())
+def _configured_app_server_bin(config: "AppServerConfig") -> str | None:
+    if config.app_server_bin is not None and config.codex_bin is not None:
+        raise ValueError(
+            "Set only one of AppServerConfig.app_server_bin or AppServerConfig.codex_bin."
+        )
+    return config.app_server_bin or config.codex_bin
+
+
+def _resolve_app_server_bin(config: "AppServerConfig") -> Path:
+    return resolve_app_server_bin(config, _default_app_server_bin_resolver_ops())
+
+
+def resolve_codex_bin(config: "AppServerConfig", ops: AppServerBinResolverOps) -> Path:
+    return resolve_app_server_bin(config, ops)
 
 
 @dataclass(slots=True)
 class AppServerConfig:
+    app_server_bin: str | None = None
     codex_bin: str | None = None
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()
@@ -133,8 +154,31 @@ class AppServerConfig:
     experimental_api: bool = True
 
 
+def _default_launch_args(app_server_bin: Path, config: AppServerConfig) -> list[str]:
+    if _is_legacy_codex_cli_binary(app_server_bin):
+        args = [str(app_server_bin)]
+        for kv in config.config_overrides:
+            args.extend(["--config", kv])
+        args.extend(["app-server", "--listen", "stdio://"])
+        return args
+
+    if config.config_overrides:
+        raise ValueError(
+            "AppServerConfig.config_overrides is only supported when launching the legacy "
+            "`codex` CLI runtime. With standalone `codex-app-server`, use "
+            "`thread_start(..., config=...)`, `thread_resume(..., config=...)`, or "
+            "`launch_args_override`."
+        )
+
+    return [str(app_server_bin), "--listen", "stdio://"]
+
+
+def _is_legacy_codex_cli_binary(app_server_bin: Path) -> bool:
+    return app_server_bin.name.lower() == "codex.exe" or app_server_bin.name == "codex"
+
+
 class AppServerClient:
-    """Synchronous typed JSON-RPC client for `codex app-server` over stdio."""
+    """Synchronous typed JSON-RPC client for Codex app-server over stdio."""
 
     def __init__(
         self,
@@ -165,11 +209,8 @@ class AppServerClient:
         if self.config.launch_args_override is not None:
             args = list(self.config.launch_args_override)
         else:
-            codex_bin = _resolve_codex_bin(self.config)
-            args = [str(codex_bin)]
-            for kv in self.config.config_overrides:
-                args.extend(["--config", kv])
-            args.extend(["app-server", "--listen", "stdio://"])
+            app_server_bin = _resolve_app_server_bin(self.config)
+            args = _default_launch_args(app_server_bin, self.config)
 
         env = os.environ.copy()
         if self.config.env:
@@ -239,7 +280,9 @@ class AppServerClient:
 
     def _request_raw(self, method: str, params: JsonObject | None = None) -> JsonValue:
         request_id = str(uuid.uuid4())
-        self._write_message({"id": request_id, "method": method, "params": params or {}})
+        self._write_message(
+            {"id": request_id, "method": method, "params": params or {}}
+        )
 
         while True:
             msg = self._read_message()
@@ -301,8 +344,12 @@ class AppServerClient:
             if self._active_turn_consumer == turn_id:
                 self._active_turn_consumer = None
 
-    def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
-        return self.request("thread/start", _params_dict(params), response_model=ThreadStartResponse)
+    def thread_start(
+        self, params: V2ThreadStartParams | JsonObject | None = None
+    ) -> ThreadStartResponse:
+        return self.request(
+            "thread/start", _params_dict(params), response_model=ThreadStartResponse
+        )
 
     def thread_resume(
         self,
@@ -310,12 +357,20 @@ class AppServerClient:
         params: V2ThreadResumeParams | JsonObject | None = None,
     ) -> ThreadResumeResponse:
         payload = {"threadId": thread_id, **_params_dict(params)}
-        return self.request("thread/resume", payload, response_model=ThreadResumeResponse)
+        return self.request(
+            "thread/resume", payload, response_model=ThreadResumeResponse
+        )
 
-    def thread_list(self, params: V2ThreadListParams | JsonObject | None = None) -> ThreadListResponse:
-        return self.request("thread/list", _params_dict(params), response_model=ThreadListResponse)
+    def thread_list(
+        self, params: V2ThreadListParams | JsonObject | None = None
+    ) -> ThreadListResponse:
+        return self.request(
+            "thread/list", _params_dict(params), response_model=ThreadListResponse
+        )
 
-    def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
+    def thread_read(
+        self, thread_id: str, include_turns: bool = False
+    ) -> ThreadReadResponse:
         return self.request(
             "thread/read",
             {"threadId": thread_id, "includeTurns": include_turns},
@@ -331,10 +386,18 @@ class AppServerClient:
         return self.request("thread/fork", payload, response_model=ThreadForkResponse)
 
     def thread_archive(self, thread_id: str) -> ThreadArchiveResponse:
-        return self.request("thread/archive", {"threadId": thread_id}, response_model=ThreadArchiveResponse)
+        return self.request(
+            "thread/archive",
+            {"threadId": thread_id},
+            response_model=ThreadArchiveResponse,
+        )
 
     def thread_unarchive(self, thread_id: str) -> ThreadUnarchiveResponse:
-        return self.request("thread/unarchive", {"threadId": thread_id}, response_model=ThreadUnarchiveResponse)
+        return self.request(
+            "thread/unarchive",
+            {"threadId": thread_id},
+            response_model=ThreadUnarchiveResponse,
+        )
 
     def thread_set_name(self, thread_id: str, name: str) -> ThreadSetNameResponse:
         return self.request(
@@ -458,12 +521,16 @@ class AppServerClient:
 
         model = NOTIFICATION_MODELS.get(method)
         if model is None:
-            return Notification(method=method, payload=UnknownNotification(params=params_dict))
+            return Notification(
+                method=method, payload=UnknownNotification(params=params_dict)
+            )
 
         try:
             payload = model.model_validate(params_dict)
         except Exception:  # noqa: BLE001
-            return Notification(method=method, payload=UnknownNotification(params=params_dict))
+            return Notification(
+                method=method, payload=UnknownNotification(params=params_dict)
+            )
         return Notification(method=method, payload=payload)
 
     def _normalize_input_items(
@@ -476,7 +543,9 @@ class AppServerClient:
             return [input_items]
         return input_items
 
-    def _default_approval_handler(self, method: str, params: JsonObject | None) -> JsonObject:
+    def _default_approval_handler(
+        self, method: str, params: JsonObject | None
+    ) -> JsonObject:
         if method == "item/commandExecution/requestApproval":
             return {"decision": "accept"}
         if method == "item/fileChange/requestApproval":

@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-PACKAGE_NAME = "openai-codex-cli-bin"
+PACKAGE_NAME = "openai-codex-app-server-bin"
 PINNED_RUNTIME_VERSION = "0.116.0-alpha.1"
 REPO_SLUG = "openai/codex"
 
@@ -39,7 +39,10 @@ def ensure_runtime_package_installed(
         installed_version = _installed_runtime_version(python_executable)
     normalized_requested = _normalized_package_version(requested_version)
 
-    if installed_version is not None and _normalized_package_version(installed_version) == normalized_requested:
+    if (
+        installed_version is not None
+        and _normalized_package_version(installed_version) == normalized_requested
+    ):
         return requested_version
 
     with tempfile.TemporaryDirectory(prefix="codex-python-runtime-") as temp_root_str:
@@ -61,7 +64,10 @@ def ensure_runtime_package_installed(
         importlib.invalidate_caches()
 
     installed_version = _installed_runtime_version(python_executable)
-    if installed_version is None or _normalized_package_version(installed_version) != normalized_requested:
+    if (
+        installed_version is None
+        or _normalized_package_version(installed_version) != normalized_requested
+    ):
         raise RuntimeSetupError(
             f"Expected {PACKAGE_NAME} {requested_version} in {python_executable}, "
             f"but found {installed_version!r} after installation."
@@ -70,24 +76,46 @@ def ensure_runtime_package_installed(
 
 
 def platform_asset_name() -> str:
+    return platform_asset_names()[0]
+
+
+def platform_asset_names() -> tuple[str, str]:
     system = platform.system().lower()
     machine = platform.machine().lower()
 
     if system == "darwin":
         if machine in {"arm64", "aarch64"}:
-            return "codex-aarch64-apple-darwin.tar.gz"
+            return (
+                "codex-app-server-aarch64-apple-darwin.tar.gz",
+                "codex-aarch64-apple-darwin.tar.gz",
+            )
         if machine in {"x86_64", "amd64"}:
-            return "codex-x86_64-apple-darwin.tar.gz"
+            return (
+                "codex-app-server-x86_64-apple-darwin.tar.gz",
+                "codex-x86_64-apple-darwin.tar.gz",
+            )
     elif system == "linux":
         if machine in {"aarch64", "arm64"}:
-            return "codex-aarch64-unknown-linux-musl.tar.gz"
+            return (
+                "codex-app-server-aarch64-unknown-linux-musl.tar.gz",
+                "codex-aarch64-unknown-linux-musl.tar.gz",
+            )
         if machine in {"x86_64", "amd64"}:
-            return "codex-x86_64-unknown-linux-musl.tar.gz"
+            return (
+                "codex-app-server-x86_64-unknown-linux-musl.tar.gz",
+                "codex-x86_64-unknown-linux-musl.tar.gz",
+            )
     elif system == "windows":
         if machine in {"aarch64", "arm64"}:
-            return "codex-aarch64-pc-windows-msvc.exe.zip"
+            return (
+                "codex-app-server-aarch64-pc-windows-msvc.exe.zip",
+                "codex-aarch64-pc-windows-msvc.exe.zip",
+            )
         if machine in {"x86_64", "amd64"}:
-            return "codex-x86_64-pc-windows-msvc.exe.zip"
+            return (
+                "codex-app-server-x86_64-pc-windows-msvc.exe.zip",
+                "codex-x86_64-pc-windows-msvc.exe.zip",
+            )
 
     raise RuntimeSetupError(
         f"Unsupported runtime artifact platform: system={platform.system()!r}, "
@@ -96,6 +124,18 @@ def platform_asset_name() -> str:
 
 
 def runtime_binary_name() -> str:
+    return (
+        "codex-app-server.exe"
+        if platform.system().lower() == "windows"
+        else "codex-app-server"
+    )
+
+
+def runtime_binary_names() -> tuple[str, str]:
+    return (runtime_binary_name(), legacy_runtime_binary_name())
+
+
+def legacy_runtime_binary_name() -> str:
     return "codex.exe" if platform.system().lower() == "windows" else "codex"
 
 
@@ -103,8 +143,8 @@ def _installed_runtime_version(python_executable: str | Path) -> str | None:
     snippet = (
         "import importlib.metadata, json, sys\n"
         "try:\n"
-        "    from codex_cli_bin import bundled_codex_path\n"
-        "    bundled_codex_path()\n"
+        "    from codex_app_server_bin import bundled_app_server_path\n"
+        "    bundled_app_server_path()\n"
         f"    print(json.dumps({{'version': importlib.metadata.version({PACKAGE_NAME!r})}}))\n"
         "except Exception:\n"
         "    sys.exit(1)\n"
@@ -152,88 +192,115 @@ def _release_metadata(version: str) -> dict[str, object]:
 
 
 def _download_release_archive(version: str, temp_root: Path) -> Path:
-    asset_name = platform_asset_name()
-    archive_path = temp_root / asset_name
-
-    browser_download_url = (
-        f"https://github.com/{REPO_SLUG}/releases/download/rust-v{version}/{asset_name}"
-    )
-    request = urllib.request.Request(
-        browser_download_url,
-        headers={"User-Agent": "codex-python-runtime-setup"},
-    )
-    try:
-        with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
-            shutil.copyfileobj(response, fh)
-        return archive_path
-    except urllib.error.HTTPError:
-        pass
+    asset_names = platform_asset_names()
+    for asset_name in asset_names:
+        archive_path = temp_root / asset_name
+        browser_download_url = f"https://github.com/{REPO_SLUG}/releases/download/rust-v{version}/{asset_name}"
+        request = urllib.request.Request(
+            browser_download_url,
+            headers={"User-Agent": "codex-python-runtime-setup"},
+        )
+        try:
+            with (
+                urllib.request.urlopen(request) as response,
+                archive_path.open("wb") as fh,
+            ):
+                shutil.copyfileobj(response, fh)
+            return archive_path
+        except urllib.error.HTTPError:
+            continue
 
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
-        raise RuntimeSetupError(f"Release rust-v{version} returned malformed assets metadata.")
-    asset = next(
-        (
-            item
-            for item in assets
-            if isinstance(item, dict) and item.get("name") == asset_name
-        ),
-        None,
-    )
-    if asset is None:
         raise RuntimeSetupError(
-            f"Release rust-v{version} does not contain asset {asset_name} for this platform."
+            f"Release rust-v{version} returned malformed assets metadata."
         )
 
-    api_url = asset.get("url")
-    if not isinstance(api_url, str):
-        api_url = None
+    matched_assets = [
+        item
+        for item in assets
+        if isinstance(item, dict) and item.get("name") in asset_names
+    ]
+    if not matched_assets:
+        supported_assets = ", ".join(asset_names)
+        raise RuntimeSetupError(
+            f"Release rust-v{version} does not contain a supported runtime asset for this platform. "
+            f"Tried: {supported_assets}."
+        )
 
-    if api_url is not None:
-        token = _github_token()
-        if token is not None:
-            request = urllib.request.Request(
-                api_url,
-                headers=_github_api_headers("application/octet-stream"),
-            )
-            try:
-                with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
-                    shutil.copyfileobj(response, fh)
-                return archive_path
-            except urllib.error.HTTPError:
-                pass
+    for asset_name in asset_names:
+        asset = next(
+            (
+                item
+                for item in matched_assets
+                if isinstance(item, dict) and item.get("name") == asset_name
+            ),
+            None,
+        )
+        if asset is None:
+            continue
+
+        archive_path = temp_root / asset_name
+        api_url = asset.get("url")
+        if not isinstance(api_url, str):
+            api_url = None
+
+        if api_url is not None:
+            token = _github_token()
+            if token is not None:
+                request = urllib.request.Request(
+                    api_url,
+                    headers=_github_api_headers("application/octet-stream"),
+                )
+                try:
+                    with (
+                        urllib.request.urlopen(request) as response,
+                        archive_path.open("wb") as fh,
+                    ):
+                        shutil.copyfileobj(response, fh)
+                    return archive_path
+                except urllib.error.HTTPError:
+                    pass
 
     if shutil.which("gh") is None:
+        supported_assets = ", ".join(asset_names)
         raise RuntimeSetupError(
-            f"Unable to download {asset_name} for rust-v{version}. "
+            f"Unable to download a supported runtime asset ({supported_assets}) for rust-v{version}. "
             "Provide GH_TOKEN/GITHUB_TOKEN or install/authenticate GitHub CLI."
         )
 
-    try:
-        subprocess.run(
-            [
-                "gh",
-                "release",
-                "download",
-                f"rust-v{version}",
-                "--repo",
-                REPO_SLUG,
-                "--pattern",
-                asset_name,
-                "--dir",
-                str(temp_root),
-            ],
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeSetupError(
-            f"gh release download failed for rust-v{version} asset {asset_name}.\n"
-            f"STDOUT:\n{exc.stdout}\nSTDERR:\n{exc.stderr}"
-        ) from exc
-    return archive_path
+    last_error: subprocess.CalledProcessError | None = None
+    for asset_name in asset_names:
+        archive_path = temp_root / asset_name
+        try:
+            subprocess.run(
+                [
+                    "gh",
+                    "release",
+                    "download",
+                    f"rust-v{version}",
+                    "--repo",
+                    REPO_SLUG,
+                    "--pattern",
+                    asset_name,
+                    "--dir",
+                    str(temp_root),
+                ],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            return archive_path
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+
+    assert last_error is not None
+    supported_assets = ", ".join(asset_names)
+    raise RuntimeSetupError(
+        f"gh release download failed for rust-v{version} runtime assets ({supported_assets}).\n"
+        f"STDOUT:\n{last_error.stdout}\nSTDERR:\n{last_error.stderr}"
+    ) from last_error
 
 
 def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
@@ -249,24 +316,33 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         with zipfile.ZipFile(archive_path) as zip_file:
             zip_file.extractall(extract_dir)
     else:
-        raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
+        raise RuntimeSetupError(
+            f"Unsupported release archive format: {archive_path.name}"
+        )
 
-    binary_name = runtime_binary_name()
     archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
     candidates = [
         path
         for path in extract_dir.rglob("*")
         if path.is_file()
         and (
-            path.name == binary_name
+            path.name in runtime_binary_names()
             or path.name == archive_stem
             or path.name.startswith("codex-")
         )
     ]
     if not candidates:
+        supported_binaries = ", ".join(runtime_binary_names())
         raise RuntimeSetupError(
-            f"Failed to find {binary_name} in extracted runtime archive {archive_path.name}."
+            f"Failed to find one of {supported_binaries} in extracted runtime archive "
+            f"{archive_path.name}."
         )
+
+    for binary_name in runtime_binary_names():
+        for candidate in candidates:
+            if candidate.name == binary_name:
+                return candidate
+
     return candidates[0]
 
 
@@ -356,4 +432,5 @@ __all__ = [
     "ensure_runtime_package_installed",
     "pinned_runtime_version",
     "platform_asset_name",
+    "platform_asset_names",
 ]
