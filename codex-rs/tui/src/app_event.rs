@@ -55,6 +55,12 @@ pub(crate) enum RealtimeAudioDeviceKind {
     Speaker,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadGoalSetMode {
+    ConfirmIfExists,
+    ReplaceExisting,
+}
+
 impl RealtimeAudioDeviceKind {
     pub(crate) fn title(self) -> &'static str {
         match self {
@@ -191,6 +197,13 @@ pub(crate) enum AppEvent {
     /// Open the current thread goal summary/action menu.
     OpenThreadGoalMenu {
         thread_id: ThreadId,
+    },
+
+    /// Set or replace the current thread goal objective.
+    SetThreadGoalObjective {
+        thread_id: ThreadId,
+        objective: String,
+        mode: ThreadGoalSetMode,
     },
 
     /// Pause or unpause the current thread goal.

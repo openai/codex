@@ -6,6 +6,7 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
 
@@ -28,6 +29,8 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+const GOAL_USAGE: &str = "Usage: /goal <objective>";
+const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -213,11 +216,8 @@ impl ChatWidget {
                         .send(AppEvent::OpenThreadGoalMenu { thread_id });
                 } else {
                     self.add_info_message(
-                        "Usage: /goal <objective, optionally with a token budget>".to_string(),
-                        Some(
-                            "Example: /goal keep improving this benchmark for up to 50K tokens"
-                                .to_string(),
-                        ),
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
                     );
                 }
             }
@@ -617,7 +617,7 @@ impl ChatWidget {
                 if let Some(command) = control_command {
                     let Some(thread_id) = self.thread_id else {
                         self.add_info_message(
-                            "Usage: /goal <objective, optionally with a token budget>".to_string(),
+                            GOAL_USAGE.to_string(),
                             Some(
                                 "The session must start before you can change a goal.".to_string(),
                             ),
@@ -639,51 +639,45 @@ impl ChatWidget {
                     }
                     return;
                 }
-                let prepared_args = args;
-                let prepared_elements = text_elements;
-                let mut history_text = "/goal ".to_string();
-                let mut history_text_elements = Vec::new();
-                append_text_with_rebased_elements(
-                    &mut history_text,
-                    &mut history_text_elements,
-                    &prepared_args,
-                    prepared_elements.clone(),
-                );
-                let prompt_prefix = "Set the current thread goal to the following long-running objective, extracting any explicit token budget from it, then continue working toward it:\n\n";
-                let mut prompt = String::from(prompt_prefix);
-                let mut prompt_elements = Vec::new();
-                append_text_with_rebased_elements(
-                    &mut prompt,
-                    &mut prompt_elements,
-                    &prepared_args,
-                    prepared_elements,
-                );
-                let (local_images, remote_image_urls, mention_bindings) =
+                let objective = args.trim();
+                if objective.is_empty() {
+                    self.add_error_message("Goal objective must not be empty.".to_string());
+                    self.add_info_message(
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
+                    );
                     if source == SlashCommandDispatchSource::Live {
-                        (
-                            self.bottom_pane
-                                .take_recent_submission_images_with_placeholders(),
-                            self.take_remote_image_urls(),
-                            self.bottom_pane.take_recent_submission_mention_bindings(),
-                        )
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let Some(thread_id) = self.thread_id else {
+                    if source == SlashCommandDispatchSource::Live {
+                        self.queue_user_message_with_options(
+                            UserMessage {
+                                text: format!("/goal {args}"),
+                                local_images: Vec::new(),
+                                remote_image_urls: Vec::new(),
+                                text_elements: Vec::new(),
+                                mention_bindings: Vec::new(),
+                            },
+                            QueuedInputAction::ParseSlash,
+                        );
+                        self.bottom_pane.drain_pending_submission_state();
                     } else {
-                        (local_images, remote_image_urls, mention_bindings)
-                    };
-                let user_message = UserMessage {
-                    text: prompt,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prompt_elements,
-                    mention_bindings,
+                        self.add_info_message(
+                            GOAL_USAGE.to_string(),
+                            Some("The session must start before you can set a goal.".to_string()),
+                        );
+                    }
+                    return;
                 };
-                let submitted = self.submit_user_message_with_history_record(
-                    user_message,
-                    UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
-                        text: history_text,
-                        text_elements: history_text_elements,
-                    }),
-                );
-                if submitted && source == SlashCommandDispatchSource::Live {
+                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                    thread_id,
+                    objective: objective.to_string(),
+                    mode: ThreadGoalSetMode::ConfirmIfExists,
+                });
+                if source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.drain_pending_submission_state();
                 }
             }
