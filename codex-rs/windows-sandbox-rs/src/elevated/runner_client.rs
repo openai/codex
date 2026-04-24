@@ -105,6 +105,7 @@ fn try_take_completed_connect_result(
 
 fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
     let pipe_label = pipe_label.to_string();
+    let pipe_label_for_thread = pipe_label.clone();
     let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
     let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
     let mut connect_thread = Some(
@@ -126,7 +127,7 @@ fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
                 };
                 if duplicate_ok == 0 {
                     let _ = thread_handle_tx.send(Err(anyhow::anyhow!(
-                        "DuplicateHandle failed for runner {pipe_label} connect thread: {}",
+                        "DuplicateHandle failed for runner {pipe_label_for_thread} connect thread: {}",
                         unsafe { GetLastError() }
                     )));
                     return;
@@ -138,7 +139,7 @@ fn connect_pipe_with_timeout(h_pipe: HANDLE, pipe_label: &str) -> Result<()> {
 
                 let result = connect_pipe(h_pipe)
                     .map_err(anyhow::Error::from)
-                    .context(format!("connect {pipe_label}"));
+                    .context(format!("connect {pipe_label_for_thread}"));
                 let _ = connect_result_tx.send(result);
             })?,
     );
