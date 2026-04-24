@@ -68,6 +68,12 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
+## Codex PR Review Guidance
+
+- Keep broader review heuristics out of normal coding-time flow. When the task is explicitly a PR
+  review, pre-submit review, or reviewer-feedback pass, read and apply the Codex PR review skill at
+  `/Users/starr/dotfiles/skills/codex/references/pr-review.md` in a separate review pass.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.
