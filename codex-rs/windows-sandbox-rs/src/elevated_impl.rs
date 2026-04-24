@@ -13,6 +13,7 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
     pub read_roots_override: Option<&'a [PathBuf]>,
+    pub read_roots_include_platform_defaults: bool,
     pub write_roots_override: Option<&'a [PathBuf]>,
     pub deny_write_paths_override: &'a [PathBuf],
 }
@@ -121,6 +122,7 @@ mod windows_impl {
             use_private_desktop,
             proxy_enforced,
             read_roots_override,
+            read_roots_include_platform_defaults,
             write_roots_override,
             deny_write_paths_override,
         } = request;
@@ -142,6 +144,7 @@ mod windows_impl {
             &env_map,
             codex_home,
             read_roots_override,
+            read_roots_include_platform_defaults,
             write_roots_override,
             deny_write_paths_override,
             proxy_enforced,
@@ -250,7 +253,6 @@ mod windows_impl {
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
-                read_only_access: Default::default(),
                 network_access,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
