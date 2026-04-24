@@ -240,7 +240,7 @@ pub enum ThreadStoreConfig {
     /// Persist threads through the remote thread-store service.
     Remote { endpoint: String },
     /// Test-only in-memory thread store.
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(debug_assertions)]
     InMemory { id: String },
 }
 
@@ -1317,7 +1317,7 @@ fn thread_store_config(
     match thread_store {
         Some(ThreadStoreToml::Local {}) => ThreadStoreConfig::Local,
         Some(ThreadStoreToml::Remote { endpoint }) => ThreadStoreConfig::Remote { endpoint },
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(debug_assertions)]
         Some(ThreadStoreToml::InMemory { id }) => ThreadStoreConfig::InMemory { id },
         None => legacy_remote_endpoint.map_or(ThreadStoreConfig::Local, |endpoint| {
             ThreadStoreConfig::Remote { endpoint }

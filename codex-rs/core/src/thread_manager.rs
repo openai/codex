@@ -53,7 +53,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
-#[cfg(any(test, debug_assertions))]
+#[cfg(debug_assertions)]
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::RemoteThreadStore;
@@ -259,7 +259,7 @@ fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
             Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
         }
         ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(debug_assertions)]
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
 }

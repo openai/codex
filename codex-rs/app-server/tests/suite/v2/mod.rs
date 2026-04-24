@@ -34,6 +34,7 @@ mod plugin_read;
 mod plugin_uninstall;
 mod rate_limits;
 mod realtime_conversation;
+#[cfg(debug_assertions)]
 mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
