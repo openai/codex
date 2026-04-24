@@ -1538,9 +1538,13 @@ mod tests {
         let command_cwd = tmp.path().join("workspace");
         let extra_write_root = tmp.path().join("extra-write-root");
         let command_git = command_cwd.join(".git");
+        let command_git_config = command_git.join("config");
+        let command_git_hooks = command_git.join("hooks");
         let extra_codex = extra_write_root.join(".codex");
         let explicit_deny = tmp.path().join("explicit-deny");
         fs::create_dir_all(&command_git).expect("create command .git");
+        fs::write(&command_git_config, "[core]\n").expect("create command git config");
+        fs::create_dir_all(&command_git_hooks).expect("create command git hooks");
         fs::create_dir_all(&extra_codex).expect("create extra .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![
@@ -1569,7 +1573,8 @@ mod tests {
 
         assert_eq!(
             [
-                dunce::canonicalize(&command_git).expect("canonical command .git"),
+                dunce::canonicalize(&command_git_config).expect("canonical command .git/config"),
+                dunce::canonicalize(&command_git_hooks).expect("canonical command .git/hooks"),
                 dunce::canonicalize(&extra_codex).expect("canonical extra .codex"),
                 explicit_deny,
             ]
