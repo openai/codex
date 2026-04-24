@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 
 const WORKSPACE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
-const WORKSPACE_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const WORKSPACE_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const CODEX_PLUGINS_BETA_SETTING: &str = "plugins";
 
 #[derive(Debug, Deserialize)]
