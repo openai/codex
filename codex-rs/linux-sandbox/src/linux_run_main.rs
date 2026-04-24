@@ -32,10 +32,18 @@ const FORWARDED_SIGNALS: &[libc::c_int] =
     &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
 const SYNTHETIC_MOUNT_MARKER_SYNTHETIC: &[u8] = b"synthetic\n";
 const SYNTHETIC_MOUNT_MARKER_EXISTING: &[u8] = b"existing\n";
+const PROTECTED_CREATE_MARKER: &[u8] = b"protected-create\n";
 
 #[derive(Debug)]
 struct SyntheticMountTargetRegistration {
     target: crate::bwrap::SyntheticMountTarget,
+    marker_file: PathBuf,
+    marker_dir: PathBuf,
+}
+
+#[derive(Debug)]
+struct ProtectedCreateTargetRegistration {
+    target: crate::bwrap::ProtectedCreateTarget,
     marker_file: PathBuf,
     marker_dir: PathBuf,
 }
@@ -501,6 +509,7 @@ fn build_bwrap_argv(
         args: argv,
         preserved_files: bwrap_args.preserved_files,
         synthetic_mount_targets: bwrap_args.synthetic_mount_targets,
+        protected_create_targets: bwrap_args.protected_create_targets,
     }
 }
 
@@ -590,7 +599,9 @@ fn resolve_true_command() -> String {
 }
 
 fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
-    if bwrap_args.synthetic_mount_targets.is_empty() {
+    if bwrap_args.synthetic_mount_targets.is_empty()
+        && bwrap_args.protected_create_targets.is_empty()
+    {
         exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
     }
     run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args);
@@ -601,8 +612,11 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
         args,
         preserved_files,
         synthetic_mount_targets,
+        protected_create_targets,
     } = bwrap_args;
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+    let protected_create_registrations =
+        register_protected_create_targets(&protected_create_targets);
     let parent_pid = unsafe { libc::getpid() };
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -624,7 +638,9 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     let status = wait_for_bwrap_child(pid);
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
-    exit_with_wait_status(status);
+    let protected_create_violation =
+        cleanup_protected_create_targets(&protected_create_registrations);
+    exit_with_wait_status_or_policy_violation(status, protected_create_violation);
 }
 
 fn terminate_with_parent(parent_pid: libc::pid_t) {
@@ -721,6 +737,37 @@ fn register_synthetic_mount_targets(
                 );
                 SyntheticMountTargetRegistration {
                     target,
+                    marker_file,
+                    marker_dir,
+                }
+            })
+            .collect()
+    })
+}
+
+fn register_protected_create_targets(
+    targets: &[crate::bwrap::ProtectedCreateTarget],
+) -> Vec<ProtectedCreateTargetRegistration> {
+    with_synthetic_mount_registry_lock(|| {
+        targets
+            .iter()
+            .map(|target| {
+                let marker_dir = synthetic_mount_marker_dir(target.path());
+                fs::create_dir_all(&marker_dir).unwrap_or_else(|err| {
+                    panic!(
+                        "failed to create protected create marker directory {}: {err}",
+                        marker_dir.display()
+                    )
+                });
+                let marker_file = marker_dir.join(std::process::id().to_string());
+                fs::write(&marker_file, PROTECTED_CREATE_MARKER).unwrap_or_else(|err| {
+                    panic!(
+                        "failed to register protected create target {}: {err}",
+                        target.path().display()
+                    )
+                });
+                ProtectedCreateTargetRegistration {
+                    target: target.clone(),
                     marker_file,
                     marker_dir,
                 }
@@ -829,6 +876,75 @@ fn cleanup_synthetic_mount_targets(targets: &[SyntheticMountTargetRegistration])
             }
         }
     });
+}
+
+fn cleanup_protected_create_targets(targets: &[ProtectedCreateTargetRegistration]) -> bool {
+    with_synthetic_mount_registry_lock(|| {
+        for target in targets.iter().rev() {
+            match fs::remove_file(&target.marker_file) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => panic!(
+                    "failed to unregister protected create target {}: {err}",
+                    target.target.path().display()
+                ),
+            }
+        }
+
+        let mut violation = false;
+        for target in targets.iter().rev() {
+            if synthetic_mount_marker_dir_has_active_process(&target.marker_dir) {
+                if target.target.path().exists() {
+                    violation = true;
+                }
+                continue;
+            }
+            violation |= remove_protected_create_target(&target.target);
+            match fs::remove_dir(&target.marker_dir) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                Err(err) => panic!(
+                    "failed to remove protected create marker directory {}: {err}",
+                    target.marker_dir.display()
+                ),
+            }
+        }
+        violation
+    })
+}
+
+fn remove_protected_create_target(target: &crate::bwrap::ProtectedCreateTarget) -> bool {
+    let path = target.path();
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(err) => panic!(
+            "failed to inspect protected create target {}: {err}",
+            path.display()
+        ),
+    };
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).unwrap_or_else(|err| {
+            panic!(
+                "failed to remove protected create target directory {}: {err}",
+                path.display()
+            )
+        });
+    } else {
+        fs::remove_file(path).unwrap_or_else(|err| {
+            panic!(
+                "failed to remove protected create target file {}: {err}",
+                path.display()
+            )
+        });
+    }
+    eprintln!(
+        "sandbox blocked creation of preserved workspace metadata path {}",
+        path.display()
+    );
+    true
 }
 
 fn remove_synthetic_mount_target(target: &crate::bwrap::SyntheticMountTarget) {
@@ -947,6 +1063,17 @@ fn exit_with_wait_status(status: libc::c_int) -> ! {
     std::process::exit(1);
 }
 
+fn exit_with_wait_status_or_policy_violation(
+    status: libc::c_int,
+    protected_create_violation: bool,
+) -> ! {
+    if protected_create_violation && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+        std::process::exit(1);
+    }
+
+    exit_with_wait_status(status);
+}
+
 /// Run a short-lived bubblewrap preflight in a child process and capture stderr.
 ///
 /// Strategy:
@@ -964,8 +1091,11 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         args,
         preserved_files,
         synthetic_mount_targets,
+        protected_create_targets,
     } = bwrap_args;
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
+    let protected_create_registrations =
+        register_protected_create_targets(&protected_create_targets);
 
     let mut pipe_fds = [0; 2];
     let pipe_res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -1009,6 +1139,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
 
     wait_for_bwrap_child(pid);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
+    cleanup_protected_create_targets(&protected_create_registrations);
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
 }

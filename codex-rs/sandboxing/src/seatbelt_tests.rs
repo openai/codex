@@ -26,6 +26,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::PRESERVED_PATH_NAMES;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -58,6 +59,26 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include -p");
     args.get(policy_index + 1)
         .expect("seatbelt args should include policy text")
+}
+
+fn seatbelt_preserved_path_name_requirements(root: &Path) -> String {
+    let mut root = root.to_string_lossy().to_string();
+    while root.len() > 1 && root.ends_with('/') {
+        root.pop();
+    }
+    let root = regex_lite::escape(&root);
+    PRESERVED_PATH_NAMES
+        .iter()
+        .map(|name| {
+            let name = regex_lite::escape(name);
+            if root == "/" {
+                format!(r#"(require-not (regex #"^/(.*/)?{name}(/.*)?$"))"#)
+            } else {
+                format!(r#"(require-not (regex #"^{root}/(.*/)?{name}(/.*)?$"))"#)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct TestConfigReloader;
@@ -1279,11 +1300,20 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().to_string());
 
-    let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_5"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_5"))) )"#
+    let slash_tmp = PathBuf::from("/tmp")
+        .canonicalize()
+        .expect("canonicalize /tmp");
+    let tempdir_policy_entry = if let Some(p) = &tmpdir_env_var {
+        let preserved_requirements = seatbelt_preserved_path_name_requirements(Path::new(p));
+        format!(
+            r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_2"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_3"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_4"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_5"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_5"))) {preserved_requirements} )"#
+        )
     } else {
-        ""
+        String::new()
     };
+    let root_0_preserved_requirements =
+        seatbelt_preserved_path_name_requirements(&vulnerable_root_canonical);
+    let root_1_preserved_requirements = seatbelt_preserved_path_name_requirements(&slash_tmp);
 
     // Build the expected policy text using a raw string for readability.
     // Note that the policy includes:
@@ -1296,7 +1326,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) ) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_2"))) ){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_2"))) {root_0_preserved_requirements} ) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_1"))) (require-not (literal (param "WRITABLE_ROOT_1_EXCLUDED_2"))) (require-not (subpath (param "WRITABLE_ROOT_1_EXCLUDED_2"))) {root_1_preserved_requirements} ){tempdir_policy_entry}
 )
 
 "#,
@@ -1321,36 +1351,18 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             "-DWRITABLE_ROOT_0_EXCLUDED_2={}",
             dot_codex_canonical.to_string_lossy()
         ),
-        format!(
-            "-DWRITABLE_ROOT_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .to_string_lossy()
-        ),
+        format!("-DWRITABLE_ROOT_1={}", slash_tmp.to_string_lossy()),
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_0={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .join(".git")
-                .to_string_lossy()
+            slash_tmp.join(".git").to_string_lossy()
         ),
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .join(".agents")
-                .to_string_lossy()
+            slash_tmp.join(".agents").to_string_lossy()
         ),
         format!(
             "-DWRITABLE_ROOT_1_EXCLUDED_2={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .join(".codex")
-                .to_string_lossy()
+            slash_tmp.join(".codex").to_string_lossy()
         ),
     ];
 

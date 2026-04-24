@@ -584,7 +584,6 @@ impl App {
                             runtime_permission_profile_for_turn_start(
                                 self.runtime_sandbox_policy_override.as_ref(),
                                 sandbox_policy,
-                                cwd.as_path(),
                             ),
                             model.to_string(),
                             effort,
@@ -1446,7 +1445,6 @@ impl App {
 fn runtime_permission_profile_for_turn_start(
     runtime_sandbox_policy_override: Option<&SandboxPolicy>,
     sandbox_policy: &SandboxPolicy,
-    cwd: &std::path::Path,
 ) -> Option<codex_protocol::models::PermissionProfile> {
     runtime_sandbox_policy_override?;
     match sandbox_policy {
@@ -1454,10 +1452,7 @@ fn runtime_permission_profile_for_turn_start(
         SandboxPolicy::ReadOnly { .. }
         | SandboxPolicy::WorkspaceWrite { .. }
         | SandboxPolicy::DangerFullAccess => Some(
-            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-                sandbox_policy,
-                cwd,
-            ),
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(sandbox_policy),
         ),
     }
 }
@@ -1470,28 +1465,23 @@ mod tests {
 
     #[test]
     fn runtime_permission_profile_for_turn_start_only_when_sandbox_was_overridden() {
-        let cwd = std::path::Path::new("/tmp/project");
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
 
         assert_eq!(
             runtime_permission_profile_for_turn_start(
                 /*runtime_sandbox_policy_override*/ None,
                 &sandbox_policy,
-                cwd,
             ),
             None
         );
 
         let profile =
-            runtime_permission_profile_for_turn_start(Some(&sandbox_policy), &sandbox_policy, cwd)
+            runtime_permission_profile_for_turn_start(Some(&sandbox_policy), &sandbox_policy)
                 .expect("runtime sandbox override should send active permissions");
 
         assert_eq!(
             profile,
-            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-                &sandbox_policy,
-                cwd,
-            )
+            codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy)
         );
     }
 }

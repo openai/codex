@@ -106,6 +106,7 @@ pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
     pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
+    pub protected_create_targets: Vec<ProtectedCreateTarget>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +137,23 @@ pub(crate) struct SyntheticMountTarget {
     // If an empty preserved path was already present, remember its inode so
     // cleanup does not delete a real pre-existing file or directory.
     pre_existing_path: Option<FileIdentity>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProtectedCreateTarget {
+    path: PathBuf,
+}
+
+impl ProtectedCreateTarget {
+    pub(crate) fn missing(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl SyntheticMountTarget {
@@ -228,6 +246,7 @@ pub(crate) fn create_bwrap_command_args(
                 args: command,
                 preserved_files: Vec::new(),
                 synthetic_mount_targets: Vec::new(),
+                protected_create_targets: Vec::new(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -268,6 +287,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
+        protected_create_targets: Vec::new(),
     }
 }
 
@@ -283,6 +303,7 @@ fn create_bwrap_flags(
         args: filesystem_args,
         preserved_files,
         synthetic_mount_targets,
+        protected_create_targets,
     } = create_filesystem_args(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -321,6 +342,7 @@ fn create_bwrap_flags(
         args,
         preserved_files,
         synthetic_mount_targets,
+        protected_create_targets,
     })
 }
 
@@ -361,6 +383,7 @@ fn create_filesystem_args(
         writable_roots.push(WritableRoot {
             root: AbsolutePathBuf::from_absolute_path("/")?,
             read_only_subpaths: Vec::new(),
+            preserved_path_names: Vec::new(),
         });
     }
     let mut unreadable_roots = file_system_sandbox_policy
@@ -456,6 +479,7 @@ fn create_filesystem_args(
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
+        protected_create_targets: Vec::new(),
     };
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -518,6 +542,13 @@ fn create_filesystem_args(
         if let Some(target) = &symlink_target {
             read_only_subpaths = remap_paths_for_symlink_target(read_only_subpaths, root, target);
         }
+        append_protected_create_targets_for_writable_root(
+            &mut bwrap_args,
+            writable_root,
+            root,
+            symlink_target.as_deref(),
+            &read_only_subpaths,
+        );
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut bwrap_args, &subpath, &allowed_write_paths)?;
@@ -553,6 +584,29 @@ fn create_filesystem_args(
     }
 
     Ok(bwrap_args)
+}
+
+fn append_protected_create_targets_for_writable_root(
+    bwrap_args: &mut BwrapArgs,
+    writable_root: &WritableRoot,
+    root: &Path,
+    symlink_target: Option<&Path>,
+    read_only_subpaths: &[PathBuf],
+) {
+    for name in &writable_root.preserved_path_names {
+        let mut path = root.join(name);
+        if let Some(target) = symlink_target
+            && let Ok(relative_path) = path.strip_prefix(root)
+        {
+            path = target.join(relative_path);
+        }
+        if read_only_subpaths.iter().any(|subpath| subpath == &path) || path.exists() {
+            continue;
+        }
+        bwrap_args
+            .protected_create_targets
+            .push(ProtectedCreateTarget::missing(&path));
+    }
 }
 
 fn expand_unreadable_globs_with_ripgrep(
@@ -1669,7 +1723,12 @@ mod tests {
         );
         assert!(
             !synthetic_mount_target_paths(&args).contains(&dot_git),
-            "missing child .git should not be tracked for post-bwrap cleanup",
+            "missing child .git should not be materialized as a synthetic mount target",
+        );
+        assert_eq!(
+            protected_create_target_paths(&args),
+            vec![dot_git],
+            "missing child .git is enforced by the preserved-name sandbox policy",
         );
     }
 
@@ -2395,6 +2454,13 @@ mod tests {
 
     fn synthetic_mount_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
         args.synthetic_mount_targets
+            .iter()
+            .map(|target| target.path().to_path_buf())
+            .collect()
+    }
+
+    fn protected_create_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
+        args.protected_create_targets
             .iter()
             .map(|target| target.path().to_path_buf())
             .collect()

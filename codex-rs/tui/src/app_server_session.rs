@@ -1511,10 +1511,8 @@ mod tests {
 
     #[test]
     fn embedded_turn_start_permission_overrides_send_runtime_profile_only_when_provided() {
-        let cwd = std::path::Path::new("/tmp/project");
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let permission_profile =
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd);
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
 
         assert_eq!(
             turn_start_permission_overrides(
@@ -1537,10 +1535,8 @@ mod tests {
 
     #[test]
     fn remote_turn_start_permission_overrides_keep_legacy_sandbox_policy() {
-        let cwd = std::path::Path::new("/tmp/project");
         let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let permission_profile =
-            PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, cwd);
+        let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy);
 
         assert_eq!(
             turn_start_permission_overrides(

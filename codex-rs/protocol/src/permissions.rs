@@ -57,21 +57,16 @@ pub fn forbidden_agent_preserved_path_write(
 
     let target = resolve_candidate_path(path, cwd)?;
     let (preserved_path, preserved_name) = first_preserved_component(target.as_path())?;
-    if has_explicit_write_entry_for_path(file_system_sandbox_policy, &preserved_path, cwd) {
+    if has_explicit_write_entry_for_preserved_path(
+        file_system_sandbox_policy,
+        &preserved_path,
+        target.as_path(),
+        cwd,
+    ) {
         return None;
     }
 
-    if !file_system_sandbox_policy.can_write_path_with_cwd(preserved_path.as_path(), cwd) {
-        return Some(preserved_name);
-    }
-
-    // A child directory of an existing Git repository must keep normal Git
-    // discovery working, so the sandbox layer intentionally does not
-    // materialize a missing child `.git`. Block that creation at command time.
-    if preserved_name == PRESERVED_GIT_PATH_NAME
-        && !preserved_path.as_path().exists()
-        && has_ancestor_git_metadata(preserved_path.as_path())
-    {
+    if !file_system_sandbox_policy.can_write_path_with_cwd(target.as_path(), cwd) {
         return Some(preserved_name);
     }
 
@@ -512,7 +507,7 @@ impl FileSystemSandboxPolicy {
         for writable_root in writable_roots {
             for protected_path in default_read_only_subpaths_for_writable_root(
                 writable_root,
-                /*protect_missing_dot_codex*/ false,
+                /*protect_missing_preserved_paths*/ false,
             ) {
                 append_default_read_only_path_if_no_explicit_rule(
                     &mut file_system_policy.entries,
@@ -617,7 +612,28 @@ impl FileSystemSandboxPolicy {
     }
 
     pub fn can_write_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
-        self.resolve_access_with_cwd(path, cwd).can_write()
+        if !self.resolve_access_with_cwd(path, cwd).can_write() {
+            return false;
+        }
+        if self.has_full_disk_write_access() {
+            return true;
+        }
+        !self.is_preserved_path_write_denied(path, cwd)
+    }
+
+    fn is_preserved_path_write_denied(&self, path: &Path, cwd: &Path) -> bool {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return false;
+        }
+
+        let Some(target) = resolve_candidate_path(path, cwd) else {
+            return true;
+        };
+        let Some((preserved_path, _)) = first_preserved_component(target.as_path()) else {
+            return false;
+        };
+
+        !has_explicit_write_entry_for_preserved_path(self, &preserved_path, target.as_path(), cwd)
     }
 
     pub fn with_additional_readable_roots(
@@ -796,6 +812,10 @@ impl FileSystemSandboxPolicy {
                     }),
             );
             WritableRoot {
+                preserved_path_names: default_preserved_path_names_for_writable_root(
+                    &root,
+                    &resolved_entries,
+                ),
                 root,
                 // Preserve literal in-root protected paths like `.git` and
                 // `.codex` so downstream sandboxes can still detect and mask
@@ -1367,6 +1387,20 @@ pub(crate) fn default_read_only_subpaths_for_writable_root(
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
 }
 
+fn default_preserved_path_names_for_writable_root(
+    writable_root: &AbsolutePathBuf,
+    entries: &[ResolvedFileSystemEntry],
+) -> Vec<String> {
+    PRESERVED_PATH_NAMES
+        .iter()
+        .filter(|name| {
+            let path = writable_root.join(**name);
+            !has_explicit_resolved_write_entry(entries, &path)
+        })
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 fn append_default_read_only_project_root_subpath_if_no_explicit_rule(
     entries: &mut Vec<FileSystemSandboxEntry>,
     subpath: impl Into<PathBuf>,
@@ -1447,8 +1481,9 @@ fn legacy_non_cwd_writable_roots(
     dedup_absolute_paths(roots, /*normalize_effective_paths*/ true)
         .into_iter()
         .map(|root| WritableRoot {
+            preserved_path_names: default_preserved_path_names_for_writable_root(&root, &[]),
             read_only_subpaths: default_read_only_subpaths_for_writable_root(
-                &root, /*protect_missing_dot_codex*/ false,
+                &root, /*protect_missing_preserved_paths*/ false,
             ),
             root,
         })
@@ -1460,6 +1495,15 @@ fn has_explicit_resolved_path_entry(
     path: &AbsolutePathBuf,
 ) -> bool {
     entries.iter().any(|entry| &entry.path == path)
+}
+
+fn has_explicit_resolved_write_entry(
+    entries: &[ResolvedFileSystemEntry],
+    path: &AbsolutePathBuf,
+) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.access.can_write() && &entry.path == path)
 }
 
 fn first_preserved_component(path: &Path) -> Option<(AbsolutePathBuf, &'static str)> {
@@ -1481,15 +1525,17 @@ fn preserved_path_name(name: &OsStr) -> Option<&'static str> {
         .find(|preserved| name == OsStr::new(preserved))
 }
 
-fn has_explicit_write_entry_for_path(
+fn has_explicit_write_entry_for_preserved_path(
     policy: &FileSystemSandboxPolicy,
-    path: &AbsolutePathBuf,
+    preserved_path: &AbsolutePathBuf,
+    target: &Path,
     cwd: &Path,
 ) -> bool {
-    policy
-        .resolved_entries_with_cwd(cwd)
-        .iter()
-        .any(|entry| entry.access.can_write() && &entry.path == path)
+    policy.resolved_entries_with_cwd(cwd).iter().any(|entry| {
+        entry.access.can_write()
+            && target.starts_with(entry.path.as_path())
+            && entry.path.as_path().starts_with(preserved_path.as_path())
+    })
 }
 
 fn has_ancestor_git_metadata(path: &Path) -> bool {
@@ -1748,8 +1794,15 @@ mod tests {
             !writable_roots[0]
                 .read_only_subpaths
                 .contains(&expected_dot_git),
-            "missing child .git under an existing parent repo is enforced by command policy so Git discovery still works"
+            "missing child .git under an existing parent repo stays absent so Git discovery still works"
         );
+        assert!(
+            writable_roots[0]
+                .preserved_path_names
+                .contains(&".git".to_string()),
+            "missing child .git creation is denied by the preserved-name policy primitive"
+        );
+        assert!(!policy.can_write_path_with_cwd(expected_dot_git.join("config").as_path(), &cwd));
         assert!(
             writable_roots[0]
                 .read_only_subpaths
@@ -1837,15 +1890,33 @@ mod tests {
         );
         assert!(
             !workspace_root
+                .preserved_path_names
+                .contains(&".git".to_string()),
+            "explicit .git rule should win over the preserved-name policy"
+        );
+        assert!(
+            !workspace_root
                 .read_only_subpaths
                 .contains(&explicit_dot_agents),
             "explicit .agents rule should win over the default preserved path carveout"
         );
         assert!(
             !workspace_root
+                .preserved_path_names
+                .contains(&".agents".to_string()),
+            "explicit .agents rule should win over the preserved-name policy"
+        );
+        assert!(
+            !workspace_root
                 .read_only_subpaths
                 .contains(&explicit_dot_codex),
             "explicit .codex rule should win over the default protected carveout"
+        );
+        assert!(
+            !workspace_root
+                .preserved_path_names
+                .contains(&".codex".to_string()),
+            "explicit .codex rule should win over the preserved-name policy"
         );
         assert!(
             policy.can_write_path_with_cwd(
@@ -1893,8 +1964,7 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let file_system_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path());
+        let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy);
 
         assert!(
             !file_system_policy

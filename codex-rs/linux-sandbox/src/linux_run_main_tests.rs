@@ -353,6 +353,43 @@ fn cleanup_synthetic_mount_targets_preserves_real_pre_existing_empty_file() {
 }
 
 #[test]
+fn cleanup_protected_create_targets_removes_created_path_and_reports_violation() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let dot_git = temp_dir.path().join(".git");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&dot_git);
+
+    let registrations = register_protected_create_targets(&[target]);
+    std::fs::create_dir(&dot_git).expect("create protected path");
+    let violation = cleanup_protected_create_targets(&registrations);
+
+    assert!(violation);
+    assert!(!dot_git.exists());
+}
+
+#[test]
+fn cleanup_protected_create_targets_waits_for_other_active_registrations() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let dot_git = temp_dir.path().join(".git");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&dot_git);
+
+    let registrations = register_protected_create_targets(std::slice::from_ref(&target));
+    let active_marker = registrations[0].marker_dir.join("1");
+    std::fs::write(&active_marker, PROTECTED_CREATE_MARKER).expect("write active marker");
+    std::fs::write(&dot_git, "").expect("create protected path");
+
+    let violation = cleanup_protected_create_targets(&registrations);
+    assert!(violation);
+    assert!(dot_git.exists());
+
+    std::fs::remove_file(active_marker).expect("remove active marker");
+    let registrations = register_protected_create_targets(std::slice::from_ref(&target));
+    let violation = cleanup_protected_create_targets(&registrations);
+
+    assert!(violation);
+    assert!(!dot_git.exists());
+}
+
+#[test]
 fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
     let supervisor_pid = unsafe { libc::fork() };
     assert!(supervisor_pid >= 0, "failed to fork supervisor");

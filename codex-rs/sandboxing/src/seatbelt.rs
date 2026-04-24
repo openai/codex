@@ -328,6 +328,7 @@ fn root_absolute_path() -> AbsolutePathBuf {
 struct SeatbeltAccessRoot {
     root: AbsolutePathBuf,
     excluded_subpaths: Vec<AbsolutePathBuf>,
+    preserved_path_names: Vec<String>,
 }
 
 fn build_seatbelt_access_policy(
@@ -342,9 +343,9 @@ fn build_seatbelt_access_policy(
         let root =
             normalize_path_for_sandbox(access_root.root.as_path()).unwrap_or(access_root.root);
         let root_param = format!("{param_prefix}_{index}");
-        params.push((root_param.clone(), root.into_path_buf()));
+        params.push((root_param.clone(), root.clone().into_path_buf()));
 
-        if access_root.excluded_subpaths.is_empty() {
+        if access_root.excluded_subpaths.is_empty() && access_root.preserved_path_names.is_empty() {
             policy_components.push(format!("(subpath (param \"{root_param}\"))"));
             continue;
         }
@@ -367,6 +368,11 @@ fn build_seatbelt_access_policy(
                 "(require-not (subpath (param \"{excluded_param}\")))"
             ));
         }
+        for preserved_name in access_root.preserved_path_names {
+            let regex =
+                seatbelt_preserved_path_name_regex(&root, &preserved_name).replace('"', "\\\"");
+            require_parts.push(format!(r#"(require-not (regex #"{regex}"))"#));
+        }
         policy_components.push(format!("(require-all {} )", require_parts.join(" ")));
     }
 
@@ -377,6 +383,20 @@ fn build_seatbelt_access_policy(
             format!("(allow {action}\n{}\n)", policy_components.join(" ")),
             params,
         )
+    }
+}
+
+fn seatbelt_preserved_path_name_regex(root: &AbsolutePathBuf, name: &str) -> String {
+    let mut root = root.to_string_lossy().to_string();
+    while root.len() > 1 && root.ends_with('/') {
+        root.pop();
+    }
+    let root = regex_lite::escape(&root);
+    let name = regex_lite::escape(name);
+    if root == "/" {
+        format!(r#"^/(.*/)?{name}(/.*)?$"#)
+    } else {
+        format!(r#"^{root}/(.*/)?{name}(/.*)?$"#)
     }
 }
 
@@ -586,6 +606,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
                     vec![SeatbeltAccessRoot {
                         root: root_absolute_path(),
                         excluded_subpaths: unreadable_roots.clone(),
+                        preserved_path_names: Vec::new(),
                     }],
                 )
             }
@@ -599,6 +620,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
                     .map(|root| SeatbeltAccessRoot {
                         root: root.root,
                         excluded_subpaths: root.read_only_subpaths,
+                        preserved_path_names: root.preserved_path_names,
                     })
                     .collect(),
             )
@@ -618,6 +640,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
                     vec![SeatbeltAccessRoot {
                         root: root_absolute_path(),
                         excluded_subpaths: unreadable_roots,
+                        preserved_path_names: Vec::new(),
                     }],
                 );
                 (
@@ -638,6 +661,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
                             .filter(|path| path.as_path().starts_with(root.as_path()))
                             .cloned()
                             .collect(),
+                        preserved_path_names: Vec::new(),
                         root,
                     })
                     .collect(),

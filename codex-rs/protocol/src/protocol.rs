@@ -83,6 +83,7 @@ pub use crate::permissions::FileSystemSandboxKind;
 pub use crate::permissions::FileSystemSandboxPolicy;
 pub use crate::permissions::FileSystemSpecialPath;
 pub use crate::permissions::NetworkSandboxPolicy;
+use crate::permissions::PRESERVED_PATH_NAMES;
 use crate::permissions::default_read_only_subpaths_for_writable_root;
 pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
@@ -1091,6 +1092,10 @@ pub struct WritableRoot {
 
     /// By construction, these subpaths are all under `root`.
     pub read_only_subpaths: Vec<AbsolutePathBuf>,
+
+    /// Path component names that must not be created or replaced under `root`
+    /// unless the policy grants an explicit write rule for that preserved path.
+    pub preserved_path_names: Vec<String>,
 }
 
 impl WritableRoot {
@@ -1107,8 +1112,31 @@ impl WritableRoot {
             }
         }
 
+        if self.path_contains_preserved_name(path) {
+            return false;
+        }
+
         true
     }
+
+    fn path_contains_preserved_name(&self, path: &Path) -> bool {
+        let Ok(relative_path) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+
+        relative_path.components().any(|component| {
+            self.preserved_path_names
+                .iter()
+                .any(|name| component.as_os_str() == std::ffi::OsStr::new(name))
+        })
+    }
+}
+
+fn default_preserved_path_names() -> Vec<String> {
+    PRESERVED_PATH_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 impl FromStr for SandboxPolicy {
@@ -1257,6 +1285,7 @@ impl SandboxPolicy {
                                 &writable_root,
                                 /*protect_missing_preserved_paths*/ true,
                             ),
+                            preserved_path_names: default_preserved_path_names(),
                             root: writable_root,
                         }
                     })
