@@ -719,13 +719,13 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         build_mcp_tool_call_request_meta(
             &turn_context,
             CODEX_APPS_MCP_SERVER_NAME,
-            "call-calendar",
+            "call_abc123xyz789",
             Some(&metadata),
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
-                "call_id": "call-calendar",
+                "call_id": "call_abc123xyz789",
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
@@ -749,13 +749,13 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
         build_mcp_tool_call_request_meta(
             &turn_context,
             CODEX_APPS_MCP_SERVER_NAME,
-            "call-calendar",
+            "call_abc123xyz789",
             /*metadata*/ None,
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
-                "call_id": "call-calendar",
+                "call_id": "call_abc123xyz789",
             },
         }))
     );
