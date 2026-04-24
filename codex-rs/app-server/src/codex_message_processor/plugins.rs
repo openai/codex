@@ -582,6 +582,11 @@ impl CodexMessageProcessor {
         let plugin_id = match (plugin_id, remote_marketplace_name, plugin_name) {
             (Some(plugin_id), None, None) => plugin_id,
             (None, Some(remote_marketplace_name), Some(plugin_name)) => {
+                if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
+                    return Err(invalid_request(
+                        "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+                    ));
+                }
                 return self
                     .remote_plugin_uninstall_response(remote_marketplace_name, plugin_name)
                     .await;
