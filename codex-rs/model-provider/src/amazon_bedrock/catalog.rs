@@ -1,6 +1,7 @@
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -38,6 +39,7 @@ fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
 
     model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
     model.priority = priority;
+    model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
     model
 }
 
@@ -137,6 +139,7 @@ mod tests {
 
         gpt_5_4_model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
         gpt_5_4_model.priority = cmb_model.priority;
+        gpt_5_4_model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
 
         assert_eq!(*cmb_model, gpt_5_4_model);
     }
