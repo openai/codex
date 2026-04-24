@@ -188,8 +188,13 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
         sqlite_artifacts.is_empty(),
         "non-local thread persistence should not create sqlite artifacts: {sqlite_artifacts:?}"
     );
+    let mut entries = codex_home_entries(codex_home)?;
+    // Bazel test runs may initialize shell snapshot storage under codex_home.
+    // That is not thread persistence; keep the assertion focused on rollout,
+    // session, sqlite, and other unexpected thread-store artifacts.
+    entries.remove("shell_snapshots");
     assert_eq!(
-        codex_home_entries(codex_home)?,
+        entries,
         BTreeSet::from([
             "config.toml".to_string(),
             "installation_id".to_string(),
