@@ -2,20 +2,18 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (49 selectable)
+tab: All (44 selectable)
 tab: Common (18 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (0) (0 selectable)
-tab: App (5 selectable)
+tab: App (3 selectable)
 tab: Composer (3 selectable)
 tab: Editor (16 selectable)
-tab: Navigation (17 selectable)
+tab: Navigation (14 selectable)
 tab: Approval (8 selectable)
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
-Edit Previous Message | esc | Chat edit_previous_message Edit Previous Message Begin or advance edit-previous-message when the composer is empty. esc Default
-Confirm Edit Previous Message | enter | Chat confirm_edit_previous_message Confirm Edit Previous Message Confirm the selected previous message to edit. enter Default
 Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
 Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default
 Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show or hide the composer shortcut overlay. ?, shift-? Default
@@ -23,3 +21,5 @@ Insert Newline | ctrl-j, ctrl-m, enter, shift-enter | Editor insert_newline Inse
 Move Left | left, ctrl-b | Editor move_left Move Left Move the cursor left. left, ctrl-b Default
 Move Right | right, ctrl-f | Editor move_right Move Right Move the cursor right. right, ctrl-f Default
 Move Up | up, ctrl-p | Editor move_up Move Up Move the cursor up. up, ctrl-p Default
+Move Down | down, ctrl-n | Editor move_down Move Down Move the cursor down. down, ctrl-n Default
+Move Word Left | alt-b, alt-left, ctrl-left | Editor move_word_left Move Word Left Move to the beginning of the previous word. alt-b, alt-left, ctrl-left Default
