@@ -6,7 +6,7 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
-use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
@@ -93,10 +93,8 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
 
 async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
     let config = test_config().await;
-    let model_info = ModelsManager::construct_model_info_offline_for_tests(
-        "gpt-5.4",
-        &config.to_models_manager_config(),
-    );
+    let model_info =
+        construct_model_info_offline_for_tests("gpt-5.4", &config.to_models_manager_config());
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let mut tools_config = ToolsConfig::new(&ToolsConfigParams {

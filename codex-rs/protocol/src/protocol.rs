@@ -41,6 +41,7 @@ use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
+use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -432,7 +433,7 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
@@ -537,6 +538,13 @@ pub enum Op {
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
+        /// Full permissions profile to use for tool calls such as `local_shell`.
+        ///
+        /// When omitted, `sandbox_policy` is used as a legacy compatibility
+        /// projection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
+
         /// Must be a valid model slug for the configured client session
         /// associated with this conversation.
         model: String,
@@ -572,7 +580,7 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
 
-        /// Optional turn-scoped environment selections.
+        /// Optional turn-scoped environments.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         environments: Option<Vec<TurnEnvironmentSelection>>,
     },
@@ -3058,7 +3066,8 @@ impl TurnContextItem {
                         &self.cwd,
                     )
                 });
-            PermissionProfile::from_runtime_permissions(
+            PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
                 &file_system_sandbox_policy,
                 NetworkSandboxPolicy::from(&self.sandbox_policy),
             )

@@ -21,7 +21,7 @@ use tokio::sync::oneshot;
 
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsage;
 
@@ -107,7 +107,7 @@ pub(crate) struct TurnState {
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
     mailbox_delivery_phase: MailboxDeliveryPhase,
-    granted_permissions: Option<PermissionProfile>,
+    granted_permissions: Option<AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
@@ -249,12 +249,12 @@ impl TurnState {
         self.mailbox_delivery_phase = phase;
     }
 
-    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+    pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {
         self.granted_permissions =
             merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
     }
 
-    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+    pub(crate) fn granted_permissions(&self) -> Option<AdditionalPermissionProfile> {
         self.granted_permissions.clone()
     }
 

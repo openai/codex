@@ -1670,6 +1670,7 @@ async fn get_login_status(
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
+        Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })
 }

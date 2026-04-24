@@ -6,15 +6,25 @@ use chrono::Utc;
 use codex_git_utils::GitSha;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadMemoryMode;
 
 use super::proto;
+use crate::GitInfoPatch;
+use crate::OptionalStringPatch;
+use crate::SortDirection;
 use crate::StoredThread;
+use crate::StoredThreadHistory;
+use crate::ThreadEventPersistenceMode;
+use crate::ThreadMetadataPatch;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -35,10 +45,42 @@ pub(super) fn remote_status_to_error(status: tonic::Status) -> ThreadStoreError 
     }
 }
 
+pub(super) fn remote_status_to_thread_error(
+    status: tonic::Status,
+    thread_id: ThreadId,
+) -> ThreadStoreError {
+    if status.code() == tonic::Code::NotFound {
+        return ThreadStoreError::ThreadNotFound { thread_id };
+    }
+    remote_status_to_error(status)
+}
+
+pub(super) fn proto_thread_id_request(thread_id: ThreadId) -> proto::ThreadIdRequest {
+    proto::ThreadIdRequest {
+        thread_id: thread_id.to_string(),
+    }
+}
+
 pub(super) fn proto_sort_key(sort_key: ThreadSortKey) -> proto::ThreadSortKey {
     match sort_key {
         ThreadSortKey::CreatedAt => proto::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => proto::ThreadSortKey::UpdatedAt,
+    }
+}
+
+pub(super) fn proto_sort_direction(sort_direction: SortDirection) -> proto::SortDirection {
+    match sort_direction {
+        SortDirection::Asc => proto::SortDirection::Asc,
+        SortDirection::Desc => proto::SortDirection::Desc,
+    }
+}
+
+pub(super) fn proto_event_persistence_mode(
+    mode: ThreadEventPersistenceMode,
+) -> proto::ThreadEventPersistenceMode {
+    match mode {
+        ThreadEventPersistenceMode::Limited => proto::ThreadEventPersistenceMode::Limited,
+        ThreadEventPersistenceMode::Extended => proto::ThreadEventPersistenceMode::Extended,
     }
 }
 
@@ -93,6 +135,114 @@ fn proto_source(kind: proto::SessionSourceKind) -> proto::SessionSource {
     }
 }
 
+pub(super) fn serialize_json<T: serde::Serialize>(
+    value: &T,
+    field_name: &str,
+) -> ThreadStoreResult<String> {
+    serde_json::to_string(value).map_err(|err| ThreadStoreError::InvalidRequest {
+        message: format!("failed to serialize {field_name} for remote thread store: {err}"),
+    })
+}
+
+fn deserialize_json<T: serde::de::DeserializeOwned>(
+    json: &str,
+    field_name: &str,
+) -> ThreadStoreResult<T> {
+    serde_json::from_str(json).map_err(|err| ThreadStoreError::InvalidRequest {
+        message: format!("remote thread store returned invalid {field_name}: {err}"),
+    })
+}
+
+pub(super) fn serialize_json_vec<T: serde::Serialize>(
+    values: &[T],
+    field_name: &str,
+) -> ThreadStoreResult<Vec<String>> {
+    values
+        .iter()
+        .map(|value| serialize_json(value, field_name))
+        .collect()
+}
+
+fn deserialize_json_vec<T: serde::de::DeserializeOwned>(
+    values: &[String],
+    field_name: &str,
+) -> ThreadStoreResult<Vec<T>> {
+    values
+        .iter()
+        .map(|value| deserialize_json(value, field_name))
+        .collect()
+}
+
+pub(super) fn base_instructions_json(
+    base_instructions: &BaseInstructions,
+) -> ThreadStoreResult<String> {
+    serialize_json(base_instructions, "base_instructions")
+}
+
+pub(super) fn dynamic_tools_json(
+    dynamic_tools: &[DynamicToolSpec],
+) -> ThreadStoreResult<Vec<String>> {
+    serialize_json_vec(dynamic_tools, "dynamic_tool")
+}
+
+pub(super) fn rollout_items_json(items: &[RolloutItem]) -> ThreadStoreResult<Vec<String>> {
+    serialize_json_vec(items, "rollout_item")
+}
+
+pub(super) fn stored_thread_history_from_proto(
+    history: proto::StoredThreadHistory,
+) -> ThreadStoreResult<StoredThreadHistory> {
+    let thread_id = ThreadId::from_string(&history.thread_id).map_err(|err| {
+        ThreadStoreError::InvalidRequest {
+            message: format!("remote thread store returned invalid history thread_id: {err}"),
+        }
+    })?;
+    Ok(StoredThreadHistory {
+        thread_id,
+        items: deserialize_json_vec(&history.items_json, "rollout_item")?,
+    })
+}
+
+pub(super) fn proto_metadata_patch(patch: ThreadMetadataPatch) -> proto::ThreadMetadataPatch {
+    proto::ThreadMetadataPatch {
+        name: patch.name,
+        memory_mode: patch.memory_mode.map(proto_memory_mode).map(Into::into),
+        git_info: patch.git_info.map(proto_git_info_patch),
+    }
+}
+
+fn proto_memory_mode(memory_mode: ThreadMemoryMode) -> proto::ThreadMemoryMode {
+    match memory_mode {
+        ThreadMemoryMode::Enabled => proto::ThreadMemoryMode::Enabled,
+        ThreadMemoryMode::Disabled => proto::ThreadMemoryMode::Disabled,
+    }
+}
+
+fn proto_git_info_patch(patch: GitInfoPatch) -> proto::GitInfoPatch {
+    proto::GitInfoPatch {
+        sha: Some(proto_optional_string_patch(patch.sha)),
+        branch: Some(proto_optional_string_patch(patch.branch)),
+        origin_url: Some(proto_optional_string_patch(patch.origin_url)),
+    }
+}
+
+fn proto_optional_string_patch(patch: OptionalStringPatch) -> proto::OptionalStringPatch {
+    match patch {
+        None => proto::OptionalStringPatch {
+            kind: proto::OptionalStringPatchKind::Unset.into(),
+            value: None,
+        },
+        Some(None) => proto::OptionalStringPatch {
+            kind: proto::OptionalStringPatchKind::Clear.into(),
+            value: None,
+        },
+        Some(Some(value)) => proto::OptionalStringPatch {
+            kind: proto::OptionalStringPatchKind::Set.into(),
+            value: Some(value),
+        },
+    }
+}
+
 pub(super) fn stored_thread_from_proto(
     thread: proto::StoredThread,
 ) -> ThreadStoreResult<StoredThread> {
@@ -121,7 +271,7 @@ pub(super) fn stored_thread_from_proto(
 
     Ok(StoredThread {
         thread_id,
-        rollout_path: None,
+        rollout_path: thread.rollout_path.map(PathBuf::from),
         forked_from_id,
         preview: thread.preview,
         name: thread.name,
@@ -142,11 +292,28 @@ pub(super) fn stored_thread_from_proto(
         agent_role: thread.agent_role,
         agent_path: thread.agent_path,
         git_info: thread.git_info.map(git_info_from_proto),
-        approval_mode: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        token_usage: None,
+        approval_mode: thread
+            .approval_mode_json
+            .as_deref()
+            .map(|json| deserialize_json(json, "approval_mode"))
+            .transpose()?
+            .unwrap_or(AskForApproval::OnRequest),
+        sandbox_policy: thread
+            .sandbox_policy_json
+            .as_deref()
+            .map(|json| deserialize_json(json, "sandbox_policy"))
+            .transpose()?
+            .unwrap_or_else(SandboxPolicy::new_read_only_policy),
+        token_usage: thread
+            .token_usage_json
+            .as_deref()
+            .map(|json| deserialize_json(json, "token_usage"))
+            .transpose()?,
         first_user_message: thread.first_user_message,
-        history: None,
+        history: thread
+            .history
+            .map(stored_thread_history_from_proto)
+            .transpose()?,
     })
 }
 
@@ -171,6 +338,26 @@ pub(super) fn stored_thread_to_proto(thread: StoredThread) -> proto::StoredThrea
         agent_path: thread.agent_path,
         reasoning_effort: thread.reasoning_effort.map(|effort| effort.to_string()),
         first_user_message: thread.first_user_message,
+        rollout_path: thread
+            .rollout_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        approval_mode_json: Some(serialize_json(&thread.approval_mode, "approval_mode").unwrap()),
+        sandbox_policy_json: Some(
+            serialize_json(&thread.sandbox_policy, "sandbox_policy").unwrap(),
+        ),
+        token_usage_json: thread
+            .token_usage
+            .as_ref()
+            .map(|usage| serialize_json(usage, "token_usage").unwrap()),
+        history: thread.history.map(stored_thread_history_to_proto),
+    }
+}
+
+#[cfg(test)]
+fn stored_thread_history_to_proto(history: StoredThreadHistory) -> proto::StoredThreadHistory {
+    proto::StoredThreadHistory {
+        thread_id: history.thread_id.to_string(),
+        items_json: rollout_items_json(&history.items).unwrap(),
     }
 }
 

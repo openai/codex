@@ -118,8 +118,7 @@ async fn run_remote_compact_task_inner_impl(
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
     // endpoint attempts, and the installed history checkpoint all have one join key.
-    let compaction_trace = sess.services.rollout_trace.compaction_trace_context(
-        sess.conversation_id,
+    let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
         turn_context.sub_id.as_str(),
         context_compaction_item.id.as_str(),
         turn_context.model_info.slug.as_str(),

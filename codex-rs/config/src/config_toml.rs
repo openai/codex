@@ -313,6 +313,10 @@ pub struct ConfigToml {
     /// Experimental / do not use. When set, app-server uses a remote thread
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
+
+    /// Experimental / do not use. When set, app-server fetches thread-scoped
+    /// config from a remote service at this endpoint.
+    pub experimental_thread_config_endpoint: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.

@@ -46,6 +46,22 @@
           ],
           "title": "ChatgptAccount",
           "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "amazonBedrock"
+              ],
+              "title": "AmazonBedrockAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AmazonBedrockAccount",
+          "type": "object"
         }
       ]
     },
@@ -1378,6 +1394,30 @@
             "params"
           ],
           "title": "Marketplace/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/upgrade"
+              ],
+              "title": "Marketplace/upgradeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceUpgradeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/upgradeRequest",
           "type": "object"
         },
         {
@@ -7033,6 +7073,64 @@
       "title": "MarketplaceRemoveResponse",
       "type": "object"
     },
+    "MarketplaceUpgradeErrorInfo": {
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName",
+        "message"
+      ],
+      "type": "object"
+    },
+    "MarketplaceUpgradeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "MarketplaceUpgradeParams",
+      "type": "object"
+    },
+    "MarketplaceUpgradeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/MarketplaceUpgradeErrorInfo"
+          },
+          "type": "array"
+        },
+        "selectedMarketplaces": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "upgradedRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "errors",
+        "selectedMarketplaces",
+        "upgradedRoots"
+      ],
+      "title": "MarketplaceUpgradeResponse",
+      "type": "object"
+    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -7902,61 +8000,132 @@
       ]
     },
     "PermissionProfile": {
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
+      "oneOf": [
+        {
+          "description": "Codex owns sandbox construction for this profile.",
+          "properties": {
+            "fileSystem": {
               "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
             },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
+            "network": {
               "$ref": "#/definitions/PermissionProfileNetworkPermissions"
             },
-            {
-              "type": "null"
+            "type": {
+              "enum": [
+                "managed"
+              ],
+              "title": "ManagedPermissionProfileType",
+              "type": "string"
             }
-          ]
+          },
+          "required": [
+            "fileSystem",
+            "network",
+            "type"
+          ],
+          "title": "ManagedPermissionProfile",
+          "type": "object"
+        },
+        {
+          "description": "Do not apply an outer sandbox.",
+          "properties": {
+            "type": {
+              "enum": [
+                "disabled"
+              ],
+              "title": "DisabledPermissionProfileType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DisabledPermissionProfile",
+          "type": "object"
+        },
+        {
+          "description": "Filesystem isolation is enforced by an external caller.",
+          "properties": {
+            "network": {
+              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
+            },
+            "type": {
+              "enum": [
+                "external"
+              ],
+              "title": "ExternalPermissionProfileType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "network",
+            "type"
+          ],
+          "title": "ExternalPermissionProfile",
+          "type": "object"
         }
-      },
-      "type": "object"
+      ]
     },
     "PermissionProfileFileSystemPermissions": {
-      "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/FileSystemSandboxEntry"
+      "oneOf": [
+        {
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/definitions/FileSystemSandboxEntry"
+              },
+              "type": "array"
+            },
+            "globScanMaxDepth": {
+              "format": "uint",
+              "minimum": 1.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedPermissionProfileFileSystemPermissionsType",
+              "type": "string"
+            }
           },
-          "type": "array"
+          "required": [
+            "entries",
+            "type"
+          ],
+          "title": "RestrictedPermissionProfileFileSystemPermissions",
+          "type": "object"
         },
-        "globScanMaxDepth": {
-          "format": "uint",
-          "minimum": 1.0,
-          "type": [
-            "integer",
-            "null"
-          ]
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "unrestricted"
+              ],
+              "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UnrestrictedPermissionProfileFileSystemPermissions",
+          "type": "object"
         }
-      },
-      "required": [
-        "entries"
-      ],
-      "type": "object"
+      ]
     },
     "PermissionProfileNetworkPermissions": {
       "properties": {
         "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         }
       },
+      "required": [
+        "enabled"
+      ],
       "type": "object"
     },
     "Personality": {
@@ -12283,6 +12452,10 @@
         "ephemeral": {
           "type": "boolean"
         },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
+          "type": "boolean"
+        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -12385,7 +12558,7 @@
             }
           ],
           "default": null,
-          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          "description": "Canonical active permissions view for this thread."
         },
         "reasoningEffort": {
           "anyOf": [
@@ -13803,6 +13976,10 @@
             "null"
           ]
         },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+          "type": "boolean"
+        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -13915,7 +14092,7 @@
             }
           ],
           "default": null,
-          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          "description": "Canonical active permissions view for this thread."
         },
         "reasoningEffort": {
           "anyOf": [
@@ -14242,7 +14419,7 @@
             }
           ],
           "default": null,
-          "description": "Canonical active permissions view for this thread when representable. This is `null` for external sandbox policies because external enforcement cannot be round-tripped as a `PermissionProfile`."
+          "description": "Canonical active permissions view for this thread."
         },
         "reasoningEffort": {
           "anyOf": [

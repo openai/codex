@@ -263,7 +263,7 @@ const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
 const MULTI_AGENT_ENABLE_NOTICE: &str = "Subagents will be enabled in the next session.";
-const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING: &str = "Your account was flagged for potentially high-risk cyber activity. Requests may be slower while additional verification is applied. To regain faster access, apply for trusted access: https://chatgpt.com/cyber or learn more: https://developers.openai.com/codex/concepts/cyber-safety";
+const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
 const MEMORIES_DOC_URL: &str = "https://developers.openai.com/codex/memories";
 const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
 const MEMORIES_ENABLE_YES: &str = "Yes, enable";
@@ -2320,6 +2320,20 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        let (file_system_sandbox_policy, network_sandbox_policy) = match event
+            .permission_profile
+            .as_ref()
+        {
+            Some(permission_profile) => permission_profile.to_runtime_permissions(),
+            None => (
+                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    &event.sandbox_policy,
+                    &event.cwd,
+                ),
+                codex_protocol::permissions::NetworkSandboxPolicy::from(&event.sandbox_policy),
+            ),
+        };
+
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -2362,6 +2376,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -6373,11 +6389,20 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
+        let permission_profile = if matches!(
+            self.config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            None
+        } else {
+            Some(self.config.permissions.permission_profile())
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,
@@ -10235,6 +10260,14 @@ impl ChatWidget {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         self.config.permissions.sandbox_policy.set(policy)?;
+        let sandbox_policy = self.config.permissions.sandbox_policy.get();
+        self.config.permissions.file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                sandbox_policy,
+                &self.config.cwd,
+            );
+        self.config.permissions.network_sandbox_policy =
+            codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
         Ok(())
     }
 
