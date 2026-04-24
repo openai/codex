@@ -536,7 +536,11 @@ pub(super) async fn fetch_plugin_uninstall(
     request_handle
         .request_typed(ClientRequest::PluginUninstall {
             request_id,
-            params: PluginUninstallParams { plugin_id },
+            params: PluginUninstallParams {
+                plugin_id: Some(plugin_id),
+                remote_marketplace_name: None,
+                plugin_name: None,
+            },
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")

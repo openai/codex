@@ -407,11 +407,7 @@ impl CodexMessageProcessor {
                 "remote plugin install is not enabled for marketplace {remote_marketplace_name}"
             )));
         }
-        if plugin_name.is_empty()
-            || !plugin_name
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
-        {
+        if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
             return Err(invalid_request(
                 "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
             ));
@@ -578,7 +574,24 @@ impl CodexMessageProcessor {
         &self,
         params: PluginUninstallParams,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
-        let PluginUninstallParams { plugin_id } = params;
+        let PluginUninstallParams {
+            plugin_id,
+            remote_marketplace_name,
+            plugin_name,
+        } = params;
+        let plugin_id = match (plugin_id, remote_marketplace_name, plugin_name) {
+            (Some(plugin_id), None, None) => plugin_id,
+            (None, Some(remote_marketplace_name), Some(plugin_name)) => {
+                return self
+                    .remote_plugin_uninstall_response(remote_marketplace_name, plugin_name)
+                    .await;
+            }
+            _ => {
+                return Err(invalid_request(
+                    "plugin/uninstall requires either pluginId or remoteMarketplaceName plus pluginName",
+                ));
+            }
+        };
         let plugins_manager = self.thread_manager.plugins_manager();
 
         plugins_manager
@@ -648,6 +661,48 @@ impl CodexMessageProcessor {
             MarketplaceError::Io { .. } => internal_error(format!("failed to {action}: {err}")),
         }
     }
+
+    async fn remote_plugin_uninstall_response(
+        &self,
+        remote_marketplace_name: String,
+        plugin_name: String,
+    ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
+        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        if !config.features.enabled(Feature::Plugins)
+            || !config.features.enabled(Feature::RemotePlugin)
+        {
+            return Err(invalid_request(format!(
+                "remote plugin uninstall is not enabled for marketplace {remote_marketplace_name}"
+            )));
+        }
+        if plugin_name.is_empty() || !is_valid_remote_plugin_id(&plugin_name) {
+            return Err(invalid_request(
+                "invalid remote plugin id: only ASCII letters, digits, `_`, `-`, and `~` are allowed",
+            ));
+        }
+
+        let auth = self.auth_manager.auth().await;
+        let remote_plugin_service_config = RemotePluginServiceConfig {
+            chatgpt_base_url: config.chatgpt_base_url.clone(),
+        };
+        codex_core_plugins::remote::uninstall_remote_plugin(
+            &remote_plugin_service_config,
+            auth.as_ref(),
+            &remote_marketplace_name,
+            &plugin_name,
+        )
+        .await
+        .map_err(|err| remote_plugin_catalog_error_to_jsonrpc(err, "uninstall remote plugin"))?;
+
+        self.clear_plugin_related_caches();
+        Ok(PluginUninstallResponse {})
+    }
+}
+
+fn is_valid_remote_plugin_id(plugin_name: &str) -> bool {
+    plugin_name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '~')
 }
 
 fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketplaceEntry {
