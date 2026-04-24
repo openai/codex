@@ -372,7 +372,7 @@ impl Session {
                             Arc::clone(&thread_store),
                             ResumeThreadParams {
                                 thread_id: resumed_history.conversation_id,
-                                rollout_path: Some(resumed_history.rollout_path.clone()),
+                                rollout_path: resumed_history.rollout_path.clone(),
                                 history: Some(resumed_history.history.clone()),
                                 include_archived: true,
                                 event_persistence_mode,
