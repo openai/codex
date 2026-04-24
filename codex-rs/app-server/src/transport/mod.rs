@@ -40,6 +40,7 @@ mod unix_socket_tests;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
+pub(crate) use remote_control::RemoteControlStateRuntimeConfig;
 pub(crate) use remote_control::start_remote_control;
 pub(crate) use stdio::start_stdio_connection;
 pub(crate) use unix_socket::start_control_socket_acceptor;

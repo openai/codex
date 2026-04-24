@@ -13,8 +13,8 @@ use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
 use codex_login::AuthManager;
-use codex_state::StateRuntime;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -34,6 +34,12 @@ pub(crate) struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct RemoteControlStateRuntimeConfig {
+    pub(crate) sqlite_home: PathBuf,
+    pub(crate) model_provider_id: String,
+}
+
 impl RemoteControlHandle {
     pub(crate) fn set_enabled(&self, enabled: bool) {
         self.enabled_tx.send_if_modified(|state| {
@@ -46,7 +52,7 @@ impl RemoteControlHandle {
 
 pub(crate) async fn start_remote_control(
     remote_control_url: String,
-    state_db: Option<Arc<StateRuntime>>,
+    state_runtime_config: RemoteControlStateRuntimeConfig,
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
@@ -64,7 +70,7 @@ pub(crate) async fn start_remote_control(
         RemoteControlWebsocket::new(
             remote_control_url,
             remote_control_target,
-            state_db,
+            state_runtime_config,
             auth_manager,
             transport_event_tx,
             shutdown_token,
