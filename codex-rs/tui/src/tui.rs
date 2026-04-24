@@ -441,10 +441,20 @@ fn set_panic_hook() {
     }));
 }
 
+/// Event consumed by the top-level TUI event loop.
+///
+/// Resize is intentionally modeled separately from [`TuiEvent::Draw`] because resize handling has to reconcile terminal geometry and cached viewport state before rendering the next frame.
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    /// Keyboard input delivered by crossterm.
     Key(KeyEvent),
+    /// Bracketed paste payload delivered by crossterm.
     Paste(String),
+    /// Terminal geometry changed or was inferred to have changed.
+    ///
+    /// Resize events should be rendered immediately and should not be downgraded to a scheduled draw. Some terminal hosts can report stale cursor positions during resize, so handlers use this variant to request a conservative repaint path.
+    Resize,
+    /// Scheduled repaint request from application state changes.
     Draw,
 }
 
@@ -465,6 +475,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     is_zellij: bool,
+    force_full_repaint: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
 }
@@ -481,8 +492,9 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
+        let terminal_info = codex_terminal_detection::terminal_info();
         let is_zellij = matches!(
-            codex_terminal_detection::terminal_info().multiplexer,
+            terminal_info.multiplexer,
             Some(codex_terminal_detection::Multiplexer::Zellij {})
         );
 
@@ -501,6 +513,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
+            force_full_repaint: false,
             alt_screen_enabled: true,
         }
     }
@@ -521,6 +534,13 @@ impl Tui {
 
     pub fn frame_requester(&self) -> FrameRequester {
         self.frame_requester.clone()
+    }
+
+    /// Requests that the next draw clear and invalidate the terminal viewport.
+    ///
+    /// This is used for resize handling when the cursor-position viewport heuristic is less trustworthy than the size event itself. It is a one-shot flag consumed by [`Tui::draw`]; callers should set it immediately before the draw that needs the conservative repaint.
+    pub(crate) fn force_full_repaint(&mut self) {
+        self.force_full_repaint = true;
     }
 
     pub fn enhanced_keys_supported(&self) -> bool {
@@ -762,9 +782,18 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
+        let force_full_repaint = self.force_full_repaint;
+        self.force_full_repaint = false;
+
         // Precompute any viewport updates that need a cursor-position query before entering
-        // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
+        // the synchronized update, to avoid racing with the event reader. Forced repaint
+        // callers skip this heuristic because some terminal hosts can report stale cursor
+        // positions while a blurred split pane is being resized rapidly.
+        let mut pending_viewport_area = if force_full_repaint {
+            None
+        } else {
+            self.pending_viewport_area()?
+        };
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -785,6 +814,11 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+
+            if force_full_repaint {
+                terminal.clear()?;
+                needs_full_repaint = true;
+            }
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();

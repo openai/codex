@@ -33,6 +33,8 @@ pub enum TerminalName {
     WarpTerminal,
     /// Visual Studio Code integrated terminal.
     VsCode,
+    /// Superset xterm.js terminal host.
+    Superset,
     /// WezTerm terminal emulator.
     WezTerm,
     /// kitty terminal emulator.
@@ -190,6 +192,7 @@ impl TerminalInfo {
                     format_terminal_version("WarpTerminal", &self.version)
                 }
                 TerminalName::VsCode => format_terminal_version("vscode", &self.version),
+                TerminalName::Superset => format_terminal_version("Superset", &self.version),
                 TerminalName::WezTerm => format_terminal_version("WezTerm", &self.version),
                 TerminalName::Kitty => "kitty".to_string(),
                 TerminalName::Alacritty => "Alacritty".to_string(),
@@ -482,6 +485,7 @@ fn terminal_name_from_term_program(value: &str) -> Option<TerminalName> {
         "iterm" | "iterm2" | "itermapp" => Some(TerminalName::Iterm2),
         "warp" | "warpterminal" => Some(TerminalName::WarpTerminal),
         "vscode" => Some(TerminalName::VsCode),
+        "superset" => Some(TerminalName::Superset),
         "wezterm" => Some(TerminalName::WezTerm),
         "kitty" => Some(TerminalName::Kitty),
         "alacritty" => Some(TerminalName::Alacritty),
