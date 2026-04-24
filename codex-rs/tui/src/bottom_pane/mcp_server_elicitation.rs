@@ -167,7 +167,9 @@ pub(crate) struct McpServerElicitationFormRequest {
     thread_id: ThreadId,
     server_name: String,
     request_id: McpRequestId,
+    is_high_risk: bool,
     message: String,
+    subtitle: Option<String>,
     approval_display_params: Vec<McpToolApprovalDisplayParam>,
     response_mode: McpServerElicitationResponseMode,
     fields: Vec<McpServerElicitationField>,
@@ -265,6 +267,20 @@ impl McpServerElicitationFormRequest {
         message: String,
         requested_schema: Value,
     ) -> Option<Self> {
+        let is_high_risk = meta
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get("riskLevel"))
+            .and_then(Value::as_str)
+            == Some("high");
+        let subtitle = meta
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get("subtitle"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|subtitle| !subtitle.is_empty())
+            .map(str::to_string);
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
             .as_ref()
@@ -368,7 +384,9 @@ impl McpServerElicitationFormRequest {
             thread_id,
             server_name,
             request_id,
+            is_high_risk,
             message,
+            subtitle,
             approval_display_params,
             response_mode,
             fields,
@@ -947,25 +965,42 @@ impl McpServerElicitationOverlay {
             .collect()
     }
 
-    fn wrapped_prompt_lines(&self, width: u16) -> Vec<String> {
-        textwrap::wrap(&self.current_prompt_text(), width.max(1) as usize)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect()
-    }
-
-    fn current_prompt_text(&self) -> String {
+    fn prompt_lines(&self, width: u16, answered: bool) -> Vec<Line<'static>> {
+        let wrap_width = width.max(1) as usize;
+        let mut lines = Vec::new();
         let request_message = format_tool_approval_display_message(
             &self.request.message,
             &self.request.approval_display_params,
         );
-        let Some(field) = self.current_field() else {
-            return request_message;
-        };
-        let mut sections = Vec::new();
         if !request_message.trim().is_empty() {
-            sections.push(request_message);
+            for (idx, line) in textwrap::wrap(&request_message, wrap_width)
+                .into_iter()
+                .enumerate()
+            {
+                let text = if self.request.is_high_risk && idx == 0 {
+                    format!("⚠ {line}")
+                } else {
+                    line.to_string()
+                };
+                let line = if self.request.is_high_risk {
+                    Line::from(text).red()
+                } else if answered {
+                    Line::from(text)
+                } else {
+                    Line::from(text).cyan()
+                };
+                lines.push(line);
+            }
         }
+        if let Some(subtitle) = self.request.subtitle.as_deref() {
+            for line in textwrap::wrap(subtitle, wrap_width) {
+                lines.push(Line::from(line.to_string()));
+            }
+        }
+
+        let Some(field) = self.current_field() else {
+            return lines;
+        };
         let field_prompt = if field.label.trim().is_empty()
             || field.prompt.trim().is_empty()
             || field.label == field.prompt
@@ -979,9 +1014,19 @@ impl McpServerElicitationOverlay {
             format!("{}\n{}", field.label, field.prompt)
         };
         if !field_prompt.trim().is_empty() {
-            sections.push(field_prompt);
+            if !lines.is_empty() {
+                lines.push(Line::from(String::new()));
+            }
+            for line in textwrap::wrap(&field_prompt, wrap_width) {
+                let line = if answered {
+                    Line::from(line.to_string())
+                } else {
+                    Line::from(line.to_string()).cyan()
+                };
+                lines.push(line);
+            }
         }
-        sections.join("\n\n")
+        lines
     }
 
     fn footer_tips(&self) -> Vec<FooterTip> {
@@ -1289,17 +1334,12 @@ impl McpServerElicitationOverlay {
             return;
         }
         let answered = self.is_current_field_answered();
-        for (offset, line) in self.wrapped_prompt_lines(area.width).iter().enumerate() {
+        for (offset, line) in self.prompt_lines(area.width, answered).iter().enumerate() {
             let y = area.y.saturating_add(offset as u16);
             if y >= area.y + area.height {
                 break;
             }
-            let line = if answered {
-                Line::from(line.clone())
-            } else {
-                Line::from(line.clone()).cyan()
-            };
-            Paragraph::new(line).render(
+            Paragraph::new(line.clone()).render(
                 Rect {
                     x: area.x,
                     y,
@@ -1392,8 +1432,9 @@ impl Renderable for McpServerElicitationOverlay {
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
+        let answered = self.is_current_field_answered();
         let height = 1u16
-            .saturating_add(self.wrapped_prompt_lines(inner_width).len() as u16)
+            .saturating_add(self.prompt_lines(inner_width, answered).len() as u16)
             .saturating_add(self.input_height(inner_width))
             .saturating_add(self.footer_tip_lines(inner_width).len() as u16)
             .saturating_add(menu_surface_padding_height());
@@ -1408,7 +1449,7 @@ impl Renderable for McpServerElicitationOverlay {
         if content_area.width == 0 || content_area.height == 0 {
             return;
         }
-        let prompt_lines = self.wrapped_prompt_lines(content_area.width);
+        let prompt_lines = self.prompt_lines(content_area.width, self.is_current_field_answered());
         let footer_lines = self.footer_tip_lines(content_area.width);
         let mut remaining = content_area.height;
 
@@ -1482,7 +1523,7 @@ impl Renderable for McpServerElicitationOverlay {
         if content_area.width == 0 || content_area.height == 0 {
             return None;
         }
-        let prompt_lines = self.wrapped_prompt_lines(content_area.width);
+        let prompt_lines = self.prompt_lines(content_area.width, self.is_current_field_answered());
         let footer_lines = self.footer_tip_lines(content_area.width);
         let mut remaining = content_area.height;
         remaining = remaining.saturating_sub(u16::from(remaining > 0));
@@ -1838,7 +1879,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                is_high_risk: false,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::FormContent,
                 fields: vec![McpServerElicitationField {
@@ -1904,7 +1947,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                is_high_risk: false,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
@@ -1961,7 +2006,9 @@ mod tests {
                 thread_id,
                 server_name: "server-1".to_string(),
                 request_id: McpRequestId::String("request-1".to_string()),
+                is_high_risk: false,
                 message: "Allow this request?".to_string(),
+                subtitle: None,
                 approval_display_params: Vec::new(),
                 response_mode: McpServerElicitationResponseMode::ApprovalAction,
                 fields: vec![McpServerElicitationField {
