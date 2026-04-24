@@ -31,7 +31,10 @@ impl CodexMessageProcessor {
             return;
         }
         let auth = self.auth_manager.auth().await;
-        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+        if !self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await
+        {
             self.outgoing
                 .send_response(
                     request_id,
@@ -409,7 +412,10 @@ impl CodexMessageProcessor {
         };
         let auth = self.auth_manager.auth().await;
 
-        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+        if !self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await
+        {
             self.send_invalid_request_error(
                 request_id,
                 "Codex plugins are disabled for this workspace".to_string(),

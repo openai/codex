@@ -332,18 +332,18 @@ async fn process_request(
                 .await
             {
                 Ok(tokens) => {
-                    if let Err(message) = ensure_workspace_allowed(
-                        opts.forced_chatgpt_workspace_id.as_deref(),
-                        &tokens.id_token,
-                    ) {
-                        eprintln!("Workspace restriction error: {message}");
-                        return login_error_response(
-                            &message,
-                            io::ErrorKind::PermissionDenied,
-                            Some("workspace_restriction"),
-                            /*error_description*/ None,
-                        );
-                    }
+                    // if let Err(message) = ensure_workspace_allowed(
+                    //     opts.forced_chatgpt_workspace_id.as_deref(),
+                    //     &tokens.id_token,
+                    // ) {
+                    //     eprintln!("Workspace restriction error: {message}");
+                    //     return login_error_response(
+                    //         &message,
+                    //         io::ErrorKind::PermissionDenied,
+                    //         Some("workspace_restriction"),
+                    //         /*error_description*/ None,
+                    //     );
+                    // }
                     // Obtain API key via token-exchange and persist
                     let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
                         .await

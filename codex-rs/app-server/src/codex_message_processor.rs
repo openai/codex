@@ -493,6 +493,7 @@ pub(crate) struct CodexMessageProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     command_exec_manager: CommandExecManager,
+    workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
@@ -750,6 +751,9 @@ impl CodexMessageProcessor {
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             command_exec_manager: CommandExecManager::default(),
+            workspace_settings_cache: Arc::new(
+                workspace_settings::WorkspaceSettingsCache::default(),
+            ),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
@@ -772,8 +776,18 @@ impl CodexMessageProcessor {
             })
     }
 
-    async fn workspace_codex_plugins_enabled(config: &Config, auth: Option<&CodexAuth>) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(config, auth).await {
+    async fn workspace_codex_plugins_enabled(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> bool {
+        match workspace_settings::codex_plugins_enabled_for_workspace(
+            config,
+            auth,
+            Some(&self.workspace_settings_cache),
+        )
+        .await
+        {
             Ok(enabled) => enabled,
             Err(err) => {
                 warn!(
@@ -5596,8 +5610,9 @@ impl CodexMessageProcessor {
             }
         };
         let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled =
-            Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await;
+        let workspace_codex_plugins_enabled = self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await;
 
         let data = FEATURES
             .iter()
@@ -6422,7 +6437,10 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if !Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await {
+        if !self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await
+        {
             self.outgoing
                 .send_response(
                     request_id,
@@ -6680,8 +6698,9 @@ impl CodexMessageProcessor {
             }
         };
         let auth = self.auth_manager.auth().await;
-        let workspace_codex_plugins_enabled =
-            Self::workspace_codex_plugins_enabled(&config, auth.as_ref()).await;
+        let workspace_codex_plugins_enabled = self
+            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let fs = self
