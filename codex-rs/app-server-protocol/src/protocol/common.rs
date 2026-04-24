@@ -311,6 +311,10 @@ client_request_definitions! {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
     },
+    ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
+        params: v2::ThreadApproveGuardianDeniedActionParams,
+        response: v2::ThreadApproveGuardianDeniedActionResponse,
+    },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
         params: v2::ThreadBackgroundTerminalsCleanParams,
@@ -352,6 +356,10 @@ client_request_definitions! {
     MarketplaceRemove => "marketplace/remove" {
         params: v2::MarketplaceRemoveParams,
         response: v2::MarketplaceRemoveResponse,
+    },
+    MarketplaceUpgrade => "marketplace/upgrade" {
+        params: v2::MarketplaceUpgradeParams,
+        response: v2::MarketplaceUpgradeResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
@@ -1056,7 +1064,9 @@ server_notification_definitions! {
     /// Deprecated: Use `ContextCompaction` item type instead.
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
+    ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     Warning => "warning" (v2::WarningNotification),
+    GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
@@ -1516,22 +1526,7 @@ mod tests {
                         "type": "dangerFullAccess"
                     },
                     "permissionProfile": {
-                        "network": {
-                            "enabled": true,
-                        },
-                        "fileSystem": {
-                            "entries": [
-                                {
-                                    "path": {
-                                        "type": "special",
-                                        "value": {
-                                            "kind": "root",
-                                        },
-                                    },
-                                    "access": "write",
-                                },
-                            ],
-                        },
+                        "type": "disabled"
                     },
                     "reasoningEffort": null
                 }

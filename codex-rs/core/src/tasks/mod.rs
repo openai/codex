@@ -19,6 +19,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
+use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
@@ -31,7 +32,7 @@ use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
-use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_otel::TURN_E2E_DURATION_METRIC;
 use codex_otel::TURN_MEMORY_METRIC;
@@ -50,6 +51,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
+use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -61,12 +63,51 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InterruptedTurnHistoryMarker {
+    Disabled,
+    ContextualUser,
+    Developer,
+}
+
+impl InterruptedTurnHistoryMarker {
+    pub(crate) fn from_config(config: &Config) -> Self {
+        if !config.agent_interrupt_message_enabled {
+            return Self::Disabled;
+        }
+        if config.features.enabled(Feature::MultiAgentV2) {
+            Self::Developer
+        } else {
+            Self::ContextualUser
+        }
+    }
+}
+
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
-pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
-    ContextualUserFragment::into(crate::context::TurnAborted::new(
-        crate::context::TurnAborted::INTERRUPTED_GUIDANCE,
-    ))
+pub(crate) fn interrupted_turn_history_marker(
+    marker: InterruptedTurnHistoryMarker,
+) -> Option<ResponseItem> {
+    match marker {
+        InterruptedTurnHistoryMarker::Disabled => None,
+        InterruptedTurnHistoryMarker::ContextualUser => Some(ContextualUserFragment::into(
+            crate::context::TurnAborted::new(crate::context::TurnAborted::INTERRUPTED_GUIDANCE),
+        )),
+        InterruptedTurnHistoryMarker::Developer => {
+            let marker = crate::context::TurnAborted::new(
+                crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE,
+            );
+            Some(ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: marker.render(),
+                }],
+                end_turn: None,
+                phase: None,
+            })
+        }
+    }
 }
 
 fn emit_turn_network_proxy_metric(
@@ -128,7 +169,7 @@ impl SessionTaskContext {
         Arc::clone(&self.session.services.auth_manager)
     }
 
-    pub(crate) fn models_manager(&self) -> Arc<ModelsManager> {
+    pub(crate) fn models_manager(&self) -> SharedModelsManager {
         Arc::clone(&self.session.services.models_manager)
     }
 }
@@ -269,6 +310,12 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&turn_context.sub_id);
+
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -408,6 +455,40 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
         }
+    }
+
+    pub(crate) async fn abort_turn_if_active(
+        self: &Arc<Self>,
+        turn_id: &str,
+        reason: TurnAbortReason,
+    ) -> bool {
+        let active_turn = {
+            let mut active = self.active_turn.lock().await;
+            if active
+                .as_ref()
+                .is_some_and(|active_turn| active_turn.tasks.contains_key(turn_id))
+            {
+                active.take()
+            } else {
+                None
+            }
+        };
+        let Some(mut active_turn) = active_turn else {
+            return false;
+        };
+
+        for task in active_turn.drain_tasks() {
+            self.handle_task_abort(task, reason.clone()).await;
+        }
+        // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+        // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+        active_turn.clear_pending().await;
+
+        if reason == TurnAbortReason::Interrupted {
+            self.maybe_start_turn_for_pending_work().await;
+        }
+
+        true
     }
 
     pub async fn on_task_finished(
@@ -568,6 +649,11 @@ impl Session {
             time_to_first_token_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&turn_context.sub_id);
 
         if should_clear_active_turn {
             let session = Arc::clone(self);
@@ -630,15 +716,20 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = interrupted_turn_history_marker();
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
-            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                .await;
-            // Ensure the marker is durably visible before emitting TurnAborted: some clients
-            // synchronously re-read the rollout on receipt of the abort event.
-            if let Err(err) = self.flush_rollout().await {
-                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
+            if let Some(marker) = interrupted_turn_history_marker(
+                InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
+            ) {
+                self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+                    .await;
+                self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
+                    .await;
+                // Ensure the marker is durably visible before emitting TurnAborted: some clients
+                // synchronously re-read the rollout on receipt of the abort event.
+                if let Err(err) = self.flush_rollout().await {
+                    warn!(
+                        "failed to flush interrupted-turn marker before emitting TurnAborted: {err}"
+                    );
+                }
             }
         }
 
@@ -654,6 +745,11 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
+        self.services
+            .guardian_rejection_circuit_breaker
+            .lock()
+            .await
+            .clear_turn(&task.turn_context.sub_id);
     }
 }
 

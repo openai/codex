@@ -69,6 +69,9 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::ServerModel(model) => {
             json!({ "type": "response.server_model", "model": model })
         }
+        codex_api::ResponseEvent::ModelVerifications(verifications) => {
+            json!({ "type": "response.model_verifications", "verifications": verifications })
+        }
         codex_api::ResponseEvent::ServerReasoningIncluded(included) => {
             json!({ "type": "response.server_reasoning_included", "included": included })
         }

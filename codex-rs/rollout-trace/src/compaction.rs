@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 use codex_protocol::models::ResponseItem;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use tracing::warn;
 
 use crate::inference::trace_response_item_json;
 use crate::model::AgentThreadId;
@@ -74,6 +75,17 @@ struct TracedCompactionCompleted {
     output_items: Vec<JsonValue>,
 }
 
+/// History replacement checkpoint persisted when compaction installs new live history.
+///
+/// The checkpoint keeps compaction separate from ordinary sampling snapshots:
+/// `input_history` is the live thread history selected for compaction, while
+/// `replacement_history` is what future prompts may carry after the checkpoint.
+#[derive(Serialize)]
+pub struct CompactionCheckpointTracePayload<'a> {
+    pub input_history: &'a [ResponseItem],
+    pub replacement_history: &'a [ResponseItem],
+}
+
 impl CompactionTraceContext {
     /// Builds a context that accepts trace calls and records nothing.
     pub fn disabled() -> Self {
@@ -118,6 +130,40 @@ impl CompactionTraceContext {
         attempt.record_started(request);
         attempt
     }
+
+    /// Records the point where compacted history becomes the live thread history.
+    ///
+    /// The checkpoint belongs to the same semantic compaction lifecycle as the
+    /// compact endpoint attempts, so the context reuses its stable compaction ID.
+    pub fn record_installed(&self, checkpoint: &CompactionCheckpointTracePayload<'_>) {
+        let CompactionTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        let checkpoint_payload = match context
+            .writer
+            .write_json_payload(RawPayloadKind::CompactionCheckpoint, checkpoint)
+        {
+            Ok(payload_ref) => payload_ref,
+            Err(err) => {
+                warn!("failed to write rollout trace payload: {err:#}");
+                return;
+            }
+        };
+
+        let event_context = RawTraceEventContext {
+            thread_id: Some(context.thread_id.clone()),
+            codex_turn_id: Some(context.codex_turn_id.clone()),
+        };
+        if let Err(err) = context.writer.append_with_context(
+            event_context,
+            RawTraceEventPayload::CompactionInstalled {
+                compaction_id: context.compaction_id.clone(),
+                checkpoint_payload,
+            },
+        ) {
+            warn!("failed to append rollout trace event: {err:#}");
+        }
+    }
 }
 
 impl CompactionTraceAttempt {
@@ -160,11 +206,11 @@ impl CompactionTraceAttempt {
     /// inference streams: traces are evidence, while normal ResponseItem
     /// serialization is shaped for future request construction.
     pub fn record_completed(&self, output_items: &[ResponseItem]) {
-        let response_payload = TracedCompactionCompleted {
-            output_items: output_items.iter().map(trace_response_item_json).collect(),
-        };
         let CompactionTraceAttemptState::Enabled(attempt) = &self.state else {
             return;
+        };
+        let response_payload = TracedCompactionCompleted {
+            output_items: output_items.iter().map(trace_response_item_json).collect(),
         };
         let Some(response_payload) = write_json_payload_best_effort(
             &attempt.context.writer,
@@ -182,6 +228,14 @@ impl CompactionTraceAttempt {
                 response_payload,
             },
         );
+    }
+
+    /// Records the compact endpoint result without forcing callers to branch on trace events.
+    pub fn record_result<E: Display>(&self, result: Result<&[ResponseItem], E>) {
+        match result {
+            Ok(output_items) => self.record_completed(output_items),
+            Err(err) => self.record_failed(err),
+        }
     }
 
     /// Records pre-response failures from the compact endpoint.
