@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxType;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -346,6 +347,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
 
     let cwd = codex_utils_absolute_path::AbsolutePathBuf::current_dir()?;
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy(&sandbox_policy, &cwd);
     let output = process_exec_tool_call(
         ExecParams {
             command,
@@ -360,9 +362,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
             justification: None,
             arg0: None,
         },
-        &sandbox_policy,
-        &FileSystemSandboxPolicy::from(&sandbox_policy),
-        NetworkSandboxPolicy::Enabled,
+        &permission_profile,
         &cwd,
         &None,
         /*use_legacy_landlock*/ false,
@@ -1026,11 +1026,11 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(1_000)).await;
         cancel_tx.cancel();
     });
+    let permission_profile =
+        PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess, &cwd);
     let result = process_exec_tool_call(
         params,
-        &SandboxPolicy::DangerFullAccess,
-        &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
-        NetworkSandboxPolicy::Enabled,
+        &permission_profile,
         &cwd,
         &None,
         /*use_legacy_landlock*/ false,
