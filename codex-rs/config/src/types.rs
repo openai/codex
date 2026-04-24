@@ -570,7 +570,9 @@ pub struct Tui {
     /// Ordered list of terminal title item identifiers.
     ///
     /// When set, the TUI renders the selected items into the terminal window/tab title.
-    /// When unset, the TUI defaults to: `spinner` and `project`.
+    /// When unset, the TUI defaults to: `activity` and `project`.
+    /// The `activity` item spins while working and shows an action-required
+    /// message when blocked on the user.
     #[serde(default)]
     pub terminal_title: Option<Vec<String>>,
 

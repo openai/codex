@@ -374,7 +374,9 @@ pub struct Config {
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `project` and `spinner`.
+    /// When unset, the TUI defaults to: `activity` and `project`.
+    /// The `activity` item spins while working and shows an action-required
+    /// message when blocked on the user.
     pub tui_terminal_title: Option<Vec<String>>,
 
     /// Syntax highlighting theme override (kebab-case name).
