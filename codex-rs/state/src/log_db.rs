@@ -105,7 +105,7 @@ impl BufferedLogSink {
     }
 
     pub fn try_send(&self, entry: LogEntry) {
-        let _ = self.sender.try_send(LogSinkCommand::Entry(Box::new(entry)));
+        let _ = self.sender.try_send(LogSinkCommand::Entry(entry));
     }
 
     pub async fn flush(&self) {
@@ -121,14 +121,8 @@ impl BufferedLogSink {
     }
 }
 
-pub struct SqliteLogWriter {
+struct SqliteLogWriter {
     state_db: std::sync::Arc<StateRuntime>,
-}
-
-impl SqliteLogWriter {
-    fn new(state_db: std::sync::Arc<StateRuntime>) -> Self {
-        Self { state_db }
-    }
 }
 
 impl LogBatchWriter for SqliteLogWriter {
@@ -142,6 +136,7 @@ impl LogBatchWriter for SqliteLogWriter {
     }
 }
 
+#[derive(Clone)]
 pub struct LogDbLayer {
     sink: BufferedLogSink,
     process_uuid: String,
@@ -149,15 +144,6 @@ pub struct LogDbLayer {
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     LogDbLayer::start(state_db)
-}
-
-impl Clone for LogDbLayer {
-    fn clone(&self) -> Self {
-        Self {
-            sink: self.sink.clone(),
-            process_uuid: self.process_uuid.clone(),
-        }
-    }
 }
 
 impl LogDbLayer {
@@ -170,7 +156,7 @@ impl LogDbLayer {
         config: LogSinkQueueConfig,
     ) -> Self {
         Self {
-            sink: BufferedLogSink::start(SqliteLogWriter::new(state_db), config),
+            sink: BufferedLogSink::start(SqliteLogWriter { state_db }, config),
             process_uuid: current_process_log_uuid().to_string(),
         }
     }
@@ -272,7 +258,7 @@ impl LogDbLayer {
 }
 
 enum LogSinkCommand {
-    Entry(Box<LogEntry>),
+    Entry(LogEntry),
     Flush(oneshot::Sender<()>),
 }
 
@@ -290,7 +276,7 @@ async fn run_buffered_sink<W>(
             maybe_command = receiver.recv() => {
                 match maybe_command {
                     Some(LogSinkCommand::Entry(entry)) => {
-                        buffer.push(*entry);
+                        buffer.push(entry);
                         if buffer.len() >= config.batch_size {
                             flush(&mut writer, &mut buffer).await;
                         }
@@ -817,7 +803,7 @@ mod tests {
 
         match receiver.try_recv().expect("first entry queued") {
             LogSinkCommand::Entry(entry) => {
-                assert_eq!(*entry, test_entry("first-queued-log"));
+                assert_eq!(entry, test_entry("first-queued-log"));
             }
             LogSinkCommand::Flush(_) => panic!("expected queued entry"),
         }
