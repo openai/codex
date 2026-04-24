@@ -68,6 +68,8 @@ fn c0_control_char_to_ctrl_char(ch: char) -> Option<char> {
         '\u{0006}' => Some('f'),
         '\u{000e}' => Some('n'),
         '\u{0010}' => Some('p'),
+        '\u{0012}' => Some('r'),
+        '\u{0013}' => Some('s'),
         _ => None,
     }
 }
@@ -213,6 +215,18 @@ mod tests {
 
         assert!(binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE)));
         assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::ALT)));
+    }
+
+    #[test]
+    fn history_search_ctrl_bindings_match_c0_control_char_events() {
+        assert!(
+            ctrl(KeyCode::Char('r'))
+                .is_press(KeyEvent::new(KeyCode::Char('\u{0012}'), KeyModifiers::NONE))
+        );
+        assert!(
+            ctrl(KeyCode::Char('s'))
+                .is_press(KeyEvent::new(KeyCode::Char('\u{0013}'), KeyModifiers::NONE))
+        );
     }
 
     #[test]

@@ -94,6 +94,8 @@ pub struct TuiGlobalKeymap {
     pub open_external_editor: Option<KeybindingsSpec>,
     /// Copy the last agent response to the clipboard.
     pub copy: Option<KeybindingsSpec>,
+    /// Clear the terminal UI.
+    pub clear_terminal: Option<KeybindingsSpec>,
     /// Submit the current composer draft.
     pub submit: Option<KeybindingsSpec>,
     /// Queue the current composer draft while a task is running.
@@ -102,11 +104,18 @@ pub struct TuiGlobalKeymap {
     pub toggle_shortcuts: Option<KeybindingsSpec>,
 }
 
-/// Chat context keybindings. These override corresponding `global` actions.
+/// Chat context keybindings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
-pub struct TuiChatKeymap {}
+pub struct TuiChatKeymap {
+    /// Decrease the active reasoning effort.
+    pub decrease_reasoning_effort: Option<KeybindingsSpec>,
+    /// Increase the active reasoning effort.
+    pub increase_reasoning_effort: Option<KeybindingsSpec>,
+    /// Edit the most recently queued message.
+    pub edit_queued_message: Option<KeybindingsSpec>,
+}
 
 /// Composer context keybindings. These override corresponding `global` actions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
@@ -119,6 +128,10 @@ pub struct TuiComposerKeymap {
     pub queue: Option<KeybindingsSpec>,
     /// Toggle the composer shortcut overlay.
     pub toggle_shortcuts: Option<KeybindingsSpec>,
+    /// Open reverse history search or move to the previous match.
+    pub history_search_previous: Option<KeybindingsSpec>,
+    /// Move to the next match in reverse history search.
+    pub history_search_next: Option<KeybindingsSpec>,
 }
 
 /// Editor context keybindings for text editing inside text areas.

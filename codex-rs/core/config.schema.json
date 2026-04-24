@@ -2242,8 +2242,14 @@
               "open_fullscreen": null,
               "open_thread": null
             },
-            "chat": {},
+            "chat": {
+              "decrease_reasoning_effort": null,
+              "edit_queued_message": null,
+              "increase_reasoning_effort": null
+            },
             "composer": {
+              "history_search_next": null,
+              "history_search_previous": null,
               "queue": null,
               "submit": null,
               "toggle_shortcuts": null
@@ -2267,6 +2273,7 @@
               "yank": null
             },
             "global": {
+              "clear_terminal": null,
               "copy": null,
               "open_external_editor": null,
               "open_transcript": null,
@@ -2440,13 +2447,55 @@
     },
     "TuiChatKeymap": {
       "additionalProperties": false,
-      "description": "Chat context keybindings. These override corresponding `global` actions.",
+      "description": "Chat context keybindings.",
+      "properties": {
+        "decrease_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Decrease the active reasoning effort."
+        },
+        "edit_queued_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Edit the most recently queued message."
+        },
+        "increase_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Increase the active reasoning effort."
+        }
+      },
       "type": "object"
     },
     "TuiComposerKeymap": {
       "additionalProperties": false,
       "description": "Composer context keybindings. These override corresponding `global` actions.",
       "properties": {
+        "history_search_next": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Move to the next match in reverse history search."
+        },
+        "history_search_previous": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open reverse history search or move to the previous match."
+        },
         "queue": {
           "allOf": [
             {
@@ -2613,6 +2662,14 @@
       "additionalProperties": false,
       "description": "Global keybindings. These are used when a context does not define an override.",
       "properties": {
+        "clear_terminal": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Clear the terminal UI."
+        },
         "copy": {
           "allOf": [
             {
@@ -2691,7 +2748,11 @@
               "$ref": "#/definitions/TuiChatKeymap"
             }
           ],
-          "default": {}
+          "default": {
+            "decrease_reasoning_effort": null,
+            "edit_queued_message": null,
+            "increase_reasoning_effort": null
+          }
         },
         "composer": {
           "allOf": [
@@ -2700,6 +2761,8 @@
             }
           ],
           "default": {
+            "history_search_next": null,
+            "history_search_previous": null,
             "queue": null,
             "submit": null,
             "toggle_shortcuts": null
@@ -2737,6 +2800,7 @@
             }
           ],
           "default": {
+            "clear_terminal": null,
             "copy": null,
             "open_external_editor": null,
             "open_transcript": null,
