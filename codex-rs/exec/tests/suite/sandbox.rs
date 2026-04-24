@@ -1,5 +1,6 @@
 #![cfg(unix)]
 use codex_core::spawn::StdioPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -24,8 +25,6 @@ async fn spawn_command_under_sandbox(
     use codex_core::exec::build_exec_request;
     use codex_core::sandboxing::SandboxPermissions;
     use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
     use std::process::Stdio;
 
     let codex_linux_sandbox_exe = None;
@@ -43,9 +42,7 @@ async fn spawn_command_under_sandbox(
             justification: None,
             arg0: None,
         },
-        sandbox_policy,
-        &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd),
-        NetworkSandboxPolicy::from(sandbox_policy),
+        &PermissionProfile::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd.as_path()),
         sandbox_cwd,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
