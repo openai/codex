@@ -1,6 +1,7 @@
 use anyhow::Context;
 use codex_git_utils::GitBaselineDiff;
 use codex_git_utils::diff_since_latest_init;
+use codex_git_utils::ensure_git_baseline_repository;
 use codex_git_utils::reset_git_repository;
 use std::path::Path;
 
@@ -11,19 +12,15 @@ const WORKSPACE_DIFF_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Prepares the memory directory for git-baseline diffing.
 ///
-/// This keeps an existing `.git/` baseline intact. It only initializes a new git baseline when the
-/// metadata is missing, and removes any stale generated `phase2_workspace_diff.md` file so that the
-/// next diff does not include a previous prompt artifact.
+/// This keeps an existing usable `.git/` baseline intact. It initializes a new git baseline when the
+/// metadata is missing or unusable, and removes any stale generated `phase2_workspace_diff.md` file
+/// so that the next diff does not include a previous prompt artifact.
 pub(super) async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(root)
         .await
         .with_context(|| format!("create memory workspace {}", root.display()))?;
     remove_workspace_diff(root).await?;
-
-    if !root.join(".git").is_dir() {
-        reset_git_repository(root).await?;
-    }
-
+    ensure_git_baseline_repository(root).await?;
     Ok(())
 }
 

@@ -54,6 +54,23 @@ async fn reset_memory_workspace_baseline_removes_generated_diff() {
     assert_eq!(diff.changes, Vec::new());
 }
 
+#[tokio::test]
+async fn prepare_memory_workspace_recovers_unusable_git_dir() {
+    let home = TempDir::new().expect("tempdir");
+    let root = home.path().join("memories");
+    fs::create_dir_all(root.join(".git")).expect("create unusable git dir");
+    fs::write(root.join("MEMORY.md"), "memory").expect("write memory");
+
+    prepare_memory_workspace(&root)
+        .await
+        .expect("prepare memory workspace");
+
+    let diff = memory_workspace_diff(&root)
+        .await
+        .expect("load workspace diff");
+    assert_eq!(diff.changes, Vec::new());
+}
+
 #[test]
 fn previous_char_boundary_handles_multibyte_text() {
     let text = "aé";

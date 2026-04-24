@@ -28,7 +28,6 @@ use codex_protocol::user_input::UserInput;
 use codex_state::Stage1Output;
 use codex_state::StateRuntime;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -305,7 +304,7 @@ mod agent {
 
         agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
-        // agent_config.ephemeral = true;
+        agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
         agent_config.memories.use_memories = false;
         agent_config.include_apps_instructions = false;
