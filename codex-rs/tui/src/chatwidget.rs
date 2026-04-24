@@ -1006,6 +1006,8 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     pub(crate) last_terminal_title: Option<String>,
+    // Last visible "action required" state observed by the terminal-title renderer.
+    last_terminal_title_requires_action: bool,
     // Original terminal-title config captured when the setup UI opens.
     //
     // The outer `Option` tracks whether a setup session is active (`Some`)
@@ -1918,13 +1920,13 @@ impl ChatWidget {
                     .iter()
                     .any(|item| item == "run-state" || item == "status")
             });
-        let title_uses_spinner = self
-            .config
-            .tui_terminal_title
-            .as_ref()
-            .is_none_or(|items| items.iter().any(|item| item == "spinner"));
+        let title_uses_activity = self.config.tui_terminal_title.as_ref().is_none_or(|items| {
+            items
+                .iter()
+                .any(|item| item == "activity" || item == "spinner")
+        });
         if title_uses_status
-            || (title_uses_spinner
+            || (title_uses_activity
                 && self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing)
         {
             self.refresh_status_surfaces();
@@ -4586,7 +4588,12 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
-        if self.should_animate_terminal_title_spinner() {
+        if self.terminal_title_shows_action_required() != self.last_terminal_title_requires_action {
+            self.refresh_terminal_title();
+        }
+        if self.should_animate_terminal_title_spinner()
+            || self.should_animate_terminal_title_action_required()
+        {
             self.refresh_terminal_title();
         }
     }
@@ -5292,6 +5299,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            last_terminal_title_requires_action: false,
             terminal_title_setup_original_items: None,
             terminal_title_animation_origin: Instant::now(),
             status_line_project_root_name_cache: None,
