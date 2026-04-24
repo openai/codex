@@ -1,15 +1,12 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
-// unified exec is not supported on Windows OS
-use std::sync::Arc;
-
 use anyhow::Result;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -1207,7 +1204,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> ModelPreset {
+async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) -> ModelPreset {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {

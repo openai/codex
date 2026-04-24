@@ -1,11 +1,15 @@
 # Rollout Trace
 
-> **Privacy:** Rollout tracing does **not** collect, upload, or report user data;
-> it only writes local bundles when `CODEX_ROLLOUT_TRACE_ROOT` is set.
+> **Privacy:** Rollout tracing is not telemetry. Codex does **not** upload or
+> report these traces; it writes local bundles only when
+> `CODEX_ROLLOUT_TRACE_ROOT` is set. Those local bundles can contain prompts,
+> responses, tool inputs/outputs, terminal output, and paths, so treat them as
+> sensitive.
 
 Rollout tracing is an opt-in diagnostic path for understanding what happened
-during a Codex session. It records raw runtime evidence into a local bundle, then
-replays that bundle into a semantic graph that a debugger or UI can inspect.
+during a Codex session. It records raw runtime evidence into a local bundle on
+disk, then replays that bundle into a semantic graph that a debugger or UI can
+inspect.
 
 The key design choice is: **observe first, interpret later**.
 
@@ -45,7 +49,7 @@ flowchart TD
         Agents["multi_agent_v2\nspawn, task delivery, result, close"]
     end
 
-    Recorder["RolloutTraceRecorder\nthin best-effort producer"]
+    Context["ThreadTraceContext\nroot/child no-op-capable producer"]
     Writer["TraceWriter\nassigns seq and writes payloads before events"]
 
     subgraph Bundle["trace bundle"]
@@ -64,14 +68,14 @@ flowchart TD
         RawRefs["raw_payload refs"]
     end
 
-    Protocol --> Recorder
-    Inference --> Recorder
-    Tools --> Recorder
-    CodeMode --> Recorder
-    Terminal --> Recorder
-    Agents --> Recorder
+    Protocol --> Context
+    Inference --> Context
+    Tools --> Context
+    CodeMode --> Context
+    Terminal --> Context
+    Agents --> Context
 
-    Recorder --> Writer
+    Context --> Writer
     Writer --> Manifest
     Writer --> Payloads
     Writer --> Events
@@ -87,9 +91,15 @@ flowchart TD
     Reducer --> RawRefs
 ```
 
-The recorder is deliberately small. It is enabled by `CODEX_ROLLOUT_TRACE_ROOT`
-and must never make a Codex session fail just because tracing failed. Core emits
-raw observations; this crate owns the bundle schema, writer API, and reducer.
+The thread context is deliberately small and no-op capable. A root session starts
+one from `CODEX_ROLLOUT_TRACE_ROOT`; fresh spawned child threads derive their
+own context from the parent's context so the whole rollout tree shares one
+writer. Disabled contexts accept the same calls and record nothing.
+
+Trace startup and writes are best-effort. Rollout tracing must never make a
+Codex session fail just because diagnostic recording failed. Core emits raw
+observations; this crate owns the bundle schema, trace-context APIs, writer, and
+reducer.
 
 ## Bundle Layout
 
@@ -111,7 +121,8 @@ To reduce a bundle:
 codex debug trace-reduce <trace-bundle>
 ```
 
-By default this writes `<trace-bundle>/state.json`.
+By default this writes `<trace-bundle>/state.json`. Rust callers can also call
+`codex_rollout_trace::replay_bundle` directly.
 
 ## Raw Evidence vs Reduced Graph
 

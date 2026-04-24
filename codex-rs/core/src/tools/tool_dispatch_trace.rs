@@ -26,7 +26,7 @@ impl ToolDispatchTrace {
         let context = invocation
             .session
             .services
-            .rollout_trace
+            .rollout_thread_trace
             .start_tool_dispatch_trace(|| tool_dispatch_invocation(invocation));
         Self { context }
     }

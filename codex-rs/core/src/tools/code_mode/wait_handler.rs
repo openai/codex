@@ -85,12 +85,8 @@ impl ToolHandler for CodeModeWaitHandler {
                     };
                     exec.session
                         .services
-                        .rollout_trace
-                        .code_cell_trace_context(
-                            exec.session.conversation_id,
-                            exec.turn.sub_id.as_str(),
-                            runtime_cell_id,
-                        )
+                        .rollout_thread_trace
+                        .code_cell_trace_context(exec.turn.sub_id.as_str(), runtime_cell_id)
                         .record_ended(response);
                 }
                 handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)

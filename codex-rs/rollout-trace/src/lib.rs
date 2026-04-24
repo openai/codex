@@ -12,9 +12,10 @@ mod compaction;
 mod inference;
 mod model;
 mod payload;
+mod protocol_event;
 mod raw_event;
-mod recorder;
 mod reducer;
+mod thread;
 mod tool_dispatch;
 mod writer;
 
@@ -50,14 +51,16 @@ pub use raw_event::RawTraceEvent;
 pub use raw_event::RawTraceEventContext;
 /// Typed payload for one raw trace event.
 pub use raw_event::RawTraceEventPayload;
-/// Environment variable that enables local trace-bundle recording.
-pub use recorder::CODEX_ROLLOUT_TRACE_ROOT_ENV;
-/// Best-effort hot-path recorder for one rollout trace bundle.
-pub use recorder::RolloutTraceRecorder;
-/// Raw metadata captured when a thread starts.
-pub use recorder::ThreadStartedTraceMetadata;
 /// Replay a raw trace bundle and write/read its reduced `RolloutTrace`.
 pub use reducer::replay_bundle;
+/// Raw payload captured when a child agent reports completion to its parent.
+pub use thread::AgentResultTracePayload;
+/// Environment variable that enables local trace-bundle recording.
+pub use thread::CODEX_ROLLOUT_TRACE_ROOT_ENV;
+/// Raw metadata captured when a thread starts.
+pub use thread::ThreadStartedTraceMetadata;
+/// No-op-capable handle for recording one thread in a rollout bundle.
+pub use thread::ThreadTraceContext;
 /// Request data for the canonical Codex tool boundary.
 pub use tool_dispatch::ToolDispatchInvocation;
 /// Tool input observed at the registry boundary.

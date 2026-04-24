@@ -154,7 +154,7 @@ pub(crate) struct ThreadSessionState {
     pub(crate) sandbox_policy: SandboxPolicy,
     /// Canonical active permissions when available. Consumers should prefer
     /// this over `sandbox_policy`; `None` means the session only has a legacy
-    /// sandbox projection or represents an external sandbox.
+    /// sandbox projection.
     pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) instruction_source_paths: Vec<AbsolutePathBuf>,
@@ -272,6 +272,9 @@ impl AppServerSession {
                     feedback_audience,
                     true,
                 )
+            }
+            Some(Account::AmazonBedrock {}) => {
+                (None, None, None, None, FeedbackAudience::External, false)
             }
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
@@ -1050,15 +1053,12 @@ fn turn_start_permission_overrides(
     Option<codex_app_server_protocol::SandboxPolicy>,
     Option<codex_app_server_protocol::PermissionProfile>,
 ) {
-    let is_external_sandbox = matches!(&sandbox_policy, SandboxPolicy::ExternalSandbox { .. });
-    match (mode, is_external_sandbox, permission_profile) {
-        (ThreadParamsMode::Embedded, false, Some(permission_profile)) => {
+    match (mode, permission_profile) {
+        (ThreadParamsMode::Embedded, Some(permission_profile)) => {
             (None, Some(permission_profile.into()))
         }
-        (ThreadParamsMode::Embedded, false, None) => (None, None),
-        (ThreadParamsMode::Embedded, true, _) | (ThreadParamsMode::Remote, _, _) => {
-            (Some(sandbox_policy.into()), None)
-        }
+        (ThreadParamsMode::Embedded, None) => (None, None),
+        (ThreadParamsMode::Remote, _) => (Some(sandbox_policy.into()), None),
     }
 }
 
@@ -1070,14 +1070,7 @@ fn permission_profile_override_from_config(
         return None;
     }
 
-    if matches!(
-        config.permissions.sandbox_policy.get(),
-        SandboxPolicy::ExternalSandbox { .. }
-    ) {
-        None
-    } else {
-        Some(config.permissions.permission_profile().into())
-    }
+    Some(config.permissions.permission_profile().into())
 }
 
 fn thread_start_params_from_config(
@@ -1591,8 +1584,11 @@ mod tests {
                 &cwd,
             )),
         );
-        assert_eq!(sandbox, Some(external_sandbox.into()));
-        assert_eq!(profile, None);
+        assert_eq!(sandbox, None);
+        assert_eq!(
+            profile,
+            Some(PermissionProfile::from_legacy_sandbox_policy(&external_sandbox, &cwd).into())
+        );
     }
 
     #[tokio::test]
