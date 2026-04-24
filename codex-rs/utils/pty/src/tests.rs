@@ -689,6 +689,51 @@ async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver_backed_process_drains_output_that_arrives_after_exit_signal() -> anyhow::Result<()>
+{
+    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    let (stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
+
+    let spawned = spawn_from_driver(ProcessDriver {
+        writer_tx,
+        stdout_rx: stdout_driver_rx,
+        stderr_rx: None,
+        exit_rx,
+        terminator: None,
+        writer_handle: None,
+        resizer: None,
+    });
+
+    let SpawnedProcess {
+        session: _session,
+        stdout_rx,
+        stderr_rx: _stderr_rx,
+        exit_rx,
+    } = spawned;
+    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
+
+    exit_tx.send(0).expect("send exit code");
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    stdout_tx.send(b"tail".to_vec())?;
+    drop(stdout_tx);
+
+    let timeout = tokio::time::Duration::from_secs(2);
+    let code = tokio::time::timeout(timeout, exit_rx)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for driver exit"))?
+        .unwrap_or(-1);
+    let stdout = tokio::time::timeout(timeout, stdout_task)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stdout"))??;
+
+    assert_eq!(stdout, b"tail".to_vec());
+    assert_eq!(code, 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
     if !setsid_available() {
         eprintln!("setsid not available; skipping pipe_terminate_aborts_detached_readers");
