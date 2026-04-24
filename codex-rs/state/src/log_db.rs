@@ -736,7 +736,7 @@ mod tests {
         );
 
         tracing::info!("second-batch-log");
-        let after_batch = wait_for_log_count(&runtime, 2).await;
+        let after_batch = wait_for_log_count(&runtime, /*expected*/ 2).await;
         drop(guard);
 
         assert_eq!(
@@ -775,7 +775,7 @@ mod tests {
             .set_default();
 
         tracing::info!("interval-log");
-        let after_interval = wait_for_log_count(&runtime, 1).await;
+        let after_interval = wait_for_log_count(&runtime, /*expected*/ 1).await;
         drop(guard);
 
         assert_eq!(after_interval[0].message.as_deref(), Some("interval-log"));
