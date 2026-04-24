@@ -13,5 +13,6 @@ pub use provider::ModelProvider;
 pub use provider::ProviderAccountError;
 pub use provider::ProviderAccountResult;
 pub use provider::ProviderAccountState;
+pub use provider::ProviderCapabilities;
 pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;

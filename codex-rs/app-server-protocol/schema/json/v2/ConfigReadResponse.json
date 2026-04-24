@@ -540,6 +540,27 @@
           "type": "object"
         },
         {
+          "description": "Derived layer that enforces provider-owned capability upper bounds.",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "providerCapabilities"
+              ],
+              "title": "ProviderCapabilitiesConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "type"
+          ],
+          "title": "ProviderCapabilitiesConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "`managed_config.toml` was designed to be a config that was loaded as the last layer on top of everything else. This scheme did not quite work out as intended, but we keep this variant as a \"best effort\" while we phase out `managed_config.toml` in favor of `requirements.toml`.",
           "properties": {
             "file": {

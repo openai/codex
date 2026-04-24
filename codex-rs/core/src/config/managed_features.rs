@@ -112,6 +112,20 @@ impl ManagedFeatures {
     pub fn disable(&mut self, feature: Feature) -> ConstraintResult<()> {
         self.set_enabled(feature, /*enabled*/ false)
     }
+
+    /// Forces a feature off for this effective runtime config.
+    ///
+    /// Unlike [`Self::disable`], this also records a pin so later mutations via
+    /// [`Self::enable`] or [`Self::set`] cannot turn the feature back on. This
+    /// is used for provider-owned capability upper bounds, where unsupported
+    /// features must stay disabled even if user config or per-turn updates
+    /// would otherwise enable them.
+    pub(crate) fn pin_disabled(&mut self, feature: Feature) -> ConstraintResult<()> {
+        self.pinned_features.insert(feature, false);
+        let mut next = self.get().clone();
+        next.set_enabled(feature, false);
+        self.set(next)
+    }
 }
 
 /// Only available for tests to ensure `ManagedFeatures` is constructed with

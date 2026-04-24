@@ -576,6 +576,9 @@ fn override_message(layer: &ConfigLayerSource) -> String {
             dot_codex_folder.display(),
         ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
+        ConfigLayerSource::ProviderCapabilities { provider } => {
+            format!("Overridden by provider capabilities: {provider}")
+        }
         ConfigLayerSource::User { file } => {
             format!("Overridden by user config: {}", file.display())
         }

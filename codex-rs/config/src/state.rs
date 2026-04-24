@@ -132,6 +132,7 @@ impl ConfigLayerEntry {
             ConfigLayerSource::User { file } => file.parent(),
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
+            ConfigLayerSource::ProviderCapabilities { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
         }
@@ -259,6 +260,24 @@ impl ConfigLayerStack {
                 }
             }
         }
+    }
+
+    /// Returns a new stack with `layer` inserted according to layer precedence.
+    pub fn with_layer(self, layer: ConfigLayerEntry) -> std::io::Result<Self> {
+        let mut layers = self.layers;
+        match layers
+            .iter()
+            .position(|existing| existing.name.precedence() > layer.name.precedence())
+        {
+            Some(index) => layers.insert(index, layer),
+            None => layers.push(layer),
+        }
+
+        Self::new(layers, self.requirements, self.requirements_toml).map(|stack| {
+            stack.with_user_and_project_exec_policy_rules_ignored(
+                self.ignore_user_and_project_exec_policy_rules,
+            )
+        })
     }
 
     /// Returns the merged config-layer view.
