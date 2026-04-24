@@ -230,8 +230,8 @@ impl App {
 
     /// Record terminal size changes and schedule any resize-sensitive transcript work.
     ///
-    /// Width changes need a rebuild because transcript wrapping changes. Height growth can expose
-    /// blank or shifted rows above the inline viewport, so it also rebuilds from source-backed
+    /// Width changes need a rebuild because transcript wrapping changes. Height changes can expose,
+    /// hide, or shift rows around the inline viewport, so they also rebuild from source-backed
     /// cells. The first observed width initializes resize tracking without scheduling a rebuild,
     /// because there is no previously emitted width to repair yet.
     pub(super) fn handle_draw_size_change(
@@ -242,8 +242,8 @@ impl App {
     ) -> bool {
         let width = self.transcript_reflow.note_width(size.width);
         let reflow_needed = self.transcript_reflow.reflow_needed_for_width(size.width);
-        let height_growth_exposes_rows = size.height > last_known_screen_size.height;
-        let should_rebuild_transcript = reflow_needed || height_growth_exposes_rows;
+        let height_changed = size.height != last_known_screen_size.height;
+        let should_rebuild_transcript = reflow_needed || height_changed;
         if width.changed || width.initialized {
             self.chat_widget.on_terminal_resize(size.width);
         }
