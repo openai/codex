@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
@@ -155,6 +156,26 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
         }
     }
     Ok(outputs)
+}
+
+async fn wait_for_raw_unified_exec_output(
+    test: &TestCodex,
+    call_id: &str,
+) -> Result<ParsedUnifiedExecOutput> {
+    let content = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RawResponseItem(raw) => match &raw.item {
+            ResponseItem::FunctionCallOutput {
+                call_id: output_call_id,
+                output,
+            } if output_call_id == call_id => output.text_content().map(str::to_string),
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+
+    parse_unified_exec_output(&content)
+        .with_context(|| format!("failed to parse raw unified exec output for {call_id}"))
 }
 
 async fn submit_unified_exec_turn(
@@ -1267,7 +1288,7 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
             ev_completed("resp-2"),
         ]),
     ];
-    let request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     submit_unified_exec_turn(
         &test,
@@ -1276,37 +1297,18 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
     )
     .await?;
 
+    let output = wait_for_raw_unified_exec_output(&test, call_id).await?;
+    assert_eq!(output.original_token_count, Some(8_991));
+    let output_text = output.output.replace("\r\n", "\n");
+    assert_regex_match(
+        r"^Total output lines: 999\n\nEXEC-LINE-0001 x{20}\nEXEC-LINE-0002 x{20}\nEXEC-LINE-0003 x{13}…8941 tokens truncated…E-0997 x{20}\nEXEC-LINE-0998 x{20}\nEXEC-LINE-0999 x{20}\n$",
+        &output_text,
+    );
+
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
-    let requests = request_log.requests();
-    assert!(!requests.is_empty(), "expected at least one POST request");
-    let bodies = requests
-        .into_iter()
-        .map(|request| request.body_json())
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-    let output = outputs
-        .get(call_id)
-        .expect("missing clamped exec_command output");
-
-    assert!(
-        output.output.contains("tokens truncated"),
-        "expected output to be truncated by policy despite large model request: {:?}",
-        output.output
-    );
-    assert!(
-        output.output.len() < 1_000,
-        "expected policy-sized output, got {} bytes",
-        output.output.len()
-    );
-    assert!(
-        output.original_token_count.unwrap_or_default() > 50,
-        "original output should exceed policy budget"
-    );
 
     Ok(())
 }
@@ -1369,7 +1371,7 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
             ev_completed("resp-3"),
         ]),
     ];
-    let request_log = mount_sse_sequence(&server, responses).await;
+    mount_sse_sequence(&server, responses).await;
 
     submit_unified_exec_turn(
         &test,
@@ -1378,44 +1380,24 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
     )
     .await?;
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let requests = request_log.requests();
-    assert!(!requests.is_empty(), "expected at least one POST request");
-    let bodies = requests
-        .into_iter()
-        .map(|request| request.body_json())
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-    let start_output = outputs
-        .get(start_call_id)
-        .expect("missing start exec_command output");
+    let start_output = wait_for_raw_unified_exec_output(&test, start_call_id).await?;
     assert!(
         start_output.process_id.is_some(),
         "start command should leave a running process for write_stdin"
     );
 
-    let stdin_output = outputs
-        .get(stdin_call_id)
-        .expect("missing clamped write_stdin output");
-    assert!(
-        stdin_output.output.contains("tokens truncated"),
-        "expected write_stdin output to be truncated by policy despite large model request: {:?}",
-        stdin_output.output
+    let stdin_output = wait_for_raw_unified_exec_output(&test, stdin_call_id).await?;
+    assert_eq!(stdin_output.original_token_count, Some(9_492));
+    let stdin_output_text = stdin_output.output.replace("\r\n", "\n");
+    assert_regex_match(
+        r"^Total output lines: 1000\n\ngo\nSTDIN-LINE-0001 y{20}\nSTDIN-LINE-0002 y{20}\nSTDIN-LINE-0003 yyyy…9442 tokens truncated…7 y{20}\nSTDIN-LINE-0998 y{20}\nSTDIN-LINE-0999 y{20}\n$",
+        &stdin_output_text,
     );
-    assert!(
-        stdin_output.output.len() < 1_000,
-        "expected policy-sized write_stdin output, got {} bytes",
-        stdin_output.output.len()
-    );
-    assert!(
-        stdin_output.original_token_count.unwrap_or_default() > 50,
-        "original write_stdin output should exceed policy budget"
-    );
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     Ok(())
 }
