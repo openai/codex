@@ -87,7 +87,6 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
-    pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
@@ -227,7 +226,6 @@ impl TurnContext {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy,
-            js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
@@ -406,7 +404,6 @@ impl Session {
         environments: Vec<TurnEnvironment>,
         cwd: AbsolutePathBuf,
         sub_id: String,
-        js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
@@ -497,7 +494,6 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
-            js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
@@ -682,7 +678,6 @@ impl Session {
             turn_environments,
             cwd,
             sub_id,
-            Arc::clone(&self.js_repl),
             skills_outcome,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();

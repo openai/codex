@@ -213,10 +213,12 @@ pub struct ConfigToml {
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
 
-    /// Optional absolute path to the Node runtime used by `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_path: Option<AbsolutePathBuf>,
 
-    /// Ordered list of directories to search for Node modules in `js_repl`.
+    /// Deprecated: ignored.
+    #[schemars(skip)]
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
 
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.

@@ -136,7 +136,6 @@ pub(super) async fn spawn_review_thread(
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,

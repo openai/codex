@@ -24,7 +24,6 @@ use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpRequestParams;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_models_manager::manager::RefreshStrategy;
@@ -48,7 +47,6 @@ use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
-use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
@@ -1322,90 +1320,6 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
             "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
             "detail": "original",
         })
-    );
-
-    server.verify().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[serial(mcp_test_value)]
-async fn js_repl_emit_image_preserves_original_detail_for_mcp_images() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let call_id = "js-repl-rmcp-image";
-    let rmcp_test_server_bin = stdio_server_bin()?;
-
-    let fixture = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::JsRepl)
-                .expect("test config should allow feature update");
-            insert_mcp_server(
-                config,
-                "rmcp",
-                stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
-                TestMcpServerOptions::default(),
-            );
-        })
-        .build(&server)
-        .await?;
-
-    wait_for_mcp_tool(&fixture, "mcp__rmcp__image_scenario").await?;
-
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            ev_custom_tool_call(
-                call_id,
-                "js_repl",
-                r#"
-const out = await codex.tool("mcp__rmcp__image_scenario", {
-  scenario: "image_only_original_detail",
-});
-const imageItem = out.output.find((item) => item.type === "input_image");
-await codex.emitImage(imageItem);
-"#,
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let final_mock = mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_assistant_message("msg-1", "done"),
-            responses::ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    fixture
-        .submit_turn("use js_repl to emit the rmcp image scenario output")
-        .await?;
-
-    let output = final_mock.single_request().custom_tool_call_output(call_id);
-    let output_items = output["output"]
-        .as_array()
-        .expect("js_repl output should be content items");
-    let image_item = output_items
-        .iter()
-        .find(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
-        .expect("js_repl should emit an input_image item");
-    assert_eq!(
-        image_item.get("detail").and_then(Value::as_str),
-        Some("original")
-    );
-    assert!(
-        image_item
-            .get("image_url")
-            .and_then(Value::as_str)
-            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,")),
-        "js_repl should emit a png data URL"
     );
 
     server.verify().await;

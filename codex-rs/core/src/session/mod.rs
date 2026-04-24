@@ -293,8 +293,6 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tools::js_repl::JsReplHandle;
-use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
@@ -498,34 +496,6 @@ impl Codex {
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
-        }
-
-        if config.features.enabled(Feature::JsRepl)
-            && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
-        {
-            let _ = config.features.disable(Feature::JsRepl);
-            let _ = config.features.disable(Feature::JsReplToolsOnly);
-            let message = if config.features.enabled(Feature::JsRepl) {
-                format!(
-                    "`js_repl` remains enabled because enterprise requirements pin it on, but the configured Node runtime is unavailable or incompatible. {err}"
-                )
-            } else {
-                format!(
-                    "Disabled `js_repl` for this session because the configured Node runtime is unavailable or incompatible. {err}"
-                )
-            };
-            warn!("{message}");
-            config.startup_warnings.push(message);
-        }
-        if config.features.enabled(Feature::CodeMode)
-            && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
-        {
-            let message = format!(
-                "Disabled `exec` for this session because the configured Node runtime is unavailable or incompatible. {err}"
-            );
-            warn!("{message}");
-            let _ = config.features.disable(Feature::CodeMode);
-            config.startup_warnings.push(message);
         }
 
         let user_instructions = AgentsMdManager::new(&config)

@@ -99,8 +99,6 @@ pub struct ToolsConfig {
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
-    pub js_repl_enabled: bool,
-    pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
@@ -141,9 +139,6 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
-        let include_js_repl = features.enabled(Feature::JsRepl);
-        let include_js_repl_tools_only =
-            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
@@ -221,8 +216,6 @@ impl ToolsConfig {
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
-            js_repl_enabled: include_js_repl,
-            js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
