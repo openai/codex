@@ -2,22 +2,22 @@
 source: tui/src/keymap_setup.rs
 expression: "render_picker(params, 78)"
 ---
-                                                                              
-  Keymap                                                                      
-  All configurable shortcuts.                                                 
-  44 actions, 0 customized, 0 unbound.                                        
-                                                                              
-  [All]  Common  Customized (0)  Unbound (0)  App  Composer  Editor           
-  Navigation  Approval                                                        
-                                                                              
-  Type to search shortcuts                                                    
-› Global         Open Transcript       ctrl-t                                 
-  Global         Open External Editor  ctrl-g                                 
-  Global         Copy                  ctrl-o                                 
-  Composer       Submit                enter                                  
-  Composer       Queue                 tab                                    
-  Composer       Toggle Shortcuts      ?, shift-?                             
-  Editor         Insert Newline        ctrl-j, ctrl-m, enter, shift-enter     
-  Editor         Move Left             left, ctrl-b                           
-                                                                              
+
+  Keymap
+  All configurable shortcuts.
+  50 actions, 0 customized, 0 unbound.
+
+  [All]  Common  Customized (0)  Unbound (0)  App  Composer  Editor
+  Navigation  Approval
+
+  Type to search shortcuts
+› Global         Open Transcript            ctrl-t
+  Global         Open External Editor       ctrl-g
+  Global         Copy                       ctrl-o
+  Global         Clear Terminal             ctrl-l
+  Chat           Decrease Reasoning Effort  alt-,
+  Chat           Increase Reasoning Effort  alt-.
+  Chat           Edit Queued Message        alt-up, shift-left
+  Composer       Submit                     enter
+
   left/right group · enter edit shortcut · * custom · - unbound · esc close
