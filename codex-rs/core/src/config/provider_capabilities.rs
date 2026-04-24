@@ -52,7 +52,12 @@ pub(crate) fn add_provider_capabilities_layer(
     ))
 }
 
-pub(crate) fn apply_provider_capabilities(
+/// Applies runtime safety constraints for provider-disabled capabilities.
+///
+/// The synthetic provider layer controls initial config visibility and origins.
+/// These constraints keep mutable runtime state from re-enabling unsupported
+/// features after the final [`Config`] has been built.
+pub(crate) fn apply_provider_capability_runtime_constraints(
     config: &mut Config,
     capabilities: ProviderCapabilities,
 ) -> std::io::Result<()> {
@@ -84,6 +89,10 @@ pub(crate) fn apply_provider_capabilities(
     Ok(())
 }
 
+/// Builds the synthetic config layer for provider-disabled capabilities.
+///
+/// Supported capabilities emit no config, so this layer can only disable
+/// features or clear provider-unsupported config surfaces.
 pub(crate) fn provider_capabilities_layer_config(
     capabilities: ProviderCapabilities,
 ) -> Option<TomlValue> {

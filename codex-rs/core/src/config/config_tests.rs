@@ -2095,15 +2095,15 @@ async fn amazon_bedrock_provider_capabilities_overlay_effective_config() -> anyh
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
 model_provider = "amazon-bedrock"
-web_search = "disabled"
-include_apps_instructions = false
+web_search = "live"
+include_apps_instructions = true
 
 [features]
 apps = true
 plugins = true
 tool_search = true
 tool_suggest = true
-image_generation = false
+image_generation = true
 
 [model_providers.amazon-bedrock.aws]
 region = "us-west-2"
@@ -2119,7 +2119,7 @@ command = "docs-server"
         .await?;
 
     assert_eq!(config.model_provider_id, "amazon-bedrock");
-    assert!(config.features.enabled(Feature::Apps));
+    assert!(!config.features.enabled(Feature::Apps));
     assert!(!config.features.enabled(Feature::Plugins));
     assert!(!config.features.enabled(Feature::ToolSearch));
     assert!(!config.features.enabled(Feature::ToolSuggest));

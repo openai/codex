@@ -119,7 +119,7 @@ pub(crate) use model_provider_resolution::resolve_model_provider_from_config_tom
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub(crate) use permissions::resolve_permission_profile;
-pub(crate) use provider_capabilities::apply_provider_capabilities;
+pub(crate) use provider_capabilities::apply_provider_capability_runtime_constraints;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
@@ -1934,6 +1934,8 @@ impl Config {
         let model_providers = resolved_model_provider.all;
         let model_provider_id = resolved_model_provider.id;
         let model_provider = resolved_model_provider.info;
+        let provider_capabilities =
+            create_model_provider(model_provider.clone(), /*auth_manager*/ None).capabilities();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -2486,9 +2488,7 @@ impl Config {
                 }
             },
         };
-        let provider =
-            create_model_provider(config.model_provider.clone(), /*auth_manager*/ None);
-        apply_provider_capabilities(&mut config, provider.capabilities())?;
+        apply_provider_capability_runtime_constraints(&mut config, provider_capabilities)?;
         Ok(config)
         })
         .await
