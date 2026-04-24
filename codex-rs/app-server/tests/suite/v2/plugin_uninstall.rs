@@ -275,8 +275,13 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_name_before_network_call
             .message
             .contains("only ASCII letters, digits, `_`, `-`, and `~` are allowed")
     );
-    let requests = server.received_requests().await.unwrap_or_default();
-    assert_eq!(requests.len(), 0);
+    wait_for_remote_plugin_request_count(
+        &server,
+        "POST",
+        "/ps/plugins/linear/../../oops/uninstall",
+        /*expected_count*/ 0,
+    )
+    .await?;
     Ok(())
 }
 
