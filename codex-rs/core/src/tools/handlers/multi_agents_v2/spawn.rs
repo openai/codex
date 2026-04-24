@@ -5,8 +5,6 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-use crate::context::ContextualUserFragment;
-use crate::context::SpawnAgentInstructions;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -88,18 +86,6 @@ impl ToolHandler for Handler {
         }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
-        let spawn_agent_instructions = SpawnAgentInstructions.render();
-        config.developer_instructions = Some(
-            if let Some(mut existing_instructions) = config.developer_instructions.take() {
-                if !existing_instructions.ends_with('\n') {
-                    existing_instructions.push('\n');
-                }
-                existing_instructions.push_str(&spawn_agent_instructions);
-                existing_instructions
-            } else {
-                spawn_agent_instructions
-            },
-        );
 
         let spawn_source = thread_spawn_source(
             session.conversation_id,

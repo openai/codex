@@ -97,6 +97,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -194,6 +195,8 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+#[cfg(test)]
+use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitReachedType;
@@ -256,6 +259,7 @@ const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
 const MULTI_AGENT_ENABLE_NOTICE: &str = "Subagents will be enabled in the next session.";
+const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
 const MEMORIES_DOC_URL: &str = "https://developers.openai.com/codex/memories";
 const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
 const MEMORIES_ENABLE_YES: &str = "Yes, enable";
@@ -649,6 +653,15 @@ fn app_server_rate_limit_error_kind(info: &AppServerCodexErrorInfo) -> Option<Ra
         } => Some(RateLimitErrorKind::Generic),
         _ => None,
     }
+}
+
+#[cfg(test)]
+fn is_core_cyber_policy_error(info: &CoreCodexErrorInfo) -> bool {
+    matches!(info, CoreCodexErrorInfo::CyberPolicy)
+}
+
+fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -> bool {
+    matches!(info, AppServerCodexErrorInfo::CyberPolicy)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2106,6 +2119,20 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        let (file_system_sandbox_policy, network_sandbox_policy) = match event
+            .permission_profile
+            .as_ref()
+        {
+            Some(permission_profile) => permission_profile.to_runtime_permissions(),
+            None => (
+                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    &event.sandbox_policy,
+                    &event.cwd,
+                ),
+                codex_protocol::permissions::NetworkSandboxPolicy::from(&event.sandbox_policy),
+            ),
+        };
+
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
@@ -2143,6 +2170,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -3040,6 +3069,16 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn on_cyber_policy_error(&mut self) {
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_cyber_policy_error_event());
+        self.request_redraw();
+
+        // After an error ends the turn, try sending the next queued input.
+        self.maybe_send_next_queued_input();
+    }
+
     fn workspace_owner_usage_nudge_enabled(&self) -> bool {
         self.config
             .features
@@ -3105,6 +3144,11 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(|info| self.handle_app_server_steer_rejected_error(info))
         {
+        } else if codex_error_info
+            .as_ref()
+            .is_some_and(is_app_server_cyber_policy_error)
+        {
+            self.on_cyber_policy_error();
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)
@@ -3123,6 +3167,19 @@ impl ChatWidget {
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
         self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_core_model_verification(&mut self, verifications: &[CoreModelVerification]) {
+        if verifications.contains(&CoreModelVerification::TrustedAccessForCyber) {
+            self.on_warning(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING);
+        }
+    }
+
+    fn on_app_server_model_verification(&mut self, verifications: &[AppServerModelVerification]) {
+        if verifications.contains(&AppServerModelVerification::TrustedAccessForCyber) {
+            self.on_warning(TRUSTED_ACCESS_FOR_CYBER_VERIFICATION_WARNING);
+        }
     }
 
     /// Record one MCP startup update, promoting it into either the active startup
@@ -5952,11 +6009,20 @@ impl ChatWidget {
             None if self.config.notices.fast_default_opt_out == Some(true) => Some(None),
             None => None,
         };
+        let permission_profile = if matches!(
+            self.config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            None
+        } else {
+            Some(self.config.permissions.permission_profile())
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,
@@ -6579,6 +6645,9 @@ impl ChatWidget {
                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::ModelVerification(notification) => {
+                self.on_app_server_model_verification(&notification.verifications)
+            }
             ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::GuardianWarning(notification) => {
                 self.on_warning(notification.message)
@@ -7084,6 +7153,9 @@ impl ChatWidget {
             | EventMsg::GuardianWarning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
+            EventMsg::ModelVerification(event) => {
+                self.on_core_model_verification(&event.verifications)
+            }
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
@@ -7092,6 +7164,11 @@ impl ChatWidget {
                     .as_ref()
                     .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
+                } else if codex_error_info
+                    .as_ref()
+                    .is_some_and(is_core_cyber_policy_error)
+                {
+                    self.on_cyber_policy_error();
                 } else if let Some(kind) = codex_error_info
                     .as_ref()
                     .and_then(core_rate_limit_error_kind)
@@ -9712,6 +9789,14 @@ impl ChatWidget {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         self.config.permissions.sandbox_policy.set(policy)?;
+        let sandbox_policy = self.config.permissions.sandbox_policy.get();
+        self.config.permissions.file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                sandbox_policy,
+                &self.config.cwd,
+            );
+        self.config.permissions.network_sandbox_policy =
+            codex_protocol::permissions::NetworkSandboxPolicy::from(sandbox_policy);
         Ok(())
     }
 

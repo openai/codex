@@ -88,6 +88,9 @@ use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_app_server_protocol::MarketplaceUpgradeErrorInfo;
+use codex_app_server_protocol::MarketplaceUpgradeParams;
+use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -245,27 +248,28 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
-use codex_core::plugins::MarketplaceAddError;
-use codex_core::plugins::MarketplaceRemoveError;
-use codex_core::plugins::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
-use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
-use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
-use codex_core::plugins::remove_marketplace;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::marketplace_add::MarketplaceAddError;
+use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
+use codex_core_plugins::marketplace_add::add_marketplace as add_marketplace_to_codex_home;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveError;
+use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
+use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_core_plugins::remote::RemoteMarketplace;
 use codex_core_plugins::remote::RemotePluginCatalogError;
 use codex_core_plugins::remote::RemotePluginDetail as RemoteCatalogPluginDetail;
@@ -310,6 +314,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -975,6 +981,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::MarketplaceRemove { request_id, params } => {
                 self.marketplace_remove(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MarketplaceUpgrade { request_id, params } => {
+                self.marketplace_upgrade(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -2073,7 +2083,16 @@ impl CodexMessageProcessor {
             env: env_overrides,
             size,
             sandbox_policy,
+            permission_profile,
         } = params;
+        if sandbox_policy.is_some() && permission_profile.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "`permissionProfile` cannot be combined with `sandboxPolicy`".to_string(),
+            )
+            .await;
+            return;
+        }
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -2185,7 +2204,11 @@ impl CodexMessageProcessor {
         } else {
             ExecCapturePolicy::ShellTool
         };
-        let sandbox_cwd = self.config.cwd.clone();
+        let sandbox_cwd = if permission_profile.is_some() {
+            cwd.clone()
+        } else {
+            self.config.cwd.clone()
+        };
         let exec_params = ExecParams {
             command,
             cwd: cwd.clone(),
@@ -2205,13 +2228,56 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
         let (
             effective_policy,
             effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        ) = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
+        ) = if let Some(permission_profile) = permission_profile {
+            let permission_profile =
+                codex_protocol::models::PermissionProfile::from(permission_profile);
+            let sandbox_policy = match permission_profile.to_legacy_sandbox_policy(&sandbox_cwd) {
+                Ok(sandbox_policy) => sandbox_policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            };
+            match self
+                .config
+                .permissions
+                .sandbox_policy
+                .can_set(&sandbox_policy)
+            {
+                Ok(()) => {
+                    let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                        permission_profile.to_runtime_permissions();
+                    Self::preserve_configured_deny_read_restrictions(
+                        &mut file_system_sandbox_policy,
+                        &self.config.permissions.file_system_sandbox_policy,
+                    );
+                    (
+                        sandbox_policy,
+                        file_system_sandbox_policy,
+                        network_sandbox_policy,
+                    )
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid permission profile: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            }
+        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+            match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
                         codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
@@ -2228,12 +2294,13 @@ impl CodexMessageProcessor {
                     self.outgoing.send_error(request, error).await;
                     return;
                 }
-            },
-            None => (
+            }
+        } else {
+            (
                 self.config.permissions.sandbox_policy.get().clone(),
                 self.config.permissions.file_system_sandbox_policy.clone(),
                 self.config.permissions.network_sandbox_policy,
-            ),
+            )
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
@@ -2286,6 +2353,30 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request, error).await;
+            }
+        }
+    }
+
+    fn preserve_configured_deny_read_restrictions(
+        file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+        configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    ) {
+        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
+            file_system_sandbox_policy.glob_scan_max_depth =
+                configured_file_system_sandbox_policy.glob_scan_max_depth;
+        }
+
+        for deny_entry in configured_file_system_sandbox_policy
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !file_system_sandbox_policy
+                .entries
+                .iter()
+                .any(|entry| entry == deny_entry)
+            {
+                file_system_sandbox_policy.entries.push(deny_entry.clone());
             }
         }
     }
@@ -2514,7 +2605,7 @@ impl CodexMessageProcessor {
             requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
 
         if requested_cwd.is_some()
-            && !config.active_project.is_trusted()
+            && config.active_project.trust_level.is_none()
             && (requested_permissions_trust_project
                 || matches!(
                     config.permissions.sandbox_policy.get(),
@@ -4382,8 +4473,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -4439,7 +4532,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_model_provider = config.model_provider_id.clone();
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
@@ -4489,8 +4581,8 @@ impl CodexMessageProcessor {
                         codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
-                        fallback_model_provider.as_str(),
                         persisted_resume_metadata.as_ref(),
+                        include_turns,
                     )
                     .await
                 {
@@ -4544,24 +4636,28 @@ impl CodexMessageProcessor {
                 }
 
                 let connection_id = request_id.connection_id;
-                let token_usage_thread = response.thread.clone();
-                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-                    &response_history.get_rollout_items(),
-                    &token_usage_thread,
-                );
+                let token_usage_thread = include_turns.then(|| response.thread.clone());
                 self.outgoing.send_response(request_id, response).await;
-                // The client needs restored usage before it starts another turn.
-                // Sending after the response preserves JSON-RPC request ordering while
-                // still filling the status line before the next turn lifecycle begins.
-                send_thread_token_usage_update_to_connection(
-                    &self.outgoing,
-                    connection_id,
-                    thread_id,
-                    &token_usage_thread,
-                    codex_thread.as_ref(),
-                    token_usage_turn_id,
-                )
-                .await;
+                // `excludeTurns` is explicitly the cheap resume path, so avoid
+                // rebuilding history only to attribute a replayed usage update.
+                if let Some(token_usage_thread) = token_usage_thread {
+                    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                        &response_history.get_rollout_items(),
+                        token_usage_thread.turns.as_slice(),
+                    );
+                    // The client needs restored usage before it starts another turn.
+                    // Sending after the response preserves JSON-RPC request ordering while
+                    // still filling the status line before the next turn lifecycle begins.
+                    send_thread_token_usage_update_to_connection(
+                        &self.outgoing,
+                        connection_id,
+                        thread_id,
+                        &token_usage_thread,
+                        codex_thread.as_ref(),
+                        token_usage_turn_id,
+                    )
+                    .await;
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4752,6 +4848,7 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
+                    include_turns: !params.exclude_turns,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4855,22 +4952,22 @@ impl CodexMessageProcessor {
         thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
-        fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
+        include_turns: bool,
     ) -> std::result::Result<Thread, String> {
+        let config_snapshot = thread.config_snapshot().await;
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
                     &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
-                    fallback_provider,
+                    config_snapshot.model_provider_id.as_str(),
                     persisted_resume_metadata,
                 )
                 .await
             }
             InitialHistory::Forked(items) => {
-                let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -4886,13 +4983,15 @@ impl CodexMessageProcessor {
         let mut thread = thread?;
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
-        let history_items = thread_history.get_rollout_items();
-        populate_thread_turns(
-            &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
-            /*active_turn*/ None,
-        )
-        .await?;
+        if include_turns {
+            let history_items = thread_history.get_rollout_items();
+            populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                /*active_turn*/ None,
+            )
+            .await?;
+        }
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
@@ -4919,8 +5018,10 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             ephemeral,
+            exclude_turns,
             persist_extended_history,
         } = params;
+        let include_turns = !exclude_turns;
         if sandbox.is_some() && permission_profile.is_some() {
             self.send_invalid_request_error(
                 request_id,
@@ -5140,12 +5241,13 @@ impl CodexMessageProcessor {
                     })
                 })
                 .map(|id| id.to_string());
-            if let Err(message) = populate_thread_turns(
-                &mut thread,
-                ThreadTurnSource::HistoryItems(&history_items),
-                /*active_turn*/ None,
-            )
-            .await
+            if include_turns
+                && let Err(message) = populate_thread_turns(
+                    &mut thread,
+                    ThreadTurnSource::HistoryItems(&history_items),
+                    /*active_turn*/ None,
+                )
+                .await
             {
                 self.send_internal_error(request_id, message).await;
                 return;
@@ -5154,6 +5256,7 @@ impl CodexMessageProcessor {
         };
 
         if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref()
+            && include_turns
             && let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
@@ -5204,30 +5307,34 @@ impl CodexMessageProcessor {
         }
 
         let connection_id = request_id.connection_id;
-        let token_usage_thread = response.thread.clone();
-        let token_usage_turn_id = if let Some(turn_id) =
-            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
-        {
-            Some(turn_id)
-        } else {
-            latest_token_usage_turn_id_from_rollout_path(
-                rollout_path.as_path(),
-                &token_usage_thread,
-            )
-            .await
-        };
+        let token_usage_thread = include_turns.then(|| response.thread.clone());
         self.outgoing.send_response(request_id, response).await;
-        // Mirror the resume contract for forks: the new thread is usable as soon
-        // as the response arrives, so restored usage must follow immediately.
-        send_thread_token_usage_update_to_connection(
-            &self.outgoing,
-            connection_id,
-            thread_id,
-            &token_usage_thread,
-            forked_thread.as_ref(),
-            token_usage_turn_id,
-        )
-        .await;
+        // `excludeTurns` is the cheap fork path, so skip restored usage replay
+        // instead of rebuilding history only to attribute a historical update.
+        if let Some(token_usage_thread) = token_usage_thread {
+            let token_usage_turn_id = if let Some(turn_id) =
+                latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+            {
+                Some(turn_id)
+            } else {
+                latest_token_usage_turn_id_from_rollout_path(
+                    rollout_path.as_path(),
+                    token_usage_thread.turns.as_slice(),
+                )
+                .await
+            };
+            // Mirror the resume contract for forks: the new thread is usable as soon
+            // as the response arrives, so restored usage must follow immediately.
+            send_thread_token_usage_update_to_connection(
+                &self.outgoing,
+                connection_id,
+                thread_id,
+                &token_usage_thread,
+                forked_thread.as_ref(),
+                token_usage_turn_id,
+            )
+            .await;
+        }
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -6676,10 +6783,65 @@ impl CodexMessageProcessor {
             }
         }
     }
+
+    async fn marketplace_upgrade(
+        &self,
+        request_id: ConnectionRequestId,
+        params: MarketplaceUpgradeParams,
+    ) {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let MarketplaceUpgradeParams { marketplace_name } = params;
+
+        let result = tokio::task::spawn_blocking(move || {
+            plugins_manager
+                .upgrade_configured_marketplaces_for_config(&config, marketplace_name.as_deref())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(outcome)) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        MarketplaceUpgradeResponse {
+                            selected_marketplaces: outcome.selected_marketplaces,
+                            upgraded_roots: outcome.upgraded_roots,
+                            errors: outcome
+                                .errors
+                                .into_iter()
+                                .map(|err| MarketplaceUpgradeErrorInfo {
+                                    marketplace_name: err.marketplace_name,
+                                    message: err.message,
+                                })
+                                .collect(),
+                        },
+                    )
+                    .await;
+            }
+            Ok(Err(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to upgrade marketplaces: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
     async fn marketplace_add(&self, request_id: ConnectionRequestId, params: MarketplaceAddParams) {
         let result = add_marketplace_to_codex_home(
             self.config.codex_home.to_path_buf(),
-            codex_core::plugins::MarketplaceAddRequest {
+            MarketplaceAddRequest {
                 source: params.source,
                 ref_name: params.ref_name,
                 sparse_paths: params.sparse_paths.unwrap_or_default(),
@@ -8557,12 +8719,13 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
+    if pending.include_turns
+        && let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
+            active_turn.as_ref(),
+        )
+        .await
     {
         outgoing
             .send_error(
@@ -8647,24 +8810,28 @@ async fn handle_pending_thread_resume_request(
         permission_profile,
         reasoning_effort,
     };
-    let token_usage_thread = response.thread.clone();
-    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
-        pending.rollout_path.as_path(),
-        &token_usage_thread,
-    )
-    .await;
+    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
-    // Rejoining a loaded thread has the same UI contract as a cold resume, but
-    // uses the live conversation state instead of reconstructing a new session.
-    send_thread_token_usage_update_to_connection(
-        outgoing,
-        connection_id,
-        conversation_id,
-        &token_usage_thread,
-        conversation.as_ref(),
-        token_usage_turn_id,
-    )
-    .await;
+    // Match cold resume: metadata-only resume should attach the listener without
+    // paying the cost of turn reconstruction for historical usage replay.
+    if let Some(token_usage_thread) = token_usage_thread {
+        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+            pending.rollout_path.as_path(),
+            token_usage_thread.turns.as_slice(),
+        )
+        .await;
+        // Rejoining a loaded thread has the same UI contract as a cold resume, but
+        // uses the live conversation state instead of reconstructing a new session.
+        send_thread_token_usage_update_to_connection(
+            outgoing,
+            connection_id,
+            conversation_id,
+            &token_usage_thread,
+            conversation.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
+    }
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
@@ -10085,6 +10252,8 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
@@ -10353,6 +10522,36 @@ mod tests {
     }
 
     #[test]
+    fn command_profile_preserves_configured_deny_read_restrictions() {
+        let readable_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: test_path_buf("/tmp/project").abs(),
+            },
+            access: FileSystemAccessMode::Read,
+        };
+        let deny_entry = FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "/tmp/project/**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::None,
+        };
+        let mut file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![readable_entry.clone()]);
+        let mut configured_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![deny_entry.clone()]);
+        configured_file_system_sandbox_policy.glob_scan_max_depth = Some(2);
+
+        CodexMessageProcessor::preserve_configured_deny_read_restrictions(
+            &mut file_system_sandbox_policy,
+            &configured_file_system_sandbox_policy,
+        );
+
+        let mut expected = FileSystemSandboxPolicy::restricted(vec![readable_entry, deny_entry]);
+        expected.glob_scan_max_depth = Some(2);
+        assert_eq!(file_system_sandbox_policy, expected);
+    }
+
+    #[test]
     fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::Auth,
@@ -10398,7 +10597,7 @@ mod tests {
         let err = std::io::Error::other(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "failed to load your workspace-managed config",
+            "Failed to load cloud requirements (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -10408,7 +10607,7 @@ mod tests {
             Some(json!({
                 "reason": "cloudRequirements",
                 "errorCode": "RequestFailed",
-                "detail": "failed to load your workspace-managed config",
+                "detail": "Failed to load cloud requirements (workspace-managed policies).",
             }))
         );
     }
@@ -10495,6 +10694,7 @@ mod tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            exclude_turns: false,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

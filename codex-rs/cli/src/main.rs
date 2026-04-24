@@ -28,6 +28,7 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
@@ -176,6 +177,7 @@ enum Subcommand {
 }
 
 #[derive(Debug, Parser)]
+#[command(bin_name = "codex plugin")]
 struct PluginCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
@@ -392,7 +394,7 @@ struct AppServerCommand {
     subcommand: Option<AppServerSubcommand>,
 
     /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `ws://IP:PORT`, `off`.
+    /// `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`.
     #[arg(
         long = "listen",
         value_name = "URL",
@@ -436,6 +438,9 @@ struct ExecServerCommand {
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
+    /// Proxy stdio bytes to the running app-server control socket.
+    Proxy(AppServerProxyCommand),
+
     /// [experimental] Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
 
@@ -445,6 +450,13 @@ enum AppServerSubcommand {
     /// [internal] Generate internal JSON Schema artifacts for Codex tooling.
     #[clap(hide = true)]
     GenerateInternalJsonSchema(GenerateInternalJsonSchemaCommand),
+}
+
+#[derive(Debug, Args)]
+struct AppServerProxyCommand {
+    /// Path to the app-server Unix domain socket to connect to.
+    #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
+    socket_path: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -483,8 +495,13 @@ struct GenerateInternalJsonSchemaCommand {
 #[derive(Debug, Parser)]
 struct StdioToUdsCommand {
     /// Path to the Unix domain socket to connect to.
-    #[arg(value_name = "SOCKET_PATH")]
-    socket_path: PathBuf,
+    #[arg(value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
+    socket_path: AbsolutePathBuf,
+}
+
+fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
+    AbsolutePathBuf::relative_to_current_dir(raw)
+        .map_err(|err| format!("failed to resolve socket path `{raw}`: {err}"))
 }
 
 fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
@@ -802,6 +819,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         auth,
                     )
                     .await?;
+                }
+                Some(AppServerSubcommand::Proxy(proxy_cli)) => {
+                    let socket_path = match proxy_cli.socket_path {
+                        Some(socket_path) => socket_path,
+                        None => {
+                            let codex_home = find_codex_home()?;
+                            codex_app_server::app_server_control_socket_path(&codex_home)?
+                        }
+                    };
+                    codex_stdio_to_uds::run(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                     let options = codex_app_server_protocol::GenerateTsOptions {
@@ -1407,6 +1434,7 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
         None => "app-server",
+        Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
         Some(AppServerSubcommand::GenerateInternalJsonSchema(_)) => {
@@ -1723,6 +1751,12 @@ mod tests {
         app_server
     }
 
+    fn default_app_server_socket_path() -> AbsolutePathBuf {
+        let codex_home = find_codex_home().expect("codex home");
+        codex_app_server::app_server_control_socket_path(&codex_home)
+            .expect("default app-server socket path")
+    }
+
     #[test]
     fn debug_prompt_input_parses_prompt_and_images() {
         let cli = MultitoolCli::try_parse_from([
@@ -1771,6 +1805,30 @@ mod tests {
 
         let cli = MultitoolCli::try_parse_from(["codex", "responses"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Responses(_))));
+    }
+
+    fn help_from_args(args: &[&str]) -> String {
+        let err = MultitoolCli::try_parse_from(args).expect_err("help should short-circuit");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+        err.to_string()
+    }
+
+    #[test]
+    fn plugin_marketplace_help_uses_plugin_namespace() {
+        let help = help_from_args(&["codex", "plugin", "marketplace", "--help"]);
+        assert!(
+            help.contains("Usage: codex plugin marketplace [OPTIONS] <COMMAND>"),
+            "{help}"
+        );
+
+        for (subcommand, usage) in [
+            ("add", "Usage: codex plugin marketplace add"),
+            ("upgrade", "Usage: codex plugin marketplace upgrade"),
+            ("remove", "Usage: codex plugin marketplace remove"),
+        ] {
+            let help = help_from_args(&["codex", "plugin", "marketplace", subcommand, "--help"]);
+            assert!(help.contains(usage), "{help}");
+        }
     }
 
     #[test]
@@ -2199,6 +2257,32 @@ mod tests {
     }
 
     #[test]
+    fn app_server_listen_unix_socket_url_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--listen", "unix://"].as_ref());
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::UnixSocket {
+                socket_path: default_app_server_socket_path()
+            }
+        );
+    }
+
+    #[test]
+    fn app_server_listen_unix_socket_path_parses() {
+        let app_server = app_server_from_args(
+            ["codex", "app-server", "--listen", "unix:///tmp/codex.sock"].as_ref(),
+        );
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::UnixSocket {
+                socket_path: AbsolutePathBuf::from_absolute_path("/tmp/codex.sock")
+                    .expect("absolute path should parse")
+            }
+        );
+    }
+
+    #[test]
     fn app_server_listen_off_parses() {
         let app_server = app_server_from_args(["codex", "app-server", "--listen", "off"].as_ref());
         assert_eq!(app_server.listen, codex_app_server::AppServerTransport::Off);
@@ -2209,6 +2293,45 @@ mod tests {
         let parse_result =
             MultitoolCli::try_parse_from(["codex", "app-server", "--listen", "http://foo"]);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn app_server_proxy_subcommand_parses() {
+        let app_server = app_server_from_args(["codex", "app-server", "proxy"].as_ref());
+        assert!(matches!(
+            app_server.subcommand,
+            Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
+                socket_path: None
+            }))
+        ));
+    }
+
+    #[test]
+    fn app_server_proxy_sock_path_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "proxy", "--sock", "codex.sock"].as_ref());
+        let Some(AppServerSubcommand::Proxy(proxy)) = app_server.subcommand else {
+            panic!("expected proxy subcommand");
+        };
+        assert_eq!(
+            proxy.socket_path,
+            Some(
+                AbsolutePathBuf::relative_to_current_dir("codex.sock")
+                    .expect("relative path should resolve")
+            )
+        );
+    }
+
+    #[test]
+    fn reject_remote_auth_token_env_for_app_server_proxy() {
+        let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand { socket_path: None });
+        let err = reject_remote_mode_for_app_server_subcommand(
+            /*remote*/ None,
+            Some("CODEX_REMOTE_AUTH_TOKEN"),
+            Some(&subcommand),
+        )
+        .expect_err("app-server proxy should reject --remote-auth-token-env");
+        assert!(err.to_string().contains("app-server proxy"));
     }
 
     #[test]

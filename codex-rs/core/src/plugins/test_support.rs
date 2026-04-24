@@ -3,7 +3,7 @@ use crate::config::ConfigBuilder;
 use std::fs;
 use std::path::Path;
 
-use super::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::SkillLoadOutcome;
@@ -364,7 +365,6 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut server_model_warning_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -455,7 +455,6 @@ pub(crate) async fn run_turn(
             sampling_request_input,
             &explicitly_enabled_connectors,
             skills_outcome,
-            &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
         )
         .await
@@ -1022,7 +1021,6 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
-    server_model_warning_emitted_for_turn: &mut bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -1076,7 +1074,6 @@ async fn run_sampling_request(
             client_session,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
-            server_model_warning_emitted_for_turn,
             &prompt,
             cancellation_token.child_token(),
         )
@@ -1490,6 +1487,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
+        | EventMsg::ModelVerification(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
@@ -1866,7 +1864,6 @@ async fn try_run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -2099,12 +2096,25 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
-                if !*server_model_warning_emitted_for_turn
+                if !turn_context
+                    .server_model_warning_emitted
+                    .load(Ordering::Relaxed)
                     && sess
                         .maybe_warn_on_server_model_mismatch(&turn_context, server_model)
                         .await
                 {
-                    *server_model_warning_emitted_for_turn = true;
+                    turn_context
+                        .server_model_warning_emitted
+                        .store(true, Ordering::Relaxed);
+                }
+            }
+            ResponseEvent::ModelVerifications(verifications) => {
+                if !turn_context
+                    .model_verification_emitted
+                    .swap(true, Ordering::Relaxed)
+                {
+                    sess.emit_model_verification(&turn_context, verifications)
+                        .await;
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {

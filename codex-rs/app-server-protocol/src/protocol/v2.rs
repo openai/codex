@@ -72,6 +72,7 @@ use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
+use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -163,6 +164,7 @@ pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
     ServerOverloaded,
+    CyberPolicy,
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -207,6 +209,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
             CoreCodexErrorInfo::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -322,7 +325,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
-    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    #[serde(rename = "guardian_subagent", alias = "auto_review")]
     AutoReview,
 }
 
@@ -422,6 +425,12 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ModelRerouteReason from CoreModelRerouteReason {
         HighRiskCyberActivity
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ModelVerification from CoreModelVerification {
+        TrustedAccessForCyber
     }
 );
 
@@ -1264,7 +1273,9 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
+    /// This will be removed in favor of `entries`.
     pub read: Option<Vec<AbsolutePathBuf>>,
+    /// This will be removed in favor of `entries`.
     pub write: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1277,11 +1288,26 @@ pub struct AdditionalFileSystemPermissions {
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
         if let Some((read, write)) = value.legacy_read_write_roots() {
+            let mut entries = Vec::with_capacity(
+                read.as_ref().map_or(0, Vec::len) + write.as_ref().map_or(0, Vec::len),
+            );
+            if let Some(paths) = read.as_ref() {
+                entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: path.clone() },
+                    access: FileSystemAccessMode::Read,
+                }));
+            }
+            if let Some(paths) = write.as_ref() {
+                entries.extend(paths.iter().map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: path.clone() },
+                    access: FileSystemAccessMode::Write,
+                }));
+            }
             Self {
                 read,
                 write,
                 glob_scan_max_depth: None,
-                entries: None,
+                entries: Some(entries),
             }
         } else {
             Self {
@@ -3126,9 +3152,16 @@ pub struct CommandExecParams {
     /// Optional sandbox policy for this command.
     ///
     /// Uses the same shape as thread/turn execution sandbox configuration and
-    /// defaults to the user's configured policy when omitted.
+    /// defaults to the user's configured policy when omitted. Cannot be
+    /// combined with `permissionProfile`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional full permissions profile for this command.
+    ///
+    /// Defaults to the user's configured permissions when omitted. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
 }
 
 /// Final buffered result for `command/exec`.
@@ -3396,6 +3429,11 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// When true, return only thread metadata and live-resume state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after resuming.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_turns: bool,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/resume.persistFullHistory")]
@@ -3488,6 +3526,11 @@ pub struct ThreadForkParams {
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    /// When true, return only thread metadata and live fork state without
+    /// populating `thread.turns`. This is useful when the client plans to call
+    /// `thread/turns/list` immediately after forking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_turns: bool,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/fork.persistFullHistory")]
@@ -4059,6 +4102,31 @@ pub struct MarketplaceRemoveParams {
 pub struct MarketplaceRemoveResponse {
     pub marketplace_name: String,
     pub installed_root: Option<AbsolutePathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeParams {
+    #[ts(optional = nullable)]
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeResponse {
+    pub selected_marketplaces: Vec<String>,
+    pub upgraded_roots: Vec<AbsolutePathBuf>,
+    pub errors: Vec<MarketplaceUpgradeErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceUpgradeErrorInfo {
+    pub marketplace_name: String,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7350,6 +7418,15 @@ pub struct ModelReroutedNotification {
     pub reason: ModelRerouteReason,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelVerificationNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub verifications: Vec<ModelVerification>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -7458,7 +7535,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
-            "\"auto_review\""
+            "\"guardian_subagent\""
         );
 
         for value in ["user", "auto_review", "guardian_subagent"] {
@@ -7729,6 +7806,45 @@ mod tests {
                             pattern: "**/*.env".to_string(),
                         },
                         access: FileSystemAccessMode::None,
+                    },
+                ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
+        let read_only_path = absolute_path("read-only");
+        let read_write_path = absolute_path("read-write");
+        let core_permissions = CoreFileSystemPermissions::from_read_write_roots(
+            Some(vec![read_only_path.clone()]),
+            Some(vec![read_write_path.clone()]),
+        );
+
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            AdditionalFileSystemPermissions {
+                read: Some(vec![read_only_path.clone()]),
+                write: Some(vec![read_write_path.clone()]),
+                glob_scan_max_depth: None,
+                entries: Some(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_only_path,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path {
+                            path: read_write_path,
+                        },
+                        access: FileSystemAccessMode::Write,
                     },
                 ]),
             }
@@ -8270,6 +8386,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             }
         );
     }
@@ -8290,6 +8407,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8304,6 +8422,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
                 "outputBytesCap": null,
             })
         );
@@ -8329,6 +8448,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8345,6 +8465,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -8373,6 +8494,7 @@ mod tests {
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8391,6 +8513,7 @@ mod tests {
                 },
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -8460,6 +8583,7 @@ mod tests {
                 cols: 120,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -8478,6 +8602,7 @@ mod tests {
                     "cols": 120,
                 },
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -9691,6 +9816,36 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: None,
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<MarketplaceUpgradeParams>(json!({})).unwrap(),
+            MarketplaceUpgradeParams {
+                marketplace_name: None,
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: Some("debug".to_string()),
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": "debug",
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
         assert_eq!(
             serde_json::to_value(PluginMarketplaceEntry {
@@ -9937,6 +10092,37 @@ mod tests {
     }
 
     #[test]
+    fn marketplace_upgrade_response_serializes_camel_case_fields() {
+        let upgraded_root = if cfg!(windows) {
+            r"C:\marketplaces\debug"
+        } else {
+            "/tmp/marketplaces/debug"
+        };
+        let upgraded_root = AbsolutePathBuf::try_from(PathBuf::from(upgraded_root)).unwrap();
+        let upgraded_root_json = upgraded_root.as_path().display().to_string();
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeResponse {
+                selected_marketplaces: vec!["debug".to_string()],
+                upgraded_roots: vec![upgraded_root],
+                errors: vec![MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "broken".to_string(),
+                    message: "failed to clone".to_string(),
+                }],
+            })
+            .unwrap(),
+            json!({
+                "selectedMarketplaces": ["debug"],
+                "upgradedRoots": [upgraded_root_json],
+                "errors": [{
+                    "marketplaceName": "broken",
+                    "message": "failed to clone",
+                }],
+            }),
+        );
+    }
+
+    #[test]
     fn codex_error_info_serializes_http_status_code_in_camel_case() {
         let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(401),
@@ -9949,6 +10135,14 @@ mod tests {
                     "httpStatusCode": 401
                 }
             })
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_cyber_policy_in_camel_case() {
+        assert_eq!(
+            serde_json::to_value(CodexErrorInfo::CyberPolicy).unwrap(),
+            json!("cyberPolicy")
         );
     }
 

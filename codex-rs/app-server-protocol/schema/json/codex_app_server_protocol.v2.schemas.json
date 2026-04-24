@@ -148,6 +148,7 @@
           ]
         },
         "read": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -157,6 +158,7 @@
           ]
         },
         "write": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -1385,6 +1387,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/upgrade"
+              ],
+              "title": "Marketplace/upgradeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/MarketplaceUpgradeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/upgradeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -2565,6 +2591,7 @@
             "contextWindowExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
+            "cyberPolicy",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -3012,6 +3039,17 @@
             "null"
           ]
         },
+        "permissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional full permissions profile for this command.\n\nDefaults to the user's configured permissions when omitted. Cannot be combined with `sandboxPolicy`."
+        },
         "processId": {
           "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
@@ -3028,7 +3066,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`."
         },
         "size": {
           "anyOf": [
@@ -7019,6 +7057,64 @@
       "title": "MarketplaceRemoveResponse",
       "type": "object"
     },
+    "MarketplaceUpgradeErrorInfo": {
+      "properties": {
+        "marketplaceName": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplaceName",
+        "message"
+      ],
+      "type": "object"
+    },
+    "MarketplaceUpgradeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "MarketplaceUpgradeParams",
+      "type": "object"
+    },
+    "MarketplaceUpgradeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "errors": {
+          "items": {
+            "$ref": "#/definitions/MarketplaceUpgradeErrorInfo"
+          },
+          "type": "array"
+        },
+        "selectedMarketplaces": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "upgradedRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "errors",
+        "selectedMarketplaces",
+        "upgradedRoots"
+      ],
+      "title": "MarketplaceUpgradeResponse",
+      "type": "object"
+    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -7626,6 +7722,36 @@
       "required": [
         "model"
       ],
+      "type": "object"
+    },
+    "ModelVerification": {
+      "enum": [
+        "trustedAccessForCyber"
+      ],
+      "type": "string"
+    },
+    "ModelVerificationNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "verifications": {
+          "items": {
+            "$ref": "#/definitions/ModelVerification"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId",
+        "verifications"
+      ],
+      "title": "ModelVerificationNotification",
       "type": "object"
     },
     "NetworkAccess": {
@@ -10945,6 +11071,26 @@
           "properties": {
             "method": {
               "enum": [
+                "model/verification"
+              ],
+              "title": "Model/verificationNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelVerificationNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/verificationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "warning"
               ],
               "title": "WarningNotificationMethod",
@@ -12177,6 +12323,10 @@
           ]
         },
         "ephemeral": {
+          "type": "boolean"
+        },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
           "type": "boolean"
         },
         "model": {
@@ -13607,6 +13757,10 @@
             "string",
             "null"
           ]
+        },
+        "excludeTurns": {
+          "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",

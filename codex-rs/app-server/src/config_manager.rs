@@ -32,7 +32,7 @@ pub(crate) struct ConfigManager {
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     arg0_paths: Arg0DispatchPaths,
-    thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
     host_name: Option<String>,
 }
 
@@ -73,7 +73,7 @@ impl ConfigManager {
             loader_overrides,
             cloud_requirements: Arc::new(RwLock::new(cloud_requirements)),
             arg0_paths,
-            thread_config_loader,
+            thread_config_loader: Arc::new(RwLock::new(thread_config_loader)),
             host_name,
         }
     }
@@ -118,6 +118,24 @@ impl ConfigManager {
         } else {
             warn!("failed to update cloud requirements loader");
         }
+    }
+
+    pub(crate) fn replace_thread_config_loader(
+        &self,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    ) {
+        if let Ok(mut guard) = self.thread_config_loader.write() {
+            *guard = thread_config_loader;
+        } else {
+            warn!("failed to update thread config loader");
+        }
+    }
+
+    fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
+        self.thread_config_loader
+            .read()
+            .map(|guard| Arc::clone(&*guard))
+            .unwrap_or_else(|_| Arc::new(codex_config::NoopThreadConfigLoader))
     }
 
     pub(crate) async fn sync_default_client_residency_requirement(&self) {
@@ -210,7 +228,7 @@ impl ConfigManager {
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(self.current_cloud_requirements())
-            .thread_config_loader(Arc::clone(&self.thread_config_loader))
+            .thread_config_loader(self.current_thread_config_loader())
             .host_name(self.host_name.clone())
             .build()
             .await?;
@@ -230,6 +248,7 @@ impl ConfigManager {
         &self,
         cwd: Option<AbsolutePathBuf>,
     ) -> std::io::Result<ConfigLayerStack> {
+        let thread_config_loader = self.current_thread_config_loader();
         load_config_layers_state(
             LOCAL_FS.as_ref(),
             &self.codex_home,
@@ -237,7 +256,7 @@ impl ConfigManager {
             &self.current_cli_overrides(),
             self.loader_overrides.clone(),
             self.current_cloud_requirements(),
-            self.thread_config_loader.as_ref(),
+            thread_config_loader.as_ref(),
             self.host_name.as_deref(),
         )
         .await

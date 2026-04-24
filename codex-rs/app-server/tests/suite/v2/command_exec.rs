@@ -13,9 +13,17 @@ use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::CommandExecTerminalSize;
 use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecWriteParams;
+use codex_app_server_protocol::FileSystemAccessMode;
+use codex_app_server_protocol::FileSystemPath;
+use codex_app_server_protocol::FileSystemSandboxEntry;
+use codex_app_server_protocol::FileSystemSpecialPath;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::PermissionProfile;
+use codex_app_server_protocol::PermissionProfileFileSystemPermissions;
+use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -57,6 +65,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
     let terminate_request_id = mcp
@@ -109,6 +118,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -167,6 +177,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -181,6 +192,158 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             stdout: format!("request|added|unset|{}", codex_home.path().display()),
             stderr: String::new(),
         }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_accepts_permission_profile() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf 'profile'".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(root_read_only_permission_profile()),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "profile".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn command_exec_permission_profile_cwd_uses_command_cwd() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let command_dir = codex_home.path().join("command-cwd");
+    std::fs::create_dir(&command_dir)?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let mut permission_profile = root_read_only_permission_profile();
+    permission_profile
+        .file_system
+        .as_mut()
+        .expect("root read-only helper should include filesystem permissions")
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        });
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "sh".to_string(),
+                "-lc".to_string(),
+                "printf child > child.txt && ! printf parent > ../parent.txt".to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: Some("command-cwd".into()),
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: Some(permission_profile),
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response.exit_code, 0,
+        "parent cwd write should fail under command-cwd-scoped profile: {response:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(command_dir.join("child.txt"))?,
+        "child"
+    );
+    assert!(
+        !codex_home.path().join("parent.txt").exists(),
+        "permissionProfile :cwd write should not grant the server cwd when command cwd differs"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+            permission_profile: Some(root_read_only_permission_profile()),
+        })
+        .await?;
+
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(command_request_id))
+        .await?;
+    assert_eq!(
+        error.error.message,
+        "`permissionProfile` cannot be combined with `sandboxPolicy`"
     );
 
     Ok(())
@@ -209,6 +372,7 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -246,6 +410,7 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -283,6 +448,7 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -320,6 +486,7 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -361,6 +528,7 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -408,6 +576,7 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -471,6 +640,7 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -546,6 +716,7 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -619,6 +790,7 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
                 cols: 101,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         })
         .await?;
 
@@ -886,6 +1058,23 @@ fn decode_delta_notification(
         .params
         .context("command/exec/outputDelta notification should include params")?;
     serde_json::from_value(params).context("deserialize command/exec/outputDelta notification")
+}
+
+fn root_read_only_permission_profile() -> PermissionProfile {
+    PermissionProfile {
+        network: Some(PermissionProfileNetworkPermissions {
+            enabled: Some(false),
+        }),
+        file_system: Some(PermissionProfileFileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            }],
+            glob_scan_max_depth: None,
+        }),
+    }
 }
 
 async fn read_initialize_response(

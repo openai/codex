@@ -5237,6 +5237,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             experimental_thread_store_endpoint: None,
+            experimental_thread_config_endpoint: None,
             base_instructions: None,
             developer_instructions: None,
             guardian_policy_config: None,
@@ -5433,6 +5434,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5583,6 +5585,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -5718,6 +5721,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         experimental_thread_store_endpoint: None,
+        experimental_thread_config_endpoint: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,
@@ -6611,6 +6615,28 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
 }
 
 #[tokio::test]
+async fn feature_requirements_auto_review_disables_guardian_approval() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                    entries: BTreeMap::from([("auto_review".to_string(), false)]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
@@ -7070,10 +7096,10 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 }
 
 #[tokio::test]
-async fn feature_requirements_reject_collab_legacy_alias() {
-    let codex_home = TempDir::new().expect("tempdir");
+async fn feature_requirements_warn_on_collab_legacy_alias() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
@@ -7084,15 +7110,49 @@ async fn feature_requirements_reject_collab_legacy_alias() {
             }))
         }))
         .build()
-        .await
-        .expect_err("legacy aliases should be rejected");
+        .await?;
 
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(config.features.enabled(Feature::Collab));
     assert!(
-        err.to_string()
-            .contains("use canonical feature key `multi_agent`"),
-        "{err}"
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Using legacy `features` requirement `collab`")
+                && warning.contains("prefer canonical feature key `multi_agent`")
+        }),
+        "{:?}",
+        config.startup_warnings
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn feature_requirements_warn_and_ignore_unknown_feature() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                    entries: BTreeMap::from([("made_up_feature".to_string(), true)]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning
+                .contains("Ignoring unknown `features` requirement `made_up_feature`")),
+        "{:?}",
+        config.startup_warnings
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -7180,6 +7240,35 @@ experimental_realtime_start_instructions = "start instructions from config"
     assert_eq!(
         config.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_thread_config_endpoint_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_thread_config_endpoint = "http://127.0.0.1:8061"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.experimental_thread_config_endpoint.as_deref(),
+        Some("http://127.0.0.1:8061")
     );
     Ok(())
 }
