@@ -180,7 +180,7 @@ mod windows_impl {
             allow_null_device(psid_to_use);
         }
 
-        let result = (|| -> Result<CaptureResult> {
+        (|| -> Result<CaptureResult> {
             let spawn_request = SpawnRequest {
                 command: command.clone(),
                 cwd: cwd.to_path_buf(),
@@ -240,9 +240,7 @@ mod windows_impl {
                 stderr,
                 timed_out,
             })
-        })();
-
-        result
+        })()
     }
 
     #[cfg(test)]
