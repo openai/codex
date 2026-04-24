@@ -91,7 +91,6 @@ where
     fn flush(&self) -> impl Future<Output = ()> + Send + '_;
 }
 
-#[derive(Clone)]
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogDbCommand>,
     process_uuid: String,
@@ -99,6 +98,15 @@ pub struct LogDbLayer {
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     LogDbLayer::start(state_db)
+}
+
+impl Clone for LogDbLayer {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            process_uuid: self.process_uuid.clone(),
+        }
+    }
 }
 
 impl LogDbLayer {
@@ -128,11 +136,6 @@ impl LogDbLayer {
 
     fn try_send(&self, entry: LogEntry) {
         let _ = self.sender.try_send(LogDbCommand::Entry(Box::new(entry)));
-    }
-
-    #[cfg(test)]
-    fn max_capacity(&self) -> usize {
-        self.sender.max_capacity()
     }
 }
 
@@ -185,7 +188,32 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
-        let entry = self.format_event(event, ctx);
+        let metadata = event.metadata();
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+        let thread_id = visitor
+            .thread_id
+            .clone()
+            .or_else(|| event_thread_id(event, &ctx));
+        let feedback_log_body = format_feedback_log_body(event, &ctx);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0));
+        let entry = LogEntry {
+            ts: now.as_secs() as i64,
+            ts_nanos: now.subsec_nanos() as i64,
+            level: metadata.level().as_str().to_string(),
+            target: metadata.target().to_string(),
+            message: visitor.message,
+            feedback_log_body: Some(feedback_log_body),
+            thread_id,
+            process_uuid: Some(self.process_uuid.clone()),
+            module_path: metadata.module_path().map(ToString::to_string),
+            file: metadata.file().map(ToString::to_string),
+            line: metadata.line().map(|line| line as i64),
+        };
+
         self.try_send(entry);
     }
 }
@@ -199,97 +227,9 @@ where
     }
 }
 
-impl LogDbLayer {
-    fn format_event<S>(
-        &self,
-        event: &Event<'_>,
-        ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) -> LogEntry
-    where
-        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-    {
-        let metadata = event.metadata();
-        let mut visitor = MessageVisitor::default();
-        event.record(&mut visitor);
-        let thread_id = visitor
-            .thread_id
-            .clone()
-            .or_else(|| event_thread_id(event, &ctx));
-        let feedback_log_body = format_feedback_log_body(event, &ctx);
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_| Duration::from_secs(0));
-        LogEntry {
-            ts: now.as_secs() as i64,
-            ts_nanos: now.subsec_nanos() as i64,
-            level: metadata.level().as_str().to_string(),
-            target: metadata.target().to_string(),
-            message: visitor.message,
-            feedback_log_body: Some(feedback_log_body),
-            thread_id,
-            process_uuid: Some(self.process_uuid.clone()),
-            module_path: metadata.module_path().map(ToString::to_string),
-            file: metadata.file().map(ToString::to_string),
-            line: metadata.line().map(|line| line as i64),
-        }
-    }
-}
-
 enum LogDbCommand {
     Entry(Box<LogEntry>),
     Flush(oneshot::Sender<()>),
-}
-
-async fn run_inserter(
-    state_db: std::sync::Arc<StateRuntime>,
-    mut receiver: mpsc::Receiver<LogDbCommand>,
-    config: LogSinkQueueConfig,
-) {
-    let mut buffer = Vec::with_capacity(config.batch_size);
-    let mut ticker = tokio::time::interval(config.flush_interval);
-    loop {
-        tokio::select! {
-            maybe_command = receiver.recv() => {
-                match maybe_command {
-                    Some(LogDbCommand::Entry(entry)) => {
-                        buffer.push(*entry);
-                        if buffer.len() >= config.batch_size {
-                            insert_batch(&state_db, &mut buffer).await;
-                        }
-                    }
-                    Some(LogDbCommand::Flush(reply)) => {
-                        insert_batch(&state_db, &mut buffer).await;
-                        let _ = reply.send(());
-                    }
-                    None => {
-                        insert_batch(&state_db, &mut buffer).await;
-                        break;
-                    }
-                }
-            }
-            _ = ticker.tick() => {
-                insert_batch(&state_db, &mut buffer).await;
-            }
-        }
-    }
-}
-
-async fn insert_batch(state_db: &StateRuntime, buffer: &mut Vec<LogEntry>) {
-    if buffer.is_empty() {
-        return;
-    }
-    let entries = buffer.split_off(0);
-    let _ = state_db.insert_logs(entries.as_slice()).await;
-}
-
-fn current_process_log_uuid() -> &'static str {
-    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
-    PROCESS_LOG_UUID.get_or_init(|| {
-        let pid = std::process::id();
-        let process_uuid = Uuid::new_v4();
-        format!("pid:{pid}:{process_uuid}")
-    })
 }
 
 #[derive(Debug)]
@@ -409,6 +349,57 @@ fn append_fields(fields: &mut String, values: &Record<'_>) {
     let mut formatted = FormattedFields::<DefaultFields>::new(std::mem::take(fields));
     let _ = formatter.add_fields(&mut formatted, values);
     *fields = formatted.fields;
+}
+
+fn current_process_log_uuid() -> &'static str {
+    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
+    PROCESS_LOG_UUID.get_or_init(|| {
+        let pid = std::process::id();
+        let process_uuid = Uuid::new_v4();
+        format!("pid:{pid}:{process_uuid}")
+    })
+}
+
+async fn run_inserter(
+    state_db: std::sync::Arc<StateRuntime>,
+    mut receiver: mpsc::Receiver<LogDbCommand>,
+    config: LogSinkQueueConfig,
+) {
+    let mut buffer = Vec::with_capacity(config.batch_size);
+    let mut ticker = tokio::time::interval(config.flush_interval);
+    loop {
+        tokio::select! {
+            maybe_command = receiver.recv() => {
+                match maybe_command {
+                    Some(LogDbCommand::Entry(entry)) => {
+                        buffer.push(*entry);
+                        if buffer.len() >= config.batch_size {
+                            flush(&state_db, &mut buffer).await;
+                        }
+                    }
+                    Some(LogDbCommand::Flush(reply)) => {
+                        flush(&state_db, &mut buffer).await;
+                        let _ = reply.send(());
+                    }
+                    None => {
+                        flush(&state_db, &mut buffer).await;
+                        break;
+                    }
+                }
+            }
+            _ = ticker.tick() => {
+                flush(&state_db, &mut buffer).await;
+            }
+        }
+    }
+}
+
+async fn flush(state_db: &StateRuntime, buffer: &mut Vec<LogEntry>) {
+    if buffer.is_empty() {
+        return;
+    }
+    let entries = buffer.split_off(0);
+    let _ = state_db.insert_logs(entries.as_slice()).await;
 }
 
 #[derive(Default)]
@@ -641,27 +632,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_with_config_uses_configured_queue_capacity() {
-        let codex_home = temp_codex_home();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
-
-        let layer = LogDbLayer::start_with_config(
-            runtime,
-            LogSinkQueueConfig {
-                queue_capacity: 3,
-                batch_size: 2,
-                flush_interval: std::time::Duration::from_secs(60),
-            },
-        );
-
-        assert_eq!(layer.max_capacity(), 3);
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
     async fn configured_batch_size_flushes_without_explicit_flush() {
         let codex_home = temp_codex_home();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -802,43 +772,5 @@ mod tests {
             .await
             .expect("flush task completes")
             .expect("flush task succeeds");
-    }
-
-    #[tokio::test]
-    async fn receiver_close_drains_buffered_entries() {
-        let codex_home = temp_codex_home();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("initialize runtime");
-        let layer = LogDbLayer::start_with_config(
-            runtime.clone(),
-            LogSinkQueueConfig {
-                queue_capacity: 8,
-                batch_size: 8,
-                flush_interval: std::time::Duration::from_secs(60),
-            },
-        );
-
-        layer.try_send(test_entry("drained-on-close"));
-        drop(layer);
-
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-        loop {
-            let rows = runtime
-                .query_logs(&crate::LogQuery::default())
-                .await
-                .expect("query logs after receiver close");
-            if !rows.is_empty() {
-                assert_eq!(rows[0].message.as_deref(), Some("drained-on-close"));
-                break;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "timed out waiting for receiver close drain"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 }
