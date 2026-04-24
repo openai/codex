@@ -4,7 +4,6 @@ use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
 use async_trait::async_trait;
-use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
@@ -33,6 +32,9 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
+
+    /// Returns whether the currently resolved auth can use Codex backend-only models.
+    async fn uses_codex_backend(&self) -> bool;
 
     /// Fetches the latest remote model catalog and optional ETag.
     async fn list_models(
@@ -79,7 +81,7 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         async move {
             let catalog = self.raw_model_catalog(refresh_strategy).await;
-            build_available_models(self.auth_mode(), catalog.models)
+            self.build_available_models(catalog.models)
         }
         .instrument(tracing::info_span!(
             "list_models",
@@ -99,8 +101,23 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// Returns an error if the internal lock cannot be acquired.
     fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError>;
 
-    /// Return the authentication mode used to filter model availability.
-    fn auth_mode(&self) -> Option<AuthMode>;
+    /// Return the auth manager used for picker filtering.
+    fn auth_manager(&self) -> Option<&AuthManager>;
+
+    /// Build picker-ready presets from the active catalog snapshot.
+    fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
+        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+
+        let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
+        let uses_codex_backend = self
+            .auth_manager()
+            .is_some_and(AuthManager::current_auth_uses_codex_backend);
+        presets = ModelPreset::filter_by_auth(presets, uses_codex_backend);
+
+        ModelPreset::mark_default_by_picker_visibility(&mut presets);
+
+        presets
+    }
 
     /// List collaboration mode presets.
     ///
@@ -112,7 +129,7 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// Returns an error if the internal lock cannot be acquired.
     fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models()?;
-        Ok(build_available_models(self.auth_mode(), remote_models))
+        Ok(self.build_available_models(remote_models))
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -234,10 +251,8 @@ impl ModelsManager for OpenAiModelsManager {
         Ok(self.remote_models.try_read()?.clone())
     }
 
-    fn auth_mode(&self) -> Option<AuthMode> {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_mode())
+    fn auth_manager(&self) -> Option<&AuthManager> {
+        self.auth_manager.as_deref()
     }
 
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
@@ -261,7 +276,7 @@ impl ModelsManager for OpenAiModelsManager {
 impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
-        if !self.should_refresh_models() {
+        if !self.should_refresh_models().await {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -304,8 +319,8 @@ impl OpenAiModelsManager {
         Ok(())
     }
 
-    fn should_refresh_models(&self) -> bool {
-        self.auth_mode() == Some(AuthMode::Chatgpt) || self.endpoint_client.has_command_auth()
+    async fn should_refresh_models(&self) -> bool {
+        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -371,10 +386,8 @@ impl ModelsManager for StaticModelsManager {
         Ok(self.remote_models.clone())
     }
 
-    fn auth_mode(&self) -> Option<AuthMode> {
-        self.auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_mode())
+    fn auth_manager(&self) -> Option<&AuthManager> {
+        self.auth_manager.as_deref()
     }
 
     fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
@@ -386,22 +399,6 @@ impl ModelsManager for StaticModelsManager {
 
 fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
     Ok(crate::bundled_models_response()?.models)
-}
-
-fn build_available_models(
-    auth_mode: Option<AuthMode>,
-    mut remote_models: Vec<ModelInfo>,
-) -> Vec<ModelPreset> {
-    // Build picker-ready presets from the active catalog snapshot.
-    remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
-
-    let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-    let chatgpt_mode = matches!(auth_mode, Some(AuthMode::Chatgpt));
-    presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
-
-    ModelPreset::mark_default_by_picker_visibility(&mut presets);
-
-    presets
 }
 
 fn default_model_from_available(available: Vec<ModelPreset>) -> String {
