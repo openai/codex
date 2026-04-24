@@ -56,6 +56,34 @@
         }
       }
     },
+    "codex-app-server": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^codex-app-server-aarch64-apple-darwin\\.zst$",
+          "path": "codex-app-server"
+        },
+        "macos-x86_64": {
+          "regex": "^codex-app-server-x86_64-apple-darwin\\.zst$",
+          "path": "codex-app-server"
+        },
+        "linux-x86_64": {
+          "regex": "^codex-app-server-x86_64-unknown-linux-musl\\.zst$",
+          "path": "codex-app-server"
+        },
+        "linux-aarch64": {
+          "regex": "^codex-app-server-aarch64-unknown-linux-musl\\.zst$",
+          "path": "codex-app-server"
+        },
+        "windows-x86_64": {
+          "regex": "^codex-app-server-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-app-server.exe"
+        },
+        "windows-aarch64": {
+          "regex": "^codex-app-server-aarch64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-app-server.exe"
+        }
+      }
+    },
     "codex-command-runner": {
       "platforms": {
         "windows-x86_64": {

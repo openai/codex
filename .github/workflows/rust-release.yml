@@ -220,7 +220,7 @@ jobs:
         shell: bash
         run: |
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
-          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy --bin codex-app-server
 
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
@@ -266,6 +266,7 @@ jobs:
           # signed binaries into a dmg.
           codex_binary_path="${release_dir}/codex"
           proxy_binary_path="${release_dir}/codex-responses-api-proxy"
+          app_server_binary_path="${release_dir}/codex-app-server"
 
           rm -rf "$dmg_root"
           mkdir -p "$dmg_root"
@@ -278,9 +279,14 @@ jobs:
             echo "Binary $proxy_binary_path not found"
             exit 1
           fi
+          if [[ ! -f "$app_server_binary_path" ]]; then
+            echo "Binary $app_server_binary_path not found"
+            exit 1
+          fi
 
           ditto "$codex_binary_path" "${dmg_root}/codex"
           ditto "$proxy_binary_path" "${dmg_root}/codex-responses-api-proxy"
+          ditto "$app_server_binary_path" "${dmg_root}/codex-app-server"
 
           rm -f "$dmg_path"
           hdiutil create \
@@ -316,10 +322,12 @@ jobs:
 
           cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-app-server "$dest/codex-app-server-${{ matrix.target }}"
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/codex-app-server.sigstore "$dest/codex-app-server-${{ matrix.target }}.sigstore"
           fi
 
           if [[ "${{ matrix.target }}" == *apple-darwin ]]; then

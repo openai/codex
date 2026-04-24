@@ -65,6 +65,20 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundle: app-server
+            build_args: --bin codex-app-server
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
+            target: aarch64-pc-windows-msvc
+            bundle: app-server
+            build_args: --bin codex-app-server
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -106,9 +120,11 @@ jobs:
           if [[ "${{ matrix.bundle }}" == "primary" ]]; then
             cp target/${{ matrix.target }}/release/codex.exe "$output_dir/codex.exe"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$output_dir/codex-responses-api-proxy.exe"
-          else
+          elif [[ "${{ matrix.bundle }}" == "helpers" ]]; then
             cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$output_dir/codex-windows-sandbox-setup.exe"
             cp target/${{ matrix.target }}/release/codex-command-runner.exe "$output_dir/codex-command-runner.exe"
+          else
+            cp target/${{ matrix.target }}/release/codex-app-server.exe "$output_dir/codex-app-server.exe"
           fi
 
       - name: Upload Windows binaries
@@ -161,6 +177,12 @@ jobs:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
 
+      - name: Download prebuilt Windows app-server binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-binaries-${{ matrix.target }}-app-server
+          path: codex-rs/target/${{ matrix.target }}/release
+
       - name: Verify binaries
         shell: bash
         run: |
@@ -169,6 +191,7 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
           ls -lh target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe
           ls -lh target/${{ matrix.target }}/release/codex-command-runner.exe
+          ls -lh target/${{ matrix.target }}/release/codex-app-server.exe
 
       - name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
@@ -191,6 +214,7 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
+          cp target/${{ matrix.target }}/release/codex-app-server.exe "$dest/codex-app-server-${{ matrix.target }}.exe"
 
       - name: Install DotSlash
         uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
