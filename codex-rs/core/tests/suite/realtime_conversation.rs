@@ -27,6 +27,11 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_rollout::RolloutConfig;
+use codex_thread_store::ListThreadsParams;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ThreadSortKey;
+use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -48,6 +53,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use wiremock::Match;
@@ -126,6 +132,20 @@ fn expected_realtime_backend_prompt() -> String {
         .replace(USER_FIRST_NAME_PLACEHOLDER, &test_user_first_name())
 }
 
+fn assert_startup_context_contains(startup_context: &str, expected: &str) {
+    assert!(
+        startup_context.contains(expected),
+        "startup context should contain `{expected}`\nstartup context:\n{startup_context}",
+    );
+}
+
+fn assert_startup_context_excludes(startup_context: &str, unexpected: &str) {
+    assert!(
+        !startup_context.contains(unexpected),
+        "startup context should not contain `{unexpected}`\nstartup context:\n{startup_context}",
+    );
+}
+
 fn test_user_first_name() -> String {
     [whoami::realname(), whoami::username()]
         .into_iter()
@@ -193,6 +213,16 @@ fn run_realtime_conversation_test_in_subprocess(
     );
     Ok(())
 }
+
+async fn completed_state_db_home() -> Result<Arc<TempDir>> {
+    let home = Arc::new(TempDir::new()?);
+    let db =
+        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".to_string())
+            .await?;
+    db.mark_backfill_complete(/*last_watermark*/ None).await?;
+    Ok(home)
+}
+
 async fn seed_recent_thread(
     test: &TestCodex,
     title: &str,
@@ -222,7 +252,38 @@ async fn seed_recent_thread(
     metadata.title = title.to_string();
     metadata.first_user_message = Some(first_user_message.to_string());
     db.upsert_thread(&metadata).await?;
+    // The helper seeds SQLite metadata directly. Mark backfill complete so the production
+    // list path reads the seeded SQLite row instead of racing the background backfill worker.
+    db.mark_backfill_complete(/*last_watermark*/ None).await?;
+    assert_seeded_thread_visible_in_store(test, &thread_id, title).await?;
 
+    Ok(())
+}
+
+async fn assert_seeded_thread_visible_in_store(
+    test: &TestCodex,
+    thread_id: &ThreadId,
+    title: &str,
+) -> Result<()> {
+    let store = LocalThreadStore::new(RolloutConfig::from_view(&test.config));
+    let page = store
+        .list_threads(ListThreadsParams {
+            page_size: 40,
+            cursor: None,
+            sort_key: ThreadSortKey::UpdatedAt,
+            allowed_sources: Vec::new(),
+            model_providers: None,
+            archived: false,
+            search_term: None,
+        })
+        .await
+        .context("list seeded threads through production thread store")?;
+    anyhow::ensure!(
+        page.items
+            .iter()
+            .any(|thread| thread.thread_id == *thread_id),
+        "seeded thread `{title}` ({thread_id}) was not visible through production thread store"
+    );
     Ok(())
 }
 
@@ -1372,7 +1433,8 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
     })]]])
     .await;
 
-    let mut builder = test_codex().with_config({
+    let home = completed_state_db_home().await?;
+    let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -1437,7 +1499,8 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
     })]]])
     .await;
 
-    let mut builder = test_codex().with_config({
+    let home = completed_state_db_home().await?;
+    let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -1501,7 +1564,8 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     })]]])
     .await;
 
-    let mut builder = test_codex().with_config({
+    let home = completed_state_db_home().await?;
+    let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
@@ -1538,18 +1602,18 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
 
-    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
-    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
-    assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
-    assert!(!startup_context.contains("## User"));
-    assert!(startup_context.contains("### "));
-    assert!(startup_context.contains("Recent sessions: 1"));
-    assert!(startup_context.contains("Latest branch: branch-latest"));
-    assert!(startup_context.contains("User asks:"));
-    assert!(startup_context.contains("Investigate realtime startup context"));
-    assert!(startup_context.contains("## Machine / Workspace Map"));
-    assert!(startup_context.contains("README.md"));
-    assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));
+    assert_startup_context_contains(&startup_context, STARTUP_CONTEXT_OPEN_TAG);
+    assert_startup_context_contains(&startup_context, STARTUP_CONTEXT_CLOSE_TAG);
+    assert_startup_context_contains(&startup_context, STARTUP_CONTEXT_HEADER);
+    assert_startup_context_excludes(&startup_context, "## User");
+    assert_startup_context_contains(&startup_context, "### ");
+    assert_startup_context_contains(&startup_context, "Recent sessions: 1");
+    assert_startup_context_contains(&startup_context, "Latest branch: branch-latest");
+    assert_startup_context_contains(&startup_context, "User asks:");
+    assert_startup_context_contains(&startup_context, "Investigate realtime startup context");
+    assert_startup_context_contains(&startup_context, "## Machine / Workspace Map");
+    assert_startup_context_contains(&startup_context, "README.md");
+    assert_startup_context_excludes(&startup_context, MEMORY_PROMPT_PHRASE);
 
     startup_server.shutdown().await;
     realtime_server.shutdown().await;
@@ -1784,7 +1848,8 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     .await;
 
     let oversized_summary = "recent work ".repeat(3_500);
-    let mut builder = test_codex().with_config({
+    let home = completed_state_db_home().await?;
+    let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
