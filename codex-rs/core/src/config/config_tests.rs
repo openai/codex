@@ -519,28 +519,34 @@ max_rows = 9000
             .terminal_resize_reflow,
         TerminalResizeReflowToml {
             max_rows: Some(9000),
-            replay_mode: TerminalResizeReflowReplayModeToml::Direct,
+            replay_mode: TerminalResizeReflowReplayModeToml::Standard,
         }
     );
 }
 
 #[test]
 fn config_toml_deserializes_terminal_resize_reflow_replay_mode() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
+    for (value, expected) in [
+        ("standard", TerminalResizeReflowReplayModeToml::Standard),
+        ("direct", TerminalResizeReflowReplayModeToml::Direct),
+        ("prefill", TerminalResizeReflowReplayModeToml::Prefill),
+    ] {
+        let cfg: ConfigToml = toml::from_str(&format!(
+            r#"
 [tui.terminal_resize_reflow]
-replay_mode = "prefill"
+replay_mode = "{value}"
 "#,
-    )
-    .expect("TOML deserialization should succeed for resize reflow replay mode");
+        ))
+        .expect("TOML deserialization should succeed for resize reflow replay mode");
 
-    assert_eq!(
-        cfg.tui
-            .expect("tui config should deserialize")
-            .terminal_resize_reflow
-            .replay_mode,
-        TerminalResizeReflowReplayModeToml::Prefill
-    );
+        assert_eq!(
+            cfg.tui
+                .expect("tui config should deserialize")
+                .terminal_resize_reflow
+                .replay_mode,
+            expected
+        );
+    }
 }
 
 #[test]
@@ -1374,7 +1380,7 @@ async fn runtime_config_resolves_terminal_resize_reflow_defaults_and_overrides()
     );
     assert_eq!(
         cfg.terminal_resize_reflow.replay_mode,
-        TerminalResizeReflowReplayMode::Direct
+        TerminalResizeReflowReplayMode::Standard
     );
 
     let cfg = Config::load_from_base_config_with_overrides(

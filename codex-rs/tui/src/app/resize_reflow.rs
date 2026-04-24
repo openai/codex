@@ -22,6 +22,7 @@ use super::InitialHistoryReplayBuffer;
 use super::trailing_run_start;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::config::TerminalResizeReflowReplayMode;
 use crate::transcript_reflow::TRANSCRIPT_REFLOW_DEBOUNCE;
 use crate::transcript_reflow::TranscriptReflowKind;
 use crate::tui;
@@ -148,6 +149,25 @@ impl App {
 
     fn resize_reflow_max_rows(&self) -> Option<usize> {
         crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
+    }
+
+    fn clear_terminal_for_full_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if tui.is_alt_screen_active() {
+            tui.terminal.clear_visible_screen()?;
+        } else {
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        }
+        if matches!(
+            self.config.terminal_resize_reflow.replay_mode,
+            TerminalResizeReflowReplayMode::Standard
+        ) {
+            let mut area = tui.terminal.viewport_area;
+            if area.y > 0 {
+                area.y = 0;
+                tui.terminal.set_viewport_area(area);
+            }
+        }
+        Ok(())
     }
 
     /// Finish stream consolidation by repairing any resize work that happened during streaming.
@@ -376,11 +396,7 @@ impl App {
 
         // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
         tui.clear_pending_history_lines();
-        if tui.is_alt_screen_active() {
-            tui.terminal.clear_visible_screen()?;
-        } else {
-            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
-        }
+        self.clear_terminal_for_full_resize_replay(tui)?;
 
         self.deferred_history_lines.clear();
         if !reflowed_lines.is_empty() {
@@ -402,7 +418,14 @@ impl App {
         let reflowed_lines = reflow_result.lines;
 
         tui.clear_pending_history_lines();
-        tui.terminal.clear_visible_screen()?;
+        if matches!(
+            self.config.terminal_resize_reflow.replay_mode,
+            TerminalResizeReflowReplayMode::Standard
+        ) {
+            self.clear_terminal_for_full_resize_replay(tui)?;
+        } else {
+            tui.terminal.clear_visible_screen()?;
+        }
         self.deferred_history_lines.clear();
         if !reflowed_lines.is_empty() {
             tui.insert_reflowed_history_lines(reflowed_lines);

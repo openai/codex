@@ -3,7 +3,7 @@
 //! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
 //! cell is an escape-sequence operation rather than a normal ratatui render. The mode determines
 //! whether new history may move the inline viewport or whether resize reflow should replay rows
-//! through full-screen scrolling while preserving the viewport chosen by the reflow draw path.
+//! through full-screen strategies while preserving the viewport chosen by the reflow draw path.
 
 use std::fmt;
 use std::io;
@@ -79,8 +79,9 @@ where
 /// emits newlines at the screen bottom to create space (since Zellij ignores scroll
 /// region escapes) and writes lines at computed absolute positions. Both modes
 /// update `terminal.viewport_area` so subsequent draw passes know where the
-/// viewport moved to. In `FullScreenReplayPrefill` mode blank rows are used to
-/// create scrollback space before replaying content, matching xterm.js behavior.
+/// viewport moved to. Resize reflow can also use those viewport-aware modes after
+/// clearing old scrollback. In `FullScreenReplayPrefill` mode blank rows are used
+/// to create scrollback space before replaying content, matching xterm.js behavior.
 /// `FullScreenReplayDirect` keeps the no-prefill strategy isolated for terminals
 /// where the prefilled blank rows become user-visible scrollback.
 pub fn insert_history_lines_with_mode<B>(

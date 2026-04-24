@@ -639,6 +639,7 @@ pub enum TerminalResizeReflowMaxRows {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalResizeReflowReplayMode {
     #[default]
+    Standard,
     Direct,
     Prefill,
 }
@@ -1518,6 +1519,9 @@ fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalRe
             None => TerminalResizeReflowMaxRows::Auto,
         },
         replay_mode: match tui.terminal_resize_reflow.replay_mode {
+            codex_config::types::TerminalResizeReflowReplayModeToml::Standard => {
+                TerminalResizeReflowReplayMode::Standard
+            }
             codex_config::types::TerminalResizeReflowReplayModeToml::Direct => {
                 TerminalResizeReflowReplayMode::Direct
             }

@@ -1937,6 +1937,13 @@
       "description": "How resize reflow should rebuild terminal scrollback during this experimental phase.",
       "oneOf": [
         {
+          "description": "Rebuild scrollback through the same viewport-aware insertion path used during startup.",
+          "enum": [
+            "standard"
+          ],
+          "type": "string"
+        },
+        {
           "description": "Rebuild scrollback using transcript rows directly, without extra blank prefill rows.",
           "enum": [
             "direct"
@@ -1969,7 +1976,7 @@
               "$ref": "#/definitions/TerminalResizeReflowReplayModeToml"
             }
           ],
-          "default": "direct",
+          "default": "standard",
           "description": "Temporary testing knob for selecting the terminal scrollback replay strategy."
         }
       },
@@ -2113,7 +2120,7 @@
           ],
           "default": {
             "max_rows": null,
-            "replay_mode": "direct"
+            "replay_mode": "standard"
           },
           "description": "Experimental terminal resize-reflow tuning knobs."
         },

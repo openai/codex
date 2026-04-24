@@ -538,8 +538,10 @@ pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TerminalResizeReflowReplayModeToml {
-    /// Rebuild scrollback using transcript rows directly, without extra blank prefill rows.
+    /// Rebuild scrollback through the same viewport-aware insertion path used during startup.
     #[default]
+    Standard,
+    /// Rebuild scrollback using transcript rows directly, without extra blank prefill rows.
     Direct,
     /// Rebuild scrollback after reserving blank rows for terminals that need viewport prefill.
     Prefill,

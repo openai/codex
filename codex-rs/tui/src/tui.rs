@@ -176,8 +176,12 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 fn insert_history_mode_for_resize_reflow(
     replay_mode: TerminalResizeReflowReplayMode,
+    is_zellij: bool,
 ) -> crate::insert_history::InsertHistoryMode {
     match replay_mode {
+        TerminalResizeReflowReplayMode::Standard => {
+            crate::insert_history::InsertHistoryMode::new(is_zellij)
+        }
         TerminalResizeReflowReplayMode::Direct => {
             crate::insert_history::InsertHistoryMode::FullScreenReplayDirect
         }
@@ -219,11 +223,31 @@ mod tests {
     #[test]
     fn resize_reflow_replay_mode_selects_insert_history_mode() {
         assert_eq!(
-            insert_history_mode_for_resize_reflow(TerminalResizeReflowReplayMode::Direct),
+            insert_history_mode_for_resize_reflow(
+                TerminalResizeReflowReplayMode::Standard,
+                /*is_zellij*/ false,
+            ),
+            InsertHistoryMode::Standard
+        );
+        assert_eq!(
+            insert_history_mode_for_resize_reflow(
+                TerminalResizeReflowReplayMode::Standard,
+                /*is_zellij*/ true,
+            ),
+            InsertHistoryMode::Zellij
+        );
+        assert_eq!(
+            insert_history_mode_for_resize_reflow(
+                TerminalResizeReflowReplayMode::Direct,
+                /*is_zellij*/ false,
+            ),
             InsertHistoryMode::FullScreenReplayDirect
         );
         assert_eq!(
-            insert_history_mode_for_resize_reflow(TerminalResizeReflowReplayMode::Prefill),
+            insert_history_mode_for_resize_reflow(
+                TerminalResizeReflowReplayMode::Prefill,
+                /*is_zellij*/ false,
+            ),
             InsertHistoryMode::FullScreenReplayPrefill
         );
     }
@@ -892,15 +916,17 @@ impl Tui {
         Ok(is_zellij)
     }
 
-    /// Write reflowed transcript rows without moving the inline viewport.
+    /// Write reflowed transcript rows with the configured resize-replay strategy.
     ///
     /// These rows come from a source-backed rebuild after Codex has already decided which
-    /// transcript cells should be visible at the new width. Sending them through the legacy
-    /// insertion helper would preserve old scroll behavior and undo the resize-reflow invariant.
+    /// transcript cells should be visible at the new width. Standard replay uses the same
+    /// viewport-aware insertion path as startup replay; full-screen replay modes keep their
+    /// experimental terminal-specific behavior isolated behind the config knob.
     fn flush_pending_reflow_history_lines(
         terminal: &mut Terminal,
         pending_reflow_history_lines: &mut Vec<Line<'static>>,
         replay_mode: TerminalResizeReflowReplayMode,
+        is_zellij: bool,
     ) -> Result<bool> {
         if pending_reflow_history_lines.is_empty() {
             return Ok(false);
@@ -909,7 +935,7 @@ impl Tui {
         crate::insert_history::insert_history_lines_with_mode(
             terminal,
             pending_reflow_history_lines.clone(),
-            insert_history_mode_for_resize_reflow(replay_mode),
+            insert_history_mode_for_resize_reflow(replay_mode, is_zellij),
         )?;
         pending_reflow_history_lines.clear();
         Ok(true)
@@ -1012,6 +1038,7 @@ impl Tui {
                 terminal,
                 &mut self.pending_reflow_history_lines,
                 replay_mode,
+                self.is_zellij,
             )?;
             needs_full_repaint |= flushed_reflow_history;
 
