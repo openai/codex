@@ -12,6 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
 
+use crate::operations::run_git_for_status;
+
 const BASELINE_COMMIT_MESSAGE: &str =
     "Initialize Codex git baseline\n\nCo-authored-by: Codex <noreply@openai.com>";
 
@@ -72,6 +74,7 @@ pub async fn reset_git_repository(root: &Path) -> anyhow::Result<()> {
         remove_git_metadata(&root)?;
         let repo = gix::init(&root).with_context(|| format!("init git repo {}", root.display()))?;
         commit_current_tree(&repo, BASELINE_COMMIT_MESSAGE)?;
+        write_index_from_head(&root)?;
         anyhow::Ok(())
     })
     .await?
@@ -128,6 +131,11 @@ fn commit_current_tree(repo: &gix::Repository, message: &str) -> anyhow::Result<
     )
     .context("commit git baseline repo")?;
     Ok(())
+}
+
+fn write_index_from_head(root: &Path) -> anyhow::Result<()> {
+    run_git_for_status(root, ["read-tree", "--reset", "HEAD"], /*env*/ None)
+        .context("write git baseline index from HEAD")
 }
 
 fn codex_signature() -> gix::actor::Signature {
@@ -501,7 +509,23 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("run git command");
+        assert!(
+            output.status.success(),
+            "git command failed: {args:?}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
 
     #[tokio::test]
     async fn reset_creates_fresh_baseline() {
@@ -513,9 +537,12 @@ mod tests {
         reset_git_repository(&root).await.expect("reset repo");
 
         assert!(root.join(".git").is_dir());
+        assert!(root.join(".git/index").is_file());
         let diff = diff_since_latest_init(&root).await.expect("diff");
         assert!(!diff.has_changes());
         assert_eq!(diff.unified_diff, "");
+        assert_eq!(git_stdout(&root, &["status", "--porcelain"]), "");
+        assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
     }
 
     #[tokio::test]
