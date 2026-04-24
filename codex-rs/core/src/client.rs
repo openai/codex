@@ -107,8 +107,11 @@ use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_model_provider::AgentTaskExternalRef;
+use codex_model_provider::ProviderAuthScope;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 #[cfg(test)]
@@ -152,6 +155,8 @@ struct ModelClientState {
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
+    agent_identity_policy: AgentIdentityAuthPolicy,
+    chatgpt_base_url: Option<String>,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
@@ -300,6 +305,35 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
+        Self::new_with_agent_identity_policy(
+            auth_manager,
+            conversation_id,
+            installation_id,
+            provider_info,
+            session_source,
+            AgentIdentityAuthPolicy::JwtOnly,
+            /*chatgpt_base_url*/ None,
+            model_verbosity,
+            enable_request_compression,
+            include_timing_metrics,
+            beta_features_header,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_agent_identity_policy(
+        auth_manager: Option<Arc<AuthManager>>,
+        conversation_id: ThreadId,
+        installation_id: String,
+        provider_info: ModelProviderInfo,
+        session_source: SessionSource,
+        agent_identity_policy: AgentIdentityAuthPolicy,
+        chatgpt_base_url: Option<String>,
+        model_verbosity: Option<VerbosityConfig>,
+        enable_request_compression: bool,
+        include_timing_metrics: bool,
+        beta_features_header: Option<String>,
+    ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
@@ -315,6 +349,8 @@ impl ModelClient {
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
+                agent_identity_policy,
+                chatgpt_base_url,
                 model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,
@@ -671,12 +707,25 @@ impl ModelClient {
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
-        let api_auth = self.state.provider.api_auth().await?;
+        let api_auth = self
+            .state
+            .provider
+            .api_auth_for_scope(self.provider_auth_scope())
+            .await?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,
             api_auth,
         })
+    }
+
+    fn provider_auth_scope(&self) -> ProviderAuthScope {
+        ProviderAuthScope::Thread {
+            external_ref: AgentTaskExternalRef::new(self.state.conversation_id.to_string()),
+            agent_identity_policy: self.state.agent_identity_policy,
+            session_source: self.state.session_source.clone(),
+            chatgpt_base_url: self.state.chatgpt_base_url.clone(),
+        }
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -811,6 +860,10 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
+        self.client.current_client_setup().await
+    }
+
     pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -1016,7 +1069,7 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
+        let client_setup = self.current_client_setup().await.map_err(|err| {
             ApiError::Stream(format!(
                 "failed to build websocket prewarm client setup: {err}"
             ))
@@ -1174,7 +1227,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self.current_client_setup().await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -1263,7 +1316,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self.current_client_setup().await?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),

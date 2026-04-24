@@ -11,6 +11,7 @@ use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::Result;
 
+use crate::auth::ProviderAuthScope;
 use crate::provider::ModelProvider;
 use auth::resolve_provider_auth;
 use auth::resolve_region;
@@ -45,6 +46,10 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     async fn api_auth(&self) -> Result<SharedAuthProvider> {
+        resolve_provider_auth(&self.aws).await
+    }
+
+    async fn api_auth_for_scope(&self, _scope: ProviderAuthScope) -> Result<SharedAuthProvider> {
         resolve_provider_auth(&self.aws).await
     }
 }

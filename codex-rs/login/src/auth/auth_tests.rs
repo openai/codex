@@ -213,8 +213,8 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         agent_auth.record().agent_runtime_id,
         reused.record().agent_runtime_id
     );
-    assert_eq!(agent_auth.process_task_id(), Some("task-123"));
-    assert_eq!(reused.process_task_id(), Some("task-123"));
+    assert_eq!(agent_auth.process_task_id(), Some("task-123".to_string()));
+    assert_eq!(reused.process_task_id(), Some("task-123".to_string()));
     assert_eq!(agent_auth.record().agent_runtime_id, "agent-runtime-123");
     assert_eq!(agent_auth.record().account_id, "account-123");
     assert_eq!(agent_auth.record().chatgpt_user_id, "user-12345");
