@@ -14,7 +14,9 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 
 use super::LocalThreadStore;
+use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ReadThreadParams;
 use crate::StoredThread;
@@ -38,6 +40,18 @@ pub(super) async fn read_thread(
             .await)
     {
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
+        if !params.include_history
+            && let Some(rollout_path) = thread.rollout_path.clone()
+            && let Ok(mut rollout_thread) = read_thread_from_rollout_path(store, rollout_path).await
+            && rollout_thread.thread_id == thread_id
+            && !rollout_thread.preview.is_empty()
+        {
+            if thread.name.is_some() {
+                rollout_thread.name = thread.name;
+            }
+            rollout_thread.git_info = thread.git_info;
+            thread = rollout_thread;
+        }
         attach_history_if_requested(&mut thread, params.include_history).await?;
         return Ok(thread);
     }
@@ -222,7 +236,7 @@ async fn stored_thread_from_sqlite_metadata(
     store: &LocalThreadStore,
     metadata: ThreadMetadata,
 ) -> StoredThread {
-    let name = match distinct_title(&metadata) {
+    let name = match distinct_thread_metadata_title(&metadata) {
         Some(title) => Some(title),
         None => find_thread_name_by_id(store.config.codex_home.as_path(), &metadata.id)
             .await
@@ -334,22 +348,6 @@ fn stored_thread_from_meta_line(
     }
 }
 
-fn distinct_title(metadata: &ThreadMetadata) -> Option<String> {
-    let title = metadata.title.trim();
-    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
-        None
-    } else {
-        Some(title.to_string())
-    }
-}
-
-fn set_thread_name_from_title(thread: &mut StoredThread, title: String) {
-    if title.trim().is_empty() || thread.preview.trim() == title.trim() {
-        return;
-    }
-    thread.name = Some(title);
-}
-
 fn parse_session_source(source: &str) -> SessionSource {
     serde_json::from_str(source)
         .or_else(|_| serde_json::from_value(serde_json::Value::String(source.to_string())))
@@ -374,6 +372,7 @@ fn parse_rfc3339_non_optional(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::PathBuf;
 
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -634,6 +633,81 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.name, Some("Saved title".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_thread_preserves_rollout_cwd_when_sqlite_metadata_exists() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(224);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let day_dir = home.path().join("sessions/2025/01/03");
+        std::fs::create_dir_all(&day_dir).expect("sessions dir");
+        let rollout_path = day_dir.join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
+        let mut file = std::fs::File::create(&rollout_path).expect("session file");
+        let rollout_cwd = PathBuf::from("/");
+        let meta = serde_json::json!({
+            "timestamp": "2025-01-03T12:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": uuid,
+                "timestamp": "2025-01-03T12:00:00Z",
+                "cwd": rollout_cwd,
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "rollout-provider"
+            },
+        });
+        writeln!(file, "{meta}").expect("write session meta");
+        let user_event = serde_json::json!({
+            "timestamp": "2025-01-03T12:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "Hello from rollout",
+                "kind": "plain",
+            },
+        });
+        writeln!(file, "{user_event}").expect("write user event");
+
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.cwd = home.path().join("sqlite-workspace");
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.title = "Saved title".to_string();
+        metadata.first_user_message = Some("Hello from sqlite".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert_eq!(thread.preview, "Hello from rollout");
+        assert_eq!(thread.name, Some("Saved title".to_string()));
+        assert_eq!(thread.cwd, rollout_cwd);
     }
 
     #[tokio::test]
