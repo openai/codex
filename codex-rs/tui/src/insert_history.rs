@@ -47,8 +47,6 @@ pub enum InsertHistoryMode {
     Standard,
     Zellij,
     FullScreenReplayPrefill,
-    // Kept available while validating terminal-specific replay behavior.
-    #[allow(dead_code)]
     FullScreenReplayDirect,
 }
 
@@ -947,6 +945,34 @@ mod tests {
                 .iter()
                 .all(|row| !row.contains("reflow line")),
             "expected replay not to occupy reserved viewport rows, rows: {rows:?}"
+        );
+        assert_eq!(term.viewport_area, viewport);
+    }
+
+    #[test]
+    fn vt100_full_screen_replay_direct_does_not_reserve_viewport_rows() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(/*x*/ 0, /*y*/ 4, width, /*height*/ 3);
+        term.set_viewport_area(viewport);
+
+        let lines: Vec<Line<'static>> = (0..6)
+            .map(|idx| Line::from(format!("reflow line {idx:02}")))
+            .collect();
+        insert_history_lines_with_mode(&mut term, lines, InsertHistoryMode::FullScreenReplayDirect)
+            .expect("insert reflow history");
+
+        let rows: Vec<String> = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .collect();
+        assert!(
+            rows[viewport.top() as usize].contains("reflow line 04"),
+            "expected direct replay not to prefill blank viewport rows, rows: {rows:?}"
         );
         assert_eq!(term.viewport_area, viewport);
     }

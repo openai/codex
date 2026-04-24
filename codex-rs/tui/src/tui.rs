@@ -41,6 +41,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::legacy_core::config::TerminalResizeReflowReplayMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -173,14 +174,30 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
+fn insert_history_mode_for_resize_reflow(
+    replay_mode: TerminalResizeReflowReplayMode,
+) -> crate::insert_history::InsertHistoryMode {
+    match replay_mode {
+        TerminalResizeReflowReplayMode::Direct => {
+            crate::insert_history::InsertHistoryMode::FullScreenReplayDirect
+        }
+        TerminalResizeReflowReplayMode::Prefill => {
+            crate::insert_history::InsertHistoryMode::FullScreenReplayPrefill
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ResizeReflowDrawRefresh;
+    use super::insert_history_mode_for_resize_reflow;
     use super::keyboard_enhancement_disabled_for;
     use super::parse_bool_env;
     use super::resize_reflow_draw_refresh;
     use super::should_emit_notification;
     use super::vscode_terminal_detected;
+    use crate::insert_history::InsertHistoryMode;
+    use crate::legacy_core::config::TerminalResizeReflowReplayMode;
     use codex_config::types::NotificationCondition;
 
     #[test]
@@ -197,6 +214,18 @@ mod tests {
             NotificationCondition::Always,
             /*terminal_focused*/ true
         ));
+    }
+
+    #[test]
+    fn resize_reflow_replay_mode_selects_insert_history_mode() {
+        assert_eq!(
+            insert_history_mode_for_resize_reflow(TerminalResizeReflowReplayMode::Direct),
+            InsertHistoryMode::FullScreenReplayDirect
+        );
+        assert_eq!(
+            insert_history_mode_for_resize_reflow(TerminalResizeReflowReplayMode::Prefill),
+            InsertHistoryMode::FullScreenReplayPrefill
+        );
     }
 
     #[test]
@@ -871,6 +900,7 @@ impl Tui {
     fn flush_pending_reflow_history_lines(
         terminal: &mut Terminal,
         pending_reflow_history_lines: &mut Vec<Line<'static>>,
+        replay_mode: TerminalResizeReflowReplayMode,
     ) -> Result<bool> {
         if pending_reflow_history_lines.is_empty() {
             return Ok(false);
@@ -879,7 +909,7 @@ impl Tui {
         crate::insert_history::insert_history_lines_with_mode(
             terminal,
             pending_reflow_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::FullScreenReplayPrefill,
+            insert_history_mode_for_resize_reflow(replay_mode),
         )?;
         pending_reflow_history_lines.clear();
         Ok(true)
@@ -953,6 +983,7 @@ impl Tui {
     pub fn draw_with_resize_reflow(
         &mut self,
         height: u16,
+        replay_mode: TerminalResizeReflowReplayMode,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -980,6 +1011,7 @@ impl Tui {
             let flushed_reflow_history = Self::flush_pending_reflow_history_lines(
                 terminal,
                 &mut self.pending_reflow_history_lines,
+                replay_mode,
             )?;
             needs_full_repaint |= flushed_reflow_history;
 

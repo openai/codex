@@ -671,6 +671,7 @@ mod tests {
             r#"
 [tui.terminal_resize_reflow]
 max_rows = 9000
+replay_mode = "prefill"
 "#,
         )?;
 
@@ -679,6 +680,10 @@ max_rows = 9000
         assert_eq!(
             app.config.terminal_resize_reflow.max_rows,
             crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(9000)
+        );
+        assert_eq!(
+            app.config.terminal_resize_reflow.replay_mode,
+            crate::legacy_core::config::TerminalResizeReflowReplayMode::Prefill
         );
         Ok(())
     }

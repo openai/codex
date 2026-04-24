@@ -128,6 +128,7 @@ mod tests {
         let terminal = test_terminal(TerminalName::VsCode);
         let config = TerminalResizeReflowConfig {
             max_rows: TerminalResizeReflowMaxRows::Limit(42),
+            ..Default::default()
         };
 
         assert_eq!(
@@ -143,6 +144,7 @@ mod tests {
         let terminal = test_terminal(TerminalName::VsCode);
         let config = TerminalResizeReflowConfig {
             max_rows: TerminalResizeReflowMaxRows::Disabled,
+            ..Default::default()
         };
 
         assert_eq!(
