@@ -314,7 +314,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -2361,24 +2360,8 @@ impl CodexMessageProcessor {
         file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
         configured_file_system_sandbox_policy: &FileSystemSandboxPolicy,
     ) {
-        if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-            file_system_sandbox_policy.glob_scan_max_depth =
-                configured_file_system_sandbox_policy.glob_scan_max_depth;
-        }
-
-        for deny_entry in configured_file_system_sandbox_policy
-            .entries
-            .iter()
-            .filter(|entry| entry.access == FileSystemAccessMode::None)
-        {
-            if !file_system_sandbox_policy
-                .entries
-                .iter()
-                .any(|entry| entry == deny_entry)
-            {
-                file_system_sandbox_policy.entries.push(deny_entry.clone());
-            }
-        }
+        file_system_sandbox_policy
+            .preserve_deny_read_restrictions_from(configured_file_system_sandbox_policy);
     }
 
     async fn command_exec_write(
@@ -10239,6 +10222,7 @@ mod tests {
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::protocol::AskForApproval;

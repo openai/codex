@@ -176,26 +176,8 @@ impl SessionConfiguration {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            if file_system_sandbox_policy.glob_scan_max_depth.is_none() {
-                file_system_sandbox_policy.glob_scan_max_depth =
-                    self.file_system_sandbox_policy.glob_scan_max_depth;
-            }
-            for deny_entry in self
-                .file_system_sandbox_policy
-                .entries
-                .iter()
-                .filter(|entry| {
-                    entry.access == codex_protocol::permissions::FileSystemAccessMode::None
-                })
-            {
-                if !file_system_sandbox_policy
-                    .entries
-                    .iter()
-                    .any(|entry| entry == deny_entry)
-                {
-                    file_system_sandbox_policy.entries.push(deny_entry.clone());
-                }
-            }
+            file_system_sandbox_policy
+                .preserve_deny_read_restrictions_from(&self.file_system_sandbox_policy);
             next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
             next_configuration.network_sandbox_policy = network_sandbox_policy;
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
