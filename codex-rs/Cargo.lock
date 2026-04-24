@@ -2705,9 +2705,14 @@ dependencies = [
  "codex-state",
  "pretty_assertions",
  "prost 0.14.3",
+ "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
