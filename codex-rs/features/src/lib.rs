@@ -178,6 +178,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
@@ -910,6 +912,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Experimental {
+            name: "Mentions v2",
+            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

@@ -5320,6 +5320,7 @@ impl ChatWidget {
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
+        widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -9845,6 +9846,9 @@ impl ChatWidget {
             self.sync_plugins_command_enabled();
             self.refresh_plugin_mentions();
         }
+        if feature == Feature::MentionsV2 {
+            self.sync_mentions_v2_enabled();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -10098,6 +10102,11 @@ impl ChatWidget {
     fn sync_plugins_command_enabled(&mut self) {
         self.bottom_pane
             .set_plugins_command_enabled(self.config.features.enabled(Feature::Plugins));
+    }
+
+    fn sync_mentions_v2_enabled(&mut self) {
+        self.bottom_pane
+            .set_mentions_v2_enabled(self.config.features.enabled(Feature::MentionsV2));
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -11115,6 +11124,7 @@ impl ChatWidget {
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
         self.config.memories = config.memories.clone();
+        self.sync_mentions_v2_enabled();
     }
 
     pub(crate) fn open_review_popup(&mut self) {
