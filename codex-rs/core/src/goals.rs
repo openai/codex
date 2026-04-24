@@ -1111,12 +1111,13 @@ impl Session {
         let goal = protocol_goal_from_state(goal);
         self.reset_thread_goal_continuation_suppression();
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-        self.goal_runtime
-            .accounting
-            .lock()
+        let active_turn_id = self
+            .active_turn_context()
             .await
-            .wall_clock
-            .mark_active_goal(goal_id);
+            .map(|turn_context| turn_context.sub_id.clone());
+        let current_token_usage = self.total_token_usage().await.unwrap_or_default();
+        self.mark_active_goal_accounting(goal_id, active_turn_id, current_token_usage)
+            .await;
         self.send_event_raw(Event {
             id: uuid::Uuid::new_v4().to_string(),
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
