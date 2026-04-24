@@ -7456,11 +7456,7 @@ async fn sample_rollout(
 
 #[tokio::test]
 async fn create_goal_tool_rejects_existing_goal() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::Goals);
-    let session = Arc::new(session);
-    attach_rollout_recorder(&session).await;
-    let turn_context = Arc::new(turn_context);
+    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = GoalHandler;
 
@@ -7472,6 +7468,7 @@ async fn create_goal_tool_rejects_existing_goal() {
             tracker: Arc::clone(&tracker),
             call_id: "create-goal-1".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Keep the watcher alive",
@@ -7491,6 +7488,7 @@ async fn create_goal_tool_rejects_existing_goal() {
             tracker,
             call_id: "create-goal-2".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Replace the watcher",
@@ -7520,11 +7518,7 @@ async fn create_goal_tool_rejects_existing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_rejects_pausing_goal() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::Goals);
-    let session = Arc::new(session);
-    attach_rollout_recorder(&session).await;
-    let turn_context = Arc::new(turn_context);
+    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = GoalHandler;
 
@@ -7536,6 +7530,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Keep the watcher alive",
@@ -7555,6 +7550,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
             tracker,
             call_id: "pause-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "status": "paused",
@@ -7582,11 +7578,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
 
 #[tokio::test]
 async fn update_goal_tool_marks_goal_complete() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::Goals);
-    let session = Arc::new(session);
-    attach_rollout_recorder(&session).await;
-    let turn_context = Arc::new(turn_context);
+    let (session, turn_context, _rx) = make_goal_session_and_context_with_rx().await;
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let handler = GoalHandler;
 
@@ -7598,6 +7590,7 @@ async fn update_goal_tool_marks_goal_complete() {
             tracker: Arc::clone(&tracker),
             call_id: "create-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("create_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Keep the watcher alive",
@@ -7617,6 +7610,7 @@ async fn update_goal_tool_marks_goal_complete() {
             tracker,
             call_id: "complete-goal".to_string(),
             tool_name: codex_tools::ToolName::plain("update_goal"),
+            source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "status": "complete",
