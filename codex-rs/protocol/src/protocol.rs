@@ -2640,7 +2640,7 @@ pub struct ConversationPathResponseEvent {
 pub struct ResumedHistory {
     pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
-    pub rollout_path: PathBuf,
+    pub rollout_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3058,7 +3058,7 @@ impl TurnContextItem {
         self.permission_profile.clone().unwrap_or_else(|| {
             let file_system_sandbox_policy =
                 self.file_system_sandbox_policy.clone().unwrap_or_else(|| {
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                         &self.sandbox_policy,
                         &self.cwd,
                     )
@@ -4644,7 +4644,7 @@ mod tests {
 
         assert_eq!(
             sorted_writable_roots(
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path())
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, cwd.path())
                     .get_writable_roots_with_cwd(cwd.path())
             ),
             vec![(canonical_cwd, vec![expected_dot_codex.to_path_buf()])]
@@ -4736,9 +4736,10 @@ mod tests {
         ];
 
         for expected in policies {
-            let actual = FileSystemSandboxPolicy::from_legacy_sandbox_policy(&expected, cwd.path())
-                .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
-                .expect("legacy bridge should preserve legacy policy semantics");
+            let actual =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&expected, cwd.path())
+                    .to_legacy_sandbox_policy(NetworkSandboxPolicy::from(&expected), cwd.path())
+                    .expect("legacy bridge should preserve legacy policy semantics");
 
             assert_same_sandbox_policy_semantics(&expected, &actual, cwd.path());
         }

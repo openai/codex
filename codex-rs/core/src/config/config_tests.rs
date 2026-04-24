@@ -1583,7 +1583,7 @@ exclude_slash_tmp = true
         let sandbox_policy = config.permissions.sandbox_policy.get();
         assert_eq!(
             config.permissions.file_system_sandbox_policy,
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd.path()),
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
             "case `{name}` should preserve filesystem semantics from legacy config"
         );
         assert_eq!(

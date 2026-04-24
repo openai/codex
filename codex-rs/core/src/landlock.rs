@@ -36,8 +36,10 @@ pub async fn spawn_command_under_linux_sandbox<P>(
 where
     P: AsRef<Path>,
 {
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd);
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        sandbox_policy,
+        sandbox_policy_cwd,
+    );
     let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
     let args = create_linux_sandbox_command_args_for_policies(
         command,

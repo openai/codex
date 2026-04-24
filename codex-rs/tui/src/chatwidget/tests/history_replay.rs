@@ -321,13 +321,20 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let updated_sandbox = SandboxPolicy::new_workspace_write_policy();
     chat.set_sandbox_policy(updated_sandbox.clone())
         .expect("set sandbox policy");
+    let updated_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &updated_sandbox,
+        &expected_cwd,
+    );
     assert_eq!(
         chat.config_ref().permissions.permission_profile(),
-        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
-            &updated_sandbox,
-            &expected_cwd
+        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
+            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(
+                &updated_sandbox
+            ),
+            &updated_file_system_policy,
+            NetworkSandboxPolicy::from(&updated_sandbox),
         ),
-        "local sandbox changes should replace SessionConfigured profile-derived runtime permissions"
+        "local sandbox changes should replace SessionConfigured profile-derived runtime permissions using the widget cwd"
     );
 }
 
