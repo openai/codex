@@ -94,6 +94,7 @@ static NSMutableDictionary *CodexDeviceKeyMacPrivateKeyQuery(
         (__bridge id)kSecAttrKeyClass: (__bridge id)kSecAttrKeyClassPrivate,
         (__bridge id)kSecAttrApplicationTag: CodexDeviceKeyMacTagData(keyTag),
         (__bridge id)kSecReturnRef: @YES,
+        (__bridge id)kSecUseDataProtectionKeychain: @YES,
     } mutableCopy];
 
     if (keyClass == CodexDeviceKeyMacKeyClassSecureEnclave) {
@@ -169,6 +170,7 @@ static SecKeyRef CodexDeviceKeyMacCreatePrivateKey(
         (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeECSECPrimeRandom,
         (__bridge id)kSecAttrKeySizeInBits: @256,
         (__bridge id)kSecAttrLabel: keyTag,
+        (__bridge id)kSecUseDataProtectionKeychain: @YES,
         (__bridge id)kSecPrivateKeyAttrs: privateAttributes,
     } mutableCopy];
     if (keyClass == CodexDeviceKeyMacKeyClassSecureEnclave) {
