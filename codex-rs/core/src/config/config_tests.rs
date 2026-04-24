@@ -4046,6 +4046,63 @@ nickname_candidates = ["Hypatia", "Noether"]
 }
 
 #[tokio::test]
+async fn agent_role_relative_config_file_resolves_from_config_layer() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"",
+    )
+    .await?;
+    let layer_config = toml::from_str(
+        r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+"#,
+    )
+    .expect("agent role layer config should parse");
+    let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
+        vec![crate::config_loader::ConfigLayerEntry::new(
+            codex_app_server_protocol::ConfigLayerSource::User {
+                file: codex_home.path().join(CONFIG_TOML_FILE).abs(),
+            },
+            layer_config,
+        )],
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml::default(),
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+        config_layer_stack,
+    )
+    .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&role_config_path)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn agent_role_file_metadata_overrides_config_toml_metadata() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let role_config_path = codex_home.path().join("agents").join("researcher.toml");
