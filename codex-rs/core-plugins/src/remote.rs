@@ -109,12 +109,12 @@ pub enum RemotePluginCatalogError {
     },
 
     #[error(
-        "remote plugin install returned unexpected plugin id: expected `{expected}`, got `{actual}`"
+        "remote plugin mutation returned unexpected plugin id: expected `{expected}`, got `{actual}`"
     )]
     UnexpectedPluginId { expected: String, actual: String },
 
     #[error(
-        "remote plugin install returned unexpected enabled state for `{plugin_id}`: expected {expected_enabled}, got {actual_enabled}"
+        "remote plugin mutation returned unexpected enabled state for `{plugin_id}`: expected {expected_enabled}, got {actual_enabled}"
     )]
     UnexpectedEnabledState {
         plugin_id: String,
@@ -273,7 +273,7 @@ struct RemotePluginInstalledResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RemotePluginInstallResponse {
+struct RemotePluginMutationResponse {
     id: String,
     enabled: bool,
 }
@@ -455,7 +455,7 @@ pub async fn install_remote_plugin(
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
     let client = build_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
-    let response: RemotePluginInstallResponse = send_and_decode(request, &url).await?;
+    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
             expected: plugin_id.to_string(),
@@ -466,6 +466,41 @@ pub async fn install_remote_plugin(
         return Err(RemotePluginCatalogError::UnexpectedEnabledState {
             plugin_id: plugin_id.to_string(),
             expected_enabled: true,
+            actual_enabled: response.enabled,
+        });
+    }
+
+    Ok(())
+}
+
+pub async fn uninstall_remote_plugin(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    marketplace_name: &str,
+    plugin_id: &str,
+) -> Result<(), RemotePluginCatalogError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    if RemotePluginScope::from_marketplace_name(marketplace_name).is_none() {
+        return Err(RemotePluginCatalogError::UnknownMarketplace {
+            marketplace_name: marketplace_name.to_string(),
+        });
+    }
+
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/ps/plugins/{plugin_id}/uninstall");
+    let client = build_reqwest_client();
+    let request = authenticated_request(client.post(&url), auth)?;
+    let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
+    if response.id != plugin_id {
+        return Err(RemotePluginCatalogError::UnexpectedPluginId {
+            expected: plugin_id.to_string(),
+            actual: response.id,
+        });
+    }
+    if response.enabled {
+        return Err(RemotePluginCatalogError::UnexpectedEnabledState {
+            plugin_id: plugin_id.to_string(),
+            expected_enabled: false,
             actual_enabled: response.enabled,
         });
     }

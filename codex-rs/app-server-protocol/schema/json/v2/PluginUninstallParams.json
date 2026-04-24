@@ -2,12 +2,24 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "pluginId": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pluginName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "remoteMarketplaceName": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
-  "required": [
-    "pluginId"
-  ],
   "title": "PluginUninstallParams",
   "type": "object"
 }

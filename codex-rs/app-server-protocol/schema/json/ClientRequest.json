@@ -2100,12 +2100,24 @@
     "PluginUninstallParams": {
       "properties": {
         "pluginId": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pluginName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteMarketplaceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "required": [
-        "pluginId"
-      ],
       "type": "object"
     },
     "PluginsMigration": {
