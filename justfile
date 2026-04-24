@@ -35,10 +35,10 @@ fmt:
     cargo fmt -- --config imports_granularity=Item 2>/dev/null
 
 fix *args:
-    cargo clippy --fix --tests --allow-dirty "$@"
+    cargo clippy --fix --all-targets --allow-dirty "$@"
 
 clippy *args:
-    cargo clippy --tests "$@"
+    cargo clippy --all-targets "$@"
 
 install:
     rustup show active-toolchain

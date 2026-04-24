@@ -144,7 +144,7 @@ def codex_rust_crate(
         test_tags = [],
         unit_test_timeout = None,
         extra_binaries = []):
-    """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
+    """Defines a Rust crate with library, binaries, examples, and tests wired for Bazel + Cargo parity.
 
     The macro mirrors Cargo conventions: it builds a library when `src/` exists,
     wires build scripts, exports `CARGO_BIN_EXE_*` for integration tests, and
@@ -311,6 +311,24 @@ def codex_rust_crate(
             edition = crate_edition,
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS,
             srcs = native.glob(["src/**/*.rs"]),
+            visibility = ["//visibility:public"],
+        )
+
+    for example in native.glob(["examples/*.rs", "examples/*/main.rs"], allow_empty = True):
+        if example.endswith("/main.rs"):
+            example_file_stem = example.removeprefix("examples/").removesuffix("/main.rs")
+        else:
+            example_file_stem = example.removeprefix("examples/").removesuffix(".rs")
+        example_name = "example-" + example_file_stem.replace("/", "-")
+
+        rust_binary(
+            name = example_name,
+            crate_name = example_file_stem.replace("-", "_"),
+            crate_root = example,
+            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+            edition = crate_edition,
+            rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS,
+            srcs = native.glob(["examples/**"], allow_empty = True),
             visibility = ["//visibility:public"],
         )
 
