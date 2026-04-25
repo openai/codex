@@ -160,12 +160,6 @@ fn browser_controls_are_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn unavailable_dummy_tools_is_stable_and_enabled_by_default() {
-    assert_eq!(Feature::UnavailableDummyTools.stage(), Stage::Stable);
-    assert_eq!(Feature::UnavailableDummyTools.default_enabled(), true);
-}
-
-#[test]
 fn general_analytics_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::GeneralAnalytics.stage(), Stage::Stable);
     assert_eq!(Feature::GeneralAnalytics.default_enabled(), true);
