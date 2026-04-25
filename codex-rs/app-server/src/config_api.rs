@@ -22,15 +22,15 @@ use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
+use codex_config::ConfigRequirementsToml;
+use codex_config::HookEventsToml;
+use codex_config::HookHandlerConfig as CoreHookHandlerConfig;
+use codex_config::ManagedHooksRequirementsToml;
+use codex_config::MatcherGroup as CoreMatcherGroup;
+use codex_config::ResidencyRequirement as CoreResidencyRequirement;
+use codex_config::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config_loader::ConfigRequirementsToml;
-use codex_core::config_loader::HookEventsToml;
-use codex_core::config_loader::HookHandlerConfig as CoreHookHandlerConfig;
-use codex_core::config_loader::ManagedHooksRequirementsToml;
-use codex_core::config_loader::MatcherGroup as CoreMatcherGroup;
-use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
-use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::plugins::PluginId;
 use codex_core_plugins::loader::installed_plugin_telemetry_metadata;
 use codex_core_plugins::toggles::collect_plugin_enabled_candidates;
@@ -388,20 +388,20 @@ fn map_residency_requirement_to_api(
 }
 
 fn map_network_requirements_to_api(
-    network: codex_core::config_loader::NetworkRequirementsToml,
+    network: codex_config::NetworkRequirementsToml,
 ) -> NetworkRequirements {
     let allowed_domains = network
         .domains
         .as_ref()
-        .and_then(codex_core::config_loader::NetworkDomainPermissionsToml::allowed_domains);
+        .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains);
     let denied_domains = network
         .domains
         .as_ref()
-        .and_then(codex_core::config_loader::NetworkDomainPermissionsToml::denied_domains);
+        .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains);
     let allow_unix_sockets = network
         .unix_sockets
         .as_ref()
-        .map(codex_core::config_loader::NetworkUnixSocketPermissionsToml::allow_unix_sockets)
+        .map(codex_config::NetworkUnixSocketPermissionsToml::allow_unix_sockets)
         .filter(|entries| !entries.is_empty());
 
     NetworkRequirements {
@@ -438,28 +438,20 @@ fn map_network_requirements_to_api(
 }
 
 fn map_network_domain_permission_to_api(
-    permission: codex_core::config_loader::NetworkDomainPermissionToml,
+    permission: codex_config::NetworkDomainPermissionToml,
 ) -> NetworkDomainPermission {
     match permission {
-        codex_core::config_loader::NetworkDomainPermissionToml::Allow => {
-            NetworkDomainPermission::Allow
-        }
-        codex_core::config_loader::NetworkDomainPermissionToml::Deny => {
-            NetworkDomainPermission::Deny
-        }
+        codex_config::NetworkDomainPermissionToml::Allow => NetworkDomainPermission::Allow,
+        codex_config::NetworkDomainPermissionToml::Deny => NetworkDomainPermission::Deny,
     }
 }
 
 fn map_network_unix_socket_permission_to_api(
-    permission: codex_core::config_loader::NetworkUnixSocketPermissionToml,
+    permission: codex_config::NetworkUnixSocketPermissionToml,
 ) -> NetworkUnixSocketPermission {
     match permission {
-        codex_core::config_loader::NetworkUnixSocketPermissionToml::Allow => {
-            NetworkUnixSocketPermission::Allow
-        }
-        codex_core::config_loader::NetworkUnixSocketPermissionToml::None => {
-            NetworkUnixSocketPermission::None
-        }
+        codex_config::NetworkUnixSocketPermissionToml::Allow => NetworkUnixSocketPermission::Allow,
+        codex_config::NetworkUnixSocketPermissionToml::None => NetworkUnixSocketPermission::None,
     }
 }
 
@@ -491,13 +483,13 @@ mod tests {
     use crate::config_manager::apply_runtime_feature_enablement;
     use codex_analytics::AnalyticsEventsClient;
     use codex_arg0::Arg0DispatchPaths;
-    use codex_core::config_loader::CloudRequirementsLoader;
-    use codex_core::config_loader::LoaderOverrides;
-    use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
-    use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
-    use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
+    use codex_config::CloudRequirementsLoader;
+    use codex_config::LoaderOverrides;
+    use codex_config::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
+    use codex_config::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
+    use codex_config::NetworkRequirementsToml as CoreNetworkRequirementsToml;
+    use codex_config::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
+    use codex_config::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
     use codex_features::Feature;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
@@ -539,11 +531,9 @@ mod tests {
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
             remote_sandbox_config: None,
-            allowed_web_search_modes: Some(vec![
-                codex_core::config_loader::WebSearchModeRequirement::Cached,
-            ]),
+            allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
-            feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
+            feature_requirements: Some(codex_config::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
                     ("apps".to_string(), false),
                     ("personality".to_string(), true),
@@ -809,11 +799,9 @@ mod tests {
             )])
             .cloud_requirements(CloudRequirementsLoader::new(async {
                 Ok(Some(ConfigRequirementsToml {
-                    feature_requirements: Some(
-                        codex_core::config_loader::FeatureRequirementsToml {
-                            entries: BTreeMap::from([("apps".to_string(), false)]),
-                        },
-                    ),
+                    feature_requirements: Some(codex_config::FeatureRequirementsToml {
+                        entries: BTreeMap::from([("apps".to_string(), false)]),
+                    }),
                     ..Default::default()
                 }))
             }))

@@ -5,18 +5,18 @@ use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::FeatureRequirementsToml;
-use crate::config_loader::NetworkConstraints;
-use crate::config_loader::NetworkDomainPermissionToml;
-use crate::config_loader::NetworkDomainPermissionsToml;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::Sourced;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
+use codex_config::ConfigLayerStack;
+use codex_config::FeatureRequirementsToml;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkDomainPermissionToml;
+use codex_config::NetworkDomainPermissionsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_exec_server::LOCAL_FS;
@@ -2122,7 +2122,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
-        crate::config_loader::ConfigRequirementsToml {
+        codex_config::ConfigRequirementsToml {
             guardian_policy_config: Some(
                 "  Use the workspace-managed guardian policy.  ".to_string(),
             ),

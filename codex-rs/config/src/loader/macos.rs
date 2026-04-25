@@ -1,7 +1,7 @@
-use super::ConfigRequirementsToml;
-use super::ConfigRequirementsWithSources;
-use super::RequirementSource;
 use super::merge_requirements_with_remote_sandbox_config;
+use crate::config_requirements::ConfigRequirementsToml;
+use crate::config_requirements::ConfigRequirementsWithSources;
+use crate::config_requirements::RequirementSource;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core_foundation::base::TCFType;

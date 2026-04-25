@@ -1,5 +1,5 @@
-use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
+use codex_config::NetworkConstraints;
 use codex_execpolicy::Policy;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;

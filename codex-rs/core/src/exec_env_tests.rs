@@ -1,5 +1,5 @@
 use super::*;
-use codex_config::types::ShellEnvironmentPolicyInherit;
+use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use maplit::hashmap;
 use pretty_assertions::assert_eq;
 

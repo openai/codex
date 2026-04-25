@@ -16,11 +16,11 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::default_project_root_markers;
+use codex_config::merge_toml_values;
+use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;

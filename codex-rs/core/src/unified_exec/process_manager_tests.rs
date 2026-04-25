@@ -81,7 +81,7 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         ]),
         exec_server_env_config: Some(ExecServerEnvConfig {
             policy: codex_exec_server::ExecEnvPolicy {
-                inherit: codex_config::types::ShellEnvironmentPolicyInherit::Core,
+                inherit: codex_protocol::config_types::ShellEnvironmentPolicyInherit::Core,
                 ignore_default_excludes: false,
                 exclude: Vec::new(),
                 r#set: HashMap::new(),

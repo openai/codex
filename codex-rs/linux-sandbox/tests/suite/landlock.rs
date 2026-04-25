@@ -1,11 +1,11 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;

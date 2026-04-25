@@ -2,17 +2,29 @@ mod layer_io;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(test)]
-mod tests;
-
-use crate::config_loader::layer_io::LoadedConfigLayers;
+use self::layer_io::LoadedConfigLayers;
+use crate::CONFIG_TOML_FILE;
+use crate::cloud_requirements::CloudRequirementsLoader;
+use crate::config_requirements::ConfigRequirementsToml;
+use crate::config_requirements::ConfigRequirementsWithSources;
+use crate::config_requirements::RequirementSource;
+use crate::config_requirements::SandboxModeRequirement;
+use crate::config_toml::ConfigToml;
+use crate::config_toml::ProjectConfig;
+use crate::diagnostics::ConfigError;
+use crate::diagnostics::config_error_from_toml;
+use crate::diagnostics::first_layer_config_error_from_entries as typed_first_layer_config_error_from_entries;
+use crate::diagnostics::io_error_from_config_error;
+use crate::merge::merge_toml_values;
+use crate::overrides::build_cli_overrides_layer;
+use crate::project_root_markers::default_project_root_markers;
+use crate::project_root_markers::project_root_markers_from_config;
+use crate::state::ConfigLayerEntry;
+use crate::state::ConfigLayerStack;
+use crate::state::LoaderOverrides;
+use crate::thread_config::ThreadConfigContext;
+use crate::thread_config::ThreadConfigLoader;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_config::CONFIG_TOML_FILE;
-use codex_config::ConfigRequirementsWithSources;
-use codex_config::ThreadConfigContext;
-use codex_config::ThreadConfigLoader;
-use codex_config::config_toml::ConfigToml;
-use codex_config::config_toml::ProjectConfig;
 use codex_exec_server::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -29,71 +41,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
-pub use codex_config::AppRequirementToml;
-pub use codex_config::AppsRequirementsToml;
-pub use codex_config::CloudRequirementsLoadError;
-pub use codex_config::CloudRequirementsLoadErrorCode;
-pub use codex_config::CloudRequirementsLoader;
-pub use codex_config::ConfigError;
-pub use codex_config::ConfigLayerEntry;
-pub use codex_config::ConfigLayerStack;
-pub use codex_config::ConfigLayerStackOrdering;
-pub use codex_config::ConfigLoadError;
-pub use codex_config::ConfigRequirements;
-pub use codex_config::ConfigRequirementsToml;
-pub use codex_config::ConstrainedWithSource;
-pub use codex_config::FeatureRequirementsToml;
-pub use codex_config::FilesystemConstraints;
-pub use codex_config::FilesystemDenyReadPattern;
-pub use codex_config::HookEventsToml;
-pub use codex_config::HookHandlerConfig;
-pub use codex_config::LoaderOverrides;
-pub use codex_config::ManagedHooksRequirementsToml;
-pub use codex_config::MatcherGroup;
-pub use codex_config::McpServerIdentity;
-pub use codex_config::McpServerRequirement;
-pub use codex_config::NetworkConstraints;
-pub use codex_config::NetworkDomainPermissionToml;
-pub use codex_config::NetworkDomainPermissionsToml;
-pub use codex_config::NetworkRequirementsToml;
-pub use codex_config::NetworkUnixSocketPermissionToml;
-pub use codex_config::NetworkUnixSocketPermissionsToml;
-pub use codex_config::RemoteSandboxConfigToml;
-pub use codex_config::RequirementSource;
-pub use codex_config::ResidencyRequirement;
-pub use codex_config::SandboxModeRequirement;
-pub use codex_config::Sourced;
-pub use codex_config::TextPosition;
-pub use codex_config::TextRange;
-pub use codex_config::WebSearchModeRequirement;
-pub(crate) use codex_config::build_cli_overrides_layer;
-pub(crate) use codex_config::config_error_from_toml;
-pub use codex_config::default_project_root_markers;
-pub use codex_config::format_config_error;
-pub use codex_config::format_config_error_with_source;
-pub(crate) use codex_config::io_error_from_config_error;
-pub use codex_config::merge_toml_values;
-pub use codex_config::project_root_markers_from_config;
-#[cfg(test)]
-pub(crate) use codex_config::version_for_toml;
-
-/// On Unix systems, load default settings from this file path, if present.
-/// Note that /etc/codex/ is treated as a "config folder," so subfolders such
-/// as skills/ and rules/ will also be honored.
-pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
+const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 #[cfg(windows)]
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
-pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
-    codex_config::first_layer_config_error::<ConfigToml>(layers, CONFIG_TOML_FILE).await
-}
-
-pub(crate) async fn first_layer_config_error_from_entries(
-    layers: &[ConfigLayerEntry],
-) -> Option<ConfigError> {
-    codex_config::first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE)
-        .await
+async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
+    typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
 }
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
@@ -163,7 +117,7 @@ pub async fn load_config_layers_state(
     .await?;
 
     // Honor the system requirements.toml location.
-    let requirements_toml_file = system_requirements_toml_file()?;
+    let requirements_toml_file = system_requirements_toml_file_with_overrides(&overrides)?;
     load_requirements_toml(
         fs,
         &mut config_requirements_toml,
@@ -175,7 +129,7 @@ pub async fn load_config_layers_state(
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
     let loaded_config_layers =
-        layer_io::load_config_layers_internal(fs, codex_home, overrides).await?;
+        layer_io::load_config_layers_internal(fs, codex_home, overrides.clone()).await?;
     load_requirements_from_legacy_scheme(
         &mut config_requirements_toml,
         loaded_config_layers.clone(),
@@ -210,7 +164,7 @@ pub async fn load_config_layers_state(
 
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
-    let system_config_toml_file = system_config_toml_file()?;
+    let system_config_toml_file = system_config_toml_file_with_overrides(&overrides)?;
     let system_layer =
         load_config_toml_for_required_layer(fs, &system_config_toml_file, |config_toml| {
             ConfigLayerEntry::new(
@@ -428,7 +382,8 @@ async fn load_config_toml_for_required_layer(
 /// If available, apply requirements from the platform system
 /// `requirements.toml` location to `config_requirements_toml` by filling in
 /// any unset fields.
-async fn load_requirements_toml(
+#[doc(hidden)]
+pub async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
@@ -494,14 +449,34 @@ fn system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
     windows_system_requirements_toml_file()
 }
 
+fn system_requirements_toml_file_with_overrides(
+    overrides: &LoaderOverrides,
+) -> io::Result<AbsolutePathBuf> {
+    match &overrides.system_requirements_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path),
+        None => system_requirements_toml_file(),
+    }
+}
+
 #[cfg(unix)]
-fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+#[doc(hidden)]
+pub fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_CONFIG_TOML_FILE_UNIX))
 }
 
 #[cfg(windows)]
-fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+#[doc(hidden)]
+pub fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     windows_system_config_toml_file()
+}
+
+fn system_config_toml_file_with_overrides(
+    overrides: &LoaderOverrides,
+) -> io::Result<AbsolutePathBuf> {
+    match &overrides.system_config_path {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path),
+        None => system_config_toml_file(),
+    }
 }
 
 #[cfg(windows)]
@@ -844,7 +819,8 @@ fn project_trust_for_lookup_key(
 ///
 /// This ensures that multiple config layers can be merged together correctly
 /// even if they were loaded from different directories.
-pub(crate) fn resolve_relative_paths_in_config_toml(
+#[doc(hidden)]
+pub fn resolve_relative_paths_in_config_toml(
     value_from_config_toml: TomlValue,
     base_dir: &Path,
 ) -> io::Result<TomlValue> {

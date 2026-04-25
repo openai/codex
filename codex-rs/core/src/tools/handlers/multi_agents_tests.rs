@@ -18,7 +18,6 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -26,6 +25,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;

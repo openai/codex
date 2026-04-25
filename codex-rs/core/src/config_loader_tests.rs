@@ -1,25 +1,29 @@
-use super::LoaderOverrides;
-use super::load_config_layers_state;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConstraintError;
-use crate::config_loader::CloudRequirementsLoadError;
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLoadError;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::ConfigRequirementsWithSources;
-use crate::config_loader::FilesystemDenyReadPattern;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::load_requirements_toml;
-use crate::config_loader::version_for_toml;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::CloudRequirementsLoadError;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigError;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::ConfigLoadError;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_config::ConfigRequirementsWithSources;
+use codex_config::FilesystemDenyReadPattern;
+use codex_config::LoaderOverrides;
+use codex_config::RequirementSource;
 use codex_config::SessionThreadConfig;
 use codex_config::StaticThreadConfigLoader;
 use codex_config::ThreadConfigSource;
+use codex_config::config_error_from_toml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::loader::load_config_layers_state;
+use codex_config::loader::load_requirements_toml;
+use codex_config::version_for_toml;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -33,7 +37,7 @@ use std::path::Path;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
-fn config_error_from_io(err: &std::io::Error) -> &super::ConfigError {
+fn config_error_from_io(err: &std::io::Error) -> &ConfigError {
     err.get_ref()
         .and_then(|err| err.downcast_ref::<ConfigLoadError>())
         .map(ConfigLoadError::config_error)
@@ -110,8 +114,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 
     let config_error = config_error_from_io(&err);
     let expected_toml_error = toml::from_str::<TomlValue>(contents).expect_err("parse error");
-    let expected_config_error =
-        super::config_error_from_toml(&config_path, contents, expected_toml_error);
+    let expected_config_error = config_error_from_toml(&config_path, contents, expected_toml_error);
     assert_eq!(config_error, &expected_config_error);
 }
 
@@ -202,7 +205,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
     let config_error = config_error_from_io(&err);
     let expected_toml_error = toml::from_str::<TomlValue>(contents).expect_err("parse error");
     let expected_config_error =
-        super::config_error_from_toml(&managed_path, contents, expected_toml_error);
+        config_error_from_toml(&managed_path, contents, expected_toml_error);
     assert_eq!(config_error, &expected_config_error);
 }
 
@@ -325,7 +328,7 @@ async fn returns_empty_when_all_layers_missing() {
         .expect("expected a user layer even when CODEX_HOME/config.toml does not exist");
     assert_eq!(
         &ConfigLayerEntry {
-            name: super::ConfigLayerSource::User {
+            name: ConfigLayerSource::User {
                 file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
             },
             config: TomlValue::Table(toml::map::Map::new()),
@@ -350,7 +353,7 @@ async fn returns_empty_when_all_layers_missing() {
     let num_system_layers = layers
         .layers_high_to_low()
         .iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::System { .. }))
         .count();
     assert_eq!(
         num_system_layers, 1,
@@ -374,12 +377,19 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
     let cwd_dir = tmp.path().join("project");
     tokio::fs::create_dir_all(&cwd_dir).await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&cwd_dir)?;
+    let overrides = LoaderOverrides::without_managed_config_for_tests();
+    let expected_system_config = AbsolutePathBuf::from_absolute_path(
+        overrides
+            .system_config_path
+            .as_ref()
+            .expect("test overrides should include a system config path"),
+    )?;
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[("features.plugins".to_string(), TomlValue::Boolean(true))],
-        LoaderOverrides::without_managed_config_for_tests(),
+        overrides,
         CloudRequirementsLoader::default(),
         &StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(SessionThreadConfig {
             features: BTreeMap::from([("plugins".to_string(), false)]),
@@ -397,13 +407,13 @@ async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
     assert_eq!(
         layer_sources,
         vec![
-            super::ConfigLayerSource::SessionFlags,
-            super::ConfigLayerSource::SessionFlags,
-            super::ConfigLayerSource::User {
+            ConfigLayerSource::SessionFlags,
+            ConfigLayerSource::SessionFlags,
+            ConfigLayerSource::User {
                 file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path()),
             },
-            super::ConfigLayerSource::System {
-                file: super::system_config_toml_file()?,
+            ConfigLayerSource::System {
+                file: expected_system_config,
             },
         ]
     );
@@ -482,7 +492,7 @@ flag = false
         .find(|layer| {
             matches!(
                 layer.name,
-                super::ConfigLayerSource::LegacyManagedConfigTomlFromMdm
+                ConfigLayerSource::LegacyManagedConfigTomlFromMdm
             )
         })
         .expect("mdm layer");
@@ -687,14 +697,14 @@ personality = true
             .allowed_web_search_modes
             .as_deref()
             .cloned(),
-        Some(vec![crate::config_loader::WebSearchModeRequirement::Cached])
+        Some(vec![codex_config::WebSearchModeRequirement::Cached])
     );
     assert_eq!(
         config_requirements_toml
             .feature_requirements
             .as_ref()
             .map(|requirements| requirements.value.clone()),
-        Some(crate::config_loader::FeatureRequirementsToml {
+        Some(codex_config::FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         })
     );
@@ -733,14 +743,14 @@ personality = true
     );
     assert_eq!(
         config_requirements.enforce_residency.value(),
-        Some(crate::config_loader::ResidencyRequirement::Us)
+        Some(codex_config::ResidencyRequirement::Us)
     );
     assert_eq!(
         config_requirements
             .feature_requirements
             .as_ref()
             .map(|requirements| requirements.value.clone()),
-        Some(crate::config_loader::FeatureRequirementsToml {
+        Some(codex_config::FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         })
     );
@@ -1174,8 +1184,8 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
     assert_eq!(
         layers.requirements_toml().allowed_sandbox_modes,
         Some(vec![
-            crate::config_loader::SandboxModeRequirement::ReadOnly,
-            crate::config_loader::SandboxModeRequirement::WorkspaceWrite,
+            codex_config::SandboxModeRequirement::ReadOnly,
+            codex_config::SandboxModeRequirement::WorkspaceWrite,
         ])
     );
     assert!(
@@ -1267,7 +1277,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         .layers_high_to_low()
         .into_iter()
         .filter_map(|layer| match &layer.name {
-            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
             _ => None,
         })
         .collect();
@@ -1413,11 +1423,11 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
     let project_layers: Vec<_> = layers
         .layers_high_to_low()
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(
         vec![&ConfigLayerEntry {
-            name: super::ConfigLayerSource::Project {
+            name: ConfigLayerSource::Project {
                 dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
             },
             config: TomlValue::Table(toml::map::Map::new()),
@@ -1454,11 +1464,11 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
 
     let project_layers: Vec<_> = layers
         .get_layers(
-            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     let expected: Vec<&ConfigLayerEntry> = Vec::new();
     assert_eq!(expected, project_layers);
@@ -1513,17 +1523,17 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
     let project_layers: Vec<_> = layers
         .get_layers(
-            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
 
     let child_config: TomlValue = toml::from_str("foo = \"child\"\n").expect("parse child config");
     assert_eq!(
         vec![&ConfigLayerEntry {
-            name: super::ConfigLayerSource::Project {
+            name: ConfigLayerSource::Project {
                 dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
             },
             config: child_config.clone(),
@@ -1585,11 +1595,11 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
         .get_layers(
-            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers_untrusted.len(), 1);
     assert!(
@@ -1626,11 +1636,11 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
         .get_layers(
-            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers_unknown.len(), 1);
     assert!(
@@ -1695,11 +1705,11 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
 
     let project_layers: Vec<_> = layers
         .get_layers(
-            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
             /*include_disabled*/ true,
         )
         .into_iter()
-        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
         .collect();
     assert_eq!(project_layers.len(), 1);
     assert!(
@@ -1849,11 +1859,11 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         .await?;
         let project_layers: Vec<_> = layers
             .get_layers(
-                super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                ConfigLayerStackOrdering::HighestPrecedenceFirst,
                 /*include_disabled*/ true,
             )
             .into_iter()
-            .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+            .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
             .collect();
         assert_eq!(
             project_layers.len(),
@@ -1919,11 +1929,11 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
         .await?;
         let project_layers: Vec<_> = layers
             .get_layers(
-                super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                ConfigLayerStackOrdering::HighestPrecedenceFirst,
                 /*include_disabled*/ true,
             )
             .into_iter()
-            .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+            .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
             .collect();
         assert_eq!(
             project_layers.len(),
@@ -2029,7 +2039,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         .layers_high_to_low()
         .into_iter()
         .filter_map(|layer| match &layer.name {
-            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
             _ => None,
         })
         .collect();
@@ -2051,14 +2061,14 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 }
 
 mod requirements_exec_policy_tests {
-    use crate::config_loader::ConfigLayerEntry;
-    use crate::config_loader::ConfigLayerStack;
-    use crate::config_loader::ConfigRequirements;
-    use crate::config_loader::ConfigRequirementsToml;
-    use crate::config_loader::ConfigRequirementsWithSources;
-    use crate::config_loader::RequirementSource;
     use crate::exec_policy::load_exec_policy;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::ConfigRequirementsWithSources;
+    use codex_config::RequirementSource;
     use codex_config::RequirementsExecPolicyDecisionToml;
     use codex_config::RequirementsExecPolicyParseError;
     use codex_config::RequirementsExecPolicyPatternTokenToml;

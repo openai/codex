@@ -15,11 +15,11 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
+use codex_config::CloudRequirementsLoadError;
+use codex_config::CloudRequirementsLoadErrorCode;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigRequirementsToml;
 use codex_config::types::AuthCredentialsStoreMode;
-use codex_core::config_loader::CloudRequirementsLoadError;
-use codex_core::config_loader::CloudRequirementsLoadErrorCode;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::util::backoff;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1309,10 +1309,10 @@ enabled = false
         assert_eq!(
             result,
             Some(ConfigRequirementsToml {
-                apps: Some(codex_core::config_loader::AppsRequirementsToml {
+                apps: Some(codex_config::AppsRequirementsToml {
                     apps: BTreeMap::from([(
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
-                        codex_core::config_loader::AppRequirementToml {
+                        codex_config::AppRequirementToml {
                             enabled: Some(false),
                         },
                     )]),

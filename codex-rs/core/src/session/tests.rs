@@ -2,14 +2,6 @@ use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::NetworkConstraints;
-use crate::config_loader::NetworkDomainPermissionToml;
-use crate::config_loader::NetworkDomainPermissionsToml;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::Sourced;
-use crate::config_loader::project_trust_key;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::exec::ExecCapturePolicy;
@@ -19,6 +11,14 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkDomainPermissionToml;
+use codex_config::NetworkDomainPermissionsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
+use codex_config::loader::project_trust_key;
 
 use codex_features::Feature;
 use codex_features::Features;
@@ -902,7 +902,7 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             RequirementSource::CloudRequirements,
         ));
         let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-        requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+        requirements_toml.network = Some(codex_config::NetworkRequirementsToml {
             enabled: Some(true),
             ..Default::default()
         });

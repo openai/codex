@@ -829,7 +829,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
-                        codex_core::config_loader::LoaderOverrides::default(),
+                        codex_config::LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
                         codex_protocol::protocol::SessionSource::VSCode,
@@ -1549,7 +1549,7 @@ async fn run_interactive_tui(
     codex_tui::run_main(
         interactive,
         arg0_paths,
-        codex_core::config_loader::LoaderOverrides::default(),
+        codex_config::LoaderOverrides::default(),
         normalized_remote,
         remote_auth_token,
     )
