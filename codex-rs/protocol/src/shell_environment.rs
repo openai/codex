@@ -26,8 +26,17 @@ where
     let mut env_map = populate_env(vars, policy, thread_id);
 
     if cfg!(target_os = "windows") {
-        // Some shells assume PATHEXT exists even when the parent environment
-        // was intentionally trimmed down.
+        // This is a workaround to address the failures we are seeing in the
+        // following tests when run via Bazel on Windows:
+        //
+        // ```
+        // suite::shell_command::unicode_output::with_login
+        // suite::shell_command::unicode_output::without_login
+        // ```
+        //
+        // Currently, we can only reproduce these failures in CI, which makes
+        // iteration times long, so we include this quick fix for now to unblock
+        // getting the Windows Bazel build running.
         if !env_map.keys().any(|k| k.eq_ignore_ascii_case("PATHEXT")) {
             env_map.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
         }

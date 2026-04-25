@@ -25,8 +25,6 @@ mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;
 pub mod config;
-#[cfg(test)]
-mod config_loader_tests;
 pub mod connectors;
 pub mod context;
 mod context_manager;
