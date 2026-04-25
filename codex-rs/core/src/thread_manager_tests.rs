@@ -348,6 +348,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -379,6 +380,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .thread
         .rollout_path()
         .expect("source rollout path should exist");
+    source
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
 
     let resumed = manager
         .resume_thread_from_rollout(
@@ -444,6 +450,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -655,6 +662,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
 
     let source = manager
@@ -757,6 +765,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
 
     let source = manager
@@ -848,6 +857,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         CollaborationModesConfig::default(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
+        thread_store_from_config(&config),
     );
 
     let source = manager
