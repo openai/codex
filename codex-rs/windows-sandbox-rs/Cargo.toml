@@ -89,6 +89,7 @@ version = "0.52"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 
 [build-dependencies]
 winres = "0.1"
