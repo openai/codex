@@ -17,7 +17,11 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    timeout-minutes: 30
+    # Ideally, this would be only 30 minutes, but a no-cache-hit Windows build
+    # seems to trip this limit and starting over is painful when it happens.
+    # Ultimately we need true distributed builds (e.g.,
+    # https://www.buildbuddy.io/docs/rbe-setup/) to speed things up.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
