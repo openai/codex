@@ -138,12 +138,14 @@ fn file_system_sandbox_context_uses_active_attempt() {
     };
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
         sandbox: SandboxType::MacosSeatbelt,
-        policy: &sandbox_policy,
-        file_system_policy: &file_system_policy,
-        network_policy: NetworkSandboxPolicy::Restricted,
+        permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &path,
@@ -190,14 +192,11 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         additional_permissions: None,
         permissions_preapproved: false,
     };
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
         sandbox: SandboxType::None,
-        policy: &sandbox_policy,
-        file_system_policy: &file_system_policy,
-        network_policy: NetworkSandboxPolicy::Enabled,
+        permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &path,
