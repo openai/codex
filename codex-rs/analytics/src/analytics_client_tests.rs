@@ -55,6 +55,7 @@ use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -74,6 +75,8 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
+use codex_app_server_protocol::TrackUsageLimitBannerAction;
+use codex_app_server_protocol::TrackUsageLimitBannerParams;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -2399,6 +2402,79 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
         json!(null)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(null));
+}
+
+#[tokio::test]
+async fn usage_limit_banner_shown_request_emits_credits_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                request: Box::new(ClientRequest::TrackUsageLimitBanner {
+                    request_id: RequestId::Integer(1),
+                    params: TrackUsageLimitBannerParams {
+                        action: TrackUsageLimitBannerAction::Shown,
+                        credit_type: AddCreditsNudgeCreditType::Credits,
+                    },
+                }),
+            },
+            &mut out,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&out[0]).expect("serialize usage banner event");
+    assert_eq!(
+        json!({
+            "event_type": "codex_usage_limit_banner_shown",
+            "event_params": {
+                "platform": "codex_cli",
+                "banner_type": "workspace_member_credits_depleted",
+                "limit_reason": "credits",
+            },
+        }),
+        payload,
+    );
+}
+
+#[tokio::test]
+async fn usage_limit_banner_click_request_emits_usage_limit_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(1),
+                request: Box::new(ClientRequest::TrackUsageLimitBanner {
+                    request_id: RequestId::Integer(1),
+                    params: TrackUsageLimitBannerParams {
+                        action: TrackUsageLimitBannerAction::CtaClicked,
+                        credit_type: AddCreditsNudgeCreditType::UsageLimit,
+                    },
+                }),
+            },
+            &mut out,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&out[0]).expect("serialize usage banner event");
+    assert_eq!(
+        json!({
+            "event_type": "codex_usage_limit_banner_cta_clicked",
+            "event_params": {
+                "platform": "codex_cli",
+                "banner_type": "workspace_member_usage_limit_reached",
+                "limit_reason": "usage_limit",
+                "cta_action": "request_increase",
+            },
+        }),
+        payload,
+    );
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {

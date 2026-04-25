@@ -1582,6 +1582,30 @@
             },
             "method": {
               "enum": [
+                "account/usageLimitBanner/track"
+              ],
+              "title": "Account/usageLimitBanner/trackRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TrackUsageLimitBannerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/usageLimitBanner/trackRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "feedback/upload"
               ],
               "title": "Feedback/uploadRequestMethod",
@@ -16897,6 +16921,35 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "TrackUsageLimitBannerAction": {
+        "enum": [
+          "shown",
+          "cta_clicked"
+        ],
+        "type": "string"
+      },
+      "TrackUsageLimitBannerParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "action": {
+            "$ref": "#/definitions/v2/TrackUsageLimitBannerAction"
+          },
+          "creditType": {
+            "$ref": "#/definitions/v2/AddCreditsNudgeCreditType"
+          }
+        },
+        "required": [
+          "action",
+          "creditType"
+        ],
+        "title": "TrackUsageLimitBannerParams",
+        "type": "object"
+      },
+      "TrackUsageLimitBannerResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "TrackUsageLimitBannerResponse",
         "type": "object"
       },
       "Turn": {

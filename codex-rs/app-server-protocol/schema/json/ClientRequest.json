@@ -4088,6 +4088,28 @@
       ],
       "type": "object"
     },
+    "TrackUsageLimitBannerAction": {
+      "enum": [
+        "shown",
+        "cta_clicked"
+      ],
+      "type": "string"
+    },
+    "TrackUsageLimitBannerParams": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/TrackUsageLimitBannerAction"
+        },
+        "creditType": {
+          "$ref": "#/definitions/AddCreditsNudgeCreditType"
+        }
+      },
+      "required": [
+        "action",
+        "creditType"
+      ],
+      "type": "object"
+    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -5811,6 +5833,30 @@
         "params"
       ],
       "title": "Account/sendAddCreditsNudgeEmailRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/usageLimitBanner/track"
+          ],
+          "title": "Account/usageLimitBanner/trackRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TrackUsageLimitBannerParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/usageLimitBanner/trackRequest",
       "type": "object"
     },
     {

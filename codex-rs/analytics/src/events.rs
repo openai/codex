@@ -19,7 +19,10 @@ use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
 use crate::now_unix_seconds;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::TrackUsageLimitBannerAction;
+use codex_app_server_protocol::TrackUsageLimitBannerParams;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -61,11 +64,27 @@ pub(crate) enum TrackEventRequest {
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
+    UsageLimitBanner(UsageLimitBannerEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
     PluginEnabled(CodexPluginEventRequest),
     PluginDisabled(CodexPluginEventRequest),
+}
+
+#[derive(Serialize)]
+pub(crate) struct UsageLimitBannerEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: UsageLimitBannerEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct UsageLimitBannerEventParams {
+    pub(crate) platform: &'static str,
+    pub(crate) banner_type: &'static str,
+    pub(crate) limit_reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cta_action: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -568,6 +587,40 @@ pub(crate) fn plugin_state_event_type(state: PluginState) -> &'static str {
         PluginState::Uninstalled => "codex_plugin_uninstalled",
         PluginState::Enabled => "codex_plugin_enabled",
         PluginState::Disabled => "codex_plugin_disabled",
+    }
+}
+
+pub(crate) fn usage_limit_banner_event_request(
+    params: TrackUsageLimitBannerParams,
+) -> UsageLimitBannerEventRequest {
+    let limit_reason = match params.credit_type {
+        AddCreditsNudgeCreditType::Credits => "credits",
+        AddCreditsNudgeCreditType::UsageLimit => "usage_limit",
+    };
+    let banner_type = match params.credit_type {
+        AddCreditsNudgeCreditType::Credits => "workspace_member_credits_depleted",
+        AddCreditsNudgeCreditType::UsageLimit => "workspace_member_usage_limit_reached",
+    };
+    let cta_action = match params.credit_type {
+        AddCreditsNudgeCreditType::Credits => "notify_owner",
+        AddCreditsNudgeCreditType::UsageLimit => "request_increase",
+    };
+    let cta_action = match params.action {
+        TrackUsageLimitBannerAction::Shown => None,
+        TrackUsageLimitBannerAction::CtaClicked => Some(cta_action),
+    };
+
+    UsageLimitBannerEventRequest {
+        event_type: match params.action {
+            TrackUsageLimitBannerAction::Shown => "codex_usage_limit_banner_shown",
+            TrackUsageLimitBannerAction::CtaClicked => "codex_usage_limit_banner_cta_clicked",
+        },
+        event_params: UsageLimitBannerEventParams {
+            platform: "codex_cli",
+            banner_type,
+            limit_reason,
+            cta_action,
+        },
     }
 }
 

@@ -573,6 +573,11 @@ client_request_definitions! {
         response: v2::SendAddCreditsNudgeEmailResponse,
     },
 
+    TrackUsageLimitBanner => "account/usageLimitBanner/track" {
+        params: v2::TrackUsageLimitBannerParams,
+        response: v2::TrackUsageLimitBannerResponse,
+    },
+
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
@@ -1456,6 +1461,31 @@ mod tests {
             json!({
                 "method": "account/rateLimits/read",
                 "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_track_usage_limit_banner() -> Result<()> {
+        let request = ClientRequest::TrackUsageLimitBanner {
+            request_id: RequestId::Integer(2),
+            params: v2::TrackUsageLimitBannerParams {
+                action: v2::TrackUsageLimitBannerAction::CtaClicked,
+                credit_type: v2::AddCreditsNudgeCreditType::UsageLimit,
+            },
+        };
+        assert_eq!(request.id(), &RequestId::Integer(2));
+        assert_eq!(request.method(), "account/usageLimitBanner/track");
+        assert_eq!(
+            json!({
+                "method": "account/usageLimitBanner/track",
+                "id": 2,
+                "params": {
+                    "action": "cta_clicked",
+                    "creditType": "usage_limit",
+                },
             }),
             serde_json::to_value(&request)?,
         );
