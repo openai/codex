@@ -2350,10 +2350,12 @@ impl Config {
             None => (None, None),
         };
         let has_network_requirements = network_requirements.is_some();
+        let network_permission_profile =
+            PermissionProfile::from_legacy_sandbox_policy(constrained_sandbox_policy.get());
         let network = NetworkProxySpec::from_config_and_constraints(
             configured_network_proxy_config,
             network_requirements,
-            constrained_sandbox_policy.get(),
+            &network_permission_profile,
         )
         .map_err(|err| {
             if let Some(source) = network_requirements_source.as_ref() {
