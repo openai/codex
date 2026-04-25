@@ -14,6 +14,7 @@ use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_thread_store::LocalThreadStore;
 
 pub(crate) struct SetGoalRequest {
     pub(crate) objective: Option<String>,
@@ -32,9 +33,7 @@ impl Session {
             anyhow::bail!("goals feature is disabled");
         }
 
-        let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(None);
-        };
+        let state_db = self.state_db_for_thread_goals().await?;
         state_db
             .get_thread_goal(self.conversation_id)
             .await
@@ -51,7 +50,7 @@ impl Session {
         }
 
         validate_goal_budget(request.token_budget.flatten())?;
-        let state_db = self.require_state_db_for_thread_goals().await?;
+        let state_db = self.state_db_for_thread_goals().await?;
         let goal = if let Some(objective) = request.objective {
             let objective = objective.trim();
             if objective.is_empty() {
@@ -120,7 +119,7 @@ impl Session {
             anyhow::bail!("goal objective must not be empty");
         }
 
-        let state_db = self.require_state_db_for_thread_goals().await?;
+        let state_db = self.state_db_for_thread_goals().await?;
         let goal = state_db
             .insert_thread_goal(
                 self.conversation_id,
@@ -151,10 +150,10 @@ impl Session {
 }
 
 impl Session {
-    async fn state_db_for_thread_goals(&self) -> anyhow::Result<Option<StateDbHandle>> {
+    async fn state_db_for_thread_goals(&self) -> anyhow::Result<StateDbHandle> {
         let config = self.get_config().await;
         if config.ephemeral {
-            return Ok(None);
+            anyhow::bail!("thread goals require a persisted thread; this thread is ephemeral");
         }
 
         self.try_ensure_rollout_materialized()
@@ -163,13 +162,19 @@ impl Session {
 
         let state_db = if let Some(state_db) = self.state_db() {
             state_db
+        } else if let Some(local_store) = self
+            .services
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.state_db().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "thread goals require a local persisted thread with a state database"
+                )
+            })?
         } else {
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .context("failed to initialize sqlite state db for thread goals")?
+            anyhow::bail!("thread goals require a local persisted thread with a state database");
         };
 
         let thread_metadata_present = state_db
@@ -192,13 +197,7 @@ impl Session {
             .await;
         }
 
-        Ok(Some(state_db))
-    }
-
-    async fn require_state_db_for_thread_goals(&self) -> anyhow::Result<StateDbHandle> {
-        self.state_db_for_thread_goals().await?.ok_or_else(|| {
-            anyhow::anyhow!("thread goals require a persisted thread; this thread is ephemeral")
-        })
+        Ok(state_db)
     }
 }
 

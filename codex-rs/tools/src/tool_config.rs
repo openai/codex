@@ -262,8 +262,8 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_goal_tools_enabled(mut self, goal_tools: bool) -> Self {
-        self.goal_tools = goal_tools;
+    pub fn with_goal_tools_allowed(mut self, allowed: bool) -> Self {
+        self.goal_tools = self.goal_tools && allowed;
         self
     }
 
