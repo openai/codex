@@ -713,29 +713,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_local_file_fails_when_process_upload_stream_reports_failed_event() {
+    async fn process_upload_stream_fails_when_late_failed_event_is_seen() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/files"))
-            .and(header("chatgpt-account-id", "account_id"))
-            .and(body_json(serde_json::json!({
-                "file_name": "hello.txt",
-                "file_size": 5,
-                "use_case": "codex",
-                "store_in_library": true,
-            })))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"file_id": "file_123", "upload_url": format!("{}/upload/file_123", server.uri())})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path("/upload/file_123"))
-            .and(header("content-length", "5"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
         Mock::given(method("POST"))
             .and(path("/backend-api/files/process_upload_stream"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(
@@ -752,20 +731,14 @@ mod tests {
             .await;
 
         let base_url = base_url_for(&server);
-        let dir = TempDir::new().expect("temp dir");
-        let path = dir.path().join("hello.txt");
-        tokio::fs::write(&path, b"hello").await.expect("write file");
-
-        let error = upload_local_file(
-            &base_url,
+        let error = process_upload_stream(
             &chatgpt_auth(),
-            &path,
-            &OpenAiFileUploadOptions {
-                store_in_library: true,
-            },
+            &base_url,
+            "file_123",
+            "hello.txt",
         )
         .await
-        .expect_err("upload should fail");
+        .expect_err("stream processing should fail");
 
         assert!(matches!(
             error,
