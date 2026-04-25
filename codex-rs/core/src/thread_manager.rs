@@ -2,6 +2,7 @@ use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::selected_primary_environment;
 use crate::environment_selection::validate_environment_selections;
@@ -17,6 +18,7 @@ use crate::session::INITIAL_SUBMIT_ID;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
+use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -51,6 +53,8 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutConfig;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+#[cfg(debug_assertions)]
+use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::ThreadStore;
@@ -250,10 +254,14 @@ pub fn build_models_manager(
 }
 
 fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
-    if let Some(endpoint) = config.experimental_thread_store_endpoint.as_deref() {
-        return Arc::new(RemoteThreadStore::new(endpoint));
+    match &config.experimental_thread_store {
+        ThreadStoreConfig::Local => {
+            Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
+        }
+        ThreadStoreConfig::Remote { endpoint } => Arc::new(RemoteThreadStore::new(endpoint)),
+        #[cfg(debug_assertions)]
+        ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }
-    Arc::new(LocalThreadStore::new(RolloutConfig::from_view(config)))
 }
 
 impl ThreadManager {
@@ -744,25 +752,48 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_state = snapshot_turn_state(&history);
-        let history = match snapshot {
-            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
-            }
-            ForkSnapshot::Interrupted => {
-                let history = match history {
-                    InitialHistory::New => InitialHistory::New,
-                    InitialHistory::Cleared => InitialHistory::Cleared,
-                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
-                };
-                if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
-                } else {
-                    history
-                }
-            }
-        };
+        self.fork_thread_from_history(
+            snapshot,
+            config,
+            history,
+            persist_extended_history,
+            parent_trace,
+        )
+        .await
+    }
+
+    /// Fork an existing thread from already-loaded store history.
+    pub async fn fork_thread_from_history<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            snapshot.into(),
+            config,
+            history,
+            persist_extended_history,
+            parent_trace,
+        )
+        .await
+    }
+
+    async fn fork_thread_with_initial_history(
+        &self,
+        snapshot: ForkSnapshot,
+        config: Config,
+        history: InitialHistory,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
+        let interrupted_marker = InterruptedTurnHistoryMarker::from_config(&config);
+        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let thread_store = configured_thread_store(&config);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -1230,10 +1261,44 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     }
 }
 
+fn fork_history_from_snapshot(
+    snapshot: ForkSnapshot,
+    history: InitialHistory,
+    interrupted_marker: InterruptedTurnHistoryMarker,
+) -> InitialHistory {
+    let snapshot_state = snapshot_turn_state(&history);
+    match snapshot {
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+        }
+        ForkSnapshot::Interrupted => {
+            let history = match history {
+                InitialHistory::New => InitialHistory::New,
+                InitialHistory::Cleared => InitialHistory::Cleared,
+                InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            };
+            if snapshot_state.ends_mid_turn {
+                append_interrupted_boundary(
+                    history,
+                    snapshot_state.active_turn_id,
+                    interrupted_marker,
+                )
+            } else {
+                history
+            }
+        }
+    }
+}
+
 /// Append the same persisted interrupt boundary used by the live interrupt path
 /// to an existing fork snapshot after the source thread has been confirmed to
 /// be mid-turn.
-fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>) -> InitialHistory {
+fn append_interrupted_boundary(
+    history: InitialHistory,
+    turn_id: Option<String>,
+    interrupted_marker: InterruptedTurnHistoryMarker,
+) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
@@ -1242,19 +1307,25 @@ fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>)
     }));
 
     match history {
-        InitialHistory::New | InitialHistory::Cleared => InitialHistory::Forked(vec![
-            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
-            aborted_event,
-        ]),
+        InitialHistory::New | InitialHistory::Cleared => {
+            let mut history = Vec::new();
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
+        }
         InitialHistory::Forked(mut history) => {
-            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
             history.push(aborted_event);
             InitialHistory::Forked(history)
         }
         InitialHistory::Resumed(mut resumed) => {
-            resumed
-                .history
-                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                resumed.history.push(RolloutItem::ResponseItem(marker));
+            }
             resumed.history.push(aborted_event);
             InitialHistory::Forked(resumed.history)
         }

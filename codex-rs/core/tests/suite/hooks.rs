@@ -1417,7 +1417,6 @@ async fn permission_request_hook_allows_apply_patch_with_write_alias() -> Result
         AskForApproval::OnRequest,
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1566,7 +1565,6 @@ allow_local_binding = true
     let approval_policy = AskForApproval::OnFailure;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,

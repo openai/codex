@@ -122,6 +122,7 @@ impl EventProcessorWithJsonOutput {
             input_tokens: usage.total.input_tokens,
             cached_input_tokens: usage.total.cached_input_tokens,
             output_tokens: usage.total.output_tokens,
+            reasoning_output_tokens: usage.total.reasoning_output_tokens,
         }
     }
 

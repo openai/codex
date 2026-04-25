@@ -24,6 +24,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
+use codex_thread_store::LocalThreadStore;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -350,9 +351,7 @@ impl Session {
             anyhow::bail!("goals feature is disabled");
         }
 
-        let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(None);
-        };
+        let state_db = self.require_state_db_for_thread_goals().await?;
         state_db
             .get_thread_goal(self.conversation_id)
             .await
@@ -1320,13 +1319,19 @@ impl Session {
             state_db
         } else if let Some(state_db) = self.goal_runtime.state_db.lock().await.clone() {
             state_db
+        } else if let Some(local_store) = self
+            .services
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            local_store.state_db().await.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "thread goals require a local persisted thread with a state database"
+                )
+            })?
         } else {
-            codex_state::StateRuntime::init(
-                config.sqlite_home.clone(),
-                config.model_provider_id.clone(),
-            )
-            .await
-            .context("failed to initialize sqlite state db for thread goals")?
+            anyhow::bail!("thread goals require a local persisted thread with a state database");
         };
 
         let thread_metadata_present = state_db
