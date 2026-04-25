@@ -32,5 +32,4 @@ ts-rs = { workspace = true, features = [
 walkdir = { workspace = true }
 
 [dev-dependencies]
-assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }

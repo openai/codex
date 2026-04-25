@@ -390,6 +390,8 @@ impl Features {
                     continue;
                 }
                 "undo" => {
+                    continue;
+                }
                 "js_repl" => {
                     continue;
                 }
