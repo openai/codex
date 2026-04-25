@@ -44,7 +44,7 @@ async fn spawn_command_under_sandbox(
             arg0: None,
         },
         sandbox_policy,
-        &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd),
+        &FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, sandbox_cwd),
         NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_cwd,
         &codex_linux_sandbox_exe,
@@ -182,7 +182,6 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -297,7 +296,6 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     // is under a writable root.
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -379,7 +377,6 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
     let config_toml = dot_codex.join("config.toml");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

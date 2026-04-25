@@ -43,3 +43,11 @@ include = ["src/codex_cli_bin/bin/**"]
 [tool.hatch.build.targets.sdist]
 
 [tool.hatch.build.targets.sdist.hooks.custom]
+
+[tool.uv]
+exclude-newer = "7 days"
+index-strategy = "first-index"
+
+[tool.uv.pip]
+exclude-newer = "7 days"
+index-strategy = "first-index"

@@ -25,7 +25,6 @@ pub(crate) struct Session {
     pub(super) idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
-    pub(super) js_repl: Arc<JsReplHandle>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -121,7 +120,7 @@ impl SessionConfiguration {
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         let file_system_policy_matches_legacy = self.file_system_sandbox_policy
-            == FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            == FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 self.sandbox_policy.get(),
                 &self.cwd,
             );
@@ -201,7 +200,7 @@ impl SessionConfiguration {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                     next_configuration.sandbox_policy.get(),
                     &next_configuration.cwd,
                 );
@@ -329,7 +328,7 @@ impl Session {
                             Arc::clone(&thread_store),
                             ResumeThreadParams {
                                 thread_id: resumed_history.conversation_id,
-                                rollout_path: Some(resumed_history.rollout_path.clone()),
+                                rollout_path: resumed_history.rollout_path.clone(),
                                 history: Some(resumed_history.history.clone()),
                                 include_archived: true,
                                 event_persistence_mode,
@@ -766,18 +765,12 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(
-                    config.js_repl_node_path.clone(),
-                ),
+                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
             services
                 .model_client
                 .set_window_generation(window_generation);
-            let js_repl = Arc::new(JsReplHandle::with_node_path(
-                config.js_repl_node_path.clone(),
-                config.js_repl_node_module_dirs.clone(),
-            ));
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
@@ -798,7 +791,6 @@ impl Session {
                 idle_pending_input: Mutex::new(Vec::new()),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
-                js_repl,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

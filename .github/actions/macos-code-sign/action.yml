@@ -4,6 +4,9 @@ inputs:
   target:
     description: Rust compilation target triple (e.g. aarch64-apple-darwin).
     required: true
+  binaries:
+    description: Space-delimited binary basenames to sign and notarize.
+    default: "codex codex-responses-api-proxy"
   sign-binaries:
     description: Whether to sign and notarize the macOS binaries.
     required: false
@@ -119,6 +122,7 @@ runs:
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
       run: |
         set -euo pipefail
 
@@ -134,7 +138,7 @@ runs:
 
         entitlements_path="$GITHUB_ACTION_PATH/codex.entitlements.plist"
 
-        for binary in codex codex-responses-api-proxy; do
+        for binary in ${BINARIES}; do
           path="codex-rs/target/${TARGET}/release/${binary}"
           codesign --force --options runtime --timestamp --entitlements "$entitlements_path" --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
         done
@@ -144,6 +148,7 @@ runs:
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
@@ -182,8 +187,9 @@ runs:
           notarize_submission "$binary" "$archive_path" "$notary_key_path"
         }
 
-        notarize_binary "codex"
-        notarize_binary "codex-responses-api-proxy"
+        for binary in ${BINARIES}; do
+          notarize_binary "${binary}"
+        done
 
     - name: Sign and notarize macOS dmg
       if: ${{ inputs.sign-dmg == 'true' }}

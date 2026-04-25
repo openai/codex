@@ -10,7 +10,5 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + [
-        "//codex-rs:node-version.txt",
-    ],
+    ),
 )
