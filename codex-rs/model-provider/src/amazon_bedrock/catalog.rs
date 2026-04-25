@@ -1,6 +1,6 @@
-use codex_models_manager::bundled_models_response;
-use codex_models_manager::model_info::model_info_from_slug;
+use codex_models_manager::model_info::BASE_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -13,19 +13,20 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 
 const GPT_OSS_CONTEXT_WINDOW: i64 = 128_000;
+const GPT_5_4_CONTEXT_WINDOW: i64 = 272_000;
+const GPT_5_4_MAX_CONTEXT_WINDOW: i64 = 1_000_000;
 const GPT_5_4_CMB_MODEL_ID: &str = "openai.gpt-5.4-cmb";
-const GPT_5_4_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![
             gpt_5_4_cmb_bedrock_model(/*priority*/ 0),
-            bedrock_model(
+            bedrock_oss_model(
                 "openai.gpt-oss-120b",
                 "GPT OSS 120B on Bedrock",
                 /*priority*/ 1,
             ),
-            bedrock_model(
+            bedrock_oss_model(
                 "openai.gpt-oss-20b",
                 "GPT OSS 20B on Bedrock",
                 /*priority*/ 2,
@@ -35,28 +36,42 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
 }
 
 fn gpt_5_4_cmb_bedrock_model(priority: i32) -> ModelInfo {
-    let mut model = bundled_gpt_5_4_model();
-
-    model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
-    model.priority = priority;
-    model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
-    model
-}
-
-fn bundled_gpt_5_4_model() -> ModelInfo {
-    if let Ok(response) = bundled_models_response()
-        && let Some(model) = response
-            .models
-            .into_iter()
-            .find(|model| model.slug == GPT_5_4_MODEL_ID)
-    {
-        return model;
+    ModelInfo {
+        slug: GPT_5_4_CMB_MODEL_ID.to_string(),
+        display_name: "gpt-5.4".to_string(),
+        description: Some("Strong model for everyday coding.".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: gpt_5_4_cmb_reasoning_levels(),
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority,
+        additional_speed_tiers: vec!["fast".to_string()],
+        availability_nux: None,
+        upgrade: None,
+        base_instructions: BASE_INSTRUCTIONS.to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: true,
+        default_reasoning_summary: ReasoningSummary::None,
+        support_verbosity: true,
+        default_verbosity: Some(Verbosity::Medium),
+        apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+        web_search_tool_type: WebSearchToolType::TextAndImage,
+        truncation_policy: TruncationPolicyConfig::tokens(/*limit*/ 10_000),
+        supports_parallel_tool_calls: true,
+        supports_image_detail_original: true,
+        context_window: Some(GPT_5_4_CONTEXT_WINDOW),
+        max_context_window: Some(GPT_5_4_MAX_CONTEXT_WINDOW),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+        input_modalities: vec![InputModality::Text, InputModality::Image],
+        used_fallback_model_metadata: false,
+        supports_search_tool: true,
     }
-
-    model_info_from_slug(GPT_5_4_MODEL_ID)
 }
 
-fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
+fn bedrock_oss_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: display_name.to_string(),
@@ -74,7 +89,7 @@ fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
         additional_speed_tiers: Vec::new(),
         availability_nux: None,
         upgrade: None,
-        base_instructions: codex_models_manager::model_info::BASE_INSTRUCTIONS.to_string(),
+        base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: None,
         supports_reasoning_summaries: true,
         default_reasoning_summary: ReasoningSummary::None,
@@ -94,6 +109,15 @@ fn bedrock_model(slug: &str, display_name: &str, priority: i32) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
     }
+}
+
+fn gpt_5_4_cmb_reasoning_levels() -> Vec<ReasoningEffortPreset> {
+    vec![
+        reasoning_effort_preset(ReasoningEffort::Minimal),
+        reasoning_effort_preset(ReasoningEffort::Low),
+        reasoning_effort_preset(ReasoningEffort::Medium),
+        reasoning_effort_preset(ReasoningEffort::High),
+    ]
 }
 
 fn reasoning_effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
@@ -128,19 +152,17 @@ mod tests {
     }
 
     #[test]
-    fn gpt_5_4_cmb_uses_gpt_5_4_spec() {
+    fn gpt_5_4_cmb_advertises_only_bedrock_supported_reasoning_levels() {
         let catalog = static_model_catalog();
         let cmb_model = catalog
             .models
             .iter()
             .find(|model| model.slug == GPT_5_4_CMB_MODEL_ID)
             .expect("Bedrock catalog should include GPT-5.4 CMB");
-        let mut gpt_5_4_model = bundled_gpt_5_4_model();
 
-        gpt_5_4_model.slug = GPT_5_4_CMB_MODEL_ID.to_string();
-        gpt_5_4_model.priority = cmb_model.priority;
-        gpt_5_4_model.apply_patch_tool_type = Some(ApplyPatchToolType::Function);
-
-        assert_eq!(*cmb_model, gpt_5_4_model);
+        assert_eq!(
+            cmb_model.supported_reasoning_levels,
+            gpt_5_4_cmb_reasoning_levels()
+        );
     }
 }

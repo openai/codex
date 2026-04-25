@@ -675,14 +675,6 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
-        if let Some(manager) = turn_context.js_repl.manager_if_initialized()
-            && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
-        {
-            warn!("failed to interrupt js_repl kernel: {err}");
-        }
-    }
-
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -711,23 +703,19 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        if reason == TurnAbortReason::Interrupted {
-            self.cleanup_after_interrupt(&task.turn_context).await;
-
-            if let Some(marker) = interrupted_turn_history_marker(
+        if reason == TurnAbortReason::Interrupted
+            && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),
-            ) {
-                self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                    .await;
-                self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
-                    .await;
-                // Ensure the marker is durably visible before emitting TurnAborted: some clients
-                // synchronously re-read the rollout on receipt of the abort event.
-                if let Err(err) = self.flush_rollout().await {
-                    warn!(
-                        "failed to flush interrupted-turn marker before emitting TurnAborted: {err}"
-                    );
-                }
+            )
+        {
+            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+                .await;
+            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
+                .await;
+            // Ensure the marker is durably visible before emitting TurnAborted: some clients
+            // synchronously re-read the rollout on receipt of the abort event.
+            if let Err(err) = self.flush_rollout().await {
+                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
             }
         }
 
