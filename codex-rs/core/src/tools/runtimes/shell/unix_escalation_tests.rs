@@ -390,11 +390,12 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         ..HooksConfig::default()
     });
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    turn_context.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
-    turn_context.file_system_sandbox_policy = read_only_file_system_sandbox_policy();
-    turn_context.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
+        &read_only_file_system_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
     let target = std::env::temp_dir().join("execve-hook-short-circuit.txt");
