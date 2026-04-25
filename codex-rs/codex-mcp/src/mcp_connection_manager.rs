@@ -334,15 +334,15 @@ fn can_auto_accept_elicitation(elicitation: &CreateElicitationRequestParams) -> 
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
     approval_policy: Arc<StdMutex<AskForApproval>>,
-    sandbox_policy: Arc<StdMutex<SandboxPolicy>>,
+    permission_profile: Arc<StdMutex<PermissionProfile>>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval, sandbox_policy: SandboxPolicy) -> Self {
+    fn new(approval_policy: AskForApproval, permission_profile: PermissionProfile) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
-            sandbox_policy: Arc::new(StdMutex::new(sandbox_policy)),
+            permission_profile: Arc::new(StdMutex::new(permission_profile)),
         }
     }
 
@@ -364,23 +364,23 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
-        let sandbox_policy = self.sandbox_policy.clone();
+        let permission_profile = self.permission_profile.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
             let approval_policy = approval_policy.clone();
-            let sandbox_policy = sandbox_policy.clone();
+            let permission_profile = permission_profile.clone();
             async move {
                 let approval_policy = approval_policy
                     .lock()
                     .map(|policy| *policy)
                     .unwrap_or(AskForApproval::Never);
-                let sandbox_policy = sandbox_policy
+                let permission_profile = permission_profile
                     .lock()
-                    .map(|policy| policy.clone())
-                    .unwrap_or_else(|_| SandboxPolicy::new_read_only_policy());
-                if mcp_permission_prompt_is_auto_approved(approval_policy, &sandbox_policy)
+                    .map(|profile| profile.clone())
+                    .unwrap_or_default();
+                if mcp_permission_prompt_is_auto_approved(approval_policy, &permission_profile)
                     && can_auto_accept_elicitation(&elicitation)
                 {
                     return Ok(ElicitationResponse {
@@ -666,14 +666,14 @@ impl AsyncManagedClient {
 impl McpConnectionManager {
     pub fn new_uninitialized(
         approval_policy: &Constrained<AskForApproval>,
-        sandbox_policy: &Constrained<SandboxPolicy>,
+        permission_profile: &Constrained<PermissionProfile>,
     ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
-                sandbox_policy.get().clone(),
+                permission_profile.get().clone(),
             ),
         }
     }
@@ -692,9 +692,9 @@ impl McpConnectionManager {
         }
     }
 
-    pub fn set_sandbox_policy(&self, sandbox_policy: &SandboxPolicy) {
-        if let Ok(mut policy) = self.elicitation_requests.sandbox_policy.lock() {
-            *policy = sandbox_policy.clone();
+    pub fn set_permission_profile(&self, permission_profile: PermissionProfile) {
+        if let Ok(mut profile) = self.elicitation_requests.permission_profile.lock() {
+            *profile = permission_profile;
         }
     }
 
@@ -706,7 +706,7 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
         tx_event: Sender<Event>,
-        initial_sandbox_policy: SandboxPolicy,
+        initial_permission_profile: PermissionProfile,
         runtime_environment: McpRuntimeEnvironment,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
@@ -718,7 +718,7 @@ impl McpConnectionManager {
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests =
-            ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
+            ElicitationRequestManager::new(approval_policy.value(), initial_permission_profile);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let codex_apps_auth_provider = auth
