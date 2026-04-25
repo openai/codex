@@ -3,8 +3,6 @@
 You have access to a memory folder with guidance from prior runs. It can save
 time and help you stay consistent. Use it whenever it is likely to help.
 
-Never update memories. You can only read them.
-
 Decision boundary: should you use memory for a new user query?
 
 - Skip memory ONLY when the request is clearly self-contained and does not need
