@@ -10,7 +10,7 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
-use codex_core::plugins::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;

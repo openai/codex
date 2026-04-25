@@ -50,6 +50,7 @@ describe("Codex", () => {
             cached_input_tokens: 12,
             input_tokens: 42,
             output_tokens: 5,
+            reasoning_output_tokens: 0,
           },
         },
       ]);

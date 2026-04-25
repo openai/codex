@@ -47,7 +47,7 @@ jobs:
 
   build:
     needs: tag-check
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -67,16 +67,53 @@ jobs:
         include:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "true"
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
+          # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+            bundle: primary
+            artifact_name: x86_64-unknown-linux-musl
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "false"
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: x86_64-unknown-linux-musl-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+            bundle: primary
+            artifact_name: aarch64-unknown-linux-musl
+            binaries: "codex codex-responses-api-proxy"
+            build_dmg: "false"
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
+            bundle: app-server
+            artifact_name: aarch64-unknown-linux-musl-app-server
+            binaries: "codex-app-server"
+            build_dmg: "false"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -219,13 +256,17 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
           echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
-          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+          cargo build --target ${{ matrix.target }} --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
-          name: cargo-timings-rust-release-${{ matrix.target }}
+          name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
@@ -235,12 +276,14 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
+          binaries: ${{ matrix.binaries }}
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
+          binaries: ${{ matrix.binaries }}
           sign-binaries: "true"
           sign-dmg: "false"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -249,7 +292,7 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
         name: Build macOS dmg
         shell: bash
         run: |
@@ -264,23 +307,17 @@ jobs:
           # The previous "MacOS code signing (binaries)" step signs + notarizes the
           # built artifacts in `${release_dir}`. This step packages *those same*
           # signed binaries into a dmg.
-          codex_binary_path="${release_dir}/codex"
-          proxy_binary_path="${release_dir}/codex-responses-api-proxy"
-
           rm -rf "$dmg_root"
           mkdir -p "$dmg_root"
 
-          if [[ ! -f "$codex_binary_path" ]]; then
-            echo "Binary $codex_binary_path not found"
-            exit 1
-          fi
-          if [[ ! -f "$proxy_binary_path" ]]; then
-            echo "Binary $proxy_binary_path not found"
-            exit 1
-          fi
-
-          ditto "$codex_binary_path" "${dmg_root}/codex"
-          ditto "$proxy_binary_path" "${dmg_root}/codex-responses-api-proxy"
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            if [[ ! -f "${binary_path}" ]]; then
+              echo "Binary ${binary_path} not found"
+              exit 1
+            fi
+            ditto "${binary_path}" "${dmg_root}/${binary}"
+          done
 
           rm -f "$dmg_path"
           hdiutil create \
@@ -295,7 +332,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -314,15 +351,15 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+          for binary in ${{ matrix.binaries }}; do
+            cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
+            if [[ "${{ matrix.target }}" == *linux* ]]; then
+              cp "target/${{ matrix.target }}/release/${binary}.sigstore" \
+                "$dest/${binary}-${{ matrix.target }}.sigstore"
+            fi
+          done
 
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
-          fi
-
-          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+          if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
@@ -364,7 +401,7 @@ jobs:
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.artifact_name }}
           # Upload the per-binary .zst files as well as the new .tar.gz
           # equivalents we generated in the previous step.
           path: |

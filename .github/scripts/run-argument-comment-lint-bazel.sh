@@ -2,16 +2,6 @@
 
 set -euo pipefail
 
-ci_config=ci-linux
-case "${RUNNER_OS:-}" in
-  macOS)
-    ci_config=ci-macos
-    ;;
-  Windows)
-    ci_config=ci-windows
-    ;;
-esac
-
 bazel_lint_args=("$@")
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   has_host_platform_override=0
@@ -44,29 +34,6 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   bazel_lint_args+=("--skip_incompatible_explicit_targets")
 fi
 
-bazel_startup_args=()
-if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
-  bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
-fi
-
-run_bazel() {
-  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-    MSYS2_ARG_CONV_EXCL='*' bazel "$@"
-    return
-  fi
-
-  bazel "$@"
-}
-
-run_bazel_with_startup_args() {
-  if [[ ${#bazel_startup_args[@]} -gt 0 ]]; then
-    run_bazel "${bazel_startup_args[@]}" "$@"
-    return
-  fi
-
-  run_bazel "$@"
-}
-
 read_query_labels() {
   local query="$1"
   local query_stdout
@@ -74,12 +41,10 @@ read_query_labels() {
   query_stdout="$(mktemp)"
   query_stderr="$(mktemp)"
 
-  if ! run_bazel_with_startup_args \
-    --noexperimental_remote_repo_contents_cache \
-    query \
+  if ! ./.github/scripts/run-bazel-query-ci.sh \
     --keep_going \
     --output=label \
-    "$query" >"$query_stdout" 2>"$query_stderr"; then
+    -- "$query" >"$query_stdout" 2>"$query_stderr"; then
     cat "$query_stderr" >&2
     rm -f "$query_stdout" "$query_stderr"
     exit 1

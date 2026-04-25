@@ -194,6 +194,7 @@ mod session_lifecycle;
 mod side;
 mod startup_prompts;
 mod thread_events;
+mod thread_goal_actions;
 mod thread_routing;
 mod thread_session_state;
 
@@ -289,7 +290,7 @@ fn default_exec_approval_decisions(
     proposed_network_policy_amendments: Option<
         &[codex_protocol::approvals::NetworkPolicyAmendment],
     >,
-    additional_permissions: Option<&codex_protocol::models::PermissionProfile>,
+    additional_permissions: Option<&codex_protocol::models::AdditionalPermissionProfile>,
 ) -> Vec<codex_protocol::protocol::ReviewDecision> {
     ExecApprovalRequestEvent::default_available_decisions(
         network_approval_context,
