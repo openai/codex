@@ -4042,30 +4042,34 @@ impl CodexMessageProcessor {
                 .await
                 .contains(&thread_id)
         {
-            self.send_invalid_request_error(
-                request_id,
-                format!(
-                    "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-                ),
-            )
-            .await;
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(format!(
+                        "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                    )),
+                )
+                .await;
             return;
         }
 
         if params.sandbox.is_some() && params.permission_profile.is_some() {
-            self.send_invalid_request_error(
-                request_id,
-                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
-            )
-            .await;
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request("`permissionProfile` cannot be combined with `sandbox`"),
+                )
+                .await;
             return;
         }
 
-        if self
-            .resume_running_thread(request_id.clone(), &params)
-            .await
-        {
-            return;
+        match self.resume_running_thread(&request_id, &params).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         }
 
         let ThreadResumeParams {
@@ -4089,22 +4093,20 @@ impl CodexMessageProcessor {
         } = params;
         let include_turns = !exclude_turns;
 
-        let (thread_history, resume_source_thread) = if let Some(history) = history {
-            let Some(thread_history) = self
-                .resume_thread_from_history(request_id.clone(), history.as_slice())
+        let (thread_history, resume_source_thread) = match if let Some(history) = history {
+            self.resume_thread_from_history(history.as_slice())
                 .await
-            else {
-                return;
-            };
-            (thread_history, None)
+                .map(|thread_history| (thread_history, None))
         } else {
-            let Some((thread_history, stored_thread)) = self
-                .resume_thread_from_rollout(request_id.clone(), &thread_id, path.as_ref())
+            self.resume_thread_from_rollout(&thread_id, path.as_ref())
                 .await
-            else {
+                .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
+        } {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
                 return;
-            };
-            (thread_history, Some(stored_thread))
+            }
         };
 
         let history_cwd = thread_history.session_cwd();
@@ -4164,11 +4166,9 @@ impl CodexMessageProcessor {
             }) => {
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
-                    self.send_internal_error(
-                        request_id,
-                        format!("rollout path missing for thread {thread_id}"),
-                    )
-                    .await;
+                    let error =
+                        internal_error(format!("rollout path missing for thread {thread_id}"));
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 };
                 // Auto-attach a thread listener when resuming a thread.
@@ -4198,7 +4198,9 @@ impl CodexMessageProcessor {
                 {
                     Ok(thread) => thread,
                     Err(message) => {
-                        self.send_internal_error(request_id, message).await;
+                        self.outgoing
+                            .send_error(request_id, internal_error(message))
+                            .await;
                         return;
                     }
                 };
@@ -4269,11 +4271,7 @@ impl CodexMessageProcessor {
                 }
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error resuming thread: {err}"),
-                    data: None,
-                };
+                let error = internal_error(format!("error resuming thread: {err}"));
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -4300,21 +4298,16 @@ impl CodexMessageProcessor {
 
     async fn resume_running_thread(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: &ConnectionRequestId,
         params: &ThreadResumeParams,
-    ) -> bool {
+    ) -> Result<bool, JSONRPCErrorError> {
         if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
             if params.history.is_some() {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "cannot resume thread {existing_thread_id} with history while it is already running"
-                    ),
-                )
-                .await;
-                return true;
+                return Err(invalid_request(format!(
+                    "cannot resume thread {existing_thread_id} with history while it is already running"
+                )));
             }
 
             if let (Some(requested_path), Some(active_path)) = (
@@ -4322,69 +4315,47 @@ impl CodexMessageProcessor {
                 existing_thread.rollout_path().as_ref(),
             ) && requested_path != active_path
             {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
-                        requested_path.display(),
-                        active_path.display()
-                    ),
-                )
-                .await;
-                return true;
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
+                    requested_path.display(),
+                    active_path.display()
+                )));
             }
 
-            let Some(source_thread) = self
+            let source_thread = self
                 .read_stored_thread_for_resume(
-                    request_id.clone(),
                     &params.thread_id,
                     params.path.as_ref(),
                     /*include_history*/ true,
                 )
-                .await
-            else {
-                return true;
-            };
+                .await?;
             if source_thread.thread_id != existing_thread_id {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "cannot resume running thread {existing_thread_id} from source thread {}",
-                        source_thread.thread_id
-                    ),
-                )
-                .await;
-                return true;
+                return Err(invalid_request(format!(
+                    "cannot resume running thread {existing_thread_id} from source thread {}",
+                    source_thread.thread_id
+                )));
             }
-            let Some(history_items) = source_thread
+            let history_items = source_thread
                 .history
                 .as_ref()
                 .map(|history| history.items.clone())
-            else {
-                self.send_internal_error(
-                    request_id,
-                    format!("thread {existing_thread_id} did not include persisted history"),
-                )
-                .await;
-                return true;
-            };
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "thread {existing_thread_id} did not include persisted history"
+                    ))
+                })?;
 
             let thread_state = self
                 .thread_state_manager
                 .thread_state(existing_thread_id)
                 .await;
-            if let Err(error) = self
-                .ensure_listener_task_running(
-                    existing_thread_id,
-                    existing_thread.clone(),
-                    thread_state.clone(),
-                    ApiVersion::V2,
-                )
-                .await
-            {
-                self.outgoing.send_error(request_id, error).await;
-                return true;
-            }
+            self.ensure_listener_task_running(
+                existing_thread_id,
+                existing_thread.clone(),
+                thread_state.clone(),
+                ApiVersion::V2,
+            )
+            .await?;
 
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
@@ -4406,10 +4377,7 @@ impl CodexMessageProcessor {
                 .await
             {
                 Ok(thread) => thread,
-                Err(message) => {
-                    self.send_internal_error(request_id, message).await;
-                    return true;
-                }
+                Err(message) => return Err(internal_error(message)),
             };
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
@@ -4421,15 +4389,9 @@ impl CodexMessageProcessor {
                 thread_state.listener_command_tx()
             };
             let Some(listener_command_tx) = listener_command_tx else {
-                let err = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!(
-                        "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener is not running"
-                    ),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, err).await;
-                return true;
+                return Err(internal_error(format!(
+                    "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener is not running"
+                )));
             };
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
@@ -4443,31 +4405,23 @@ impl CodexMessageProcessor {
                 }),
             );
             if listener_command_tx.send(command).is_err() {
-                let err = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!(
-                        "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
-                    ),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, err).await;
+                return Err(internal_error(format!(
+                    "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
+                )));
             }
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 
     async fn resume_thread_from_history(
         &self,
-        request_id: ConnectionRequestId,
         history: &[ResponseItem],
-    ) -> Option<InitialHistory> {
+    ) -> Result<InitialHistory, JSONRPCErrorError> {
         if history.is_empty() {
-            self.send_invalid_request_error(request_id, "history must not be empty".to_string())
-                .await;
-            return None;
+            return Err(invalid_request("history must not be empty"));
         }
-        Some(InitialHistory::Forked(
+        Ok(InitialHistory::Forked(
             history
                 .iter()
                 .cloned()
@@ -4478,34 +4432,24 @@ impl CodexMessageProcessor {
 
     async fn resume_thread_from_rollout(
         &self,
-        request_id: ConnectionRequestId,
         thread_id: &str,
         path: Option<&PathBuf>,
-    ) -> Option<(InitialHistory, StoredThread)> {
-        match self
-            .read_stored_thread_for_resume(
-                request_id.clone(),
-                thread_id,
-                path,
-                /*include_history*/ true,
-            )
-            .await
-        {
-            Some(stored_thread) => self
-                .stored_thread_to_initial_history(request_id, &stored_thread)
-                .await
-                .map(|history| (history, stored_thread)),
-            None => None,
-        }
+    ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
+        let stored_thread = self
+            .read_stored_thread_for_resume(thread_id, path, /*include_history*/ true)
+            .await?;
+        let history = self
+            .stored_thread_to_initial_history(&stored_thread)
+            .await?;
+        Ok((history, stored_thread))
     }
 
     async fn read_stored_thread_for_resume(
         &self,
-        request_id: ConnectionRequestId,
         thread_id: &str,
         path: Option<&PathBuf>,
         include_history: bool,
-    ) -> Option<StoredThread> {
+    ) -> Result<StoredThread, JSONRPCErrorError> {
         let result = if let Some(path) = path {
             self.thread_store
                 .read_thread_by_rollout_path(StoreReadThreadByRolloutPathParams {
@@ -4518,12 +4462,7 @@ impl CodexMessageProcessor {
             let existing_thread_id = match ThreadId::from_string(thread_id) {
                 Ok(id) => id,
                 Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("invalid thread id: {err}"),
-                    )
-                    .await;
-                    return None;
+                    return Err(invalid_request(format!("invalid thread id: {err}")));
                 }
             };
             let params = StoreReadThreadParams {
@@ -4534,35 +4473,24 @@ impl CodexMessageProcessor {
             self.thread_store.read_thread(params).await
         };
 
-        match result {
-            Ok(thread) => Some(thread),
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_resume_read_error(err))
-                    .await;
-                None
-            }
-        }
+        result.map_err(thread_store_resume_read_error)
     }
 
     async fn stored_thread_to_initial_history(
         &self,
-        request_id: ConnectionRequestId,
         stored_thread: &StoredThread,
-    ) -> Option<InitialHistory> {
+    ) -> Result<InitialHistory, JSONRPCErrorError> {
         let thread_id = stored_thread.thread_id;
-        let history = match stored_thread.history.as_ref() {
-            Some(history) => history.items.clone(),
-            None => {
-                self.send_internal_error(
-                    request_id,
-                    format!("thread {thread_id} did not include persisted history"),
-                )
-                .await;
-                return None;
-            }
-        };
-        Some(InitialHistory::Resumed(ResumedHistory {
+        let history = stored_thread
+            .history
+            .as_ref()
+            .map(|history| history.items.clone())
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "thread {thread_id} did not include persisted history"
+                ))
+            })?;
+        Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history,
             rollout_path: stored_thread.rollout_path.clone(),
@@ -4590,27 +4518,18 @@ impl CodexMessageProcessor {
 
     async fn read_stored_thread_for_new_fork(
         &self,
-        request_id: ConnectionRequestId,
         thread_store: &dyn ThreadStore,
         thread_id: ThreadId,
         include_history: bool,
-    ) -> Option<StoredThread> {
-        match thread_store
+    ) -> Result<StoredThread, JSONRPCErrorError> {
+        thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: true,
                 include_history,
             })
             .await
-        {
-            Ok(thread) => Some(thread),
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_resume_read_error(err))
-                    .await;
-                None
-            }
-        }
+            .map_err(thread_store_resume_read_error)
     }
 
     async fn load_thread_from_resume_source_or_send_internal(
@@ -4711,238 +4630,208 @@ impl CodexMessageProcessor {
             persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
-        if sandbox.is_some() && permission_profile.is_some() {
-            self.send_invalid_request_error(
-                request_id,
-                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
-            )
-            .await;
-            return;
-        }
-
-        let Some(source_thread) = self
-            .read_stored_thread_for_resume(
-                request_id.clone(),
-                &thread_id,
-                path.as_ref(),
-                /*include_history*/ true,
-            )
-            .await
-        else {
-            return;
-        };
-        let source_thread_id = source_thread.thread_id;
-        let Some(history_items) = source_thread
-            .history
-            .as_ref()
-            .map(|history| history.items.clone())
-        else {
-            self.send_internal_error(
-                request_id,
-                format!("thread {source_thread_id} did not include persisted history"),
-            )
-            .await;
-            return;
-        };
-        let history_cwd = Some(source_thread.cwd.clone());
-
-        // Persist Windows sandbox mode.
-        let mut cli_overrides = cli_overrides.unwrap_or_default();
-        if cfg!(windows) {
-            match WindowsSandboxLevel::from_config(&self.config) {
-                WindowsSandboxLevel::Elevated => {
-                    cli_overrides
-                        .insert("windows.sandbox".to_string(), serde_json::json!("elevated"));
-                }
-                WindowsSandboxLevel::RestrictedToken => {
-                    cli_overrides.insert(
-                        "windows.sandbox".to_string(),
-                        serde_json::json!("unelevated"),
-                    );
-                }
-                WindowsSandboxLevel::Disabled => {}
+        let result = async {
+            if sandbox.is_some() && permission_profile.is_some() {
+                return Err(invalid_request(
+                    "`permissionProfile` cannot be combined with `sandbox`",
+                ));
             }
-        }
-        let request_overrides = if cli_overrides.is_empty() {
-            None
-        } else {
-            Some(cli_overrides)
-        };
-        let mut typesafe_overrides = self.build_thread_config_overrides(
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox,
-            permission_profile,
-            base_instructions,
-            developer_instructions,
-            /*personality*/ None,
-        );
-        typesafe_overrides.ephemeral = ephemeral.then_some(true);
-        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
-            .config_manager
-            .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
-            .await
-        {
-            Ok(config) => config,
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, config_load_error(&err))
-                    .await;
-                return;
+
+            let source_thread = self
+                .read_stored_thread_for_resume(
+                    &thread_id,
+                    path.as_ref(),
+                    /*include_history*/ true,
+                )
+                .await?;
+            let source_thread_id = source_thread.thread_id;
+            let history_items = source_thread
+                .history
+                .as_ref()
+                .map(|history| history.items.clone())
+                .ok_or_else(|| {
+                    internal_error(format!(
+                        "thread {source_thread_id} did not include persisted history"
+                    ))
+                })?;
+            let history_cwd = Some(source_thread.cwd.clone());
+
+            // Persist Windows sandbox mode.
+            let mut cli_overrides = cli_overrides.unwrap_or_default();
+            if cfg!(windows) {
+                match WindowsSandboxLevel::from_config(&self.config) {
+                    WindowsSandboxLevel::Elevated => {
+                        cli_overrides
+                            .insert("windows.sandbox".to_string(), serde_json::json!("elevated"));
+                    }
+                    WindowsSandboxLevel::RestrictedToken => {
+                        cli_overrides.insert(
+                            "windows.sandbox".to_string(),
+                            serde_json::json!("unelevated"),
+                        );
+                    }
+                    WindowsSandboxLevel::Disabled => {}
+                }
             }
-        };
+            let request_overrides = if cli_overrides.is_empty() {
+                None
+            } else {
+                Some(cli_overrides)
+            };
+            let mut typesafe_overrides = self.build_thread_config_overrides(
+                model,
+                model_provider,
+                service_tier,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                sandbox,
+                permission_profile,
+                base_instructions,
+                developer_instructions,
+                /*personality*/ None,
+            );
+            typesafe_overrides.ephemeral = ephemeral.then_some(true);
+            // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+            let config = self
+                .config_manager
+                .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+                .await
+                .map_err(|err| config_load_error(&err))?;
 
-        let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
-        let fork_thread_store = configured_thread_store(&config);
+            let fallback_model_provider = config.model_provider_id.clone();
+            let instruction_sources = Self::instruction_sources_from_config(&config).await;
+            let fork_thread_store = configured_thread_store(&config);
 
-        let NewThread {
-            thread_id,
-            thread: forked_thread,
-            session_configured,
-            ..
-        } = match self
-            .thread_manager
-            .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
-                config,
-                InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: source_thread_id,
-                    history: history_items.clone(),
-                    rollout_path: source_thread.rollout_path.clone(),
-                }),
-                persist_extended_history,
-                self.request_trace_context(&request_id).await,
-            )
-            .await
-        {
-            Ok(thread) => thread,
-            Err(err) => {
-                match err {
+            let NewThread {
+                thread_id,
+                thread: forked_thread,
+                session_configured,
+                ..
+            } = self
+                .thread_manager
+                .fork_thread_from_history(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    InitialHistory::Resumed(ResumedHistory {
+                        conversation_id: source_thread_id,
+                        history: history_items.clone(),
+                        rollout_path: source_thread.rollout_path.clone(),
+                    }),
+                    persist_extended_history,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+                .map_err(|err| match err {
                     CodexErr::Io(_) | CodexErr::Json(_) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to load thread {source_thread_id}: {err}"),
-                        )
-                        .await;
+                        invalid_request(format!("failed to load thread {source_thread_id}: {err}"))
                     }
-                    CodexErr::InvalidRequest(message) => {
-                        self.send_invalid_request_error(request_id, message).await;
-                    }
-                    _ => {
-                        self.send_internal_error(
-                            request_id,
-                            format!("error forking thread: {err}"),
-                        )
-                        .await;
-                    }
-                }
-                return;
-            }
-        };
+                    CodexErr::InvalidRequest(message) => invalid_request(message),
+                    err => internal_error(format!("error forking thread: {err}")),
+                })?;
 
-        // Auto-attach a conversation listener when forking a thread.
-        Self::log_listener_attach_result(
-            self.ensure_conversation_listener(
+            // Auto-attach a conversation listener when forking a thread.
+            Self::log_listener_attach_result(
+                self.ensure_conversation_listener(
+                    thread_id,
+                    request_id.connection_id,
+                    /*raw_events_enabled*/ false,
+                    ApiVersion::V2,
+                )
+                .await,
                 thread_id,
                 request_id.connection_id,
-                /*raw_events_enabled*/ false,
-                ApiVersion::V2,
-            )
-            .await,
-            thread_id,
-            request_id.connection_id,
-            "thread",
-        );
+                "thread",
+            );
 
-        // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
-        // pathless, so they rebuild their visible history from the copied source history instead.
-        let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
-            let Some(stored_thread) = self
-                .read_stored_thread_for_new_fork(
-                    request_id.clone(),
-                    fork_thread_store.as_ref(),
-                    thread_id,
-                    include_turns,
-                )
-                .await
-            else {
-                return;
-            };
-            match self
-                .stored_thread_to_api_thread(
-                    stored_thread,
-                    fallback_model_provider.as_str(),
-                    include_turns,
-                )
-                .await
-            {
-                Ok(thread) => thread,
-                Err(message) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
+            // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
+            // pathless, so they rebuild their visible history from the copied source history instead.
+            let mut thread =
+                if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
+                    let stored_thread = self
+                        .read_stored_thread_for_new_fork(
+                            fork_thread_store.as_ref(),
+                            thread_id,
+                            include_turns,
+                        )
+                        .await?;
+                    self.stored_thread_to_api_thread(
+                        stored_thread,
+                        fallback_model_provider.as_str(),
+                        include_turns,
+                    )
+                    .await
+                    .map_err(|message| {
+                        internal_error(format!(
                             "failed to load rollout `{}` for thread {thread_id}: {message}",
                             fork_rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            }
-        } else {
-            let config_snapshot = forked_thread.config_snapshot().await;
-            // forked thread names do not inherit the source thread name
-            let mut thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
-            thread.preview = preview_from_rollout_items(&history_items);
-            thread.forked_from_id = Some(source_thread_id.to_string());
-            if include_turns
-                && let Err(message) = populate_thread_turns(
-                    &mut thread,
-                    ThreadTurnSource::HistoryItems(&history_items),
-                    /*active_turn*/ None,
-                )
-                .await
-            {
-                self.send_internal_error(request_id, message).await;
+                        ))
+                    })?
+                } else {
+                    let config_snapshot = forked_thread.config_snapshot().await;
+                    // forked thread names do not inherit the source thread name
+                    let mut thread =
+                        build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+                    thread.preview = preview_from_rollout_items(&history_items);
+                    thread.forked_from_id = Some(source_thread_id.to_string());
+                    if include_turns {
+                        populate_thread_turns(
+                            &mut thread,
+                            ThreadTurnSource::HistoryItems(&history_items),
+                            /*active_turn*/ None,
+                        )
+                        .await
+                        .map_err(internal_error)?;
+                    }
+                    thread
+                };
+
+            self.thread_watch_manager
+                .upsert_thread_silently(thread.clone())
+                .await;
+
+            thread.status = resolve_thread_status(
+                self.thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await,
+                /*has_in_progress_turn*/ false,
+            );
+            let permission_profile = thread_response_permission_profile(
+                forked_thread.config_snapshot().await.permission_profile,
+            );
+
+            let response = ThreadForkResponse {
+                thread: thread.clone(),
+                model: session_configured.model,
+                model_provider: session_configured.model_provider_id,
+                service_tier: session_configured.service_tier,
+                cwd: session_configured.cwd,
+                instruction_sources,
+                approval_policy: session_configured.approval_policy.into(),
+                approvals_reviewer: session_configured.approvals_reviewer.into(),
+                sandbox: session_configured.sandbox_policy.into(),
+                permission_profile,
+                reasoning_effort: session_configured.reasoning_effort,
+            };
+
+            Ok::<_, JSONRPCErrorError>((
+                response,
+                thread_id,
+                forked_thread,
+                history_items,
+                thread_started_notification(thread),
+            ))
+        }
+        .await;
+
+        let (response, thread_id, forked_thread, history_items, notif) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
                 return;
             }
-            thread
         };
 
-        self.thread_watch_manager
-            .upsert_thread_silently(thread.clone())
-            .await;
-
-        thread.status = resolve_thread_status(
-            self.thread_watch_manager
-                .loaded_status_for_thread(&thread.id)
-                .await,
-            /*has_in_progress_turn*/ false,
-        );
-        let permission_profile = thread_response_permission_profile(
-            forked_thread.config_snapshot().await.permission_profile,
-        );
-
-        let response = ThreadForkResponse {
-            thread: thread.clone(),
-            model: session_configured.model,
-            model_provider: session_configured.model_provider_id,
-            service_tier: session_configured.service_tier,
-            cwd: session_configured.cwd,
-            instruction_sources,
-            approval_policy: session_configured.approval_policy.into(),
-            approvals_reviewer: session_configured.approvals_reviewer.into(),
-            sandbox: session_configured.sandbox_policy.into(),
-            permission_profile,
-            reasoning_effort: session_configured.reasoning_effort,
-        };
         if self.config.features.enabled(Feature::GeneralAnalytics) {
             self.analytics_events_client.track_response(
                 request_id.connection_id.0,
@@ -4982,7 +4871,6 @@ impl CodexMessageProcessor {
             .await;
         }
 
-        let notif = thread_started_notification(thread);
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;
@@ -8329,14 +8217,7 @@ async fn handle_pending_thread_resume_request(
         .await
     {
         outgoing
-            .send_error(
-                request_id,
-                JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message,
-                    data: None,
-                },
-            )
+            .send_error(request_id, internal_error(message))
             .await;
         return;
     }
@@ -8358,13 +8239,9 @@ async fn handle_pending_thread_resume_request(
             outgoing
                 .send_error(
                     request_id,
-                    JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!(
-                            "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
-                        ),
-                        data: None,
-                    },
+                    invalid_request(format!(
+                        "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
+                    )),
                 )
                 .await;
             return;
