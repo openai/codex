@@ -1339,9 +1339,14 @@ impl Session {
             .await
             .context("failed to read thread metadata before reconciling thread goals")?
             .is_some();
-        if !thread_metadata_present
-            && let Ok(Some(rollout_path)) = self.current_rollout_path().await
-        {
+        if !thread_metadata_present {
+            let rollout_path = self
+                .current_rollout_path()
+                .await
+                .context("failed to locate rollout before reconciling thread goals")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("thread goals require materialized thread metadata")
+                })?;
             reconcile_rollout(
                 Some(&state_db),
                 rollout_path.as_path(),
@@ -1352,6 +1357,14 @@ impl Session {
                 /*new_thread_memory_mode*/ None,
             )
             .await;
+            let thread_metadata_present = state_db
+                .get_thread(self.conversation_id)
+                .await
+                .context("failed to read thread metadata after reconciling thread goals")?
+                .is_some();
+            if !thread_metadata_present {
+                anyhow::bail!("thread metadata is unavailable after reconciling thread goals");
+            }
         }
 
         *self.goal_runtime.state_db.lock().await = Some(state_db.clone());
