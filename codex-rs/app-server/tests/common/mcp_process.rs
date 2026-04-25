@@ -106,6 +106,8 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+pub const TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR: &str =
+    "CODEX_APP_SERVER_TEST_DISABLE_PLUGIN_STARTUP_TASKS";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 impl McpProcess {
@@ -147,7 +149,8 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
-        cmd.env("RUST_LOG", "info");
+        cmd.env("RUST_LOG", "warn");
+        cmd.env(TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR, "1");
         // Keep integration tests isolated from host managed configuration.
         cmd.env(
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",

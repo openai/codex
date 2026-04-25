@@ -19,9 +19,7 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -105,14 +103,11 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         expiration: ExecExpiration::DefaultTimeout,
         capture_policy: ExecCapturePolicy::ShellTool,
     };
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let file_system_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
         sandbox: SandboxType::None,
-        policy: &sandbox_policy,
-        file_system_policy: &file_system_policy,
-        network_policy: NetworkSandboxPolicy::Enabled,
+        permissions: &permissions,
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &cwd,

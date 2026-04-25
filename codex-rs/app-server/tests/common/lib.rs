@@ -26,6 +26,7 @@ pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
 pub use mcp_process::DEFAULT_CLIENT_NAME;
 pub use mcp_process::McpProcess;
+pub use mcp_process::TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;
 pub use mock_model_server::create_mock_responses_server_sequence;
 pub use mock_model_server::create_mock_responses_server_sequence_unchecked;
