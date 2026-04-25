@@ -301,10 +301,13 @@ impl Session {
         let task_kind = task.kind();
         let span_name = task.span_name();
         let started_at = Instant::now();
-        turn_context
+        let turn_started_at_unix_ms = turn_context
             .turn_timing_state
             .mark_turn_started(started_at)
             .await;
+        turn_context
+            .turn_metadata_state
+            .set_turn_started_at_unix_ms(turn_started_at_unix_ms);
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
 
         let cancellation_token = CancellationToken::new();
