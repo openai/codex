@@ -2,7 +2,6 @@ use super::*;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
@@ -73,6 +72,7 @@ pub(crate) struct TurnContext {
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) permission_profile: PermissionProfile,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
@@ -96,11 +96,7 @@ pub(crate) struct TurnContext {
 }
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
-            &self.file_system_sandbox_policy,
-            self.network_sandbox_policy,
-        )
+        self.permission_profile.clone()
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -170,7 +166,7 @@ impl TurnContext {
             ),
             web_search_mode: self.tools_config.web_search_mode,
             session_source: self.session_source.clone(),
-            sandbox_policy: self.sandbox_policy.get(),
+            permission_profile: &self.permission_profile,
             windows_sandbox_level: self.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
@@ -213,6 +209,7 @@ impl TurnContext {
             collaboration_mode,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
+            permission_profile: self.permission_profile.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
@@ -258,7 +255,7 @@ impl TurnContext {
             additional_permissions.as_ref(),
         );
         let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
+            self.permission_profile.enforcement(),
             &file_system_sandbox_policy,
             network_sandbox_policy,
         );
@@ -367,6 +364,13 @@ impl Session {
         per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
+        per_turn_config.permissions.permission_profile =
+            session_configuration.permission_profile.clone();
+        per_turn_config.permissions.sandbox_policy = session_configuration.sandbox_policy.clone();
+        per_turn_config.permissions.file_system_sandbox_policy =
+            session_configuration.file_system_sandbox_policy.clone();
+        per_turn_config.permissions.network_sandbox_policy =
+            session_configuration.network_sandbox_policy;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -429,7 +433,7 @@ impl Session {
             image_generation_tool_auth_allowed,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
             session_source: session_source.clone(),
-            sandbox_policy: session_configuration.sandbox_policy.get(),
+            permission_profile: &session_configuration.permission_profile(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode_for_session(
@@ -455,7 +459,7 @@ impl Session {
             &session_source,
             sub_id.clone(),
             cwd.clone(),
-            session_configuration.sandbox_policy.get(),
+            &session_configuration.permission_profile(),
             session_configuration.windows_sandbox_level,
         ));
         let (current_date, timezone) = local_time_context();
@@ -483,6 +487,7 @@ impl Session {
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
+            permission_profile: session_configuration.permission_profile(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,
