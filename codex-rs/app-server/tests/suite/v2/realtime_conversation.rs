@@ -345,10 +345,16 @@ impl RealtimeE2eHarness {
     /// Returns the nth JSON message app-server wrote to the fake Realtime API
     /// sideband websocket.
     async fn sideband_outbound_request(&self, request_index: usize) -> Value {
-        self.realtime_server
-            .wait_for_request(/*connection_index*/ 0, request_index)
-            .await
-            .body_json()
+        timeout(
+            DEFAULT_TIMEOUT,
+            self.realtime_server
+                .wait_for_request(/*connection_index*/ 0, request_index),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("timed out waiting for realtime sideband request {request_index}")
+        })
+        .body_json()
     }
 
     async fn append_audio(&mut self, thread_id: String) -> Result<()> {
