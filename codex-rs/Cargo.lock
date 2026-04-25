@@ -2538,6 +2538,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "cc",
  "p256",
  "pretty_assertions",
  "rand 0.9.3",

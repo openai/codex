@@ -237,6 +237,7 @@ clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
+core-foundation = "0.10.1"
 crossbeam-channel = "0.5.15"
 crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.28.1"

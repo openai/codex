@@ -3,6 +3,7 @@ name = "codex-device-key"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -20,3 +21,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+
+[build-dependencies]
+cc = "1"
