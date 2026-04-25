@@ -686,6 +686,32 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
 }
 
 #[tokio::test]
+async fn mcp_tool_call_request_meta_includes_turn_started_at_unix_ms() {
+    let (_, turn_context) = make_session_and_context().await;
+    turn_context
+        .turn_metadata_state
+        .set_turn_started_at_unix_ms(/*turn_started_at_unix_ms*/ 1_700_000_000_123);
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        "call-custom",
+        /*metadata*/ None,
+    )
+    .expect("custom servers should receive turn metadata");
+    let turn_metadata = meta
+        .get(crate::X_CODEX_TURN_METADATA_HEADER)
+        .expect("turn metadata should be present");
+
+    assert_eq!(
+        turn_metadata
+            .get("turn_started_at_unix_ms")
+            .and_then(serde_json::Value::as_i64),
+        Some(1_700_000_000_123)
+    );
+}
+
+#[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
     let (_, turn_context) = make_session_and_context().await;
     let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(

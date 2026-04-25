@@ -437,6 +437,14 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         !initial_turn_id.is_empty(),
         "turn_id should not be empty in x-codex-turn-metadata"
     );
+    let initial_turn_started_at_unix_ms = initial_parsed
+        .get("turn_started_at_unix_ms")
+        .and_then(serde_json::Value::as_i64)
+        .expect("turn_started_at_unix_ms should be present");
+    assert!(
+        initial_turn_started_at_unix_ms > 0,
+        "turn_started_at_unix_ms should be positive"
+    );
     assert_eq!(
         initial_parsed
             .get("sandbox")
@@ -540,6 +548,22 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .get("turn_id")
         .and_then(serde_json::Value::as_str)
         .expect("second turn_id should be present");
+    let first_turn_started_at_unix_ms = first_parsed
+        .get("turn_started_at_unix_ms")
+        .and_then(serde_json::Value::as_i64)
+        .expect("first turn_started_at_unix_ms should be present");
+    let second_turn_started_at_unix_ms = second_parsed
+        .get("turn_started_at_unix_ms")
+        .and_then(serde_json::Value::as_i64)
+        .expect("second turn_started_at_unix_ms should be present");
+    assert!(
+        first_turn_started_at_unix_ms > 0,
+        "first turn_started_at_unix_ms should be positive"
+    );
+    assert_eq!(
+        first_turn_started_at_unix_ms, second_turn_started_at_unix_ms,
+        "requests in the same turn should share turn_started_at_unix_ms"
+    );
     assert_eq!(
         first_parsed
             .get("thread_source")

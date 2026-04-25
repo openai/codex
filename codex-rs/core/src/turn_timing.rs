@@ -53,12 +53,14 @@ struct TurnTimingStateInner {
 }
 
 impl TurnTimingState {
-    pub(crate) async fn mark_turn_started(&self, started_at: Instant) {
+    pub(crate) async fn mark_turn_started(&self, started_at: Instant) -> i64 {
+        let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
         state.started_at = Some(started_at);
-        state.started_at_unix_secs = Some(now_unix_timestamp_secs());
+        state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
         state.first_token_at = None;
         state.first_message_at = None;
+        started_at_unix_ms
     }
 
     pub(crate) async fn started_at_unix_secs(&self) -> Option<i64> {
@@ -102,10 +104,14 @@ impl TurnTimingState {
 }
 
 fn now_unix_timestamp_secs() -> i64 {
+    now_unix_timestamp_ms() / 1000
+}
+
+fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 impl TurnTimingStateInner {
