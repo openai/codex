@@ -1357,9 +1357,8 @@ pub(crate) fn default_read_only_subpaths_for_writable_root(
     // writable root itself.
     let top_level_git_is_file = top_level_git.as_path().is_file();
     let top_level_git_is_dir = top_level_git.as_path().is_dir();
-    let should_protect_top_level_git = top_level_git_is_dir
-        || top_level_git_is_file
-        || (protect_missing_preserved_paths && !has_ancestor_git_metadata(writable_root.as_path()));
+    let should_protect_top_level_git =
+        top_level_git_is_dir || top_level_git_is_file || protect_missing_preserved_paths;
     if should_protect_top_level_git {
         if top_level_git_is_file
             && is_git_pointer_file(&top_level_git)
@@ -1536,34 +1535,6 @@ fn has_explicit_write_entry_for_preserved_path(
             && target.starts_with(entry.path.as_path())
             && entry.path.as_path().starts_with(preserved_path.as_path())
     })
-}
-
-fn has_ancestor_git_metadata(path: &Path) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    parent
-        .ancestors()
-        .any(|ancestor| git_metadata_dir(&ancestor.join(PRESERVED_GIT_PATH_NAME)).is_some())
-}
-
-fn git_metadata_dir(path: &Path) -> Option<AbsolutePathBuf> {
-    let Ok(metadata) = std::fs::symlink_metadata(path) else {
-        return None;
-    };
-    if metadata.is_dir() {
-        return AbsolutePathBuf::from_absolute_path(path).ok();
-    }
-    if !metadata.is_file() {
-        return None;
-    }
-    let Ok(dot_git) = AbsolutePathBuf::from_absolute_path(path) else {
-        return None;
-    };
-    if !is_git_pointer_file(&dot_git) {
-        return None;
-    }
-    resolve_gitdir_from_file(&dot_git)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -1768,7 +1739,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn writable_roots_keep_missing_git_absent_under_parent_git_repo() {
+    fn writable_roots_protect_missing_git_under_parent_git_repo() {
         let repo = TempDir::new().expect("tempdir");
         fs::create_dir(repo.path().join(".git")).expect("create parent .git");
         let cwd = repo.path().join("sub");
@@ -1791,10 +1762,10 @@ mod tests {
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(writable_roots[0].root, expected_root);
         assert!(
-            !writable_roots[0]
+            writable_roots[0]
                 .read_only_subpaths
                 .contains(&expected_dot_git),
-            "missing child .git under an existing parent repo stays absent so Git discovery still works"
+            "missing child .git under an existing parent repo should be read-only so git init fails"
         );
         assert!(
             writable_roots[0]
@@ -1955,10 +1926,6 @@ mod tests {
         let extra_root = AbsolutePathBuf::from_absolute_path(extra.path()).expect("absolute extra");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![extra_root],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1999,12 +1966,20 @@ mod tests {
         let file_system_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, relative_cwd);
 
-        let mut expected_entries = vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+        let mut expected_entries = vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
             },
-            access: FileSystemAccessMode::Write,
-        }];
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ];
         expected_entries.extend(
             default_read_only_subpaths_for_writable_root(
                 &expected_root,

@@ -32,7 +32,6 @@ mod tests {
     use std::path::PathBuf;
 
     use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
@@ -67,10 +66,6 @@ mod tests {
     fn legacy_workspace_write_policy() -> FileSystemSandboxPolicy {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

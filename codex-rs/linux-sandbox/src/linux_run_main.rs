@@ -27,6 +27,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
 static BWRAP_CHILD_PID: AtomicI32 = AtomicI32::new(0);
+static PENDING_FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 const FORWARDED_SIGNALS: &[libc::c_int] =
     &[libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
@@ -614,6 +615,7 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
+    let setup_signal_mask = ForwardedSignalMask::block();
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
@@ -625,6 +627,8 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     }
 
     if pid == 0 {
+        reset_forwarded_signal_handlers_to_default();
+        setup_signal_mask.restore();
         let setpgid_res = unsafe { libc::setpgid(0, 0) };
         if setpgid_res < 0 {
             let err = std::io::Error::last_os_error();
@@ -635,12 +639,50 @@ fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::Bwr
     }
 
     install_bwrap_signal_forwarders(pid);
+    setup_signal_mask.restore();
     let status = wait_for_bwrap_child(pid);
+    let cleanup_signal_mask = ForwardedSignalMask::block();
     BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
     let protected_create_violation =
         cleanup_protected_create_targets(&protected_create_registrations);
+    cleanup_signal_mask.restore();
     exit_with_wait_status_or_policy_violation(status, protected_create_violation);
+}
+
+struct ForwardedSignalMask {
+    previous: libc::sigset_t,
+}
+
+impl ForwardedSignalMask {
+    fn block() -> Self {
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            for signal in FORWARDED_SIGNALS {
+                libc::sigaddset(&mut blocked, *signal);
+            }
+            if libc::sigprocmask(libc::SIG_BLOCK, &blocked, &mut previous) < 0 {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to block bubblewrap forwarded signals: {err}");
+            }
+        }
+        Self { previous }
+    }
+
+    fn restore(&self) {
+        let mut restored = self.previous;
+        unsafe {
+            for signal in FORWARDED_SIGNALS {
+                libc::sigdelset(&mut restored, *signal);
+            }
+            if libc::sigprocmask(libc::SIG_SETMASK, &restored, std::ptr::null_mut()) < 0 {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to restore bubblewrap forwarded signals: {err}");
+            }
+        }
+    }
 }
 
 fn terminate_with_parent(parent_pid: libc::pid_t) {
@@ -669,14 +711,38 @@ fn install_bwrap_signal_forwarders(pid: libc::pid_t) {
             }
         }
     }
+    replay_pending_forwarded_signal(pid);
 }
 
 extern "C" fn forward_signal_to_bwrap_child(signal: libc::c_int) {
+    PENDING_FORWARDED_SIGNAL.store(signal, Ordering::SeqCst);
     let pid = BWRAP_CHILD_PID.load(Ordering::SeqCst);
     if pid > 0 {
+        send_signal_to_bwrap_child(pid, signal);
+    }
+}
+
+fn replay_pending_forwarded_signal(pid: libc::pid_t) {
+    let signal = PENDING_FORWARDED_SIGNAL.swap(0, Ordering::SeqCst);
+    if signal > 0 {
+        send_signal_to_bwrap_child(pid, signal);
+    }
+}
+
+fn send_signal_to_bwrap_child(pid: libc::pid_t, signal: libc::c_int) {
+    unsafe {
+        libc::kill(-pid, signal);
+        libc::kill(pid, signal);
+    }
+}
+
+fn reset_forwarded_signal_handlers_to_default() {
+    for signal in FORWARDED_SIGNALS {
         unsafe {
-            libc::kill(-pid, signal);
-            libc::kill(pid, signal);
+            if libc::signal(*signal, libc::SIG_DFL) == libc::SIG_ERR {
+                let err = std::io::Error::last_os_error();
+                panic!("failed to reset bubblewrap signal handler for {signal}: {err}");
+            }
         }
     }
 }
@@ -1093,6 +1159,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         synthetic_mount_targets,
         protected_create_targets,
     } = bwrap_args;
+    let setup_signal_mask = ForwardedSignalMask::block();
     let synthetic_mount_registrations = register_synthetic_mount_targets(&synthetic_mount_targets);
     let protected_create_registrations =
         register_protected_create_targets(&protected_create_targets);
@@ -1113,6 +1180,8 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
     }
 
     if pid == 0 {
+        reset_forwarded_signal_handlers_to_default();
+        setup_signal_mask.restore();
         // Child: redirect stderr to the pipe, then run bubblewrap.
         unsafe {
             close_fd_or_panic(read_fd, "close read end in bubblewrap child");
@@ -1126,6 +1195,8 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         exec_bwrap(args, preserved_files);
     }
 
+    install_bwrap_signal_forwarders(pid);
+    setup_signal_mask.restore();
     // Parent: close the write end and read stderr while the child runs.
     close_fd_or_panic(write_fd, "close write end in bubblewrap parent");
 
@@ -1138,8 +1209,11 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
     }
 
     wait_for_bwrap_child(pid);
+    let cleanup_signal_mask = ForwardedSignalMask::block();
+    BWRAP_CHILD_PID.store(0, Ordering::SeqCst);
     cleanup_synthetic_mount_targets(&synthetic_mount_registrations);
     cleanup_protected_create_targets(&protected_create_registrations);
+    cleanup_signal_mask.restore();
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
 }

@@ -26,7 +26,6 @@ use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_protocol::permissions::is_preserved_directory_path_name;
 use codex_protocol::permissions::is_preserved_path_name;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
@@ -1004,10 +1003,7 @@ fn append_empty_directory_args(bwrap_args: &mut BwrapArgs, path: &Path) {
 }
 
 fn append_missing_read_only_subpath_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if path
-        .file_name()
-        .is_some_and(is_preserved_directory_path_name)
-    {
+    if path.file_name().is_some_and(is_preserved_path_name) {
         append_empty_directory_args(bwrap_args, path);
         bwrap_args
             .synthetic_mount_targets
@@ -1632,6 +1628,7 @@ mod tests {
                 .expect("filesystem args");
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
+        assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(args.preserved_files.len(), 1);
@@ -1698,7 +1695,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_child_git_under_parent_repo_stays_absent() {
+    fn missing_child_git_under_parent_repo_uses_read_only_empty_directory() {
         let temp_dir = TempDir::new().expect("temp dir");
         let repo = temp_dir.path().join("repo");
         let workspace = repo.join("workspace");
@@ -1717,18 +1714,15 @@ mod tests {
 
         let args = create_filesystem_args(&policy, &workspace, NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
             .expect("filesystem args");
+        assert_empty_directory_mounted_read_only(&args.args, &dot_git);
         assert!(
-            !args.args.iter().any(|arg| arg == &path_to_string(&dot_git)),
-            "missing child .git under an existing parent repo must not be materialized",
-        );
-        assert!(
-            !synthetic_mount_target_paths(&args).contains(&dot_git),
-            "missing child .git should not be materialized as a synthetic mount target",
+            synthetic_mount_target_paths(&args).contains(&dot_git),
+            "missing child .git should be a transient mount target",
         );
         assert_eq!(
             protected_create_target_paths(&args),
-            vec![dot_git],
-            "missing child .git is enforced by the preserved-name sandbox policy",
+            Vec::<PathBuf>::new(),
+            "missing child .git should fail at creation time through the read-only mount",
         );
     }
 

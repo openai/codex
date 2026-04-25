@@ -4,7 +4,6 @@
 //! between user and agent.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt;
 use std::ops::Mul;
 use std::path::Path;
@@ -4437,22 +4436,20 @@ mod tests {
     }
 
     #[test]
-    fn workspace_write_keeps_missing_git_absent_under_parent_repo() {
+    fn workspace_write_protects_missing_git_under_parent_repo() {
         let repo = TempDir::new().expect("tempdir");
         std::fs::create_dir(repo.path().join(".git")).expect("create parent .git");
         let cwd = repo.path().join("sub");
         std::fs::create_dir(&cwd).expect("create subdir");
         let expected_root = AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd");
+        let expected_dot_git =
+            AbsolutePathBuf::from_absolute_path(cwd.join(".git")).expect("canonical .git");
         let expected_dot_codex =
             AbsolutePathBuf::from_absolute_path(cwd.join(".codex")).expect("canonical .codex");
         let expected_dot_agents =
             AbsolutePathBuf::from_absolute_path(cwd.join(".agents")).expect("canonical .agents");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -4464,7 +4461,8 @@ mod tests {
                 expected_root.to_path_buf(),
                 vec![
                     expected_dot_agents.to_path_buf(),
-                    expected_dot_codex.to_path_buf()
+                    expected_dot_codex.to_path_buf(),
+                    expected_dot_git.to_path_buf()
                 ],
             )]
         );
@@ -4482,10 +4480,6 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(&extra).expect("absolute extra root");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![expected_extra.clone()],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -4511,46 +4505,6 @@ mod tests {
                     ],
                 ),
             ]
-        );
-    }
-
-    #[test]
-    fn legacy_workspace_write_nested_readable_root_stays_writable() {
-        let cwd = TempDir::new().expect("tempdir");
-        let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
-        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
-            .expect("canonicalize cwd");
-        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
-            .expect("canonical .codex");
-        let expected_dot_git = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".git"))
-            .expect("canonical .git");
-        let expected_dot_agents =
-            AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".agents"))
-                .expect("canonical .agents");
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![docs],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-
-        assert_eq!(
-            sorted_writable_roots(
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, cwd.path())
-                    .get_writable_roots_with_cwd(cwd.path())
-            ),
-            vec![(
-                canonical_cwd,
-                vec![
-                    expected_dot_agents.to_path_buf(),
-                    expected_dot_codex.to_path_buf(),
-                    expected_dot_git.to_path_buf()
-                ]
-            )]
         );
     }
 

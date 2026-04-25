@@ -27,7 +27,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::PRESERVED_PATH_NAMES;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -371,49 +370,6 @@ fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access()
     let policy = &args[1];
     assert!(policy.contains("(allow user-preference-read)"));
     assert!(!policy.contains("(allow user-preference-write)"));
-}
-
-#[test]
-fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
-    let tmp = TempDir::new().expect("tempdir");
-    let cwd = tmp.path().join("workspace");
-    fs::create_dir_all(cwd.join("docs")).expect("create docs");
-    let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args_for_legacy_policy(
-        vec!["/bin/true".to_string()],
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: true,
-                readable_roots: vec![docs.clone()],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
-        cwd.as_path(),
-        /*enforce_managed_network*/ false,
-        /*network*/ None,
-    );
-
-    assert!(
-        !args
-            .iter()
-            .any(|arg| arg.ends_with(&format!("={}", docs.as_path().display()))),
-        "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}",
-    );
-    assert!(
-        args.iter()
-            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_EXCLUDED_")
-                && arg.ends_with("/workspace/.agents")),
-        "expected proactive .agents carveout for cwd root: {args:#?}",
-    );
-    assert!(
-        args.iter()
-            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_EXCLUDED_")
-                && arg.ends_with("/workspace/.codex")),
-        "expected proactive .codex carveout for cwd root: {args:#?}",
-    );
 }
 
 #[test]
