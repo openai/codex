@@ -1,5 +1,6 @@
 mod client;
 mod client_api;
+mod cloud;
 mod connection;
 mod environment;
 mod file_system;
@@ -22,6 +23,9 @@ pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::RemoteExecServerConnectArgs;
+pub use cloud::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR;
+pub use cloud::CloudExecutorConfig;
+pub use cloud::run_cloud_executor;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;

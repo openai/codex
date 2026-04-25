@@ -431,6 +431,22 @@ struct ExecServerCommand {
         default_value = "ws://127.0.0.1:0"
     )]
     listen: String,
+
+    /// Register this exec-server as a cloud executor instead of listening locally.
+    #[arg(long = "cloud", default_value_t = false)]
+    cloud: bool,
+
+    /// Cloud environments service base URL.
+    #[arg(long = "cloud-base-url", value_name = "URL")]
+    cloud_base_url: Option<String>,
+
+    /// Existing cloud environment id to attach to. Omit to let the service create one.
+    #[arg(long = "cloud-environment-id", value_name = "ID")]
+    cloud_environment_id: Option<String>,
+
+    /// Human-readable executor name.
+    #[arg(long = "cloud-name", value_name = "NAME")]
+    cloud_name: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1101,7 +1117,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(cmd, &arg0_paths, root_config_overrides.clone()).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1176,6 +1192,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
+    root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1185,6 +1202,31 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
+    if cmd.cloud {
+        let cloud_base_url = cmd
+            .cloud_base_url
+            .or_else(|| {
+                std::env::var(codex_exec_server::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR).ok()
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--cloud-base-url or CODEX_CLOUD_ENVIRONMENTS_BASE_URL is required in cloud mode"
+                )
+            })?;
+        let cli_overrides = root_config_overrides
+            .parse_overrides()
+            .map_err(anyhow::Error::msg)?;
+        let config = Config::load_with_cli_overrides(cli_overrides).await?;
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        let mut cloud_config = codex_exec_server::CloudExecutorConfig::new(cloud_base_url);
+        cloud_config.cloud_environment_id = cmd.cloud_environment_id;
+        if let Some(name) = cmd.cloud_name {
+            cloud_config.cloud_name = name;
+        }
+        codex_exec_server::run_cloud_executor(cloud_config, auth_manager, runtime_paths).await?;
+        return Ok(());
+    }
     codex_exec_server::run_main(&cmd.listen, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)

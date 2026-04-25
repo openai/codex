@@ -2191,6 +2191,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-login",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2199,9 +2200,11 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",
@@ -2209,6 +2212,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

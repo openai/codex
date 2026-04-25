@@ -198,6 +198,18 @@ pub enum ExecServerError {
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
+    #[error("cloud environments request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
+    CloudEnvironmentHttp {
+        status: reqwest::StatusCode,
+        code: Option<String>,
+        message: String,
+    },
+    #[error("cloud environment configuration error: {0}")]
+    CloudEnvironmentConfig(String),
+    #[error("cloud environment authentication error: {0}")]
+    CloudEnvironmentAuth(String),
+    #[error("cloud environments request failed: {0}")]
+    CloudEnvironmentRequest(#[from] reqwest::Error),
 }
 
 impl ExecServerClient {
