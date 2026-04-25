@@ -1039,7 +1039,7 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
             .changes
             .get(&std::path::PathBuf::from("streamed.txt")),
         Some(&codex_protocol::protocol::FileChange::Add {
-            content: "hello\n".to_string(),
+            content: String::new(),
         })
     );
     assert_eq!(
