@@ -1062,6 +1062,8 @@ const CODEX_LOGO_LINES: [&str; 8] = [
 ];
 const CODEX_LOGO_WIDTH: usize = 16;
 const CODEX_LOGO_GAP_WIDTH: usize = 2;
+const CODEX_LOGO_WINK_LINE_INDEX: usize = 4;
+const CODEX_LOGO_WINK_SEGMENT: &str = "⠿⠿⠿⠿";
 const SESSION_HEADER_TEXT_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize =
     CODEX_LOGO_WIDTH + CODEX_LOGO_GAP_WIDTH + SESSION_HEADER_TEXT_MAX_INNER_WIDTH;
@@ -1094,12 +1096,31 @@ fn codex_logo_gradient_for_bg(terminal_bg: Option<(u8, u8, u8)>) -> [(u8, u8, u8
     }
 }
 
-fn padded_logo_line(line: &str) -> String {
-    let width = UnicodeWidthStr::width(line);
-    format!(
-        "{line}{}",
-        " ".repeat(CODEX_LOGO_WIDTH.saturating_sub(width))
-    )
+fn logo_line_spans(
+    idx: usize,
+    logo: &str,
+    style: Style,
+    animations_enabled: bool,
+) -> Vec<Span<'static>> {
+    let padding = " ".repeat(CODEX_LOGO_WIDTH.saturating_sub(UnicodeWidthStr::width(logo)));
+    if animations_enabled
+        && idx == CODEX_LOGO_WINK_LINE_INDEX
+        && let Some(segment_start) = logo.find(CODEX_LOGO_WINK_SEGMENT)
+    {
+        let segment_end = segment_start + CODEX_LOGO_WINK_SEGMENT.len();
+        let prefix = &logo[..segment_start];
+        let suffix = &logo[segment_end..];
+        vec![
+            Span::styled(prefix.to_string(), style),
+            Span::styled(
+                CODEX_LOGO_WINK_SEGMENT,
+                style.add_modifier(Modifier::SLOW_BLINK),
+            ),
+            Span::styled(format!("{suffix}{padding}"), style),
+        ]
+    } else {
+        vec![Span::styled(format!("{logo}{padding}"), style)]
+    }
 }
 
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
@@ -1251,7 +1272,8 @@ pub(crate) fn new_session_info(
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
-    .with_yolo_mode(has_yolo_permissions(approval_policy, &sandbox_policy));
+    .with_yolo_mode(has_yolo_permissions(approval_policy, &sandbox_policy))
+    .with_animations_enabled(config.animations);
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1349,6 +1371,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    animations_enabled: bool,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1385,11 +1408,17 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            animations_enabled: false,
         }
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
+        self
+    }
+
+    pub(crate) fn with_animations_enabled(mut self, animations_enabled: bool) -> Self {
+        self.animations_enabled = animations_enabled;
         self
     }
 
@@ -1524,13 +1553,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let text_top_padding = CODEX_LOGO_LINES.len().saturating_sub(text_lines.len()) / 2;
         let mut lines = Vec::with_capacity(CODEX_LOGO_LINES.len());
         for (idx, logo) in CODEX_LOGO_LINES.iter().enumerate() {
-            let mut spans = vec![
-                Span::styled(
-                    padded_logo_line(logo),
-                    Style::default().fg(terminal_palette::best_color(logo_gradient[idx])),
-                ),
-                Span::from(" ".repeat(CODEX_LOGO_GAP_WIDTH)).dim(),
-            ];
+            let logo_style = Style::default().fg(terminal_palette::best_color(logo_gradient[idx]));
+            let mut spans = logo_line_spans(idx, logo, logo_style, self.animations_enabled);
+            spans.push(Span::from(" ".repeat(CODEX_LOGO_GAP_WIDTH)).dim());
             if let Some(text_idx) = idx.checked_sub(text_top_padding)
                 && let Some(text_line) = text_lines.get(text_idx)
             {
@@ -4195,6 +4220,39 @@ mod tests {
         assert!(rendered.contains(">_ OpenAI Codex (vtest)"));
         assert!(!rendered.contains("⣿"));
         assert_eq!(rendered.lines().count(), 6);
+    }
+
+    #[test]
+    fn codex_logo_wink_segment_blinks_when_animations_are_enabled() {
+        let spans = logo_line_spans(
+            CODEX_LOGO_WINK_LINE_INDEX,
+            CODEX_LOGO_LINES[CODEX_LOGO_WINK_LINE_INDEX],
+            Style::default(),
+            /*animations_enabled*/ true,
+        );
+
+        let wink_span = spans
+            .iter()
+            .find(|span| span.content == CODEX_LOGO_WINK_SEGMENT)
+            .expect("wink segment");
+
+        assert!(wink_span.style.add_modifier.contains(Modifier::SLOW_BLINK));
+    }
+
+    #[test]
+    fn codex_logo_wink_segment_stays_static_when_animations_are_disabled() {
+        let spans = logo_line_spans(
+            CODEX_LOGO_WINK_LINE_INDEX,
+            CODEX_LOGO_LINES[CODEX_LOGO_WINK_LINE_INDEX],
+            Style::default(),
+            /*animations_enabled*/ false,
+        );
+
+        assert!(
+            spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::SLOW_BLINK))
+        );
     }
 
     #[test]
