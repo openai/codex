@@ -1,5 +1,4 @@
 use super::*;
-use crate::config::ConstraintError;
 use crate::goals::GoalRuntimeState;
 use tokio::sync::Semaphore;
 
