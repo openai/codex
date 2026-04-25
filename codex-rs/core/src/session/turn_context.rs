@@ -537,16 +537,18 @@ impl Session {
                     let turn_environments =
                         self.resolve_turn_environments(&effective_environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
-                    let previous_sandbox_policy = state.session_configuration.sandbox_policy();
-                    let next_sandbox_policy = next.sandbox_policy();
-                    let sandbox_policy_changed = previous_sandbox_policy != next_sandbox_policy;
+                    let previous_permission_profile =
+                        state.session_configuration.permission_profile();
+                    let next_permission_profile = next.permission_profile();
+                    let permission_profile_changed =
+                        previous_permission_profile != next_permission_profile;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
                     Ok((
                         next,
                         turn_environments,
-                        sandbox_policy_changed,
+                        permission_profile_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
@@ -559,7 +561,7 @@ impl Session {
         let (
             session_configuration,
             turn_environments,
-            sandbox_policy_changed,
+            permission_profile_changed,
             previous_cwd,
             codex_home,
             session_source,
@@ -586,8 +588,8 @@ impl Session {
             &session_source,
         );
 
-        if sandbox_policy_changed {
-            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+        if permission_profile_changed {
+            self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
 
@@ -690,8 +692,8 @@ impl Session {
                 .network_proxy
                 .as_ref()
                 .and_then(|started_proxy| {
-                    Self::managed_network_proxy_active_for_sandbox_policy(
-                        &session_configuration.sandbox_policy(),
+                    Self::managed_network_proxy_active_for_permission_profile(
+                        &session_configuration.permission_profile(),
                     )
                     .then(|| started_proxy.proxy())
                 }),
