@@ -3759,6 +3759,20 @@ pub enum ThreadGoalStatus {
     Complete,
 }
 
+pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
+pub fn validate_thread_goal_objective(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("goal objective must not be empty".to_string());
+    }
+    if value.chars().count() > MAX_THREAD_GOAL_OBJECTIVE_CHARS {
+        return Err(format!(
+            "goal objective must be at most {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "protocol/")]

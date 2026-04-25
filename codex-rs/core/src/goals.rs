@@ -21,6 +21,7 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_utils_template::Template;
 use futures::future::BoxFuture;
@@ -375,9 +376,9 @@ impl Session {
         let state_db = self.require_state_db_for_thread_goals().await?;
         let objective = objective.map(|objective| objective.trim().to_string());
         if let Some(objective) = objective.as_deref()
-            && objective.is_empty()
+            && let Err(err) = validate_thread_goal_objective(objective)
         {
-            anyhow::bail!("goal objective must not be empty");
+            anyhow::bail!("{err}");
         }
 
         self.account_thread_goal_wall_clock_usage(
@@ -498,9 +499,7 @@ impl Session {
         } = request;
         validate_goal_budget(token_budget)?;
         let objective = objective.trim();
-        if objective.is_empty() {
-            anyhow::bail!("goal objective must not be empty");
-        }
+        validate_thread_goal_objective(objective).map_err(anyhow::Error::msg)?;
 
         let state_db = self.require_state_db_for_thread_goals().await?;
         self.account_thread_goal_wall_clock_usage(

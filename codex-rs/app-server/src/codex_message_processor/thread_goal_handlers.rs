@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::validate_thread_goal_objective;
 
 impl CodexMessageProcessor {
     pub(super) async fn thread_goal_set(
@@ -83,12 +84,8 @@ impl CodexMessageProcessor {
         let objective = params.objective.as_deref().map(str::trim);
 
         if let Some(objective) = objective {
-            if objective.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "goal objective must not be empty".to_string(),
-                )
-                .await;
+            if let Err(message) = validate_thread_goal_objective(objective) {
+                self.send_invalid_request_error(request_id, message).await;
                 return;
             }
             if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
