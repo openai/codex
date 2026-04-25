@@ -439,7 +439,12 @@ async fn send_openai_file_download_request(
         source,
     })?;
     let request_builder = if should_attach_auth_to_openai_file_url(&resolved_url, base_url) {
-        authorized_request(auth, reqwest::Method::GET, resolved_url.as_str())
+        let mut headers = http::HeaderMap::new();
+        auth.add_auth_headers(&mut headers);
+        build_reqwest_client_no_redirects()
+            .request(reqwest::Method::GET, resolved_url.as_str())
+            .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+            .headers(headers)
     } else {
         build_reqwest_client()
             .request(reqwest::Method::GET, resolved_url.as_str())
@@ -576,6 +581,22 @@ fn build_reqwest_client() -> reqwest::Client {
     build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build OpenAI file upload client");
         reqwest::Client::new()
+    })
+}
+
+fn build_reqwest_client_no_redirects() -> reqwest::Client {
+    build_reqwest_client_with_custom_ca(
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+    )
+    .unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "failed to build OpenAI file upload client");
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|build_error| {
+                tracing::warn!(error = %build_error, "failed to build no-redirect OpenAI file client");
+                reqwest::Client::new()
+            })
     })
 }
 
@@ -722,6 +743,50 @@ mod tests {
             }
         ));
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn authenticated_download_does_not_follow_redirects() {
+        let server = MockServer::start().await;
+        let redirected_server = MockServer::start().await;
+        let redirected_hits = Arc::new(AtomicUsize::new(0));
+        let redirected_hits_responder = Arc::clone(&redirected_hits);
+
+        Mock::given(method("GET"))
+            .and(path("/download/file_123"))
+            .and(header("authorization", "Bearer token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .append_header("location", format!("{}/redirected", redirected_server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/redirected"))
+            .respond_with(move |_request: &Request| {
+                redirected_hits_responder.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_bytes(b"redirected".to_vec())
+            })
+            .mount(&redirected_server)
+            .await;
+
+        let error = download_openai_file(
+            &base_url_for(&server),
+            &chatgpt_auth(),
+            &format!("{}/download/file_123", server.uri()),
+        )
+        .await
+        .expect_err("download should not follow redirect");
+
+        assert!(matches!(
+            error,
+            OpenAiFileError::UnexpectedStatus {
+                status: StatusCode::FOUND,
+                ..
+            }
+        ));
+        assert_eq!(redirected_hits.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
