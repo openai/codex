@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::sandbox_tags::sandbox_tag;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::PathBufExt;
@@ -70,13 +73,14 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = PermissionProfile::read_only();
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         &SessionSource::Exec,
         "turn-a".to_string(),
         cwd,
-        &sandbox_policy,
+        &permission_profile,
         WindowsSandboxLevel::Disabled,
     );
 
@@ -97,7 +101,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
 fn turn_metadata_state_classifies_subagent_thread_source() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = PermissionProfile::read_only();
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
 
     let state = TurnMetadataState::new(
@@ -105,7 +109,7 @@ fn turn_metadata_state_classifies_subagent_thread_source() {
         &session_source,
         "turn-a".to_string(),
         cwd,
-        &sandbox_policy,
+        &permission_profile,
         WindowsSandboxLevel::Disabled,
     );
 
@@ -120,14 +124,14 @@ fn turn_metadata_state_classifies_subagent_thread_source() {
 fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let permission_profile = PermissionProfile::read_only();
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         &SessionSource::Exec,
         "turn-a".to_string(),
         cwd,
-        &sandbox_policy,
+        &permission_profile,
         WindowsSandboxLevel::Disabled,
     );
     state.set_responsesapi_client_metadata(HashMap::from([

@@ -24,8 +24,6 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -35,8 +33,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
+use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -80,19 +77,8 @@ impl ApplyPatchRuntime {
             return None;
         }
 
-        let file_system_policy = effective_file_system_sandbox_policy(
-            attempt.file_system_policy,
-            req.additional_permissions.as_ref(),
-        );
-        let network_policy = effective_network_sandbox_policy(
-            attempt.network_policy,
-            req.additional_permissions.as_ref(),
-        );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(attempt.policy),
-            &file_system_policy,
-            network_policy,
-        );
+        let permissions =
+            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
         Some(FileSystemSandboxContext {
             permissions,
             cwd: Some(attempt.sandbox_cwd.clone()),
