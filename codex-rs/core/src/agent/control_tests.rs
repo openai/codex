@@ -66,7 +66,6 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: None,
         phase,
     }
 }
@@ -519,7 +518,6 @@ async fn append_message_records_assistant_message() {
                 content: vec![ContentItem::InputText {
                     text: message.to_string(),
                 }],
-                end_turn: None,
                 phase: None,
             },
         )
@@ -678,7 +676,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             content: vec![ContentItem::InputText {
                 text: "parent seed context".to_string(),
             }],
-            end_turn: None,
             phase: None,
         },
         assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),

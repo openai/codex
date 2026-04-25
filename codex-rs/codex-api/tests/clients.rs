@@ -423,7 +423,6 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
             id: Some("msg_1".into()),
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
-            end_turn: None,
             phase: None,
         }],
         tools: Vec::new(),

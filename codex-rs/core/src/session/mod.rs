@@ -2362,7 +2362,6 @@ impl Session {
             content: vec![ContentItem::InputText {
                 text: format!("Warning: {}", message.into()),
             }],
-            end_turn: None,
             phase: None,
         };
 

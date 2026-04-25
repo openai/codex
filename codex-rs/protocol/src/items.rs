@@ -266,7 +266,6 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         id: Some(uuid::Uuid::new_v4().to_string()),
         role: "user".to_string(),
         content,
-        end_turn: None,
         phase: None,
     })
 }
