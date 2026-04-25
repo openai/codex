@@ -189,22 +189,23 @@ async fn run_command_under_sandbox(
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
+            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+            let network_sandbox_policy = config.permissions.network_sandbox_policy();
             let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
-                file_system_sandbox_policy: &config.permissions.file_system_sandbox_policy,
-                network_sandbox_policy: config.permissions.network_sandbox_policy,
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
             });
-            let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
                 /*arg0*/ None,
                 cwd.to_path_buf(),
-                network_policy,
+                network_sandbox_policy,
                 env,
                 |env_map| {
                     env_map.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
@@ -221,23 +222,24 @@ async fn run_command_under_sandbox(
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
             let use_legacy_landlock = config.features.use_legacy_landlock();
+            let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+            let network_sandbox_policy = config.permissions.network_sandbox_policy();
             let args = create_linux_sandbox_command_args_for_policies(
                 command,
                 cwd.as_path(),
                 config.permissions.sandbox_policy.get(),
-                &config.permissions.file_system_sandbox_policy,
-                config.permissions.network_sandbox_policy,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 /*allow_network_for_proxy*/ false,
             );
-            let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,
                 args,
                 Some("codex-linux-sandbox"),
                 cwd.to_path_buf(),
-                network_policy,
+                network_sandbox_policy,
                 env,
                 |env_map| {
                     if let Some(network) = network.as_ref() {
@@ -715,17 +717,17 @@ mod tests {
 
         assert!(config_uses_permission_profiles(&config));
         assert!(
-            profile_config.permissions.file_system_sandbox_policy
-                != legacy_config.permissions.file_system_sandbox_policy,
+            profile_config.permissions.file_system_sandbox_policy()
+                != legacy_config.permissions.file_system_sandbox_policy(),
             "test fixture should distinguish profile syntax from legacy sandbox_mode"
         );
         assert_eq!(
-            config.permissions.file_system_sandbox_policy,
-            profile_config.permissions.file_system_sandbox_policy,
+            config.permissions.file_system_sandbox_policy(),
+            profile_config.permissions.file_system_sandbox_policy(),
         );
         assert_ne!(
-            config.permissions.file_system_sandbox_policy,
-            legacy_config.permissions.file_system_sandbox_policy,
+            config.permissions.file_system_sandbox_policy(),
+            legacy_config.permissions.file_system_sandbox_policy(),
         );
 
         Ok(())
