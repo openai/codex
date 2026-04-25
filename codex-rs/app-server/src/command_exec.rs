@@ -34,9 +34,9 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_PARAMS_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_params;
+use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -158,7 +158,7 @@ impl CommandExecManager {
         } = params;
         if process_id.is_none() && (tty || stream_stdin || stream_stdout_stderr) {
             return Err(invalid_request(
-                "command/exec tty or streaming requires a client-supplied processId".to_string(),
+                "command/exec tty or streaming requires a client-supplied processId",
             ));
         }
         let process_id = process_id.map_or_else(
@@ -178,12 +178,12 @@ impl CommandExecManager {
         if matches!(exec_request.sandbox, SandboxType::WindowsRestrictedToken) {
             if tty || stream_stdin || stream_stdout_stderr {
                 return Err(invalid_request(
-                    "streaming command/exec is not supported with windows sandbox".to_string(),
+                    "streaming command/exec is not supported with windows sandbox",
                 ));
             }
             if output_bytes_cap != Some(DEFAULT_OUTPUT_BYTES_CAP) {
                 return Err(invalid_request(
-                    "custom outputBytesCap is not supported with windows sandbox".to_string(),
+                    "custom outputBytesCap is not supported with windows sandbox",
                 ));
             }
             if let InternalProcessId::Client(_) = &process_id {
@@ -249,7 +249,7 @@ impl CommandExecManager {
         let sessions = Arc::clone(&self.sessions);
         let (program, args) = command
             .split_first()
-            .ok_or_else(|| invalid_request("command must not be empty".to_string()))?;
+            .ok_or_else(|| invalid_request("command must not be empty"))?;
         {
             let mut sessions = self.sessions.lock().await;
             if sessions.contains_key(&process_key) {
@@ -312,7 +312,7 @@ impl CommandExecManager {
     ) -> Result<CommandExecWriteResponse, JSONRPCErrorError> {
         if params.delta_base64.is_none() && !params.close_stdin {
             return Err(invalid_params(
-                "command/exec/write requires deltaBase64 or closeStdin".to_string(),
+                "command/exec/write requires deltaBase64 or closeStdin",
             ));
         }
 
@@ -421,7 +421,7 @@ impl CommandExecManager {
         };
         let CommandExecSession::Active { control_tx } = session else {
             return Err(invalid_request(
-                "command/exec/write, command/exec/terminate, and command/exec/resize are not supported for windows sandbox processes".to_string(),
+                "command/exec/write, command/exec/terminate, and command/exec/resize are not supported for windows sandbox processes",
             ));
         };
         let (response_tx, response_rx) = oneshot::channel();
@@ -635,7 +635,7 @@ async fn handle_process_write(
 ) -> Result<(), JSONRPCErrorError> {
     if !stream_stdin {
         return Err(invalid_request(
-            "stdin streaming is not enabled for this command/exec".to_string(),
+            "stdin streaming is not enabled for this command/exec",
         ));
     }
     if !delta.is_empty() {
@@ -643,7 +643,7 @@ async fn handle_process_write(
             .writer_sender()
             .send(delta)
             .await
-            .map_err(|_| invalid_request("stdin is already closed".to_string()))?;
+            .map_err(|_| invalid_request("stdin is already closed"))?;
     }
     if close_stdin {
         session.close_stdin();
@@ -665,7 +665,7 @@ pub(crate) fn terminal_size_from_protocol(
 ) -> Result<TerminalSize, JSONRPCErrorError> {
     if size.rows == 0 || size.cols == 0 {
         return Err(invalid_params(
-            "command/exec size rows and cols must be greater than 0".to_string(),
+            "command/exec size rows and cols must be greater than 0",
         ));
     }
     Ok(TerminalSize {
@@ -681,34 +681,11 @@ fn command_no_longer_running_error(process_id: &InternalProcessId) -> JSONRPCErr
     ))
 }
 
-fn invalid_request(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message,
-        data: None,
-    }
-}
-
-fn invalid_params(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_PARAMS_ERROR_CODE,
-        message,
-        data: None,
-    }
-}
-
-fn internal_error(message: String) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INTERNAL_ERROR_CODE,
-        message,
-        data: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;

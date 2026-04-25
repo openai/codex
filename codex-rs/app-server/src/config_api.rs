@@ -1,7 +1,8 @@
 use crate::config_manager::ConfigManager;
 use crate::config_manager_service::ConfigManagerError;
-use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use async_trait::async_trait;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -99,10 +100,10 @@ impl ConfigApi {
         self.config_manager
             .load_latest_config(fallback_cwd)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to resolve feature override precedence: {err}"),
-                data: None,
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to resolve feature override precedence: {err}"
+                ))
             })
     }
 
@@ -197,14 +198,10 @@ impl ConfigApi {
                     continue;
                 }
 
-                return Err(JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!(
-                        "unsupported feature enablement `{key}`: currently supported features are {}",
-                        SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT.join(", ")
-                    ),
-                    data: None,
-                });
+                return Err(invalid_request(format!(
+                    "unsupported feature enablement `{key}`: currently supported features are {}",
+                    SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT.join(", ")
+                )));
             }
 
             let message = if let Some(feature) = feature_for_key(key) {
@@ -215,11 +212,7 @@ impl ConfigApi {
             } else {
                 format!("invalid feature enablement `{key}`")
             };
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            });
+            return Err(invalid_request(message));
         }
 
         if enablement.is_empty() {
@@ -232,11 +225,7 @@ impl ConfigApi {
                     .iter()
                     .map(|(name, enabled)| (name.clone(), *enabled)),
             )
-            .map_err(|_| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "failed to update feature enablement".to_string(),
-                data: None,
-            })?;
+            .map_err(|_| internal_error("failed to update feature enablement"))?;
 
         self.load_latest_config(/*fallback_cwd*/ None).await?;
         self.user_config_reloader.reload_user_config().await;
@@ -468,11 +457,7 @@ fn map_error(err: ConfigManagerError) -> JSONRPCErrorError {
         return config_write_error(code, err.to_string());
     }
 
-    JSONRPCErrorError {
-        code: INTERNAL_ERROR_CODE,
-        message: err.to_string(),
-        data: None,
-    }
+    internal_error(err.to_string())
 }
 
 fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) -> JSONRPCErrorError {
