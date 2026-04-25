@@ -148,10 +148,10 @@ async fn build_uploaded_local_argument_value(
         "uri": uploaded.uri,
         "file_size_bytes": uploaded.file_size_bytes,
     });
-    if uploaded.library_file_id.is_none() {
-        if let Some(uploaded_object) = uploaded_value.as_object_mut() {
-            uploaded_object.remove("library_file_id");
-        }
+    if uploaded.library_file_id.is_none()
+        && let Some(uploaded_object) = uploaded_value.as_object_mut()
+    {
+        uploaded_object.remove("library_file_id");
     }
     Ok(uploaded_value)
 }
