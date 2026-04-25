@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "PreCompact",
+      "type": "string"
+    },
+    "implementation": {
+      "enum": [
+        "responses",
+        "responses_compact"
+      ],
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "phase": {
+      "enum": [
+        "standalone_turn",
+        "pre_turn",
+        "mid_turn"
+      ],
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "user_requested",
+        "context_limit",
+        "model_downshift"
+      ],
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "trigger": {
+      "enum": [
+        "manual",
+        "auto"
+      ],
+      "type": "string"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "implementation",
+    "model",
+    "permission_mode",
+    "phase",
+    "reason",
+    "session_id",
+    "transcript_path",
+    "trigger",
+    "turn_id"
+  ],
+  "title": "pre-compact.command.input",
+  "type": "object"
+}

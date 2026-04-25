@@ -4,6 +4,9 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::hook_runtime::PostCompactHookResult;
+use crate::hook_runtime::run_post_compact_hooks;
+use crate::hook_runtime::run_pre_compact_hooks;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
@@ -132,6 +135,15 @@ async fn run_compact_task_inner(
         phase,
     )
     .await;
+    run_pre_compact_hooks(
+        &sess,
+        &turn_context,
+        trigger,
+        reason,
+        phase,
+        CompactionImplementation::Responses,
+    )
+    .await;
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
@@ -139,13 +151,22 @@ async fn run_compact_task_inner(
         initial_context_injection,
     )
     .await;
-    attempt
-        .track(
-            sess.as_ref(),
-            compaction_status_from_result(&result),
-            result.as_ref().err().map(ToString::to_string),
-        )
-        .await;
+    let status = compaction_status_from_result(&result);
+    let error = result.as_ref().err().map(ToString::to_string);
+    run_post_compact_hooks(
+        &sess,
+        &turn_context,
+        trigger,
+        reason,
+        phase,
+        CompactionImplementation::Responses,
+        PostCompactHookResult {
+            status,
+            error: error.clone(),
+        },
+    )
+    .await;
+    attempt.track(sess.as_ref(), status, error).await;
     result
 }
 

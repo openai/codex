@@ -2,6 +2,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_analytics::CompactionImplementation;
+use codex_analytics::CompactionPhase;
+use codex_analytics::CompactionReason;
+use codex_analytics::CompactionStatus;
+use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
 use codex_hooks::PermissionRequestDecision;
@@ -250,6 +255,68 @@ pub(crate) async fn run_post_tool_use_hooks(
     outcome
 }
 
+pub(crate) async fn run_pre_compact_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    implementation: CompactionImplementation,
+) {
+    let request = codex_hooks::PreCompactRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        trigger: compaction_trigger_label(trigger).to_string(),
+        reason: compaction_reason_label(reason).to_string(),
+        phase: compaction_phase_label(phase).to_string(),
+        implementation: compaction_implementation_label(implementation).to_string(),
+    };
+    let preview_runs = sess.hooks().preview_pre_compact(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_pre_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+}
+
+pub(crate) struct PostCompactHookResult {
+    pub(crate) status: CompactionStatus,
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) async fn run_post_compact_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
+    phase: CompactionPhase,
+    implementation: CompactionImplementation,
+    result: PostCompactHookResult,
+) {
+    let request = codex_hooks::PostCompactRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        trigger: compaction_trigger_label(trigger).to_string(),
+        reason: compaction_reason_label(reason).to_string(),
+        phase: compaction_phase_label(phase).to_string(),
+        implementation: compaction_implementation_label(implementation).to_string(),
+        status: compaction_status_label(result.status).to_string(),
+        error: result.error,
+    };
+    let preview_runs = sess.hooks().preview_post_compact(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let outcome = sess.hooks().run_post_compact(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+}
+
 pub(crate) async fn run_user_prompt_submit_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -463,6 +530,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PreToolUse => "PreToolUse",
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
@@ -501,6 +570,44 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
+}
+
+fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
+    match value {
+        CompactionTrigger::Manual => "manual",
+        CompactionTrigger::Auto => "auto",
+    }
+}
+
+fn compaction_reason_label(value: CompactionReason) -> &'static str {
+    match value {
+        CompactionReason::UserRequested => "user_requested",
+        CompactionReason::ContextLimit => "context_limit",
+        CompactionReason::ModelDownshift => "model_downshift",
+    }
+}
+
+fn compaction_implementation_label(value: CompactionImplementation) -> &'static str {
+    match value {
+        CompactionImplementation::Responses => "responses",
+        CompactionImplementation::ResponsesCompact => "responses_compact",
+    }
+}
+
+fn compaction_phase_label(value: CompactionPhase) -> &'static str {
+    match value {
+        CompactionPhase::StandaloneTurn => "standalone_turn",
+        CompactionPhase::PreTurn => "pre_turn",
+        CompactionPhase::MidTurn => "mid_turn",
+    }
+}
+
+fn compaction_status_label(value: CompactionStatus) -> &'static str {
+    match value {
+        CompactionStatus::Completed => "completed",
+        CompactionStatus::Failed => "failed",
+        CompactionStatus::Interrupted => "interrupted",
+    }
 }
 
 #[cfg(test)]
