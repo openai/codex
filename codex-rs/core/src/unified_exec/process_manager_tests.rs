@@ -129,7 +129,10 @@ fn exec_server_process_id_matches_unified_exec_process_id() {
 
 #[tokio::test]
 async fn network_denial_fallback_message_names_sandbox_network_proxy() {
-    let message = UnifiedExecProcessManager::network_denial_message_for_session(None, None).await;
+    let message = UnifiedExecProcessManager::network_denial_message_for_session(
+        /*session*/ None, /*deferred*/ None,
+    )
+    .await;
 
     assert_eq!(
         message,

@@ -790,13 +790,10 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        read_only_access: Default::default(),
-        network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
+    let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    if let SandboxPolicy::WorkspaceWrite { network_access, .. } = &mut sandbox_policy {
+        *network_access = true;
+    }
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_home(home).with_config(move |config| {
         config.use_experimental_unified_exec_tool = true;
