@@ -95,6 +95,8 @@ use tokio::time::timeout;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR: &str =
+    "CODEX_APP_SERVER_TEST_DISABLE_PLUGIN_STARTUP_TASKS";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -315,11 +317,13 @@ impl MessageProcessor {
             feedback,
             log_db,
         });
-        // Keep plugin startup warmups aligned at app-server startup.
-        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
-        thread_manager
-            .plugins_manager()
-            .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+        if std::env::var_os(TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR).is_none() {
+            // Keep plugin startup warmups aligned at app-server startup.
+            // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+            thread_manager
+                .plugins_manager()
+                .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
+        }
         let config_api = ConfigApi::new(
             config_manager,
             thread_manager.clone(),

@@ -38,7 +38,7 @@ pub(super) async fn spawn_review_thread(
         )),
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.session_source.clone(),
-        sandbox_policy: parent_turn_context.sandbox_policy.get(),
+        permission_profile: &parent_turn_context.permission_profile,
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
     .with_unified_exec_shell_mode_for_session(
@@ -97,8 +97,9 @@ pub(super) async fn spawn_review_thread(
         &session_source,
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
-        parent_turn_context.sandbox_policy.get(),
+        &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
+        parent_turn_context.network.is_some(),
     ));
 
     let review_turn_context = TurnContext {
@@ -127,6 +128,7 @@ pub(super) async fn spawn_review_thread(
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
+        permission_profile: parent_turn_context.permission_profile(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,
