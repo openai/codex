@@ -1,4 +1,3 @@
-pub(crate) mod auth;
 pub use auth::McpAuthStatusEntry;
 pub use auth::McpOAuthLoginConfig;
 pub use auth::McpOAuthLoginSupport;
@@ -9,6 +8,8 @@ pub use auth::discover_supported_scopes;
 pub use auth::oauth_login_support;
 pub use auth::resolve_oauth_scopes;
 pub use auth::should_retry_without_scopes;
+
+pub(crate) mod auth;
 
 use std::collections::HashMap;
 use std::env;
@@ -37,9 +38,9 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::McpRuntimeEnvironment;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 
+pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,26 +53,6 @@ pub enum McpSnapshotDetail {
 impl McpSnapshotDetail {
     fn include_resources(self) -> bool {
         matches!(self, Self::Full)
-    }
-}
-
-/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
-/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
-/// name we expose to the model by replacing any disallowed character with `_`.
-pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
-    let mut sanitized = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            sanitized.push(c);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
     }
 }
 
@@ -189,98 +170,6 @@ impl ToolPluginProvenance {
         }
 
         tool_plugin_provenance
-    }
-}
-
-fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
-    match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
-        Ok(value) if !value.trim().is_empty() => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
-        Ok(_) => None,
-        Err(env::VarError::NotPresent) => None,
-        Err(env::VarError::NotUnicode(_)) => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
-    }
-}
-
-fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
-    let token = auth.and_then(|auth| auth.get_token().ok())?;
-    let token = token.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
-    let mut headers = HashMap::new();
-    if let Some(token) = codex_apps_mcp_bearer_token(auth) {
-        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
-    }
-    if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
-        headers.insert("ChatGPT-Account-ID".to_string(), account_id);
-    }
-    if headers.is_empty() {
-        None
-    } else {
-        Some(headers)
-    }
-}
-
-fn normalize_codex_apps_base_url(base_url: &str) -> String {
-    let mut base_url = base_url.trim_end_matches('/').to_string();
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
-}
-
-fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
-    let base_url = normalize_codex_apps_base_url(base_url);
-    if base_url.contains("/backend-api") {
-        format!("{base_url}/wham/apps")
-    } else if base_url.contains("/api/codex") {
-        format!("{base_url}/apps")
-    } else {
-        format!("{base_url}/api/codex/apps")
-    }
-}
-
-pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
-    codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
-}
-
-fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) -> McpServerConfig {
-    let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
-    let http_headers = if bearer_token_env_var.is_some() {
-        None
-    } else {
-        codex_apps_mcp_http_headers(auth)
-    };
-    let url = codex_apps_mcp_url(config);
-
-    McpServerConfig {
-        transport: McpServerTransportConfig::StreamableHttp {
-            url,
-            bearer_token_env_var,
-            http_headers,
-            env_http_headers: None,
-        },
-        experimental_environment: None,
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: Some(Duration::from_secs(30)),
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
     }
 }
 
@@ -414,6 +303,130 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     cancel_token.cancel();
 
     snapshot
+}
+
+pub async fn collect_mcp_snapshot_from_manager(
+    mcp_connection_manager: &McpConnectionManager,
+    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
+) -> McpListToolsResponseEvent {
+    collect_mcp_snapshot_from_manager_with_detail(
+        mcp_connection_manager,
+        auth_status_entries,
+        McpSnapshotDetail::Full,
+    )
+    .await
+}
+
+pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
+    codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
+}
+
+/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
+/// name we expose to the model by replacing any disallowed character with `_`.
+pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            sanitized.push(c);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
+    match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
+        Ok(value) if !value.trim().is_empty() => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
+        Ok(_) => None,
+        Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
+    }
+}
+
+fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
+    let token = auth.and_then(|auth| auth.get_token().ok())?;
+    let token = token.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
+fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
+    let mut headers = HashMap::new();
+    if let Some(token) = codex_apps_mcp_bearer_token(auth) {
+        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+    }
+    if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
+        headers.insert("ChatGPT-Account-ID".to_string(), account_id);
+    }
+    if headers.is_empty() {
+        None
+    } else {
+        Some(headers)
+    }
+}
+
+fn normalize_codex_apps_base_url(base_url: &str) -> String {
+    let mut base_url = base_url.trim_end_matches('/').to_string();
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    base_url
+}
+
+fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
+    let base_url = normalize_codex_apps_base_url(base_url);
+    if base_url.contains("/backend-api") {
+        format!("{base_url}/wham/apps")
+    } else if base_url.contains("/api/codex") {
+        format!("{base_url}/apps")
+    } else {
+        format!("{base_url}/api/codex/apps")
+    }
+}
+
+fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) -> McpServerConfig {
+    let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
+    let http_headers = if bearer_token_env_var.is_some() {
+        None
+    } else {
+        codex_apps_mcp_http_headers(auth)
+    };
+    let url = codex_apps_mcp_url(config);
+
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers: None,
+        },
+        experimental_environment: None,
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: Some(Duration::from_secs(30)),
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
 }
 
 fn protocol_tool_from_rmcp_tool(name: &str, tool: &rmcp::model::Tool) -> Option<Tool> {
@@ -562,18 +575,6 @@ async fn collect_mcp_server_status_snapshot_from_manager(
         resource_templates: convert_mcp_resource_templates(resource_templates),
         auth_statuses: auth_statuses_from_entries(&auth_status_entries),
     }
-}
-
-pub async fn collect_mcp_snapshot_from_manager(
-    mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
-) -> McpListToolsResponseEvent {
-    collect_mcp_snapshot_from_manager_with_detail(
-        mcp_connection_manager,
-        auth_status_entries,
-        McpSnapshotDetail::Full,
-    )
-    .await
 }
 
 async fn collect_mcp_snapshot_from_manager_with_detail(

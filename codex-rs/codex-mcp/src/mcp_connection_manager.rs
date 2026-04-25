@@ -108,32 +108,6 @@ const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
 const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 
-fn sha1_hex(s: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(s.as_bytes());
-    let sha1 = hasher.finalize();
-    format!("{sha1:x}")
-}
-
-pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
-    let token_data = auth.and_then(|auth| auth.get_token_data().ok());
-    let account_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.account_id.clone());
-    let chatgpt_user_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
-    let is_workspace_account = token_data
-        .as_ref()
-        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
-
-    CodexAppsToolsCacheKey {
-        account_id,
-        chatgpt_user_id,
-        is_workspace_account,
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
     /// Raw MCP server name used for routing the tool call.
@@ -162,8 +136,6 @@ impl ToolInfo {
     }
 }
 
-const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
-
 pub fn declared_openai_file_input_param_names(
     meta: Option<&Map<String, JsonValue>>,
 ) -> Vec<String> {
@@ -181,75 +153,134 @@ pub fn declared_openai_file_input_param_names(
         .collect()
 }
 
-/// Returns the model-visible view of a tool while preserving the raw metadata
-/// used by execution. Keep cache entries raw and call this at manager return
-/// boundaries.
-fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
-    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
-    if file_params.is_empty() {
-        return tool.clone();
-    }
-
-    let mut tool = tool.clone();
-    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
-    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
-    if let JsonValue::Object(input_schema) = input_schema {
-        tool.input_schema = Arc::new(input_schema);
-    }
-    tool
-}
-
-fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(JsonValue::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        mask_input_property_schema(property_schema);
-    }
-}
-
-fn mask_input_property_schema(schema: &mut JsonValue) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-    if description.is_empty() {
-        description = guidance.to_string();
-    } else if !description.contains(guidance) {
-        description = format!("{description} {guidance}");
-    }
-
-    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert("description".to_string(), JsonValue::String(description));
-    if is_array {
-        object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
-    } else {
-        object.insert("type".to_string(), JsonValue::String("string".to_string()));
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
+}
+
+pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
+    let token_data = auth.and_then(|auth| auth.get_token_data().ok());
+    let account_id = token_data
+        .as_ref()
+        .and_then(|token_data| token_data.account_id.clone());
+    let chatgpt_user_id = token_data
+        .as_ref()
+        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
+    let is_workspace_account = token_data
+        .as_ref()
+        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
+
+    CodexAppsToolsCacheKey {
+        account_id,
+        chatgpt_user_id,
+        is_workspace_account,
+    }
+}
+
+pub fn filter_non_codex_apps_mcp_tools_only(
+    mcp_tools: &HashMap<String, ToolInfo>,
+) -> HashMap<String, ToolInfo> {
+    mcp_tools
+        .iter()
+        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
+}
+
+/// MCP server capability indicating that Codex should include [`SandboxState`]
+/// in tool-call request `_meta` under this key.
+pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
+    #[serde(default)]
+    pub use_legacy_landlock: bool,
+}
+
+/// A thin wrapper around a set of running [`RmcpClient`] instances.
+pub struct McpConnectionManager {
+    clients: HashMap<String, AsyncManagedClient>,
+    server_origins: HashMap<String, String>,
+    elicitation_requests: ElicitationRequestManager,
+}
+
+/// Runtime placement information used when starting MCP server transports.
+///
+/// `McpConfig` describes what servers exist. This value describes where those
+/// servers should run for the current caller. Keep it explicit at manager
+/// construction time so status/snapshot paths and real sessions make the same
+/// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
+/// used only when an executor-backed stdio server omits `cwd` and the executor
+/// API still needs a concrete process working directory.
+#[derive(Clone)]
+pub struct McpRuntimeEnvironment {
+    environment: Arc<Environment>,
+    fallback_cwd: PathBuf,
+}
+
+impl McpRuntimeEnvironment {
+    pub fn new(environment: Arc<Environment>, fallback_cwd: PathBuf) -> Self {
+        Self {
+            environment,
+            fallback_cwd,
+        }
+    }
+
+    fn environment(&self) -> Arc<Environment> {
+        Arc::clone(&self.environment)
+    }
+
+    fn fallback_cwd(&self) -> PathBuf {
+        self.fallback_cwd.clone()
+    }
+}
+
+/// A tool is allowed to be used if both are true:
+/// 1. enabled is None (no allowlist is set) or the tool is explicitly enabled.
+/// 2. The tool is not explicitly disabled.
+#[derive(Default, Clone)]
+pub(crate) struct ToolFilter {
+    enabled: Option<HashSet<String>>,
+    disabled: HashSet<String>,
+}
+
+impl ToolFilter {
+    fn from_config(cfg: &McpServerConfig) -> Self {
+        let enabled = cfg
+            .enabled_tools
+            .as_ref()
+            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>());
+        let disabled = cfg
+            .disabled_tools
+            .as_ref()
+            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>())
+            .unwrap_or_default();
+
+        Self { enabled, disabled }
+    }
+
+    fn allows(&self, tool_name: &str) -> bool {
+        if let Some(enabled) = &self.enabled
+            && !enabled.contains(tool_name)
+        {
+            return false;
+        }
+
+        !self.disabled.contains(tool_name)
+    }
+}
+
+fn sha1_hex(s: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(s.as_bytes());
+    let sha1 = hasher.finalize();
+    format!("{sha1:x}")
 }
 
 #[derive(Clone)]
@@ -635,58 +666,6 @@ impl AsyncManagedClient {
     }
 }
 
-/// MCP server capability indicating that Codex should include [`SandboxState`]
-/// in tool-call request `_meta` under this key.
-pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SandboxState {
-    pub sandbox_policy: SandboxPolicy,
-    pub codex_linux_sandbox_exe: Option<PathBuf>,
-    pub sandbox_cwd: PathBuf,
-    #[serde(default)]
-    pub use_legacy_landlock: bool,
-}
-
-/// A thin wrapper around a set of running [`RmcpClient`] instances.
-pub struct McpConnectionManager {
-    clients: HashMap<String, AsyncManagedClient>,
-    server_origins: HashMap<String, String>,
-    elicitation_requests: ElicitationRequestManager,
-}
-
-/// Runtime placement information used when starting MCP server transports.
-///
-/// `McpConfig` describes what servers exist. This value describes where those
-/// servers should run for the current caller. Keep it explicit at manager
-/// construction time so status/snapshot paths and real sessions make the same
-/// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
-/// used only when an executor-backed stdio server omits `cwd` and the executor
-/// API still needs a concrete process working directory.
-#[derive(Clone)]
-pub struct McpRuntimeEnvironment {
-    environment: Arc<Environment>,
-    fallback_cwd: PathBuf,
-}
-
-impl McpRuntimeEnvironment {
-    pub fn new(environment: Arc<Environment>, fallback_cwd: PathBuf) -> Self {
-        Self {
-            environment,
-            fallback_cwd,
-        }
-    }
-
-    fn environment(&self) -> Arc<Environment> {
-        Arc::clone(&self.environment)
-    }
-
-    fn fallback_cwd(&self) -> PathBuf {
-        self.fallback_cwd.clone()
-    }
-}
-
 impl McpConnectionManager {
     pub fn new_uninitialized(
         approval_policy: &Constrained<AskForApproval>,
@@ -841,15 +820,6 @@ impl McpConnectionManager {
                 .await;
         });
         (manager, cancel_token)
-    }
-
-    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
-        self.clients
-            .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
-            .await
-            .context("failed to get client")
     }
 
     pub async fn resolve_elicitation(
@@ -1203,6 +1173,81 @@ impl McpConnectionManager {
             .into_values()
             .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
+
+    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
+        self.clients
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
+            .client()
+            .await
+            .context("failed to get client")
+    }
+}
+
+const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
+
+/// Returns the model-visible view of a tool while preserving the raw metadata
+/// used by execution. Keep cache entries raw and call this at manager return
+/// boundaries.
+fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
+    let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
+    if file_params.is_empty() {
+        return tool.clone();
+    }
+
+    let mut tool = tool.clone();
+    let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
+    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
+    if let JsonValue::Object(input_schema) = input_schema {
+        tool.input_schema = Arc::new(input_schema);
+    }
+    tool
+}
+
+fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+    let Some(properties) = input_schema
+        .as_object_mut()
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return;
+    };
+
+    for field_name in file_params {
+        let Some(property_schema) = properties.get_mut(field_name) else {
+            continue;
+        };
+        mask_input_property_schema(property_schema);
+    }
+}
+
+fn mask_input_property_schema(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let mut description = object
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let guidance = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
+    if description.is_empty() {
+        description = guidance.to_string();
+    } else if !description.contains(guidance) {
+        description = format!("{description} {guidance}");
+    }
+
+    let is_array = object.get("type").and_then(JsonValue::as_str) == Some("array")
+        || object.get("items").is_some();
+    object.clear();
+    object.insert("description".to_string(), JsonValue::String(description));
+    if is_array {
+        object.insert("type".to_string(), JsonValue::String("array".to_string()));
+        object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
+    } else {
+        object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
 }
 
 async fn emit_update(
@@ -1218,55 +1263,10 @@ async fn emit_update(
         .await
 }
 
-/// A tool is allowed to be used if both are true:
-/// 1. enabled is None (no allowlist is set) or the tool is explicitly enabled.
-/// 2. The tool is not explicitly disabled.
-#[derive(Default, Clone)]
-pub(crate) struct ToolFilter {
-    enabled: Option<HashSet<String>>,
-    disabled: HashSet<String>,
-}
-
-impl ToolFilter {
-    fn from_config(cfg: &McpServerConfig) -> Self {
-        let enabled = cfg
-            .enabled_tools
-            .as_ref()
-            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>());
-        let disabled = cfg
-            .disabled_tools
-            .as_ref()
-            .map(|tools| tools.iter().cloned().collect::<HashSet<_>>())
-            .unwrap_or_default();
-
-        Self { enabled, disabled }
-    }
-
-    fn allows(&self, tool_name: &str) -> bool {
-        if let Some(enabled) = &self.enabled
-            && !enabled.contains(tool_name)
-        {
-            return false;
-        }
-
-        !self.disabled.contains(tool_name)
-    }
-}
-
 fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
     tools
         .into_iter()
         .filter(|tool| filter.allows(&tool.tool.name))
-        .collect()
-}
-
-pub fn filter_non_codex_apps_mcp_tools_only(
-    mcp_tools: &HashMap<String, ToolInfo>,
-) -> HashMap<String, ToolInfo> {
-    mcp_tools
-        .iter()
-        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
-        .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
 }
 
