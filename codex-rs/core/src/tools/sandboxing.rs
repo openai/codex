@@ -17,7 +17,6 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 #[cfg(test)]
@@ -357,9 +356,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: SandboxType,
-    pub policy: &'a codex_protocol::protocol::SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
-    pub network_policy: NetworkSandboxPolicy,
+    pub permissions: &'a codex_protocol::models::PermissionProfile,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a AbsolutePathBuf,
@@ -379,9 +376,7 @@ impl<'a> SandboxAttempt<'a> {
         self.manager
             .transform(SandboxTransformRequest {
                 command,
-                policy: self.policy,
-                file_system_policy: self.file_system_policy,
-                network_policy: self.network_policy,
+                permissions: self.permissions,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
                 network,

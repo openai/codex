@@ -56,8 +56,8 @@ fn build_permissions_update_item(
     }
 
     Some(
-        PermissionsInstructions::from_policy(
-            next.sandbox_policy.get(),
+        PermissionsInstructions::from_permission_profile(
+            &next.permission_profile,
             next.approval_policy.value(),
             next.config.approvals_reviewer,
             exec_policy,
