@@ -2366,37 +2366,13 @@ impl ChatWidget {
             tracing::warn!(%err, "failed to sync permissions from SessionConfigured");
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
-            match event.permission_profile.clone() {
-                Some(permission_profile) => {
-                    let (file_system_sandbox_policy, network_sandbox_policy) =
-                        permission_profile.to_runtime_permissions();
-                    self.config.permissions.permission_profile =
-                        Constrained::allow_only(permission_profile);
-                    self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
-                    self.config.permissions.network_sandbox_policy = network_sandbox_policy;
-                }
-                None => {
-                    self.config.permissions.file_system_sandbox_policy =
-                        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                            &event.sandbox_policy,
-                            &event.cwd,
-                        );
-                    self.config.permissions.network_sandbox_policy =
-                        codex_protocol::permissions::NetworkSandboxPolicy::from(
-                            &event.sandbox_policy,
-                        );
-                    let permission_profile =
-                        codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
-                            codex_protocol::models::SandboxEnforcement::from_legacy_sandbox_policy(
-                                &event.sandbox_policy,
-                            ),
-                            &self.config.permissions.file_system_sandbox_policy,
-                            self.config.permissions.network_sandbox_policy,
-                        );
-                    self.config.permissions.permission_profile =
-                        Constrained::allow_only(permission_profile);
-                }
-            }
+            let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &event.sandbox_policy,
+                )
+            });
+            self.config.permissions.permission_profile =
+                Constrained::allow_only(permission_profile);
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
