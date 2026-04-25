@@ -709,7 +709,7 @@ impl Session {
                     let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                         spec,
                         current_exec_policy.as_ref(),
-                        config.permissions.sandbox_policy.get(),
+                        config.permissions.permission_profile.get(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
@@ -863,8 +863,8 @@ impl Session {
                     history_entry_count,
                     initial_messages,
                     network_proxy: session_network_proxy.filter(|_| {
-                        Self::managed_network_proxy_active_for_sandbox_policy(
-                            &session_sandbox_policy,
+                        Self::managed_network_proxy_active_for_permission_profile(
+                            session_configuration.permission_profile.get(),
                         )
                     }),
                     rollout_path,
