@@ -13,6 +13,7 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
@@ -38,10 +39,12 @@ use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::time::Duration;
+use std::time::Instant;
 
 mod app_link_view;
 mod approval_overlay;
@@ -139,6 +142,8 @@ pub(crate) use selection_tabs::SelectionTab;
 /// Keeping a single value ensures Ctrl+C and Ctrl+D behave identically.
 pub(crate) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
+const APPROVAL_PROMPT_TYPING_IDLE_DELAY: Duration = Duration::from_secs(1);
+
 /// Whether Ctrl+C/Ctrl+D require a second press to quit.
 ///
 /// This UX experiment was enabled by default, but requiring a double press to quit feels janky in
@@ -170,6 +175,11 @@ pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
+struct DelayedApprovalRequest {
+    request: ApprovalRequest,
+    features: Features,
+}
+
 /// Pane displayed in the lower half of the chat UI.
 ///
 /// This is the owning container for the prompt input (`ChatComposer`) and the view stack
@@ -182,6 +192,8 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
+    delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
+    last_composer_activity_at: Option<Instant>,
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -243,6 +255,8 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
+            delayed_approval_requests: VecDeque::new(),
+            last_composer_activity_at: None,
             app_event_tx,
             frame_requester,
             has_input_focus,
@@ -442,6 +456,45 @@ impl BottomPane {
         }
     }
 
+    fn approval_prompt_delay_remaining(&self, now: Instant) -> Option<Duration> {
+        self.last_composer_activity_at.and_then(|last_activity_at| {
+            last_activity_at
+                .checked_add(APPROVAL_PROMPT_TYPING_IDLE_DELAY)
+                .and_then(|show_at| show_at.checked_duration_since(now))
+                .filter(|delay| !delay.is_zero())
+        })
+    }
+
+    fn record_composer_activity_at(&mut self, now: Instant) {
+        self.last_composer_activity_at = Some(now);
+        if !self.delayed_approval_requests.is_empty()
+            && let Some(delay) = self.approval_prompt_delay_remaining(now)
+        {
+            self.request_redraw_in(delay);
+        }
+    }
+
+    fn maybe_show_delayed_approval_requests_at(&mut self, now: Instant) {
+        if self.delayed_approval_requests.is_empty() || !self.view_stack.is_empty() {
+            return;
+        }
+        if let Some(delay) = self.approval_prompt_delay_remaining(now) {
+            self.request_redraw_in(delay);
+            return;
+        }
+
+        let Some(first) = self.delayed_approval_requests.pop_front() else {
+            return;
+        };
+        let mut modal =
+            ApprovalOverlay::new(first.request, self.app_event_tx.clone(), first.features);
+        while let Some(delayed) = self.delayed_approval_requests.pop_back() {
+            modal.enqueue_request(delayed.request);
+        }
+        self.pause_status_timer_for_modal();
+        self.push_view(Box::new(modal));
+    }
+
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
@@ -512,7 +565,23 @@ impl BottomPane {
                 self.request_redraw();
                 return InputResult::None;
             }
+            let records_composer_activity =
+                matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                    && !key_event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && matches!(
+                        key_event.code,
+                        KeyCode::Char(_)
+                            | KeyCode::Backspace
+                            | KeyCode::Delete
+                            | KeyCode::Enter
+                            | KeyCode::Tab
+                    );
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
+            if records_composer_activity {
+                self.record_composer_activity_at(Instant::now());
+            }
             if needs_redraw {
                 self.request_redraw();
             }
@@ -560,6 +629,7 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
+        let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             let view_complete = view.is_complete();
@@ -572,6 +642,9 @@ impl BottomPane {
             }
         } else {
             let needs_redraw = self.composer.handle_paste(pasted);
+            if has_pasted_text {
+                self.record_composer_activity_at(Instant::now());
+            }
             self.composer.sync_popups();
             if needs_redraw {
                 self.request_redraw();
@@ -586,7 +659,12 @@ impl BottomPane {
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {
+        self.pre_draw_tick_at(Instant::now());
+    }
+
+    fn pre_draw_tick_at(&mut self, now: Instant) {
         self.composer.sync_popups();
+        self.maybe_show_delayed_approval_requests_at(now);
     }
 
     /// Replace the composer text with `text`.
@@ -989,10 +1067,21 @@ impl BottomPane {
             request
         };
 
-        // Otherwise create a new approval modal overlay.
-        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
-        self.pause_status_timer_for_modal();
-        self.push_view(Box::new(modal));
+        let now = Instant::now();
+        if !self.delayed_approval_requests.is_empty()
+            || self.approval_prompt_delay_remaining(now).is_some()
+        {
+            self.delayed_approval_requests
+                .push_back(DelayedApprovalRequest {
+                    request,
+                    features: features.clone(),
+                });
+            self.maybe_show_delayed_approval_requests_at(now);
+        } else {
+            let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
+            self.pause_status_timer_for_modal();
+            self.push_view(Box::new(modal));
+        }
     }
 
     /// Called when the agent requests user input.
@@ -1107,11 +1196,19 @@ impl BottomPane {
         &mut self,
         request: &ResolvedAppServerRequest,
     ) -> bool {
+        let delayed_len = self.delayed_approval_requests.len();
+        self.delayed_approval_requests
+            .retain(|delayed| !delayed.request.matches_resolved_request(request));
+        let delayed_changed = self.delayed_approval_requests.len() != delayed_len;
+
         if self.view_stack.is_empty() {
-            return false;
+            if delayed_changed {
+                self.request_redraw();
+            }
+            return delayed_changed;
         }
 
-        let mut changed = false;
+        let mut changed = delayed_changed;
         let mut completed_indices = Vec::new();
         for index in (0..self.view_stack.len()).rev() {
             let view = &mut self.view_stack[index];
@@ -1356,6 +1453,7 @@ mod tests {
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
@@ -1367,6 +1465,7 @@ mod tests {
     use ratatui::layout::Rect;
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
@@ -1388,13 +1487,20 @@ mod tests {
     }
 
     fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
+        test_pane_with_disable_paste_burst(app_event_tx, /*disable_paste_burst*/ false)
+    }
+
+    fn test_pane_with_disable_paste_burst(
+        app_event_tx: AppEventSender,
+        disable_paste_burst: bool,
+    ) -> BottomPane {
         BottomPane::new(BottomPaneParams {
             app_event_tx,
             frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
-            disable_paste_burst: false,
+            disable_paste_burst,
             animations_enabled: true,
             skills: Some(Vec::new()),
         })
@@ -1563,6 +1669,136 @@ mod tests {
             !r0.contains("Working"),
             "overlay should not render above modal"
         );
+    }
+
+    #[test]
+    fn approval_request_shows_immediately_without_recent_typing() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane(tx);
+
+        pane.push_approval_request(exec_request(), &features);
+
+        assert_eq!(pane.view_stack.len(), 1);
+        assert!(pane.delayed_approval_requests.is_empty());
+    }
+
+    #[test]
+    fn approval_request_is_delayed_after_recent_typing() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane(tx);
+        let now = Instant::now();
+        pane.last_composer_activity_at = Some(now);
+
+        pane.push_approval_request(exec_request(), &features);
+
+        assert!(pane.view_stack.is_empty());
+        assert_eq!(pane.delayed_approval_requests.len(), 1);
+
+        pane.pre_draw_tick_at(
+            now + APPROVAL_PROMPT_TYPING_IDLE_DELAY - Duration::from_millis(/*millis*/ 1),
+        );
+        assert!(pane.view_stack.is_empty());
+        assert_eq!(pane.delayed_approval_requests.len(), 1);
+
+        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        assert_eq!(pane.view_stack.len(), 1);
+        assert!(pane.delayed_approval_requests.is_empty());
+    }
+
+    #[test]
+    fn continued_typing_resets_delayed_approval_idle_deadline() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane(tx);
+        let first_activity = Instant::now();
+        pane.last_composer_activity_at = Some(first_activity);
+        pane.push_approval_request(exec_request(), &features);
+
+        let continued_activity = first_activity + Duration::from_millis(/*millis*/ 750);
+        pane.record_composer_activity_at(continued_activity);
+
+        pane.pre_draw_tick_at(first_activity + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        assert!(pane.view_stack.is_empty());
+        assert_eq!(pane.delayed_approval_requests.len(), 1);
+
+        pane.pre_draw_tick_at(continued_activity + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        assert_eq!(pane.view_stack.len(), 1);
+        assert!(pane.delayed_approval_requests.is_empty());
+    }
+
+    #[test]
+    fn typed_approval_shortcuts_during_delay_stay_in_composer() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane_with_disable_paste_burst(tx, /*disable_paste_burst*/ true);
+        pane.last_composer_activity_at = Some(Instant::now());
+        pane.push_approval_request(exec_request(), &features);
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        assert_eq!(pane.composer_text(), "ya");
+        assert!(pane.view_stack.is_empty());
+        assert_eq!(pane.delayed_approval_requests.len(), 1);
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, AppEvent::SubmitThreadOp { .. }),
+                "delayed approval shortcut should not submit an approval: {event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_approval_shortcut_works_after_idle_deadline() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane(tx);
+        let now = Instant::now();
+        pane.last_composer_activity_at = Some(now);
+        pane.push_approval_request(exec_request(), &features);
+
+        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        let mut approval_decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::ExecApproval { decision, .. },
+                ..
+            } = event
+            {
+                approval_decision = Some(decision);
+            }
+        }
+        assert_eq!(approval_decision, Some(ReviewDecision::Approved));
+    }
+
+    #[test]
+    fn dismiss_app_server_request_prunes_delayed_approval() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = test_pane(tx);
+        let now = Instant::now();
+        pane.last_composer_activity_at = Some(now);
+        pane.push_approval_request(exec_request(), &features);
+
+        assert!(
+            pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "1".to_string(),
+            })
+        );
+        assert!(pane.delayed_approval_requests.is_empty());
+
+        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+        assert!(pane.view_stack.is_empty());
     }
 
     #[test]
