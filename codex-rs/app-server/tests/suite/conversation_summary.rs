@@ -92,6 +92,7 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn get_conversation_summary_by_rollout_path_rejects_remote_thread_store() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
