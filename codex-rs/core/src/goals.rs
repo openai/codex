@@ -8,6 +8,7 @@ use crate::StateDbHandle;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
+use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use anyhow::Context;
 use codex_features::Feature;
@@ -735,6 +736,16 @@ impl Session {
         }
     }
 
+    async fn clear_reserved_goal_continuation_turn(&self, turn_state: &Arc<Mutex<TurnState>>) {
+        let mut active_turn_guard = self.active_turn.lock().await;
+        if let Some(active_turn) = active_turn_guard.as_ref()
+            && active_turn.tasks.is_empty()
+            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
+        {
+            *active_turn_guard = None;
+        }
+    }
+
     async fn finish_thread_goal_turn(
         self: &Arc<Self>,
         turn_context: &TurnContext,
@@ -1180,13 +1191,8 @@ impl Session {
             }
         };
         if !goal_is_current {
-            let mut active_turn_guard = self.active_turn.lock().await;
-            if let Some(active_turn) = active_turn_guard.as_ref()
-                && active_turn.tasks.is_empty()
-                && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
-            {
-                *active_turn_guard = None;
-            }
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
             return;
         }
         {
@@ -1199,9 +1205,20 @@ impl Session {
         let turn_context = self
             .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
-        self.mark_thread_goal_continuation_turn_started(turn_context.sub_id.clone())
-            .await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        let still_reserved = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn.as_ref().is_some_and(|active_turn| {
+                active_turn.tasks.is_empty() && Arc::ptr_eq(&active_turn.turn_state, &turn_state)
+            })
+        };
+        if !still_reserved {
+            self.clear_reserved_goal_continuation_turn(&turn_state)
+                .await;
+            return;
+        }
+        self.mark_thread_goal_continuation_turn_started(turn_context.sub_id.clone())
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
