@@ -1,8 +1,5 @@
 use super::*;
 use crate::compact::InitialContextInjection;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
@@ -13,6 +10,9 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;

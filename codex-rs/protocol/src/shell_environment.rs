@@ -1,6 +1,6 @@
-use crate::types::EnvironmentVariablePattern;
-use crate::types::ShellEnvironmentPolicy;
-use crate::types::ShellEnvironmentPolicyInherit;
+use crate::config_types::EnvironmentVariablePattern;
+use crate::config_types::ShellEnvironmentPolicy;
+use crate::config_types::ShellEnvironmentPolicyInherit;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -76,7 +76,6 @@ where
         }
     };
 
-    // Internal helper - does `name` match any pattern in `patterns`?
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
     };

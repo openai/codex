@@ -18,6 +18,8 @@ use toml::Value as TomlValue;
 #[derive(Debug, Default, Clone)]
 pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
+    pub system_config_path: Option<PathBuf>,
+    pub system_requirements_path: Option<PathBuf>,
     pub ignore_user_config: bool,
     pub ignore_user_and_project_exec_policy_rules: bool,
     //TODO(gt): Add a macos_ prefix to this field and remove the target_os check.
@@ -31,11 +33,17 @@ impl LoaderOverrides {
     ///
     /// This is intended for tests that should load only repo-controlled config fixtures.
     pub fn without_managed_config_for_tests() -> Self {
-        Self::with_managed_config_path_for_tests(
-            std::env::temp_dir()
-                .join("codex-config-tests")
-                .join("managed_config.toml"),
-        )
+        let base = std::env::temp_dir().join("codex-config-tests");
+        Self {
+            managed_config_path: Some(base.join("managed_config.toml")),
+            system_config_path: Some(base.join("config.toml")),
+            system_requirements_path: Some(base.join("requirements.toml")),
+            ignore_user_config: false,
+            ignore_user_and_project_exec_policy_rules: false,
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
+        }
     }
 
     /// Returns overrides with host MDM disabled and managed config loaded from `managed_config_path`.
@@ -44,11 +52,7 @@ impl LoaderOverrides {
     pub fn with_managed_config_path_for_tests(managed_config_path: PathBuf) -> Self {
         Self {
             managed_config_path: Some(managed_config_path),
-            ignore_user_config: false,
-            ignore_user_and_project_exec_policy_rules: false,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
+            ..Self::without_managed_config_for_tests()
         }
     }
 }

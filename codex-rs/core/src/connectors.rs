@@ -25,11 +25,11 @@ use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::config_loader::AppsRequirementsToml;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;

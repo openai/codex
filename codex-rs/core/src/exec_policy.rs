@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;

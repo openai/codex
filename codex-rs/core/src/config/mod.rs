@@ -1,20 +1,6 @@
 use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::ConstrainedWithSource;
-use crate::config_loader::FeatureRequirementsToml;
-use crate::config_loader::LoaderOverrides;
-use crate::config_loader::McpServerIdentity;
-use crate::config_loader::McpServerRequirement;
-use crate::config_loader::ResidencyRequirement;
-use crate::config_loader::Sourced;
-use crate::config_loader::load_config_layers_state;
-use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -22,6 +8,18 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
+use codex_config::ConstrainedWithSource;
+use codex_config::FeatureRequirementsToml;
+use codex_config::LoaderOverrides;
+use codex_config::McpServerIdentity;
+use codex_config::McpServerRequirement;
+use codex_config::ResidencyRequirement;
+use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -29,6 +27,8 @@ use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
+use codex_config::loader::load_config_layers_state;
+use codex_config::loader::project_trust_key;
 use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -44,7 +44,6 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
-use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
@@ -74,6 +73,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
@@ -785,10 +785,13 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = match merged_toml.try_into() {
             Ok(config_toml) => config_toml,
             Err(err) => {
-                if let Some(config_error) =
-                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
+                if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
+                    &config_layer_stack,
+                    codex_config::CONFIG_TOML_FILE,
+                )
+                .await
                 {
-                    return Err(crate::config_loader::io_error_from_config_error(
+                    return Err(codex_config::io_error_from_config_error(
                         std::io::ErrorKind::InvalidData,
                         config_error,
                         Some(err),
@@ -888,8 +891,8 @@ impl Config {
                 format!("failed to serialize default config: {e}"),
             )
         })?;
-        let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
-        crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let cli_layer = codex_config::build_cli_overrides_layer(&cli_overrides);
+        codex_config::merge_toml_values(&mut merged, &cli_layer);
         let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
@@ -1371,7 +1374,7 @@ fn resolve_permission_config_syntax(
 
 fn apply_managed_filesystem_constraints(
     file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    filesystem_constraints: &crate::config_loader::FilesystemConstraints,
+    filesystem_constraints: &codex_config::FilesystemConstraints,
 ) {
     for deny_read in &filesystem_constraints.deny_read {
         let deny_entry = if deny_read.contains_glob() {
@@ -2647,3 +2650,7 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_loader_tests.rs"]
+mod config_loader_tests;
