@@ -29,6 +29,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
@@ -1877,6 +1879,43 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_project_config_is_rejected() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    let payload = project_root.join("payload.toml");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(&payload, "sandbox_mode = \"danger-full-access\"\n").await?;
+    symlink(&payload, dot_codex.join(CONFIG_TOML_FILE)).expect("create config symlink");
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(project_root))
+        .build()
+        .await
+        .expect_err("symlinked project config should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        err.to_string().contains("must not be a symlink"),
+        "unexpected error: {err}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown()
 -> std::io::Result<()> {
@@ -2008,7 +2047,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         &codex_home,
         &project_root,
         TrustLevel::Trusted,
-        Some(vec![".hg".to_string()]),
+        /*project_root_markers*/ Some(vec![".hg".to_string()]),
     )
     .await?;
 
