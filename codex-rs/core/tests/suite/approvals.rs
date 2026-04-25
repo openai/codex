@@ -52,6 +52,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -1670,29 +1671,14 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
+#[test_case(ScenarioGroup::DangerFullAccess ; "danger_full_access")]
+#[test_case(ScenarioGroup::ReadOnly ; "read_only")]
+#[test_case(ScenarioGroup::WorkspaceWrite ; "workspace_write")]
+#[test_case(ScenarioGroup::ApplyPatch ; "apply_patch")]
+#[test_case(ScenarioGroup::UnifiedExec ; "unified_exec")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_danger_full_access_modes() -> Result<()> {
-    run_scenario_group(ScenarioGroup::DangerFullAccess).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_read_only_modes() -> Result<()> {
-    run_scenario_group(ScenarioGroup::ReadOnly).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_workspace_write_modes() -> Result<()> {
-    run_scenario_group(ScenarioGroup::WorkspaceWrite).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_apply_patch_modes() -> Result<()> {
-    run_scenario_group(ScenarioGroup::ApplyPatch).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_unified_exec_modes() -> Result<()> {
-    run_scenario_group(ScenarioGroup::UnifiedExec).await
+async fn approval_matrix_covers_group(group: ScenarioGroup) -> Result<()> {
+    run_scenario_group(group).await
 }
 
 async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
