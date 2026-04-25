@@ -80,6 +80,8 @@ pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
         warn!(
             "skipping codex_apps file download materialization because ChatGPT auth is unavailable"
         );
+        redact_codex_apps_file_download_url(&mut result);
+        append_materialization_failure_message(&mut result);
         return result;
     };
     materialize_codex_apps_file_download_result_with_auth(
@@ -105,6 +107,8 @@ async fn materialize_codex_apps_file_download_result_with_auth(
         Ok(token_data) => token_data,
         Err(error) => {
             warn!(error = %error, "failed to read ChatGPT auth for codex_apps file download materialization");
+            redact_codex_apps_file_download_url(&mut result);
+            append_materialization_failure_message(&mut result);
             return result;
         }
     };
@@ -124,6 +128,8 @@ async fn materialize_codex_apps_file_download_result_with_auth(
                     file_id = payload.file_id,
                     "failed to resolve trusted codex_apps file download link",
                 );
+                redact_codex_apps_file_download_url(&mut result);
+                append_materialization_failure_message(&mut result);
                 return result;
             }
         };
@@ -146,6 +152,8 @@ async fn materialize_codex_apps_file_download_result_with_auth(
             path = %parent.display(),
             "failed to create codex_apps file download artifact directory",
         );
+        redact_codex_apps_file_download_url(&mut result);
+        append_materialization_failure_message(&mut result);
         return result;
     }
 
@@ -164,6 +172,8 @@ async fn materialize_codex_apps_file_download_result_with_auth(
             path = %artifact_path.display(),
             "failed to materialize codex_apps file download via app-server",
         );
+        redact_codex_apps_file_download_url(&mut result);
+        append_materialization_failure_message(&mut result);
         return result;
     }
 
@@ -174,11 +184,51 @@ async fn materialize_codex_apps_file_download_result_with_auth(
             JsonValue::String(local_path.clone()),
         );
     }
+    redact_codex_apps_file_download_url(&mut result);
     result.content.push(serde_json::json!({
         "type": "text",
         "text": format!("Downloaded file to local path: {local_path}"),
     }));
     result
+}
+
+fn redact_codex_apps_file_download_url(result: &mut CallToolResult) {
+    if let Some(structured_content) = result.structured_content.as_mut() {
+        redact_download_url_from_value(structured_content);
+    }
+
+    for item in &mut result.content {
+        let Some(item_object) = item.as_object_mut() else {
+            continue;
+        };
+        let Some(text) = item_object.get("text").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Ok(mut payload) = serde_json::from_str::<JsonValue>(text) else {
+            continue;
+        };
+        redact_download_url_from_value(&mut payload);
+        if let Ok(serialized) = serde_json::to_string(&payload) {
+            item_object.insert("text".to_string(), JsonValue::String(serialized));
+        }
+    }
+}
+
+fn redact_download_url_from_value(value: &mut JsonValue) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let Some(file_uri) = object.get_mut("file_uri").and_then(JsonValue::as_object_mut) else {
+        return;
+    };
+    file_uri.remove("download_url");
+}
+
+fn append_materialization_failure_message(result: &mut CallToolResult) {
+    result.content.push(serde_json::json!({
+        "type": "text",
+        "text": "Failed to materialize downloaded file to a local path.",
+    }));
 }
 
 fn extract_codex_apps_file_download_payload(
@@ -306,21 +356,22 @@ mod tests {
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());
         turn_context.config = Arc::new(config);
+        let original_payload = serde_json::json!({
+            "file_id": "file_123",
+            "file_name": "testing-file.txt",
+            "file_uri": {
+                "download_url": format!("{}/download/file_123", attacker_server.uri()),
+                "file_id": "file_123",
+                "file_name": "testing-file.txt",
+                "mime_type": "text/plain",
+            }
+        });
         let original = CallToolResult {
             content: vec![serde_json::json!({
                 "type": "text",
-                "text": "{\"file_id\":\"file_123\"}",
+                "text": original_payload.to_string(),
             })],
-            structured_content: Some(serde_json::json!({
-                "file_id": "file_123",
-                "file_name": "testing-file.txt",
-                "file_uri": {
-                    "download_url": format!("{}/download/file_123", attacker_server.uri()),
-                    "file_id": "file_123",
-                    "file_name": "testing-file.txt",
-                    "mime_type": "text/plain",
-                }
-            })),
+            structured_content: Some(original_payload),
             is_error: Some(false),
             meta: None,
         };
@@ -349,17 +400,111 @@ mod tests {
             .expect("local_path in structured content");
         assert!(local_path.contains("codex_apps_downloads"));
         assert!(local_path.ends_with("trusted-name.txt"));
+        let structured_download_url = result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("file_uri"))
+            .and_then(|value| value.get("download_url"));
+        assert_eq!(structured_download_url, None);
         let saved = tokio::fs::read(local_path)
             .await
             .expect("saved local file should exist");
         assert_eq!(saved, b"downloaded contents".to_vec());
         assert_eq!(attacker_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!result.content.iter().any(|block| {
+            block.get("text")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|text| text.contains(&attacker_server.uri()))
+        }));
         assert!(result.content.iter().any(|block| {
             block.get("type").and_then(JsonValue::as_str) == Some("text")
                 && block
                     .get("text")
                     .and_then(JsonValue::as_str)
                     .is_some_and(|text| text.contains("Downloaded file to local path:"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn codex_apps_file_download_materialization_failure_redacts_download_url() {
+        let server = MockServer::start().await;
+        let attacker_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/file_123/download"))
+            .and(header("authorization", "Bearer Access Token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let (_, mut turn_context) = make_session_and_context().await;
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+        turn_context.config = Arc::new(config);
+        let original_payload = serde_json::json!({
+            "file_id": "file_123",
+            "file_name": "testing-file.txt",
+            "file_uri": {
+                "download_url": format!("{}/download/file_123", attacker_server.uri()),
+                "file_name": "testing-file.txt",
+                "mime_type": "text/plain",
+            }
+        });
+        let original = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": original_payload.to_string(),
+            })],
+            structured_content: Some(original_payload),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let result = materialize_codex_apps_file_download_result_with_auth(
+            &turn_context,
+            turn_context.config.chatgpt_base_url.as_str(),
+            "session-1",
+            &CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            serde_json::from_value(
+                original
+                    .structured_content
+                    .clone()
+                    .expect("structured content should exist"),
+            )
+            .expect("download payload"),
+            original,
+        )
+        .await;
+
+        assert!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("local_path"))
+                .is_none()
+        );
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("file_uri"))
+                .and_then(|value| value.get("download_url")),
+            None,
+        );
+        assert!(!result.content.iter().any(|block| {
+            block.get("text")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|text| text.contains(&attacker_server.uri()))
+        }));
+        assert!(result.content.iter().any(|block| {
+            block.get("type").and_then(JsonValue::as_str) == Some("text")
+                && block
+                    .get("text")
+                    .and_then(JsonValue::as_str)
+                    .is_some_and(|text| {
+                        text.contains("Failed to materialize downloaded file to a local path.")
+                    })
         }));
     }
 }
