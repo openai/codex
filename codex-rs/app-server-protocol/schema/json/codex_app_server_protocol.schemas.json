@@ -9158,38 +9158,6 @@
         "title": "GetAccountResponse",
         "type": "object"
       },
-      "GhostCommit": {
-        "description": "Details of a ghost commit created from a repository state.",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "parent": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "preexisting_untracked_dirs": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "preexisting_untracked_files": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "preexisting_untracked_dirs",
-          "preexisting_untracked_files"
-        ],
-        "type": "object"
-      },
       "GitInfo": {
         "properties": {
           "branch": {
@@ -13149,26 +13117,6 @@
               "type"
             ],
             "title": "ImageGenerationCallResponseItem",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "ghost_commit": {
-                "$ref": "#/definitions/v2/GhostCommit"
-              },
-              "type": {
-                "enum": [
-                  "ghost_snapshot"
-                ],
-                "title": "GhostSnapshotResponseItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "ghost_commit",
-              "type"
-            ],
-            "title": "GhostSnapshotResponseItem",
             "type": "object"
           },
           {

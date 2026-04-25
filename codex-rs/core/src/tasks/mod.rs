@@ -1,5 +1,4 @@
 mod compact;
-mod ghost_snapshot;
 mod regular;
 mod review;
 mod undo;
@@ -53,7 +52,6 @@ use codex_protocol::user_input::UserInput;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
-pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;

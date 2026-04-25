@@ -360,7 +360,8 @@ pub struct ConfigToml {
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
-    /// Settings for ghost snapshots (used for undo).
+    /// Compatibility-only settings retained so legacy `ghost_snapshot`
+    /// config still loads.
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
@@ -627,14 +628,13 @@ impl From<ToolsToml> for Tools {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct GhostSnapshotToml {
-    /// Exclude untracked files larger than this many bytes from ghost snapshots.
+    /// Legacy no-op setting retained for compatibility.
     #[serde(alias = "ignore_untracked_files_over_bytes")]
     pub ignore_large_untracked_files: Option<i64>,
-    /// Ignore untracked directories that contain this many files or more.
-    /// (Still emits a warning unless warnings are disabled.)
+    /// Legacy no-op setting retained for compatibility.
     #[serde(alias = "large_untracked_dir_warning_threshold")]
     pub ignore_large_untracked_dirs: Option<i64>,
-    /// Disable all ghost snapshot warning events.
+    /// Legacy no-op setting retained for compatibility.
     pub disable_warnings: Option<bool>,
 }
 
