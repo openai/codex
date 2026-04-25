@@ -11,8 +11,6 @@ use serde_json::Value as JsonValue;
 use tracing::warn;
 
 const CODEX_APPS_FILE_DOWNLOAD_ARTIFACTS_DIR: &str = ".tmp/codex_apps_downloads";
-const CODEX_APPS_PROVIDER_BUILTIN: &str = "builtin";
-const CODEX_APPS_META_PROVIDER_KEY: &str = "provider";
 const CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY: &str = "materialize_file_download";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -47,13 +45,9 @@ fn should_materialize_codex_apps_file_download(
     };
 
     codex_apps_meta
-        .get(CODEX_APPS_META_PROVIDER_KEY)
-        .and_then(JsonValue::as_str)
-        == Some(CODEX_APPS_PROVIDER_BUILTIN)
-        && codex_apps_meta
-            .get(CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY)
-            .and_then(JsonValue::as_bool)
-            == Some(true)
+        .get(CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY)
+        .and_then(JsonValue::as_bool)
+        == Some(true)
 }
 
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
@@ -263,7 +257,6 @@ mod tests {
 
     fn download_materialization_meta() -> JsonMap<String, JsonValue> {
         serde_json::json!({
-            "provider": "builtin",
             "materialize_file_download": true,
         })
         .as_object()
