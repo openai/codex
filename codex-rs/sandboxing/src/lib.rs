@@ -24,7 +24,7 @@ use codex_protocol::error::CodexErr;
 
 #[cfg(not(target_os = "linux"))]
 pub fn system_bwrap_warning(
-    _sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
+    _permission_profile: &codex_protocol::models::PermissionProfile,
 ) -> Option<String> {
     None
 }
