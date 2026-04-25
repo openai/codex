@@ -86,7 +86,7 @@ pub(crate) fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
     !policy.has_full_network_access()
 }
 
-pub(crate) fn prepare_legacy_spawn_context(
+fn prepare_spawn_context_common(
     policy_json_or_preset: &str,
     codex_home: &Path,
     cwd: &Path,
@@ -111,9 +111,6 @@ pub(crate) fn prepare_legacy_spawn_context(
     if add_git_safe_directory {
         inject_git_safe_directory(env_map, cwd);
     }
-    if should_apply_network_block(&policy) {
-        apply_no_network_to_env(env_map)?;
-    }
 
     ensure_codex_home_exists(codex_home)?;
     let sandbox_base = codex_home.join(".sandbox");
@@ -130,6 +127,30 @@ pub(crate) fn prepare_legacy_spawn_context(
         logs_base_dir,
         is_workspace_write,
     })
+}
+
+pub(crate) fn prepare_legacy_spawn_context(
+    policy_json_or_preset: &str,
+    codex_home: &Path,
+    cwd: &Path,
+    env_map: &mut HashMap<String, String>,
+    command: &[String],
+    inherit_path: bool,
+    add_git_safe_directory: bool,
+) -> Result<SpawnContext> {
+    let common = prepare_spawn_context_common(
+        policy_json_or_preset,
+        codex_home,
+        cwd,
+        env_map,
+        command,
+        inherit_path,
+        add_git_safe_directory,
+    )?;
+    if should_apply_network_block(&common.policy) {
+        apply_no_network_to_env(env_map)?;
+    }
+    Ok(common)
 }
 
 pub(crate) fn prepare_legacy_session_security(
@@ -243,7 +264,7 @@ pub(crate) fn prepare_elevated_spawn_context(
     env_map: &mut HashMap<String, String>,
     command: &[String],
 ) -> Result<ElevatedSpawnContext> {
-    let common = prepare_legacy_spawn_context(
+    let common = prepare_spawn_context_common(
         policy_json_or_preset,
         codex_home,
         cwd,
@@ -252,6 +273,7 @@ pub(crate) fn prepare_elevated_spawn_context(
         /*inherit_path*/ true,
         /*add_git_safe_directory*/ true,
     )?;
+
     let AllowDenyPaths { allow, deny } = compute_allow_paths(
         &common.policy,
         sandbox_policy_cwd,
@@ -272,6 +294,7 @@ pub(crate) fn prepare_elevated_spawn_context(
         env_map,
         codex_home,
         /*read_roots_override*/ None,
+        /*read_roots_include_platform_defaults*/ false,
         write_roots_override,
         &deny_write_paths,
         /*proxy_enforced*/ false,
@@ -303,4 +326,86 @@ pub(crate) fn prepare_elevated_spawn_context(
         sandbox_creds,
         cap_sids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SandboxPolicy;
+    use super::prepare_legacy_spawn_context;
+    use super::prepare_spawn_context_common;
+    use super::should_apply_network_block;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn no_network_env_rewrite_applies_for_workspace_write() {
+        assert!(should_apply_network_block(
+            &SandboxPolicy::new_workspace_write_policy(),
+        ));
+    }
+
+    #[test]
+    fn no_network_env_rewrite_skips_when_network_access_is_allowed() {
+        assert!(!should_apply_network_block(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+        ));
+    }
+
+    #[test]
+    fn legacy_spawn_env_applies_offline_network_rewrite() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let cwd = TempDir::new().expect("tempdir");
+        let mut env_map = HashMap::new();
+
+        let _context = prepare_legacy_spawn_context(
+            "workspace-write",
+            codex_home.path(),
+            cwd.path(),
+            &mut env_map,
+            &["cmd.exe".to_string()],
+            /*inherit_path*/ true,
+            /*add_git_safe_directory*/ false,
+        )
+        .expect("legacy env prep");
+
+        assert_eq!(env_map.get("SBX_NONET_ACTIVE"), Some(&"1".to_string()));
+        assert_eq!(
+            env_map.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:9".to_string())
+        );
+    }
+
+    #[test]
+    fn common_spawn_env_keeps_network_env_unchanged() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let cwd = TempDir::new().expect("tempdir");
+        let mut env_map = HashMap::from([(
+            "HTTP_PROXY".to_string(),
+            "http://user.proxy:8080".to_string(),
+        )]);
+
+        let context = prepare_spawn_context_common(
+            "workspace-write",
+            codex_home.path(),
+            cwd.path(),
+            &mut env_map,
+            &["cmd.exe".to_string()],
+            /*inherit_path*/ true,
+            /*add_git_safe_directory*/ true,
+        )
+        .expect("preserve existing env prep");
+        assert_eq!(context.policy, SandboxPolicy::new_workspace_write_policy());
+
+        assert_eq!(env_map.get("SBX_NONET_ACTIVE"), None);
+        assert_eq!(
+            env_map.get("HTTP_PROXY"),
+            Some(&"http://user.proxy:8080".to_string())
+        );
+    }
 }

@@ -14,7 +14,9 @@ workspace = true
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
@@ -22,7 +24,7 @@ codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -38,6 +40,7 @@ tokio = { workspace = true, features = [
     "sync",
     "time",
 ] }
+tokio-util = { workspace = true, features = ["rt"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

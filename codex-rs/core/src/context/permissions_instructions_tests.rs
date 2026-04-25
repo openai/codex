@@ -51,7 +51,6 @@ fn builds_permissions_with_network_access_override() {
 fn builds_permissions_from_policy() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -197,10 +196,10 @@ fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_b
 }
 
 #[test]
-fn guardian_subagent_approvals_append_guardian_specific_guidance() {
+fn auto_review_approvals_append_auto_review_specific_guidance() {
     let text = approval_text(
         AskForApproval::OnRequest,
-        ApprovalsReviewer::GuardianSubagent,
+        ApprovalsReviewer::AutoReview,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
@@ -212,10 +211,10 @@ fn guardian_subagent_approvals_append_guardian_specific_guidance() {
 }
 
 #[test]
-fn guardian_subagent_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
+fn auto_review_approvals_omit_auto_review_specific_guidance_when_approval_is_never() {
     let text = approval_text(
         AskForApproval::Never,
-        ApprovalsReviewer::GuardianSubagent,
+        ApprovalsReviewer::AutoReview,
         &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,

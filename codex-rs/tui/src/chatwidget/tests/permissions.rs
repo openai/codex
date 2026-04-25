@@ -54,7 +54,6 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
     let extra_root = test_path_buf("/tmp/extra").abs();
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![extra_root],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -189,6 +188,7 @@ async fn approvals_popup_shows_disabled_presets() {
 #[tokio::test]
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
@@ -198,25 +198,49 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
-    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
-    // and selection should wrap back to idx 0 (also enabled).
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    let mut disabled_shortcut = None;
+    let mut row_number = 0;
+    for line in popup.lines() {
+        let row = line
+            .trim_start()
+            .strip_prefix('\u{203a}')
+            .unwrap_or_else(|| line.trim_start())
+            .trim_start();
+        let mut chars = row.chars();
+        let has_numeric_shortcut =
+            chars.next().is_some_and(|ch| ch.is_ascii_digit()) && chars.next() == Some('.');
+        if has_numeric_shortcut || row.contains("(disabled)") {
+            row_number += 1;
+            if row.contains("(disabled)") {
+                disabled_shortcut = char::from_digit(row_number, 10);
+                break;
+            }
+        }
+    }
+    let disabled_shortcut = disabled_shortcut
+        .unwrap_or_else(|| panic!("expected at least one disabled selection row: {popup}"));
 
-    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
-    chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
+    for _ in 0..10 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+        let popup = render_bottom_popup(&chat, /*width*/ 80);
+        let selected_disabled = popup
+            .lines()
+            .find(|line| line.trim_start().starts_with('\u{203a}'))
+            .expect("expected a selected selection row")
+            .contains("(disabled)");
+        assert!(
+            !selected_disabled,
+            "navigation should skip disabled rows: {popup}"
+        );
+    }
+
+    // Press the hidden numeric shortcut for a disabled row; it should not close
+    // the popup or accept the preset.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(disabled_shortcut)));
 
     // Ensure the popup remains open and no selection actions were sent.
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("render approvals popup after disabled selection");
-    let screen = terminal.backend().vt100().screen().contents();
+    let screen = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
         screen.contains("Update Model Permissions"),
         "popup should remain open after selecting a disabled entry"
@@ -386,7 +410,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() {
+async fn permissions_selection_hides_auto_review_when_feature_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -401,12 +425,12 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden until the experimental feature is enabled: {popup}"
+        "expected Auto-review to stay hidden until the feature is enabled: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_even_if_auto_review_is_active()
+async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_auto_review_is_active()
  {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
@@ -416,7 +440,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
     }
     chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
     chat.config.notices.hide_full_access_warning = Some(true);
-    chat.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    chat.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
     chat.config
         .permissions
         .approval_policy
@@ -433,12 +457,12 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
 
     assert!(
         !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden when the experimental feature is disabled: {popup}"
+        "expected Auto-review to stay hidden when the feature is disabled: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_guardian_approvals_current_after_session_configured() {
+async fn permissions_selection_marks_auto_review_current_after_session_configured() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -461,8 +485,9 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -483,8 +508,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_guardian_approvals_current_with_custom_workspace_write_details()
- {
+async fn permissions_selection_marks_auto_review_current_with_custom_workspace_write_details() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -509,14 +533,14 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![extra_root],
-                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
+            permission_profile: None,
             cwd: test_project_path().abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -537,7 +561,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
 }
 
 #[tokio::test]
-async fn permissions_selection_can_disable_guardian_approvals() {
+async fn permissions_selection_can_disable_auto_review() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
     {
@@ -630,8 +654,9 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,

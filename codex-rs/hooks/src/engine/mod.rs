@@ -1,5 +1,4 @@
 pub(crate) mod command_runner;
-pub(crate) mod config;
 pub(crate) mod discovery;
 pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
@@ -32,6 +31,7 @@ pub(crate) struct CommandShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
+    pub is_managed: bool,
     pub matcher: Option<String>,
     pub command: String,
     pub timeout_sec: u64,
@@ -170,3 +170,7 @@ impl ClaudeHooksEngine {
         crate::events::stop::run(&self.handlers, &self.shell, request).await
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

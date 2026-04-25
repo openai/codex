@@ -1,5 +1,6 @@
 use super::*;
 use codex_app_server_protocol::AppInfo;
+use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -244,6 +245,34 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
         "plugin_detail_popup_installed",
         strip_osc8_for_snapshot(&popup)
     );
+}
+
+#[tokio::test]
+async fn plugin_detail_error_popup_skips_disabled_row_numbering() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-figma",
+            "figma",
+            Some("Figma"),
+            Some("Design handoff."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Err("Failed to load plugin details.".to_string()),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugin_detail_error_popup", popup);
 }
 
 #[tokio::test]
@@ -1723,55 +1752,22 @@ async fn experimental_features_toggle_saves_on_exit() {
 }
 
 #[tokio::test]
-async fn experimental_popup_shows_js_repl_node_requirement() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    let js_repl_description = FEATURES
-        .iter()
-        .find(|spec| spec.id == Feature::JsRepl)
-        .and_then(|spec| spec.stage.experimental_menu_description())
-        .expect("expected js_repl experimental description");
-    let node_requirement = js_repl_description
-        .split(". ")
-        .find(|sentence| sentence.starts_with("Requires Node >= v"))
-        .map(|sentence| sentence.trim_end_matches(" installed."))
-        .expect("expected js_repl description to mention the Node requirement");
-
-    chat.open_experimental_popup();
-
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
-    assert!(
-        popup.contains(node_requirement),
-        "expected js_repl feature description to mention the required Node version, got:\n{popup}"
-    );
-}
-
-#[tokio::test]
-async fn experimental_popup_includes_guardian_approval() {
+async fn experimental_popup_omits_stable_guardian_approval() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let guardian_stage = FEATURES
         .iter()
         .find(|spec| spec.id == Feature::GuardianApproval)
         .map(|spec| spec.stage)
         .expect("expected guardian approval feature metadata");
-    let guardian_name = guardian_stage
-        .experimental_menu_name()
-        .expect("expected guardian approval experimental menu name");
-    let guardian_description = guardian_stage
-        .experimental_menu_description()
-        .expect("expected guardian approval experimental description");
+
+    assert_eq!(guardian_stage, Stage::Stable);
 
     chat.open_experimental_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
-    let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        popup.contains(guardian_name),
-        "expected auto-review entry in experimental popup, got:\n{popup}"
-    );
-    assert!(
-        normalized_popup.contains(guardian_description),
-        "expected auto-review description in experimental popup, got:\n{popup}"
+        !popup.contains("Auto-review"),
+        "expected stable auto-review feature to be omitted from experimental popup, got:\n{popup}"
     );
 }
 
@@ -2075,6 +2071,105 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[tokio::test]
+async fn alt_period_raises_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.4")),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected reasoning update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected no model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn alt_comma_lowers_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Low))
+        )),
+        "expected reasoning update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected no model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_shortcut_clears_armed_quit_shortcut() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.arm_quit_shortcut(key_hint::ctrl(KeyCode::Char('c')));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(chat.quit_shortcut_expires_at.is_none());
+    assert!(chat.quit_shortcut_key.is_none());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::Exit(_))),
+        "did not expect reasoning shortcut to quit; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_shortcut_is_ignored_with_model_popup_open() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.open_model_popup();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect reasoning update while popup is active; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "did not expect model persistence while popup is active; events: {events:?}"
+    );
 }
 
 #[tokio::test]

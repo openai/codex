@@ -1,7 +1,8 @@
 //! Named pipe helpers for the elevated Windows sandbox runner.
 //!
-//! This module generates paired pipe names, creates server‑side pipes with permissive
-//! ACLs, and waits for the runner to connect. It is **elevated-path only** and is
+//! This module generates paired pipe names, creates server‑side pipes with
+//! sandbox-user-scoped ACLs, and waits for the runner to connect. It is
+//! **elevated-path only** and is
 //! used by the parent to establish the IPC channel for both unified_exec sessions
 //! and elevated capture. The legacy restricted‑token path spawns the child directly
 //! and does not use these helpers.
@@ -27,6 +28,7 @@ use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
 use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
+use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
 use windows_sys::Win32::System::Pipes::PIPE_READMODE_BYTE;
 use windows_sys::Win32::System::Pipes::PIPE_TYPE_BYTE;
 use windows_sys::Win32::System::Pipes::PIPE_WAIT;
@@ -103,8 +105,9 @@ pub fn create_named_pipe(name: &str, access: u32, sandbox_username: &str) -> io:
 /// Waits for the runner to connect to a parent-created server pipe.
 ///
 /// This is parent-side only: the runner opens the pipe with `CreateFileW`, while the
-/// parent calls `ConnectNamedPipe` and tolerates the already-connected case.
-pub fn connect_pipe(h: HANDLE) -> io::Result<()> {
+/// parent calls `ConnectNamedPipe`, tolerates the already-connected case, and
+/// verifies that the connected client is the runner process we just spawned.
+pub fn connect_pipe(h: HANDLE, expected_runner_pid: u32) -> io::Result<()> {
     let ok = unsafe { ConnectNamedPipe(h, ptr::null_mut()) };
     if ok == 0 {
         let err = unsafe { GetLastError() };
@@ -112,6 +115,21 @@ pub fn connect_pipe(h: HANDLE) -> io::Result<()> {
         if err != ERROR_PIPE_CONNECTED {
             return Err(io::Error::from_raw_os_error(err as i32));
         }
+    }
+    let mut client_pid = 0;
+    let ok = unsafe { GetNamedPipeClientProcessId(h, &mut client_pid) };
+    if ok == 0 {
+        return Err(io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
+    }
+    if client_pid != expected_runner_pid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "named pipe client pid {client_pid} did not match runner pid {expected_runner_pid}"
+            ),
+        ));
     }
     Ok(())
 }

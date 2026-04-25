@@ -205,8 +205,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
-    let current_preset = get_available_model(&chat, "gpt-5.4");
-    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
     let preset = get_available_model(&chat, "gpt-5.4");
     chat.open_reasoning_popup(preset);
@@ -256,6 +255,53 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
             model,
             effort: Some(ReasoningEffortConfig::Medium)
         } if model == "gpt-5.4"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or_persist() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan reasoning override update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected no Plan reasoning scope prompt event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "expected no Plan reasoning persistence event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "expected no global model persistence event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "expected no global reasoning update event; events: {events:?}"
     );
 }
 
@@ -639,6 +685,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
         last_agent_message: Some("Plan details".to_string()),
         completed_at: None,
         duration_ms: None,
+        time_to_first_token_ms: None,
     })]);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -665,6 +712,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         last_agent_message: Some("Plan details".to_string()),
         completed_at: None,
         duration_ms: None,
+        time_to_first_token_ms: None,
     })]);
     let replay_popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
@@ -679,6 +727,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             last_agent_message: Some("Plan details".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -702,6 +751,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             last_agent_message: Some("Plan details".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let duplicate_popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -1010,6 +1060,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -1255,6 +1306,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,

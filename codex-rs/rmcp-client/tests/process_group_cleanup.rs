@@ -80,7 +80,7 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
         )])),
         &[],
         /*cwd*/ None,
-        Arc::new(LocalStdioServerLauncher),
+        Arc::new(LocalStdioServerLauncher::new(std::env::current_dir()?)),
     )
     .await?;
 

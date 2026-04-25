@@ -137,6 +137,7 @@ pub fn require_logon_sandbox_creds(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
     read_roots_override: Option<&[PathBuf]>,
+    read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
@@ -198,6 +199,7 @@ pub fn require_logon_sandbox_creds(
             },
             crate::setup::SetupRootOverrides {
                 read_roots: Some(needed_read.clone()),
+                read_roots_include_platform_defaults,
                 write_roots: Some(needed_write.clone()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
@@ -216,6 +218,7 @@ pub fn require_logon_sandbox_creds(
         },
         crate::setup::SetupRootOverrides {
             read_roots: Some(needed_read),
+            read_roots_include_platform_defaults,
             write_roots: Some(needed_write),
             deny_write_paths: Some(deny_write_paths_override.to_vec()),
         },

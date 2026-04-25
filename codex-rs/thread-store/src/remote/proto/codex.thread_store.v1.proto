@@ -3,7 +3,59 @@ syntax = "proto3";
 package codex.thread_store.v1;
 
 service ThreadStore {
+  rpc CreateThread(CreateThreadRequest) returns (Empty);
+  rpc ResumeThread(ResumeThreadRequest) returns (Empty);
+  rpc AppendItems(AppendThreadItemsRequest) returns (Empty);
+  rpc PersistThread(ThreadIdRequest) returns (Empty);
+  rpc FlushThread(ThreadIdRequest) returns (Empty);
+  rpc ShutdownThread(ThreadIdRequest) returns (Empty);
+  rpc DiscardThread(ThreadIdRequest) returns (Empty);
+  rpc LoadHistory(LoadThreadHistoryRequest) returns (StoredThreadHistory);
+  rpc ReadThread(ReadThreadRequest) returns (StoredThreadResponse);
   rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+  rpc UpdateThreadMetadata(UpdateThreadMetadataRequest) returns (StoredThreadResponse);
+  rpc ArchiveThread(ArchiveThreadRequest) returns (Empty);
+  rpc UnarchiveThread(ArchiveThreadRequest) returns (StoredThreadResponse);
+}
+
+message Empty {}
+
+message ThreadIdRequest {
+  string thread_id = 1;
+}
+
+message CreateThreadRequest {
+  string thread_id = 1;
+  optional string forked_from_id = 2;
+  SessionSource source = 3;
+  string base_instructions_json = 4;
+  repeated string dynamic_tools_json = 5;
+  ThreadEventPersistenceMode event_persistence_mode = 6;
+}
+
+message ResumeThreadRequest {
+  string thread_id = 1;
+  optional string rollout_path = 2;
+  repeated string history_json = 3;
+  bool has_history = 4;
+  bool include_archived = 5;
+  ThreadEventPersistenceMode event_persistence_mode = 6;
+}
+
+message AppendThreadItemsRequest {
+  string thread_id = 1;
+  repeated string items_json = 2;
+}
+
+message LoadThreadHistoryRequest {
+  string thread_id = 1;
+  bool include_archived = 2;
+}
+
+message ReadThreadRequest {
+  string thread_id = 1;
+  bool include_archived = 2;
+  bool include_history = 3;
 }
 
 message ListThreadsRequest {
@@ -14,9 +66,16 @@ message ListThreadsRequest {
   optional ModelProviderFilter model_provider_filter = 5;
   bool archived = 6;
   optional string search_term = 7;
+  optional CwdFilter cwd_filter = 8;
+  bool use_state_db_only = 9;
+  SortDirection sort_direction = 10;
 }
 
 message ModelProviderFilter {
+  repeated string values = 1;
+}
+
+message CwdFilter {
   repeated string values = 1;
 }
 
@@ -25,9 +84,23 @@ enum ThreadSortKey {
   THREAD_SORT_KEY_UPDATED_AT = 1;
 }
 
+enum SortDirection {
+  SORT_DIRECTION_ASC = 0;
+  SORT_DIRECTION_DESC = 1;
+}
+
 message ListThreadsResponse {
   repeated StoredThread threads = 1;
   optional string next_cursor = 2;
+}
+
+message StoredThreadResponse {
+  StoredThread thread = 1;
+}
+
+message StoredThreadHistory {
+  string thread_id = 1;
+  repeated string items_json = 2;
 }
 
 message StoredThread {
@@ -52,6 +125,11 @@ message StoredThread {
   optional string agent_path = 16;
   optional string reasoning_effort = 17;
   optional string first_user_message = 18;
+  optional string rollout_path = 19;
+  optional string approval_mode_json = 20;
+  optional string sandbox_policy_json = 21;
+  optional string token_usage_json = 22;
+  optional StoredThreadHistory history = 23;
 }
 
 message SessionSource {
@@ -83,4 +161,47 @@ message GitInfo {
   optional string sha = 1;
   optional string branch = 2;
   optional string origin_url = 3;
+}
+
+message UpdateThreadMetadataRequest {
+  string thread_id = 1;
+  ThreadMetadataPatch patch = 2;
+  bool include_archived = 3;
+}
+
+message ThreadMetadataPatch {
+  optional string name = 1;
+  optional ThreadMemoryMode memory_mode = 2;
+  optional GitInfoPatch git_info = 3;
+}
+
+enum ThreadMemoryMode {
+  THREAD_MEMORY_MODE_ENABLED = 0;
+  THREAD_MEMORY_MODE_DISABLED = 1;
+}
+
+message GitInfoPatch {
+  OptionalStringPatch sha = 1;
+  OptionalStringPatch branch = 2;
+  OptionalStringPatch origin_url = 3;
+}
+
+message OptionalStringPatch {
+  OptionalStringPatchKind kind = 1;
+  optional string value = 2;
+}
+
+enum OptionalStringPatchKind {
+  OPTIONAL_STRING_PATCH_KIND_UNSET = 0;
+  OPTIONAL_STRING_PATCH_KIND_CLEAR = 1;
+  OPTIONAL_STRING_PATCH_KIND_SET = 2;
+}
+
+message ArchiveThreadRequest {
+  string thread_id = 1;
+}
+
+enum ThreadEventPersistenceMode {
+  THREAD_EVENT_PERSISTENCE_MODE_LIMITED = 0;
+  THREAD_EVENT_PERSISTENCE_MODE_EXTENDED = 1;
 }

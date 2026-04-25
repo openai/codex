@@ -30,6 +30,11 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// Programmatic Codex auth backed by a registered Agent Identity.
+    #[serde(rename = "agentIdentity")]
+    #[ts(rename = "agentIdentity")]
+    #[strum(serialize = "agentIdentity")]
+    AgentIdentity,
 }
 
 macro_rules! experimental_reason_expr {
@@ -280,6 +285,21 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    #[experimental("thread/goal/set")]
+    ThreadGoalSet => "thread/goal/set" {
+        params: v2::ThreadGoalSetParams,
+        response: v2::ThreadGoalSetResponse,
+    },
+    #[experimental("thread/goal/get")]
+    ThreadGoalGet => "thread/goal/get" {
+        params: v2::ThreadGoalGetParams,
+        response: v2::ThreadGoalGetResponse,
+    },
+    #[experimental("thread/goal/clear")]
+    ThreadGoalClear => "thread/goal/clear" {
+        params: v2::ThreadGoalClearParams,
+        response: v2::ThreadGoalClearResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
@@ -305,6 +325,10 @@ client_request_definitions! {
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         response: v2::ThreadShellCommandResponse,
+    },
+    ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
+        params: v2::ThreadApproveGuardianDeniedActionParams,
+        response: v2::ThreadApproveGuardianDeniedActionResponse,
     },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
@@ -347,6 +371,10 @@ client_request_definitions! {
     MarketplaceRemove => "marketplace/remove" {
         params: v2::MarketplaceRemoveParams,
         response: v2::MarketplaceRemoveResponse,
+    },
+    MarketplaceUpgrade => "marketplace/upgrade" {
+        params: v2::MarketplaceUpgradeParams,
+        response: v2::MarketplaceUpgradeResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
@@ -1014,6 +1042,10 @@ server_notification_definitions! {
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
+    #[experimental("thread/goal/updated")]
+    ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
+    #[experimental("thread/goal/cleared")]
+    ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
@@ -1051,7 +1083,9 @@ server_notification_definitions! {
     /// Deprecated: Use `ContextCompaction` item type instead.
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
+    ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     Warning => "warning" (v2::WarningNotification),
+    GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
@@ -1430,6 +1464,7 @@ mod tests {
 
     #[test]
     fn serialize_client_response() -> Result<()> {
+        let cwd = absolute_path("/tmp");
         let response = ClientResponse::ThreadStart {
             request_id: RequestId::Integer(7),
             response: v2::ThreadStartResponse {
@@ -1443,7 +1478,7 @@ mod tests {
                     updated_at: 2,
                     status: v2::ThreadStatus::Idle,
                     path: None,
-                    cwd: absolute_path("/tmp"),
+                    cwd: cwd.clone(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
                     agent_nickname: None,
@@ -1455,11 +1490,17 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
-                cwd: absolute_path("/tmp"),
+                cwd,
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
+                permission_profile: Some(
+                    codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                        &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    )
+                    .into(),
+                ),
                 reasoning_effort: None,
             },
         };
@@ -1501,6 +1542,9 @@ mod tests {
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
+                    },
+                    "permissionProfile": {
+                        "type": "disabled"
                     },
                     "reasoningEffort": null
                 }
@@ -2021,6 +2065,76 @@ mod tests {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("thread/realtime/start"));
     }
+
+    #[test]
+    fn thread_goal_methods_are_marked_experimental() {
+        let set_request = ClientRequest::ThreadGoalSet {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadGoalSetParams {
+                thread_id: "thr_123".to_string(),
+                objective: Some("ship goal mode".to_string()),
+                status: Some(v2::ThreadGoalStatus::Active),
+                token_budget: Some(Some(10_000)),
+            },
+        };
+        let get_request = ClientRequest::ThreadGoalGet {
+            request_id: RequestId::Integer(2),
+            params: v2::ThreadGoalGetParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        let clear_request = ClientRequest::ThreadGoalClear {
+            request_id: RequestId::Integer(3),
+            params: v2::ThreadGoalClearParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&set_request),
+            Some("thread/goal/set")
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&get_request),
+            Some("thread/goal/get")
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&clear_request),
+            Some("thread/goal/clear")
+        );
+    }
+
+    #[test]
+    fn thread_goal_notifications_are_marked_experimental() {
+        let goal = v2::ThreadGoal {
+            thread_id: "thr_123".to_string(),
+            objective: "ship goal mode".to_string(),
+            status: v2::ThreadGoalStatus::Active,
+            token_budget: Some(10_000),
+            tokens_used: 123,
+            time_used_seconds: 45,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_123,
+        };
+        let updated = ServerNotification::ThreadGoalUpdated(v2::ThreadGoalUpdatedNotification {
+            thread_id: "thr_123".to_string(),
+            turn_id: None,
+            goal,
+        });
+        let cleared = ServerNotification::ThreadGoalCleared(v2::ThreadGoalClearedNotification {
+            thread_id: "thr_123".to_string(),
+        });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&updated),
+            Some("thread/goal/updated")
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&cleared),
+            Some("thread/goal/cleared")
+        );
+    }
+
     #[test]
     fn thread_realtime_started_notification_is_marked_experimental() {
         let notification =

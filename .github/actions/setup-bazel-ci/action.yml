@@ -5,7 +5,7 @@ inputs:
     description: Target triple used for cache namespacing.
     required: true
   install-test-prereqs:
-    description: Install Node.js and DotSlash for Bazel-backed test jobs.
+    description: Install DotSlash for Bazel-backed test jobs.
     required: false
     default: "false"
 outputs:
@@ -16,12 +16,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Set up Node.js for js_repl tests
-      if: inputs.install-test-prereqs == 'true'
-      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
-      with:
-        node-version-file: codex-rs/node-version.txt
-
     # Some integration tests rely on DotSlash being installed.
     # See https://github.com/openai/codex/pull/7617.
     - name: Install DotSlash
@@ -121,6 +115,11 @@ runs:
             "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
         }
+
+    - name: Compute cache-stable Windows Bazel PATH
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./.github/scripts/compute-bazel-windows-path.ps1
 
     - name: Enable Git long paths (Windows)
       if: runner.os == 'Windows'

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
 use crate::facts::CompactionImplementation;
@@ -16,11 +18,12 @@ use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
+use crate::now_unix_seconds;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianCommandSource;
@@ -30,6 +33,7 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -176,17 +180,17 @@ pub enum GuardianApprovalRequestSource {
 pub enum GuardianReviewedAction {
     Shell {
         sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
     },
     UnifiedExec {
         sandbox_permissions: SandboxPermissions,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
         tty: bool,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
     },
     ApplyPatch {},
     NetworkAccess {
@@ -200,6 +204,7 @@ pub enum GuardianReviewedAction {
         connector_name: Option<String>,
         tool_title: Option<String>,
     },
+    RequestPermissions {},
 }
 
 #[derive(Clone, Serialize)]
@@ -233,6 +238,142 @@ pub struct GuardianReviewEventParams {
     pub output_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
+}
+
+pub struct GuardianReviewTrackContext {
+    thread_id: String,
+    turn_id: String,
+    review_id: String,
+    target_item_id: Option<String>,
+    approval_request_source: GuardianApprovalRequestSource,
+    reviewed_action: GuardianReviewedAction,
+    review_timeout_ms: u64,
+    started_at: u64,
+    started_instant: Instant,
+}
+
+impl GuardianReviewTrackContext {
+    pub fn new(
+        thread_id: String,
+        turn_id: String,
+        review_id: String,
+        target_item_id: Option<String>,
+        approval_request_source: GuardianApprovalRequestSource,
+        reviewed_action: GuardianReviewedAction,
+        review_timeout_ms: u64,
+    ) -> Self {
+        Self {
+            thread_id,
+            turn_id,
+            review_id,
+            target_item_id,
+            approval_request_source,
+            reviewed_action,
+            review_timeout_ms,
+            started_at: now_unix_seconds(),
+            started_instant: Instant::now(),
+        }
+    }
+
+    pub(crate) fn event_params(
+        &self,
+        result: GuardianReviewAnalyticsResult,
+    ) -> GuardianReviewEventParams {
+        GuardianReviewEventParams {
+            thread_id: self.thread_id.clone(),
+            turn_id: self.turn_id.clone(),
+            review_id: self.review_id.clone(),
+            target_item_id: self.target_item_id.clone(),
+            approval_request_source: self.approval_request_source,
+            reviewed_action: self.reviewed_action.clone(),
+            reviewed_action_truncated: result.reviewed_action_truncated,
+            decision: result.decision,
+            terminal_status: result.terminal_status,
+            failure_reason: result.failure_reason,
+            risk_level: result.risk_level,
+            user_authorization: result.user_authorization,
+            outcome: result.outcome,
+            guardian_thread_id: result.guardian_thread_id,
+            guardian_session_kind: result.guardian_session_kind,
+            guardian_model: result.guardian_model,
+            guardian_reasoning_effort: result.guardian_reasoning_effort,
+            had_prior_review_context: result.had_prior_review_context,
+            review_timeout_ms: self.review_timeout_ms,
+            // TODO(rhan-oai): plumb nested Guardian review session tool-call counts.
+            tool_call_count: None,
+            time_to_first_token_ms: result.time_to_first_token_ms,
+            completion_latency_ms: Some(self.started_instant.elapsed().as_millis() as u64),
+            started_at: self.started_at,
+            completed_at: Some(now_unix_seconds()),
+            input_tokens: result.token_usage.as_ref().map(|usage| usage.input_tokens),
+            cached_input_tokens: result
+                .token_usage
+                .as_ref()
+                .map(|usage| usage.cached_input_tokens),
+            output_tokens: result.token_usage.as_ref().map(|usage| usage.output_tokens),
+            reasoning_output_tokens: result
+                .token_usage
+                .as_ref()
+                .map(|usage| usage.reasoning_output_tokens),
+            total_tokens: result.token_usage.as_ref().map(|usage| usage.total_tokens),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GuardianReviewAnalyticsResult {
+    pub decision: GuardianReviewDecision,
+    pub terminal_status: GuardianReviewTerminalStatus,
+    pub failure_reason: Option<GuardianReviewFailureReason>,
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub user_authorization: Option<GuardianUserAuthorization>,
+    pub outcome: Option<GuardianAssessmentOutcome>,
+    pub guardian_thread_id: Option<String>,
+    pub guardian_session_kind: Option<GuardianReviewSessionKind>,
+    pub guardian_model: Option<String>,
+    pub guardian_reasoning_effort: Option<String>,
+    pub had_prior_review_context: Option<bool>,
+    pub reviewed_action_truncated: bool,
+    pub token_usage: Option<TokenUsage>,
+    pub time_to_first_token_ms: Option<u64>,
+}
+
+impl GuardianReviewAnalyticsResult {
+    pub fn without_session() -> Self {
+        Self {
+            decision: GuardianReviewDecision::Denied,
+            terminal_status: GuardianReviewTerminalStatus::FailedClosed,
+            failure_reason: None,
+            risk_level: None,
+            user_authorization: None,
+            outcome: None,
+            guardian_thread_id: None,
+            guardian_session_kind: None,
+            guardian_model: None,
+            guardian_reasoning_effort: None,
+            had_prior_review_context: None,
+            reviewed_action_truncated: false,
+            token_usage: None,
+            time_to_first_token_ms: None,
+        }
+    }
+
+    pub fn from_session(
+        guardian_thread_id: String,
+        guardian_session_kind: GuardianReviewSessionKind,
+        guardian_model: String,
+        guardian_reasoning_effort: Option<String>,
+        had_prior_review_context: bool,
+    ) -> Self {
+        Self {
+            guardian_thread_id: Some(guardian_thread_id),
+            guardian_session_kind: Some(guardian_session_kind),
+            guardian_model: Some(guardian_model),
+            guardian_reasoning_effort,
+            had_prior_review_context: Some(had_prior_review_context),
+            ..Self::without_session()
+        }
+    }
 }
 
 #[derive(Serialize)]

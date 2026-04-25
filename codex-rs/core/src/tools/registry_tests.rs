@@ -1,6 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+#[derive(Default)]
 struct TestHandler;
 
 impl ToolHandler for TestHandler {
@@ -11,7 +12,10 @@ impl ToolHandler for TestHandler {
     }
 
     async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        unreachable!("test handler should not be invoked")
+        Ok(crate::tools::context::FunctionToolOutput::from_text(
+            "ok".to_string(),
+            Some(true),
+        ))
     }
 }
 

@@ -181,6 +181,7 @@ pub(super) async fn make_chatwidget_manual(
     };
     let current_collaboration_mode = base_mode;
     let active_collaboration_mask = collaboration_modes::default_mask(model_catalog.as_ref());
+    let effective_service_tier = cfg.service_tier;
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -188,6 +189,7 @@ pub(super) async fn make_chatwidget_manual(
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
+        effective_service_tier,
         current_collaboration_mode,
         active_collaboration_mask,
         has_chatgpt_account: false,
@@ -254,6 +256,7 @@ pub(super) async fn make_chatwidget_manual(
         suppress_queue_autosend: false,
         thread_id: None,
         last_turn_id: None,
+        budget_limited_turn_ids: HashSet::new(),
         thread_name: None,
         thread_rename_block_message: None,
         active_side_conversation: false,
@@ -265,8 +268,10 @@ pub(super) async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        queued_user_message_history_records: VecDeque::new(),
         user_turn_pending_start: false,
         rejected_steers_queue: VecDeque::new(),
+        rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -302,6 +307,9 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        current_goal_status_indicator: None,
+        current_goal_status: None,
+        goal_status_active_turn_started_at: None,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
@@ -582,6 +590,7 @@ pub(super) fn complete_assistant_message(
 pub(super) fn pending_steer(text: &str) -> PendingSteer {
     PendingSteer {
         user_message: UserMessage::from(text),
+        history_record: UserMessageHistoryRecord::UserMessageText,
         compare_key: PendingSteerCompareKey {
             message: text.to_string(),
             image_count: 0,
@@ -958,7 +967,7 @@ pub(super) fn plugins_test_detail(
 ) -> PluginDetail {
     PluginDetail {
         marketplace_name: "ChatGPT Marketplace".to_string(),
-        marketplace_path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
         description: description.map(str::to_string),
         skills: skills
@@ -968,7 +977,9 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
+                path: Some(plugins_test_absolute_path(&format!(
+                    "skills/{name}/SKILL.md"
+                ))),
                 enabled: true,
             })
             .collect(),

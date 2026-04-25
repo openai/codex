@@ -63,7 +63,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
         /*env*/ None,
         &[],
         /*cwd*/ None,
-        Arc::new(LocalStdioServerLauncher),
+        Arc::new(LocalStdioServerLauncher::new(std::env::current_dir()?)),
     )
     .await?;
 

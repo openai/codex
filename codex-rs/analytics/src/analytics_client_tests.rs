@@ -65,6 +65,7 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NonSteerableTurnKind;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -91,6 +92,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -152,9 +154,14 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
+}
+
+fn sample_permission_profile() -> AppServerPermissionProfile {
+    CorePermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess).into()
 }
 
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
@@ -203,6 +210,7 @@ fn sample_thread_resume_response_with_source(
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
@@ -312,7 +320,7 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         reasoning_summary: None,
         service_tier: None,
         approval_policy: AskForApproval::OnRequest,
-        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,
@@ -1322,7 +1330,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
         },
     ));
 
-    let payload = serde_json::to_value(&event).expect("serialize guardian subagent event");
+    let payload = serde_json::to_value(&event).expect("serialize auto-review subagent event");
     assert_eq!(payload["event_params"]["subagent_source"], "guardian");
     assert_eq!(
         payload["event_params"]["parent_thread_id"],
@@ -1746,7 +1754,7 @@ fn turn_event_serializes_expected_shape() {
             reasoning_summary: Some("detailed".to_string()),
             service_tier: "flex".to_string(),
             approval_policy: "on-request".to_string(),
-            approvals_reviewer: "guardian_subagent".to_string(),
+            approvals_reviewer: "auto_review".to_string(),
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
             personality: Some("pragmatic".to_string()),
@@ -1807,7 +1815,7 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
                 "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
+                "approvals_reviewer": "auto_review",
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",

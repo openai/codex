@@ -314,6 +314,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -335,6 +336,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -439,8 +441,11 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
         pending_steers,
+        pending_steer_history_records: VecDeque::new(),
         rejected_steers_queue,
+        rejected_steer_history_records: VecDeque::new(),
         queued_user_messages,
+        queued_user_message_history_records: VecDeque::new(),
         user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
@@ -1050,6 +1055,24 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 }
 
 #[tokio::test]
+async fn ctrl_c_interrupts_without_arming_quit_when_double_press_disabled() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_interrupt_op(&mut op_rx);
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
 async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
@@ -1296,6 +1319,132 @@ async fn interrupted_turn_error_message_snapshot() {
     );
     let last = lines_to_single_string(cells.last().unwrap());
     assert_chatwidget_snapshot!("interrupted_turn_error_message", last);
+}
+
+#[tokio::test]
+async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+
+    chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::TurnStarted(
+            codex_app_server_protocol::TurnStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: codex_app_server_protocol::TurnStatus::InProgress,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                goal: codex_app_server_protocol::ThreadGoal {
+                    thread_id: "thread-1".to_string(),
+                    objective: "Run until the token budget is limited".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
+                    token_budget: Some(10_000),
+                    tokens_used: 10_500,
+                    time_used_seconds: 0,
+                    created_at: 0,
+                    updated_at: 1,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::TurnCompleted(
+            codex_app_server_protocol::TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: codex_app_server_protocol::TurnStatus::Interrupted,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_chatwidget_snapshot!("interrupted_turn_goal_budget_limited_message", last);
+}
+
+#[tokio::test]
+async fn direct_budget_limited_turn_uses_budget_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::BudgetLimited,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_chatwidget_snapshot!("direct_budget_limited_turn_message", last);
+}
+
+#[tokio::test]
+async fn budget_limited_turn_restores_queued_input_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.queued_user_messages
+        .push_back(UserMessage::from("follow-up after budget stop").into());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::BudgetLimited,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "follow-up after budget stop"
+    );
+    assert_no_submit_op(&mut op_rx);
 }
 
 // Snapshot test: interrupting specifically to submit pending steers shows an
