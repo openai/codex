@@ -123,6 +123,8 @@ struct ResponseCompleted {
     id: String,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
+    #[serde(default)]
+    end_turn: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -382,6 +384,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            end_turn: resp.end_turn,
                         }));
                     }
                     Err(err) => {
@@ -843,9 +846,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                end_turn,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(end_turn.is_none());
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -1148,7 +1153,8 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                end_turn: None,
             } if response_id == "resp-1"
         );
     }
@@ -1184,7 +1190,8 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                end_turn: None,
             } if response_id == "resp-1"
         );
     }
@@ -1218,7 +1225,8 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None
+                token_usage: None,
+                end_turn: None,
             } if response_id == "resp-1"
         );
     }

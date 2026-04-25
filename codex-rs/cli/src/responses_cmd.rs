@@ -78,6 +78,8 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::Completed {
             response_id,
             token_usage,
+            // FIXME(andrey): Make this actually work + test it, before merging.
+            end_turn: _,
         } => {
             let response = match token_usage {
                 Some(token_usage) => json!({
@@ -165,6 +167,7 @@ mod tests {
                 reasoning_output_tokens: 3,
                 total_tokens: 17,
             }),
+            end_turn: None,
         });
         assert_eq!(
             completed,
@@ -190,6 +193,7 @@ mod tests {
         let completed_without_usage = response_event_to_json(codex_api::ResponseEvent::Completed {
             response_id: "resp-2".to_string(),
             token_usage: None,
+            end_turn: None,
         });
         assert_eq!(
             completed_without_usage,
