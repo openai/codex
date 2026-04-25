@@ -203,9 +203,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     )?;
 
     Mock::given(method("POST"))
-        .and(path(
-            "/backend-api/ps/plugins/plugins~Plugin_linear/uninstall",
-        ))
+        .and(path("/backend-api/plugins/plugins~Plugin_linear/uninstall"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
@@ -236,7 +234,7 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        "/ps/plugins/plugins~Plugin_linear/uninstall",
+        "/plugins/plugins~Plugin_linear/uninstall",
         /*expected_count*/ 1,
     )
     .await?;
@@ -278,7 +276,7 @@ async fn plugin_uninstall_rejects_invalid_remote_plugin_name_before_network_call
     wait_for_remote_plugin_request_count(
         &server,
         "POST",
-        "/ps/plugins/linear/../../oops/uninstall",
+        "/plugins/linear/../../oops/uninstall",
         /*expected_count*/ 0,
     )
     .await?;
