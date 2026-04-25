@@ -139,6 +139,7 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_policy_cwd: sandbox_policy_cwd,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
+        permission_profile,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
@@ -156,6 +157,7 @@ pub(super) async fn try_run_zsh_fork(
     let command_executor = CoreShellCommandExecutor {
         command,
         cwd: sandbox_cwd,
+        permission_profile,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
@@ -254,6 +256,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     let command_executor = CoreShellCommandExecutor {
         command: exec_request.command.clone(),
         cwd: exec_request.cwd.clone(),
+        permission_profile: exec_request.permission_profile.clone(),
         sandbox_policy: exec_request.sandbox_policy.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
@@ -743,6 +746,7 @@ fn commands_for_intercepted_exec_policy(
 struct CoreShellCommandExecutor {
     command: Vec<String>,
     cwd: AbsolutePathBuf,
+    permission_profile: PermissionProfile,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -760,9 +764,7 @@ struct PrepareSandboxedExecParams<'a> {
     command: Vec<String>,
     workdir: &'a AbsolutePathBuf,
     env: HashMap<String, String>,
-    sandbox_policy: &'a SandboxPolicy,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    permission_profile: &'a PermissionProfile,
     additional_permissions: Option<AdditionalPermissionProfile>,
 }
 
@@ -798,6 +800,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 windows_sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
+                permission_profile: self.permission_profile.clone(),
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
@@ -846,9 +849,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     command,
                     workdir,
                     env,
-                    sandbox_policy: &self.sandbox_policy,
-                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
-                    network_sandbox_policy: self.network_sandbox_policy,
+                    permission_profile: &self.permission_profile,
                     additional_permissions: None,
                 })?
             }
@@ -860,9 +861,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     command,
                     workdir,
                     env,
-                    sandbox_policy: &self.sandbox_policy,
-                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
-                    network_sandbox_policy: self.network_sandbox_policy,
+                    permission_profile: &self.permission_profile,
                     additional_permissions: Some(permission_profile),
                 })?
             }
@@ -870,15 +869,11 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 permissions,
             )) => {
                 // Use a fully specified permission profile instead of merging into the turn policy.
-                let (file_system_sandbox_policy, network_sandbox_policy) =
-                    permissions.permission_profile.to_runtime_permissions();
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
                     env,
-                    sandbox_policy: &permissions.sandbox_policy,
-                    file_system_sandbox_policy: &file_system_sandbox_policy,
-                    network_sandbox_policy,
+                    permission_profile: &permissions.permission_profile,
                     additional_permissions: None,
                 })?
             }
@@ -898,17 +893,17 @@ impl CoreShellCommandExecutor {
             command,
             workdir,
             env,
-            sandbox_policy,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
+            permission_profile,
             additional_permissions,
         } = params;
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
         let (program, args) = command
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
-            file_system_sandbox_policy,
+            &file_system_sandbox_policy,
             network_sandbox_policy,
             SandboxablePreference::Auto,
             self.windows_sandbox_level,
@@ -927,9 +922,7 @@ impl CoreShellCommandExecutor {
         };
         let exec_request = sandbox_manager.transform(SandboxTransformRequest {
             command,
-            policy: sandbox_policy,
-            file_system_policy: file_system_sandbox_policy,
-            network_policy: network_sandbox_policy,
+            permissions: permission_profile,
             sandbox,
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
