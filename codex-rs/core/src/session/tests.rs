@@ -37,6 +37,7 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1484,6 +1485,11 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
         config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
         config.permissions.file_system_sandbox_policy = FileSystemSandboxPolicy::external_sandbox();
         config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+        config.permissions.permission_profile =
+            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                &config.permissions.file_system_sandbox_policy,
+                config.permissions.network_sandbox_policy,
+            ));
     });
 
     let test = builder.build(&server).await?;
@@ -2237,6 +2243,7 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2341,6 +2348,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2790,6 +2798,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2910,6 +2919,51 @@ async fn session_configuration_apply_permission_profile_preserves_existing_deny_
     assert_eq!(
         updated.file_system_sandbox_policy,
         expected_file_system_policy
+    );
+}
+
+#[tokio::test]
+async fn session_configuration_apply_permission_profile_accepts_direct_write_roots() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let cwd = tempfile::tempdir().expect("create cwd");
+    session_configuration.cwd = cwd.path().abs();
+    let external_write_dir = tempfile::tempdir().expect("create external write root");
+    let external_write_path = AbsolutePathBuf::from_absolute_path(
+        std::fs::canonicalize(external_write_dir.path()).expect("canonical temp dir"),
+    )
+    .expect("canonical temp dir should be absolute");
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: external_write_path.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        })
+        .expect("permission profile update should accept direct runtime permissions");
+
+    assert_eq!(updated.permission_profile(), permission_profile);
+    assert_eq!(
+        updated.file_system_sandbox_policy(),
+        file_system_sandbox_policy
+    );
+    assert_eq!(
+        updated.sandbox_policy(),
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![external_write_path],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
     );
 }
 
@@ -3105,6 +3159,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -3211,6 +3266,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -3423,6 +3479,7 @@ async fn make_session_with_config_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -4566,6 +4623,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: config.permissions.permission_profile.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
