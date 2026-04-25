@@ -204,6 +204,11 @@ pub enum GuardianReviewedAction {
         connector_name: Option<String>,
         tool_title: Option<String>,
     },
+    McpElicitation {
+        server_name: String,
+        connector_id: Option<String>,
+        connector_name: Option<String>,
+    },
     RequestPermissions {},
 }
 

@@ -1,6 +1,50 @@
 use super::*;
 
+const MCP_ELICITATION_CONNECTOR_ID_KEY: &str = "connector_id";
+const MCP_ELICITATION_CONNECTOR_NAME_KEY: &str = "connector_name";
+const MCP_ELICITATION_CONNECTOR_DISPLAY_NAME_KEY: &str = "connector_display_name";
+
 impl Session {
+    pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> McpElicitationReviewer {
+        let session = Arc::downgrade(self);
+        Arc::new(move |request| {
+            let session = session.clone();
+            async move {
+                let session = session.upgrade()?;
+                session.review_mcp_elicitation(request).await
+            }
+            .boxed()
+        })
+    }
+
+    async fn review_mcp_elicitation(
+        self: Arc<Self>,
+        request: McpElicitationReviewRequest,
+    ) -> Option<ElicitationResponse> {
+        let (turn_context, cancellation_token) =
+            self.active_turn_context_and_cancellation_token().await?;
+        if !should_route_mcp_elicitation_to_guardian(turn_context.as_ref(), &request.request) {
+            return None;
+        }
+
+        let review_rx = crate::guardian::spawn_approval_request_review(
+            Arc::clone(&self),
+            Arc::clone(&turn_context),
+            crate::guardian::new_guardian_review_id(),
+            build_guardian_mcp_elicitation_review_request(request, &turn_context.sub_id),
+            /*retry_reason*/ None,
+            codex_analytics::GuardianApprovalRequestSource::MainTurn,
+            cancellation_token.clone(),
+        );
+        let decision = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => ReviewDecision::Abort,
+            decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+        };
+
+        Some(mcp_elicitation_response_from_guardian_decision(decision))
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -66,14 +110,7 @@ impl Session {
                 "Overwriting existing pending elicitation for server_name: {server_name}, request_id: {request_id}"
             );
         }
-        let id = match request_id {
-            rmcp::model::NumberOrString::String(value) => {
-                codex_protocol::mcp::RequestId::String(value.to_string())
-            }
-            rmcp::model::NumberOrString::Number(value) => {
-                codex_protocol::mcp::RequestId::Integer(value)
-            }
-        };
+        let id = protocol_request_id(request_id);
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
             turn_id: params.turn_id,
             server_name,
@@ -203,7 +240,7 @@ impl Session {
     }
 
     async fn refresh_mcp_servers_inner(
-        &self,
+        self: &Arc<Self>,
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
@@ -244,6 +281,7 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
+            Some(self.mcp_elicitation_reviewer()),
             auth.as_ref(),
         )
         .await;
@@ -259,7 +297,10 @@ impl Session {
         *manager = refreshed_manager;
     }
 
-    pub(crate) async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
+    pub(crate) async fn refresh_mcp_servers_if_requested(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+    ) {
         let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
         let Some(refresh_config) = refresh_config else {
             return;
@@ -293,7 +334,7 @@ impl Session {
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
-        &self,
+        self: &Arc<Self>,
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
@@ -319,3 +360,98 @@ impl Session {
             .cancel();
     }
 }
+
+fn guardian_can_review_mcp_elicitation(
+    request: &codex_protocol::approvals::ElicitationRequest,
+) -> bool {
+    match request {
+        codex_protocol::approvals::ElicitationRequest::Form {
+            requested_schema, ..
+        } => mcp_elicitation_form_has_empty_schema(requested_schema),
+        codex_protocol::approvals::ElicitationRequest::Url { .. } => false,
+    }
+}
+
+fn should_route_mcp_elicitation_to_guardian(
+    turn_context: &TurnContext,
+    request: &codex_protocol::approvals::ElicitationRequest,
+) -> bool {
+    crate::guardian::routes_approval_to_guardian(turn_context)
+        && guardian_can_review_mcp_elicitation(request)
+}
+
+fn mcp_elicitation_form_has_empty_schema(requested_schema: &serde_json::Value) -> bool {
+    let properties_empty = requested_schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .is_none_or(serde_json::Map::is_empty);
+    let required_empty = requested_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty);
+    properties_empty && required_empty
+}
+
+fn build_guardian_mcp_elicitation_review_request(
+    request: McpElicitationReviewRequest,
+    turn_id: &str,
+) -> crate::guardian::GuardianApprovalRequest {
+    let McpElicitationReviewRequest {
+        server_name,
+        request_id,
+        request,
+    } = request;
+    let meta = mcp_elicitation_meta(&request);
+    let connector_id = mcp_elicitation_meta_string(meta, MCP_ELICITATION_CONNECTOR_ID_KEY);
+    let connector_name = mcp_elicitation_meta_string(meta, MCP_ELICITATION_CONNECTOR_NAME_KEY)
+        .or_else(|| mcp_elicitation_meta_string(meta, MCP_ELICITATION_CONNECTOR_DISPLAY_NAME_KEY));
+    crate::guardian::GuardianApprovalRequest::McpElicitation {
+        id: format!("mcp_elicitation:{server_name}:{request_id}"),
+        turn_id: turn_id.to_string(),
+        server_name,
+        request,
+        connector_id,
+        connector_name,
+    }
+}
+
+fn mcp_elicitation_meta(
+    request: &codex_protocol::approvals::ElicitationRequest,
+) -> Option<&serde_json::Value> {
+    match request {
+        codex_protocol::approvals::ElicitationRequest::Form { meta, .. }
+        | codex_protocol::approvals::ElicitationRequest::Url { meta, .. } => meta.as_ref(),
+    }
+}
+
+fn mcp_elicitation_meta_string(meta: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    meta.and_then(serde_json::Value::as_object)
+        .and_then(|meta| meta.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn mcp_elicitation_response_from_guardian_decision(
+    decision: ReviewDecision,
+) -> ElicitationResponse {
+    let action = match decision {
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => ElicitationAction::Accept,
+        ReviewDecision::Denied
+        | ReviewDecision::TimedOut
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::NetworkPolicyAmendment { .. } => ElicitationAction::Decline,
+        ReviewDecision::Abort => ElicitationAction::Cancel,
+    };
+    let should_accept = action == ElicitationAction::Accept;
+    ElicitationResponse {
+        action,
+        content: should_accept.then(|| serde_json::json!({})),
+        meta: None,
+    }
+}
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;

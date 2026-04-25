@@ -180,8 +180,11 @@ fn elicitation_granular_policy_respects_never_and_config() {
 
 #[tokio::test]
 async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -210,8 +213,11 @@ async fn full_access_auto_accepts_elicitation_with_empty_form_schema() {
 
 #[tokio::test]
 async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
-    let manager =
-        ElicitationRequestManager::new(AskForApproval::Never, SandboxPolicy::DangerFullAccess);
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+        /*reviewer*/ None,
+    );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
 
@@ -239,6 +245,67 @@ async fn full_access_does_not_auto_accept_elicitation_with_requested_fields() {
             content: None,
             meta: None,
         }
+    );
+}
+
+#[tokio::test]
+async fn elicitation_reviewer_resolves_before_prompt_event() {
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let captured_for_reviewer = Arc::clone(&captured);
+    let reviewer: McpElicitationReviewer = Arc::new(move |request| {
+        *captured_for_reviewer.lock().expect("capture lock") = Some(request);
+        async move {
+            Some(ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: Some(serde_json::json!({})),
+                meta: None,
+            })
+        }
+        .boxed()
+    });
+    let manager = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_read_only_policy(),
+        Some(reviewer),
+    );
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    let sender = manager.make_sender("browser-use".to_string(), tx_event);
+
+    let response = sender(
+        NumberOrString::Number(7),
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta: Some(Meta::new()),
+            message: "Allow Browser Use to access https://example.com?".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .build()
+                .expect("schema should build"),
+        },
+    )
+    .await
+    .expect("reviewer should resolve elicitation");
+
+    assert_eq!(
+        response,
+        ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(serde_json::json!({})),
+            meta: None,
+        }
+    );
+    assert!(rx_event.try_recv().is_err());
+    let captured = captured
+        .lock()
+        .expect("capture lock")
+        .clone()
+        .expect("review request should be captured");
+    assert_eq!(captured.server_name, "browser-use");
+    assert_eq!(
+        captured.request_id,
+        codex_protocol::mcp::RequestId::Integer(7)
+    );
+    assert_eq!(
+        captured.request.message(),
+        "Allow Browser Use to access https://example.com?"
     );
 }
 
