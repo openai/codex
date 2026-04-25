@@ -672,12 +672,24 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
 async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_request() {
     let (gate_first_completed_tx, gate_first_completed_rx) = oneshot::channel();
 
+    let large_output_command = if cfg!(windows) {
+        "[Console]::Out.Write([string]::new([char]'0', 4000))"
+    } else {
+        "printf '%04000d' 0"
+    };
+    let large_output_args = json!({
+        "command": large_output_command,
+        "login": false,
+        "timeout_ms": 2000,
+    })
+    .to_string();
+
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
         chunk(ev_function_call(
             "call-1",
             "shell_command",
-            r#"{"command":"printf '%04000d' 0","login":false,"timeout_ms":2000}"#,
+            &large_output_args,
         )),
         gated_chunk(
             gate_first_completed_rx,
