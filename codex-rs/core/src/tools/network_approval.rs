@@ -359,7 +359,8 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
+        let sandbox_policy = turn_context.sandbox_policy();
+        if !sandbox_policy_allows_network_approval_flow(&sandbox_policy) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             self.pending_host_approvals.lock().await.remove(&key);
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
