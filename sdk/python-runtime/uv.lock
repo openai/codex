@@ -7,6 +7,6 @@ exclude-newer = "2026-04-16T16:29:01.518541933Z"
 exclude-newer-span = "P7D"
 
 [[package]]
-name = "openai-codex-cli-bin"
+name = "openai-codex-app-server-bin"
 version = "0.0.0.dev0"
 source = { editable = "." }

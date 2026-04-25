@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, get_args, get_origin
 
-RUNTIME_DISTRIBUTION_NAME = "openai-codex-cli-bin"
+RUNTIME_DISTRIBUTION_NAME = "openai-codex-app-server-bin"
+RUNTIME_PACKAGE_DIR = "codex_app_server_bin"
 
 
 def repo_root() -> Path:
@@ -52,11 +53,21 @@ def _is_windows() -> bool:
 
 
 def runtime_binary_name() -> str:
+    return "codex-app-server.exe" if _is_windows() else "codex-app-server"
+
+
+def legacy_runtime_binary_name() -> str:
     return "codex.exe" if _is_windows() else "codex"
 
 
-def staged_runtime_bin_path(root: Path) -> Path:
-    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
+def staged_runtime_bin_path(root: Path, binary_name: str | None = None) -> Path:
+    return (
+        root
+        / "src"
+        / RUNTIME_PACKAGE_DIR
+        / "bin"
+        / (binary_name or runtime_binary_name())
+    )
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -178,7 +189,11 @@ def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -
         )
 
     raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-    raw_items = [item for item in raw_items if "codex-cli-bin" not in item]
+    raw_items = [
+        item
+        for item in raw_items
+        if "codex-cli-bin" not in item and "codex-app-server-bin" not in item
+    ]
     raw_items.append(f'"{RUNTIME_DISTRIBUTION_NAME}=={runtime_version}"')
     replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
     return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
@@ -217,7 +232,7 @@ def stage_python_runtime_package(
         pyproject_text = _rewrite_runtime_platform_tag(pyproject_text, platform_tag)
     pyproject_path.write_text(pyproject_text)
 
-    out_bin = staged_runtime_bin_path(staging_dir)
+    out_bin = staged_runtime_bin_path(staging_dir, binary_path.name)
     out_bin.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary_path, out_bin)
     if not _is_windows():
@@ -995,7 +1010,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_sdk_parser.add_argument(
         "--runtime-version",
         required=True,
-        help="Pinned openai-codex-cli-bin version for the staged SDK package",
+        help="Pinned openai-codex-app-server-bin version for the staged SDK package",
     )
     stage_sdk_parser.add_argument(
         "--sdk-version",
@@ -1014,7 +1029,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_runtime_parser.add_argument(
         "runtime_binary",
         type=Path,
-        help="Path to the codex binary to package for this platform",
+        help="Path to the app-server binary to package for this platform",
     )
     stage_runtime_parser.add_argument(
         "--codex-version",

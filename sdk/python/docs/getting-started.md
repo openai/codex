@@ -18,7 +18,7 @@ Requirements:
 
 - Python `>=3.10`
 - uv
-- installed `openai-codex-cli-bin` runtime package, or an explicit `codex_bin` override
+- installed `openai-codex-app-server-bin` runtime package, or an explicit `app_server_bin` override
 - local Codex auth/session configured
 
 ## 2) Run your first turn (sync)
@@ -40,7 +40,7 @@ with Codex() as codex:
 
 What happened:
 
-- `Codex()` started and initialized `codex app-server`.
+- `Codex()` started and initialized `codex-app-server`.
 - `thread_start(...)` created a thread.
 - `thread.run("...")` started a turn, consumed events until completion, and returned the final assistant response plus collected items and usage.
 - `result.final_response` is `None` when no final-answer or phase-less assistant message item completes for the turn.

@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "openai-codex-cli-bin"
+name = "openai-codex-app-server-bin"
 version = "0.0.0-dev"
-description = "Pinned Codex CLI runtime for the Python SDK"
+description = "Pinned Codex app-server runtime for the Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -35,8 +35,8 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codex_cli_bin"]
-include = ["src/codex_cli_bin/bin/**"]
+packages = ["src/codex_app_server_bin", "src/codex_cli_bin"]
+include = ["src/codex_app_server_bin/bin/**"]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 

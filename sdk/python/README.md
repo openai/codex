@@ -12,8 +12,8 @@ uv sync
 source .venv/bin/activate
 ```
 
-Published SDK builds pin an exact `openai-codex-cli-bin` runtime dependency. For local
-repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
+Published SDK builds pin an exact `openai-codex-app-server-bin` runtime dependency. For local
+repo development, either pass `AppServerConfig(app_server_bin=...)` to point at a
 local build explicitly, or use the repo examples/notebook bootstrap which
 installs the pinned runtime package automatically.
 
@@ -54,13 +54,13 @@ python examples/01_quickstart_constructor/async.py
 
 The repo no longer checks `codex` binaries into `sdk/python`.
 
-Published SDK builds are pinned to an exact `openai-codex-cli-bin` package version,
+Published SDK builds are pinned to an exact `openai-codex-app-server-bin` package version,
 and that runtime package carries the platform-specific binary for the target
 wheel.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use an
-explicit `codex_bin` override for manual SDK usage; the repo examples and
+explicit `app_server_bin` override for manual SDK usage; the repo examples and
 notebook bootstrap the pinned runtime package automatically.
 
 ## Maintainer workflow
@@ -74,26 +74,26 @@ python scripts/update_sdk_artifacts.py \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-runtime \
-  /tmp/codex-python-release/openai-codex-cli-bin \
-  /path/to/codex \
+  /tmp/codex-python-release/openai-codex-app-server-bin \
+  /path/to/codex-app-server \
   --runtime-version 1.2.3
 ```
 
 This supports the CI release flow:
 
 - run `generate-types` before packaging
-- stage `codex-app-server-sdk` once with an exact `openai-codex-cli-bin==...` dependency
-- stage `openai-codex-cli-bin` on each supported platform runner with the same pinned runtime version
-- build and publish `openai-codex-cli-bin` as platform wheels only; do not publish an sdist
+- stage `codex-app-server-sdk` once with an exact `openai-codex-app-server-bin==...` dependency
+- stage `openai-codex-app-server-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `openai-codex-app-server-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
 - Package: `codex-app-server-sdk`
-- Runtime package: `openai-codex-cli-bin`
+- Runtime package: `openai-codex-app-server-bin`
 - Current SDK version in this repo: `0.2.0`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
-- Recommendation: keep SDK and `codex` CLI reasonably up to date together
+- Recommendation: keep SDK and `codex-app-server` runtime reasonably up to date together
 
 ## Notes
 
