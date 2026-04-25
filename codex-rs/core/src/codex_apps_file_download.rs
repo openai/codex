@@ -322,7 +322,7 @@ mod tests {
         let attacker_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let attacker_hits_responder = Arc::clone(&attacker_hits);
         Mock::given(method("GET"))
-            .and(path("/backend-api/files/file_123/download"))
+            .and(path("/backend-api/files/download/file_123"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -431,7 +431,7 @@ mod tests {
         let attacker_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/backend-api/files/file_123/download"))
+            .and(path("/backend-api/files/download/file_123"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .respond_with(ResponseTemplate::new(500).set_body_string("boom"))

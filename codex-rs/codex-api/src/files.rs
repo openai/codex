@@ -159,7 +159,7 @@ pub async fn get_openai_file_download_info(
     file_id: &str,
 ) -> Result<OpenAiFileDownloadInfo, OpenAiFileError> {
     let base_url = base_url.trim_end_matches('/');
-    let download_link_url = format!("{base_url}/files/{file_id}/download");
+    let download_link_url = format!("{base_url}/files/download/{file_id}");
     let response = authorized_request(auth, reqwest::Method::GET, &download_link_url)
         .send()
         .await
@@ -803,7 +803,7 @@ mod tests {
     async fn get_openai_file_download_info_defaults_missing_status_to_success() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/backend-api/files/file_123/download"))
+            .and(path("/backend-api/files/download/file_123"))
             .and(header("authorization", "Bearer token"))
             .and(header("chatgpt-account-id", "account_id"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
