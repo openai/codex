@@ -281,7 +281,7 @@ impl RealtimeE2eHarness {
         )?;
 
         let mut mcp = McpProcess::new(codex_home.path()).await?;
-        mcp.initialize().await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
         login_with_api_key(&mut mcp, "sk-test-key").await?;
 
         let thread_start_request_id = mcp
@@ -345,10 +345,16 @@ impl RealtimeE2eHarness {
     /// Returns the nth JSON message app-server wrote to the fake Realtime API
     /// sideband websocket.
     async fn sideband_outbound_request(&self, request_index: usize) -> Value {
-        self.realtime_server
-            .wait_for_request(/*connection_index*/ 0, request_index)
-            .await
-            .body_json()
+        timeout(
+            DEFAULT_TIMEOUT,
+            self.realtime_server
+                .wait_for_request(/*connection_index*/ 0, request_index),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("timed out waiting for realtime sideband request {request_index}")
+        })
+        .body_json()
     }
 
     async fn append_audio(&mut self, thread_id: String) -> Result<()> {
@@ -534,7 +540,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -783,7 +789,7 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -885,7 +891,7 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_realtime_list_voices_request(ThreadRealtimeListVoicesParams {})
@@ -957,7 +963,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -1053,7 +1059,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
@@ -1541,6 +1547,7 @@ async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Res
 /// output to realtime and then requests a new `response.create` so realtime can
 /// react to that final output.
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_output() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -1968,7 +1975,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     // Phase 2: start a normal app-server thread and request realtime over WebRTC.
@@ -2029,7 +2036,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    mcp.initialize().await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams::default())

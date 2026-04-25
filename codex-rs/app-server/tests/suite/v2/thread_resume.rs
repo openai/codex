@@ -761,6 +761,7 @@ async fn thread_resume_by_path_uses_remote_thread_store_error() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1793,6 +1794,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_response = responses::sse_response(responses::sse(vec![
