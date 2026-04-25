@@ -2784,39 +2784,42 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
-        let thread_id = match ThreadId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+        let result = self.thread_archive_response(params).await;
+        let archived_thread_ids = result
+            .as_ref()
+            .ok()
+            .map(|(_, thread_ids)| thread_ids.clone());
+        self.outgoing
+            .send_result(request_id, result.map(|(response, _)| response))
+            .await;
+
+        if let Some(archived_thread_ids) = archived_thread_ids {
+            for thread_id in archived_thread_ids {
+                let notification = ThreadArchivedNotification { thread_id };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadArchived(notification))
+                    .await;
             }
-        };
+        }
+    }
+
+    async fn thread_archive_response(
+        &self,
+        params: ThreadArchiveParams,
+    ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
         if let Some(state_db_ctx) = get_state_db(&self.config).await {
-            let descendants = match state_db_ctx.list_thread_spawn_descendants(thread_id).await {
-                Ok(descendants) => descendants,
-                Err(err) => {
-                    self.outgoing
-                        .send_error(
-                            request_id,
-                            JSONRPCErrorError {
-                                code: INTERNAL_ERROR_CODE,
-                                message: format!(
-                                    "failed to list spawned descendants for thread id {thread_id}: {err}"
-                                ),
-                                data: None,
-                            },
-                        )
-                        .await;
-                    return;
-                }
-            };
+            let descendants = state_db_ctx
+                .list_thread_spawn_descendants(thread_id)
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to list spawned descendants for thread id {thread_id}: {err}"
+                    ))
+                })?;
             let mut seen = HashSet::from([thread_id]);
             for descendant_id in descendants {
                 if seen.insert(descendant_id) {
@@ -2840,12 +2843,7 @@ impl CodexMessageProcessor {
                     archive_thread_ids.push(thread_id);
                 }
             }
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_archive_error("archive", err))
-                    .await;
-                return;
-            }
+            Err(err) => return Err(thread_store_archive_error("archive", err)),
         }
         for descendant_thread_id in thread_ids.into_iter().skip(1) {
             match self
@@ -2873,10 +2871,7 @@ impl CodexMessageProcessor {
         let mut archived_thread_ids = Vec::new();
         let Some((parent_thread_id, descendant_thread_ids)) = archive_thread_ids.split_first()
         else {
-            self.outgoing
-                .send_response(request_id, ThreadArchiveResponse {})
-                .await;
-            return;
+            return Ok((ThreadArchiveResponse {}, archived_thread_ids));
         };
 
         self.prepare_thread_for_archive(*parent_thread_id).await;
@@ -2890,12 +2885,7 @@ impl CodexMessageProcessor {
             Ok(()) => {
                 archived_thread_ids.push(parent_thread_id.to_string());
             }
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_archive_error("archive", err))
-                    .await;
-                return;
-            }
+            Err(err) => return Err(thread_store_archive_error("archive", err)),
         }
 
         for descendant_thread_id in descendant_thread_ids.iter().rev().copied() {
@@ -2918,15 +2908,7 @@ impl CodexMessageProcessor {
             }
         }
 
-        self.outgoing
-            .send_response(request_id, ThreadArchiveResponse {})
-            .await;
-        for thread_id in archived_thread_ids {
-            let notification = ThreadArchivedNotification { thread_id };
-            self.outgoing
-                .send_server_notification(ServerNotification::ThreadArchived(notification))
-                .await;
-        }
+        Ok((ThreadArchiveResponse {}, archived_thread_ids))
     }
 
     async fn thread_increment_elicitation(
@@ -2934,34 +2916,23 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadIncrementElicitationParams,
     ) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
-            Ok(value) => value,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        match thread.increment_out_of_band_elicitation_count().await {
-            Ok(count) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        ThreadIncrementElicitationResponse {
-                            count,
-                            paused: count > 0,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to increment out-of-band elicitation counter: {err}"),
-                )
-                .await;
-            }
+        let result = async {
+            let (_, thread) = self.load_thread(&params.thread_id).await?;
+            let count = thread
+                .increment_out_of_band_elicitation_count()
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to increment out-of-band elicitation counter: {err}"
+                    ))
+                })?;
+            Ok::<_, JSONRPCErrorError>(ThreadIncrementElicitationResponse {
+                count,
+                paused: count > 0,
+            })
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_decrement_elicitation(
@@ -2969,76 +2940,64 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadDecrementElicitationParams,
     ) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
-            Ok(value) => value,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        match thread.decrement_out_of_band_elicitation_count().await {
-            Ok(count) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        ThreadDecrementElicitationResponse {
-                            count,
-                            paused: count > 0,
-                        },
-                    )
-                    .await;
-            }
-            Err(CodexErr::InvalidRequest(message)) => {
-                self.send_invalid_request_error(request_id, message).await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to decrement out-of-band elicitation counter: {err}"),
-                )
-                .await;
-            }
+        let result = async {
+            let (_, thread) = self.load_thread(&params.thread_id).await?;
+            let count = thread
+                .decrement_out_of_band_elicitation_count()
+                .await
+                .map_err(|err| match err {
+                    CodexErr::InvalidRequest(message) => invalid_request(message),
+                    err => internal_error(format!(
+                        "failed to decrement out-of-band elicitation counter: {err}"
+                    )),
+                })?;
+            Ok::<_, JSONRPCErrorError>(ThreadDecrementElicitationResponse {
+                count,
+                paused: count > 0,
+            })
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_set_name(&self, request_id: ConnectionRequestId, params: ThreadSetNameParams) {
-        let ThreadSetNameParams { thread_id, name } = params;
-        let thread_id = match ThreadId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
-                    .await;
-                return;
-            }
-        };
-        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
-            self.send_invalid_request_error(
-                request_id,
-                "thread name must not be empty".to_string(),
-            )
+        let result = self.thread_set_name_response(&request_id, params).await;
+        let notification = result
+            .as_ref()
+            .ok()
+            .and_then(|(_, notification)| notification.clone());
+        self.outgoing
+            .send_result(request_id, result.map(|(response, _)| response))
             .await;
-            return;
+
+        if let Some(notification) = notification {
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                .await;
+        }
+    }
+
+    async fn thread_set_name_response(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSetNameParams,
+    ) -> Result<(ThreadSetNameResponse, Option<ThreadNameUpdatedNotification>), JSONRPCErrorError>
+    {
+        let ThreadSetNameParams { thread_id, name } = params;
+        let thread_id = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
+            return Err(invalid_request("thread name must not be empty"));
         };
 
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            if let Err(err) = self
-                .submit_core_op(&request_id, thread.as_ref(), Op::SetThreadName { name })
+            self.submit_core_op(request_id, thread.as_ref(), Op::SetThreadName { name })
                 .await
-            {
-                self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
-                    .await;
-                return;
-            }
-
-            self.outgoing
-                .send_response(request_id, ThreadSetNameResponse {})
-                .await;
-            return;
+                .map_err(|err| internal_error(format!("failed to set thread name: {err}")))?;
+            return Ok((ThreadSetNameResponse {}, None));
         }
 
-        if let Err(err) = self
-            .thread_store
+        self.thread_store
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id,
                 patch: StoreThreadMetadataPatch {
@@ -3048,23 +3007,15 @@ impl CodexMessageProcessor {
                 include_archived: false,
             })
             .await
-        {
-            self.outgoing
-                .send_error(request_id, thread_store_write_error("set thread name", err))
-                .await;
-            return;
-        }
+            .map_err(|err| thread_store_write_error("set thread name", err))?;
 
-        self.outgoing
-            .send_response(request_id, ThreadSetNameResponse {})
-            .await;
-        let notification = ThreadNameUpdatedNotification {
-            thread_id: thread_id.to_string(),
-            thread_name: Some(name),
-        };
-        self.outgoing
-            .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
-            .await;
+        Ok((
+            ThreadSetNameResponse {},
+            Some(ThreadNameUpdatedNotification {
+                thread_id: thread_id.to_string(),
+                thread_name: Some(name),
+            }),
+        ))
     }
 
     async fn thread_memory_mode_set(
@@ -3072,43 +3023,35 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadMemoryModeSetParams,
     ) {
+        let result = self.thread_memory_mode_set_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_memory_mode_set_response(
+        &self,
+        params: ThreadMemoryModeSetParams,
+    ) -> Result<ThreadMemoryModeSetResponse, JSONRPCErrorError> {
         let ThreadMemoryModeSetParams { thread_id, mode } = params;
-        let thread_id = match ThreadId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
-                    .await;
-                return;
-            }
-        };
+        let thread_id = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             if thread.config_snapshot().await.ephemeral {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("ephemeral thread does not support memory mode updates: {thread_id}"),
-                )
-                .await;
-                return;
+                return Err(invalid_request(format!(
+                    "ephemeral thread does not support memory mode updates: {thread_id}"
+                )));
             }
 
-            if let Err(err) = thread.set_thread_memory_mode(mode.to_core()).await {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to set thread memory mode: {err}"),
-                )
-                .await;
-                return;
-            }
-
-            self.outgoing
-                .send_response(request_id, ThreadMemoryModeSetResponse {})
-                .await;
-            return;
+            thread
+                .set_thread_memory_mode(mode.to_core())
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to set thread memory mode: {err}"))
+                })?;
+            return Ok(ThreadMemoryModeSetResponse {});
         }
 
-        if let Err(err) = self
-            .thread_store
+        self.thread_store
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id,
                 patch: StoreThreadMetadataPatch {
@@ -3118,63 +3061,40 @@ impl CodexMessageProcessor {
                 include_archived: false,
             })
             .await
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    thread_store_write_error("set thread memory mode", err),
-                )
-                .await;
-            return;
-        }
+            .map_err(|err| thread_store_write_error("set thread memory mode", err))?;
 
-        self.outgoing
-            .send_response(request_id, ThreadMemoryModeSetResponse {})
-            .await;
+        Ok(ThreadMemoryModeSetResponse {})
     }
 
     async fn memory_reset(&self, request_id: ConnectionRequestId, _params: Option<()>) {
-        let state_db = match StateRuntime::init(
+        let result = self.memory_reset_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn memory_reset_response(&self) -> Result<MemoryResetResponse, JSONRPCErrorError> {
+        let state_db = StateRuntime::init(
             self.config.sqlite_home.clone(),
             self.config.model_provider_id.clone(),
         )
         .await
-        {
-            Ok(state_db) => state_db,
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to open state db for memory reset: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
+        .map_err(|err| {
+            internal_error(format!("failed to open state db for memory reset: {err}"))
+        })?;
 
-        if let Err(err) = state_db.clear_memory_data().await {
-            self.send_internal_error(
-                request_id,
-                format!("failed to clear memory rows in state db: {err}"),
-            )
-            .await;
-            return;
-        }
+        state_db.clear_memory_data().await.map_err(|err| {
+            internal_error(format!("failed to clear memory rows in state db: {err}"))
+        })?;
 
-        if let Err(err) = clear_memory_roots_contents(&self.config.codex_home).await {
-            self.send_internal_error(
-                request_id,
-                format!(
+        clear_memory_roots_contents(&self.config.codex_home)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
                     "failed to clear memory directories under {}: {err}",
                     self.config.codex_home.display()
-                ),
-            )
-            .await;
-            return;
-        }
+                ))
+            })?;
 
-        self.outgoing
-            .send_response(request_id, MemoryResetResponse {})
-            .await;
+        Ok(MemoryResetResponse {})
     }
 
     async fn thread_metadata_update(
@@ -3182,19 +3102,21 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadMetadataUpdateParams,
     ) {
+        let result = self.thread_metadata_update_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_metadata_update_response(
+        &self,
+        params: ThreadMetadataUpdateParams,
+    ) -> Result<ThreadMetadataUpdateResponse, JSONRPCErrorError> {
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
         } = params;
 
-        let thread_uuid = match ThreadId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
-                    .await;
-                return;
-            }
-        };
+        let thread_uuid = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let Some(ThreadMetadataGitInfoUpdateParams {
             sha,
@@ -3202,21 +3124,11 @@ impl CodexMessageProcessor {
             origin_url,
         }) = git_info
         else {
-            self.send_invalid_request_error(
-                request_id,
-                "gitInfo must include at least one field".to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request("gitInfo must include at least one field"));
         };
 
         if sha.is_none() && branch.is_none() && origin_url.is_none() {
-            self.send_invalid_request_error(
-                request_id,
-                "gitInfo must include at least one field".to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request("gitInfo must include at least one field"));
         }
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
@@ -3225,72 +3137,20 @@ impl CodexMessageProcessor {
             state_db_ctx = get_state_db(&self.config).await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
-            self.send_internal_error(
-                request_id,
-                format!("sqlite state db unavailable for thread {thread_uuid}"),
-            )
-            .await;
-            return;
+            return Err(internal_error(format!(
+                "sqlite state db unavailable for thread {thread_uuid}"
+            )));
         };
 
-        if let Err(error) = self
-            .ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
-            .await
-        {
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
+        self.ensure_thread_metadata_row_exists(thread_uuid, &state_db_ctx, loaded_thread.as_ref())
+            .await?;
 
-        let git_sha = match sha {
-            Some(Some(sha)) => {
-                let sha = sha.trim().to_string();
-                if sha.is_empty() {
-                    self.send_invalid_request_error(
-                        request_id,
-                        "gitInfo.sha must not be empty".to_string(),
-                    )
-                    .await;
-                    return;
-                }
-                Some(Some(sha))
-            }
-            Some(None) => Some(None),
-            None => None,
-        };
-        let git_branch = match branch {
-            Some(Some(branch)) => {
-                let branch = branch.trim().to_string();
-                if branch.is_empty() {
-                    self.send_invalid_request_error(
-                        request_id,
-                        "gitInfo.branch must not be empty".to_string(),
-                    )
-                    .await;
-                    return;
-                }
-                Some(Some(branch))
-            }
-            Some(None) => Some(None),
-            None => None,
-        };
-        let git_origin_url = match origin_url {
-            Some(Some(origin_url)) => {
-                let origin_url = origin_url.trim().to_string();
-                if origin_url.is_empty() {
-                    self.send_invalid_request_error(
-                        request_id,
-                        "gitInfo.originUrl must not be empty".to_string(),
-                    )
-                    .await;
-                    return;
-                }
-                Some(Some(origin_url))
-            }
-            Some(None) => Some(None),
-            None => None,
-        };
+        let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
+        let git_branch = Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
+        let git_origin_url =
+            Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
 
-        let updated = match state_db_ctx
+        let updated = state_db_ctx
             .update_thread_git_info(
                 thread_uuid,
                 git_sha.as_ref().map(|value| value.as_deref()),
@@ -3298,35 +3158,23 @@ impl CodexMessageProcessor {
                 git_origin_url.as_ref().map(|value| value.as_deref()),
             )
             .await
-        {
-            Ok(updated) => updated,
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to update thread metadata for {thread_uuid}: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to update thread metadata for {thread_uuid}: {err}"
+                ))
+            })?;
         if !updated {
-            self.send_internal_error(
-                request_id,
-                format!("thread metadata disappeared before update completed: {thread_uuid}"),
-            )
-            .await;
-            return;
+            return Err(internal_error(format!(
+                "thread metadata disappeared before update completed: {thread_uuid}"
+            )));
         }
 
         let Some(summary) =
             read_summary_from_state_db_context_by_thread_id(Some(&state_db_ctx), thread_uuid).await
         else {
-            self.send_internal_error(
-                request_id,
-                format!("failed to reload updated thread metadata for {thread_uuid}"),
-            )
-            .await;
-            return;
+            return Err(internal_error(format!(
+                "failed to reload updated thread metadata for {thread_uuid}"
+            )));
         };
 
         let mut thread = summary_to_thread(summary, &self.config.cwd);
@@ -3338,9 +3186,24 @@ impl CodexMessageProcessor {
             /*has_in_progress_turn*/ false,
         );
 
-        self.outgoing
-            .send_response(request_id, ThreadMetadataUpdateResponse { thread })
-            .await;
+        Ok(ThreadMetadataUpdateResponse { thread })
+    }
+
+    fn normalize_thread_metadata_git_field(
+        value: Option<Option<String>>,
+        name: &str,
+    ) -> Result<Option<Option<String>>, JSONRPCErrorError> {
+        match value {
+            Some(Some(value)) => {
+                let value = value.trim().to_string();
+                if value.is_empty() {
+                    return Err(invalid_request(format!("{name} must not be empty")));
+                }
+                Ok(Some(Some(value)))
+            }
+            Some(None) => Ok(Some(None)),
+            None => Ok(None),
+        }
     }
 
     async fn ensure_thread_metadata_row_exists(
@@ -3349,22 +3212,6 @@ impl CodexMessageProcessor {
         state_db_ctx: &Arc<StateRuntime>,
         loaded_thread: Option<&Arc<CodexThread>>,
     ) -> Result<(), JSONRPCErrorError> {
-        fn invalid_request(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
-        fn internal_error(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
         match state_db_ctx.get_thread(thread_uuid).await {
             Ok(Some(_)) => return Ok(()),
             Ok(None) => {}
@@ -3480,21 +3327,34 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadUnarchiveParams,
     ) {
-        let thread_id = match ThreadId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let result = self.thread_unarchive_response(params).await;
+        let notification =
+            result
+                .as_ref()
+                .ok()
+                .map(|(_, thread_id)| ThreadUnarchivedNotification {
+                    thread_id: thread_id.clone(),
+                });
+        self.outgoing
+            .send_result(request_id, result.map(|(response, _)| response))
+            .await;
+
+        if let Some(notification) = notification {
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadUnarchived(notification))
+                .await;
+        }
+    }
+
+    async fn thread_unarchive_response(
+        &self,
+        params: ThreadUnarchiveParams,
+    ) -> Result<(ThreadUnarchiveResponse, String), JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let fallback_provider = self.config.model_provider_id.clone();
-        let result = self
+        let mut thread = self
             .thread_store
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
@@ -3507,50 +3367,42 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread {thread_id}"),
                         data: None,
                     })
-            });
+            })?;
 
-        match result {
-            Ok(mut thread) => {
-                thread.status = resolve_thread_status(
-                    self.thread_watch_manager
-                        .loaded_status_for_thread(&thread.id)
-                        .await,
-                    /*has_in_progress_turn*/ false,
-                );
-                self.attach_thread_name(thread_id, &mut thread).await;
-                let thread_id = thread.id.clone();
-                let response = ThreadUnarchiveResponse { thread };
-                self.outgoing.send_response(request_id, response).await;
-                let notification = ThreadUnarchivedNotification { thread_id };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadUnarchived(notification))
-                    .await;
-            }
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-            }
-        }
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            /*has_in_progress_turn*/ false,
+        );
+        self.attach_thread_name(thread_id, &mut thread).await;
+        let thread_id = thread.id.clone();
+        Ok((ThreadUnarchiveResponse { thread }, thread_id))
     }
 
     async fn thread_rollback(&self, request_id: ConnectionRequestId, params: ThreadRollbackParams) {
+        let result = self
+            .thread_rollback_start(&request_id, params)
+            .await
+            .map(|()| None::<serde_json::Value>);
+        self.send_optional_result(request_id, result).await;
+    }
+
+    async fn thread_rollback_start(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadRollbackParams,
+    ) -> Result<(), JSONRPCErrorError> {
         let ThreadRollbackParams {
             thread_id,
             num_turns,
         } = params;
 
         if num_turns == 0 {
-            self.send_invalid_request_error(request_id, "numTurns must be >= 1".to_string())
-                .await;
-            return;
+            return Err(invalid_request("numTurns must be >= 1"));
         }
 
-        let (thread_id, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let (thread_id, thread) = self.load_thread(&thread_id).await?;
 
         let request = request_id.clone();
 
@@ -3565,17 +3417,14 @@ impl CodexMessageProcessor {
             }
         };
         if rollback_already_in_progress {
-            self.send_invalid_request_error(
-                request.clone(),
-                "rollback already in progress for this thread".to_string(),
-            )
-            .await;
-            return;
+            return Err(invalid_request(
+                "rollback already in progress for this thread",
+            ));
         }
 
         if let Err(err) = self
             .submit_core_op(
-                &request_id,
+                request_id,
                 thread.as_ref(),
                 Op::ThreadRollback { num_turns },
             )
@@ -3586,9 +3435,9 @@ impl CodexMessageProcessor {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             thread_state.lock().await.pending_rollbacks = None;
 
-            self.send_internal_error(request, format!("failed to start rollback: {err}"))
-                .await;
+            return Err(internal_error(format!("failed to start rollback: {err}")));
         }
+        Ok(())
     }
 
     async fn thread_compact_start(
@@ -3598,28 +3447,15 @@ impl CodexMessageProcessor {
     ) {
         let ThreadCompactStartParams { thread_id } = params;
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        match self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Compact)
-            .await
-        {
-            Ok(_) => {
-                self.outgoing
-                    .send_response(request_id, ThreadCompactStartResponse {})
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(request_id, format!("failed to start compaction: {err}"))
-                    .await;
-            }
+        let result = async {
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(&request_id, thread.as_ref(), Op::Compact)
+                .await
+                .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
+            Ok::<_, JSONRPCErrorError>(ThreadCompactStartResponse {})
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_background_terminals_clean(
@@ -3629,31 +3465,17 @@ impl CodexMessageProcessor {
     ) {
         let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        match self
-            .submit_core_op(&request_id, thread.as_ref(), Op::CleanBackgroundTerminals)
-            .await
-        {
-            Ok(_) => {
-                self.outgoing
-                    .send_response(request_id, ThreadBackgroundTerminalsCleanResponse {})
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to clean background terminals: {err}"),
-                )
-                .await;
-            }
+        let result = async {
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(&request_id, thread.as_ref(), Op::CleanBackgroundTerminals)
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to clean background terminals: {err}"))
+                })?;
+            Ok::<_, JSONRPCErrorError>(ThreadBackgroundTerminalsCleanResponse {})
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_shell_command(
@@ -3661,51 +3483,25 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadShellCommandParams,
     ) {
-        let ThreadShellCommandParams { thread_id, command } = params;
-        let command = command.trim().to_string();
-        if command.is_empty() {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "command must not be empty".to_string(),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
-        }
-
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
+        let result = async {
+            let ThreadShellCommandParams { thread_id, command } = params;
+            let command = command.trim().to_string();
+            if command.is_empty() {
+                return Err(invalid_request("command must not be empty"));
             }
-        };
 
-        match self
-            .submit_core_op(
+            let (_, thread) = self.load_thread(&thread_id).await?;
+            self.submit_core_op(
                 &request_id,
                 thread.as_ref(),
                 Op::RunUserShellCommand { command },
             )
             .await
-        {
-            Ok(_) => {
-                self.outgoing
-                    .send_response(request_id, ThreadShellCommandResponse {})
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to start shell command: {err}"),
-                )
-                .await;
-            }
+            .map_err(|err| internal_error(format!("failed to start shell command: {err}")))?;
+            Ok::<_, JSONRPCErrorError>(ThreadShellCommandResponse {})
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_approve_guardian_denied_action(
@@ -3713,55 +3509,34 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadApproveGuardianDeniedActionParams,
     ) {
-        let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
-        let event = match serde_json::from_value(event) {
-            Ok(event) => event,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid Guardian denial event: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let (_, thread) = match self.load_thread(&thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let result = async {
+            let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
+            let event = serde_json::from_value(event)
+                .map_err(|err| invalid_request(format!("invalid Guardian denial event: {err}")))?;
+            let (_, thread) = self.load_thread(&thread_id).await?;
 
-        match self
-            .submit_core_op(
+            self.submit_core_op(
                 &request_id,
                 thread.as_ref(),
                 Op::ApproveGuardianDeniedAction { event },
             )
             .await
-        {
-            Ok(_) => {
-                self.outgoing
-                    .send_response(request_id, ThreadApproveGuardianDeniedActionResponse {})
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to approve Guardian denial: {err}"),
-                )
-                .await;
-            }
+            .map_err(|err| internal_error(format!("failed to approve Guardian denial: {err}")))?;
+            Ok::<_, JSONRPCErrorError>(ThreadApproveGuardianDeniedActionResponse {})
         }
+        .await;
+        self.outgoing.send_result(request_id, result).await;
     }
 
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
+        let result = self.thread_list_response(params).await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn thread_list_response(
+        &self,
+        params: ThreadListParams,
+    ) -> Result<ThreadListResponse, JSONRPCErrorError> {
         let ThreadListParams {
             cursor,
             limit,
@@ -3774,13 +3549,7 @@ impl CodexMessageProcessor {
             use_state_db_only,
             search_term,
         } = params;
-        let cwd_filters = match normalize_thread_list_cwd_filters(cwd) {
-            Ok(cwd_filters) => cwd_filters,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -3791,7 +3560,7 @@ impl CodexMessageProcessor {
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
         };
         let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
-        let list_result = self
+        let (summaries, next_cursor) = self
             .list_threads_common(
                 requested_page_size,
                 cursor,
@@ -3806,14 +3575,7 @@ impl CodexMessageProcessor {
                     use_state_db_only,
                 },
             )
-            .await;
-        let (summaries, next_cursor) = match list_result {
-            Ok(r) => r,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+            .await?;
         let backwards_cursor = summaries.first().and_then(|summary| {
             thread_backwards_cursor_for_sort_key(summary, store_sort_key, sort_direction)
         });
@@ -3849,12 +3611,11 @@ impl CodexMessageProcessor {
                 thread
             })
             .collect();
-        let response = ThreadListResponse {
+        Ok(ThreadListResponse {
             data,
             next_cursor,
             backwards_cursor,
-        };
-        self.outgoing.send_response(request_id, response).await;
+        })
     }
 
     async fn thread_loaded_list(
