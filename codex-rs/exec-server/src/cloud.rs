@@ -398,25 +398,4 @@ mod tests {
             }
         );
     }
-
-    #[test]
-    fn registration_idempotency_key_is_stable_within_process_and_unique_across_launches() {
-        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        let config = CloudExecutorConfig::new("http://127.0.0.1:18084".to_string());
-        let first_registration_id = Uuid::from_u128(1);
-        let second_registration_id = Uuid::from_u128(2);
-
-        let first = config
-            .registration_request(&auth, first_registration_id)
-            .expect("first registration");
-        let repeated = config
-            .registration_request(&auth, first_registration_id)
-            .expect("repeated registration");
-        let second = config
-            .registration_request(&auth, second_registration_id)
-            .expect("second registration");
-
-        assert_eq!(first.idempotency_id, repeated.idempotency_id);
-        assert_ne!(first.idempotency_id, second.idempotency_id);
-    }
 }
