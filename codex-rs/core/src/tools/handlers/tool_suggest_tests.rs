@@ -9,6 +9,46 @@ use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tempfile::tempdir;
 
+#[test]
+fn invalid_suggest_reason_message_rejects_placeholder_reasons() {
+    for reason in [
+        "",
+        "   ",
+        "placeholder",
+        " Placeholder ",
+        "<placeholder>",
+        "[TODO]",
+        "TBD",
+        "n/a",
+        "reason",
+        "suggestion reason",
+        "reason goes here",
+        "Concise one-line user-facing reason why this tool can help with the current request",
+        "Specific one-line user-facing reason why this tool can help with the current request",
+    ] {
+        assert!(
+            invalid_suggest_reason_message(reason).is_some(),
+            "expected {reason:?} to be rejected"
+        );
+    }
+}
+
+#[test]
+fn invalid_suggest_reason_message_allows_specific_reasons() {
+    for reason in [
+        "Search Slack messages related to the release plan.",
+        "Find and reference issues in GitHub for this bug report.",
+        "Use Google Calendar to compare attendee availability.",
+        "Use Figma to inspect placeholder text in the selected design.",
+    ] {
+        assert_eq!(
+            invalid_suggest_reason_message(reason),
+            None,
+            "expected {reason:?} to be allowed"
+        );
+    }
+}
+
 #[tokio::test]
 async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");

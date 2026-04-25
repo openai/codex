@@ -27,6 +27,8 @@ use crate::tools::registry::ToolKind;
 
 pub struct ToolSuggestHandler;
 
+const INVALID_SUGGEST_REASON_MESSAGE: &str = "suggest_reason must be a specific one-line user-facing reason for the current request; do not use placeholders like \"placeholder\".";
+
 impl ToolHandler for ToolSuggestHandler {
     type Output = FunctionToolOutput;
 
@@ -58,10 +60,8 @@ impl ToolHandler for ToolSuggestHandler {
 
         let args: ToolSuggestArgs = parse_arguments(&arguments)?;
         let suggest_reason = args.suggest_reason.trim();
-        if suggest_reason.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "suggest_reason must not be empty".to_string(),
-            ));
+        if let Some(message) = invalid_suggest_reason_message(suggest_reason) {
+            return Err(FunctionCallError::RespondToModel(message.to_string()));
         }
         if args.action_type != DiscoverableToolAction::Install {
             return Err(FunctionCallError::RespondToModel(
@@ -156,6 +156,57 @@ impl ToolHandler for ToolSuggestHandler {
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
+}
+
+fn invalid_suggest_reason_message(suggest_reason: &str) -> Option<&'static str> {
+    if suggest_reason.trim().is_empty() {
+        return Some("suggest_reason must not be empty");
+    }
+
+    let normalized = normalize_suggest_reason_for_stub_check(suggest_reason);
+    if normalized.ends_with("goes here")
+        || matches!(
+            normalized.as_str(),
+            "placeholder"
+                | "placeholder text"
+                | "todo"
+                | "tbd"
+                | "n/a"
+                | "na"
+                | "none"
+                | "null"
+                | "nil"
+                | "reason"
+                | "suggest reason"
+                | "suggestion reason"
+                | "tool suggestion reason"
+                | "concise one-line user-facing reason"
+                | "concise one-line user-facing reason why this tool can help with the current request"
+                | "specific one-line user-facing reason"
+                | "specific one-line user-facing reason why this tool can help with the current request"
+        )
+    {
+        return Some(INVALID_SUGGEST_REASON_MESSAGE);
+    }
+
+    None
+}
+
+fn normalize_suggest_reason_for_stub_check(suggest_reason: &str) -> String {
+    const WRAPPER_CHARS: &[char] = &[
+        '"', '\'', '`', '<', '>', '[', ']', '(', ')', '{', '}', '.', ',', ':', ';', '-', '_', '*',
+        ' ',
+    ];
+
+    suggest_reason
+        .trim()
+        .trim_matches(WRAPPER_CHARS)
+        .split_whitespace()
+        .map(|word| word.trim_matches(WRAPPER_CHARS))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 async fn verify_tool_suggestion_completed(
