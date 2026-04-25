@@ -1,5 +1,6 @@
 mod client;
 mod client_api;
+mod cloud;
 mod connection;
 mod environment;
 mod environment_provider;
@@ -33,6 +34,9 @@ pub use codex_file_system::FileSystemResult;
 pub use codex_file_system::FileSystemSandboxContext;
 pub use codex_file_system::ReadDirectoryEntry;
 pub use codex_file_system::RemoveOptions;
+pub use cloud::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR;
+pub use cloud::CloudExecutorConfig;
+pub use cloud::run_cloud_executor;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;
