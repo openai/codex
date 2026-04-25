@@ -4,10 +4,12 @@ use std::time::Duration;
 
 use crate::AuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
+use futures::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
 use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::time::Instant;
 use tokio_util::io::ReaderStream;
 use url::Url;
@@ -44,6 +46,12 @@ pub enum OpenAiFileError {
     NotAFile { path: PathBuf },
     #[error("path `{path}` cannot be read: {source}")]
     ReadFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("path `{path}` cannot be written: {source}")]
+    WriteFile {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -128,25 +136,21 @@ pub async fn download_openai_file(
     auth: &impl AuthProvider,
     download_url: &str,
 ) -> Result<Vec<u8>, OpenAiFileError> {
-    let resolved_url = Url::parse(download_url).map_err(|source| OpenAiFileError::InvalidUrl {
-        url: download_url.to_string(),
-        source,
-    })?;
-    let request_builder = if should_attach_auth_to_openai_file_url(&resolved_url, base_url) {
-        authorized_request(auth, reqwest::Method::GET, resolved_url.as_str())
-    } else {
-        build_reqwest_client()
-            .request(reqwest::Method::GET, resolved_url.as_str())
-            .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-    };
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: resolved_url.to_string(),
-            source,
-        })?;
+    let (resolved_url, response) =
+        send_openai_file_download_request(base_url, auth, download_url).await?;
     response_bytes(resolved_url.as_str(), response).await
+}
+
+pub async fn download_openai_file_to_path(
+    base_url: &str,
+    auth: &impl AuthProvider,
+    download_url: &str,
+    path: &Path,
+    max_size_bytes: u64,
+) -> Result<(), OpenAiFileError> {
+    let (resolved_url, response) =
+        send_openai_file_download_request(base_url, auth, download_url).await?;
+    response_to_file(resolved_url.as_str(), response, path, max_size_bytes).await
 }
 
 pub async fn upload_local_file(
@@ -425,6 +429,32 @@ fn authorized_request(
         .headers(headers)
 }
 
+async fn send_openai_file_download_request(
+    base_url: &str,
+    auth: &impl AuthProvider,
+    download_url: &str,
+) -> Result<(Url, reqwest::Response), OpenAiFileError> {
+    let resolved_url = Url::parse(download_url).map_err(|source| OpenAiFileError::InvalidUrl {
+        url: download_url.to_string(),
+        source,
+    })?;
+    let request_builder = if should_attach_auth_to_openai_file_url(&resolved_url, base_url) {
+        authorized_request(auth, reqwest::Method::GET, resolved_url.as_str())
+    } else {
+        build_reqwest_client()
+            .request(reqwest::Method::GET, resolved_url.as_str())
+            .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+    };
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: resolved_url.to_string(),
+            source,
+        })?;
+    Ok((resolved_url, response))
+}
+
 async fn response_text(url: &str, response: reqwest::Response) -> Result<String, OpenAiFileError> {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
@@ -459,6 +489,73 @@ async fn response_bytes(
             source,
         })?;
     Ok(bytes.to_vec())
+}
+
+async fn response_to_file(
+    url: &str,
+    response: reqwest::Response,
+    path: &Path,
+    max_size_bytes: u64,
+) -> Result<(), OpenAiFileError> {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(OpenAiFileError::UnexpectedStatus {
+            url: url.to_string(),
+            status,
+            body,
+        });
+    }
+
+    if let Some(content_length) = response.content_length()
+        && content_length > max_size_bytes
+    {
+        return Err(OpenAiFileError::FileTooLarge {
+            path: path.to_path_buf(),
+            size_bytes: content_length,
+            limit_bytes: max_size_bytes,
+        });
+    }
+
+    let mut file = File::create(path)
+        .await
+        .map_err(|source| OpenAiFileError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let mut size_bytes = 0_u64;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|source| OpenAiFileError::Request {
+            url: url.to_string(),
+            source,
+        })?;
+        size_bytes += chunk.len() as u64;
+        if size_bytes > max_size_bytes {
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(OpenAiFileError::FileTooLarge {
+                path: path.to_path_buf(),
+                size_bytes,
+                limit_bytes: max_size_bytes,
+            });
+        }
+        if let Err(source) = file.write_all(&chunk).await {
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(OpenAiFileError::WriteFile {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    }
+
+    file.flush()
+        .await
+        .map_err(|source| OpenAiFileError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(())
 }
 
 fn should_attach_auth_to_openai_file_url(download_url: &Url, base_url: &str) -> bool {
@@ -593,6 +690,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_openai_file_to_path_enforces_size_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/download/file_123"))
+            .and(header("authorization", "Bearer token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello".to_vec()))
+            .mount(&server)
+            .await;
+
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("downloaded.txt");
+
+        let error = download_openai_file_to_path(
+            &base_url_for(&server),
+            &chatgpt_auth(),
+            &format!("{}/download/file_123", server.uri()),
+            &path,
+            4,
+        )
+        .await
+        .expect_err("download should fail");
+
+        assert!(matches!(
+            error,
+            OpenAiFileError::FileTooLarge {
+                size_bytes: 5,
+                limit_bytes: 4,
+                ..
+            }
+        ));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
     async fn upload_local_file_stores_library_file_with_process_upload_stream() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -704,14 +836,9 @@ mod tests {
             .await;
 
         let base_url = base_url_for(&server);
-        let error = process_upload_stream(
-            &chatgpt_auth(),
-            &base_url,
-            "file_123",
-            "hello.txt",
-        )
-        .await
-        .expect_err("stream processing should fail");
+        let error = process_upload_stream(&chatgpt_auth(), &base_url, "file_123", "hello.txt")
+            .await
+            .expect_err("stream processing should fail");
 
         assert!(matches!(
             error,

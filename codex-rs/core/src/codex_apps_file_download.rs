@@ -1,6 +1,7 @@
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use codex_api::download_openai_file;
+use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
+use codex_api::download_openai_file_to_path;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_protocol::mcp::CallToolResult;
@@ -111,24 +112,6 @@ async fn materialize_codex_apps_file_download_result_with_auth(
         account_id: token_data.account_id,
         is_fedramp_account: auth.is_fedramp_account(),
     };
-    let downloaded = match download_openai_file(
-        download_base_url,
-        &auth_provider,
-        &payload.file_uri.download_url,
-    )
-    .await
-    {
-        Ok(downloaded) => downloaded,
-        Err(error) => {
-            warn!(
-                error = %error,
-                file_id = payload.file_id,
-                "failed to materialize codex_apps file download via app-server",
-            );
-            return result;
-        }
-    };
-
     let artifact_path = codex_apps_file_download_artifact_path(
         &turn_context.config.codex_home,
         session_id,
@@ -149,11 +132,21 @@ async fn materialize_codex_apps_file_download_result_with_auth(
         );
         return result;
     }
-    if let Err(error) = tokio::fs::write(artifact_path.as_path(), &downloaded).await {
+
+    if let Err(error) = download_openai_file_to_path(
+        download_base_url,
+        &auth_provider,
+        &payload.file_uri.download_url,
+        artifact_path.as_path(),
+        OPENAI_FILE_UPLOAD_LIMIT_BYTES,
+    )
+    .await
+    {
         warn!(
             error = %error,
+            file_id = payload.file_id,
             path = %artifact_path.display(),
-            "failed to write codex_apps file download artifact",
+            "failed to materialize codex_apps file download via app-server",
         );
         return result;
     }
