@@ -3350,6 +3350,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*goal_tools_supported*/ true,
     );
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
@@ -4705,6 +4706,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_configuration.cwd.clone(),
         "turn_id".to_string(),
         skills_outcome,
+        /*goal_tools_supported*/ true,
     ));
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
