@@ -16,6 +16,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -2881,6 +2882,7 @@ allow_local_binding = true
     let mut builder = test_codex().with_home(home).with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        config.permissions.permission_profile = Constrained::allow_any(PermissionProfile::Disabled);
         let layers = config
             .config_layer_stack
             .get_layers(
