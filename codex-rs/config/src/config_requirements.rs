@@ -2,6 +2,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -624,7 +625,7 @@ pub(crate) fn merge_enablement_settings_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
-    pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_approval_policies: Option<Vec<ApprovalPolicyConstraint>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
@@ -640,6 +641,118 @@ pub struct ConfigRequirementsToml {
     pub network: Option<NetworkRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalPolicyConstraint {
+    #[serde(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    Granular(GranularApprovalConstraint),
+    Never,
+}
+
+impl ApprovalPolicyConstraint {
+    pub fn initial_policy(self) -> AskForApproval {
+        match self {
+            Self::UnlessTrusted => AskForApproval::UnlessTrusted,
+            Self::OnFailure => AskForApproval::OnFailure,
+            Self::OnRequest => AskForApproval::OnRequest,
+            Self::Granular(GranularApprovalConstraint::Any) => {
+                AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval: true,
+                    rules: true,
+                    skill_approval: true,
+                    request_permissions: true,
+                    mcp_elicitations: true,
+                })
+            }
+            Self::Granular(GranularApprovalConstraint::Exact(config)) => {
+                AskForApproval::Granular(config)
+            }
+            Self::Never => AskForApproval::Never,
+        }
+    }
+
+    fn matches(self, candidate: AskForApproval) -> bool {
+        match self {
+            Self::Granular(GranularApprovalConstraint::Any) => {
+                matches!(candidate, AskForApproval::Granular(_))
+            }
+            Self::Granular(GranularApprovalConstraint::Exact(config)) => {
+                matches!(candidate, AskForApproval::Granular(candidate_config) if candidate_config == config)
+            }
+            _ => candidate == self.initial_policy(),
+        }
+    }
+}
+
+impl From<AskForApproval> for ApprovalPolicyConstraint {
+    fn from(value: AskForApproval) -> Self {
+        match value {
+            AskForApproval::UnlessTrusted => Self::UnlessTrusted,
+            AskForApproval::OnFailure => Self::OnFailure,
+            AskForApproval::OnRequest => Self::OnRequest,
+            AskForApproval::Granular(config) => {
+                Self::Granular(GranularApprovalConstraint::Exact(config))
+            }
+            AskForApproval::Never => Self::Never,
+        }
+    }
+}
+
+impl fmt::Display for ApprovalPolicyConstraint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnlessTrusted => write!(f, "untrusted"),
+            Self::OnFailure => write!(f, "on-failure"),
+            Self::OnRequest => write!(f, "on-request"),
+            Self::Granular(granular) => write!(f, "granular:{granular}"),
+            Self::Never => write!(f, "never"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GranularApprovalConstraint {
+    Any,
+    Exact(GranularApprovalConfig),
+}
+
+impl fmt::Display for GranularApprovalConstraint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Any => write!(f, "any"),
+            Self::Exact(_) => write!(f, "exact"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for GranularApprovalConstraint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Any(GranularApprovalWildcard),
+            Exact(GranularApprovalConfig),
+        }
+
+        match Wire::deserialize(deserializer)? {
+            Wire::Any(GranularApprovalWildcard::Any) => Ok(Self::Any),
+            Wire::Exact(config) => Ok(Self::Exact(config)),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum GranularApprovalWildcard {
+    Any,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -672,7 +785,7 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
-    pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
+    pub allowed_approval_policies: Option<Sourced<Vec<ApprovalPolicyConstraint>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
@@ -912,13 +1025,19 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 value: policies,
                 source: requirement_source,
             }) => {
-                let Some(initial_value) = policies.first().copied() else {
+                let Some(initial_value) = policies
+                    .first()
+                    .map(|requirement| requirement.initial_policy())
+                else {
                     return Err(ConstraintError::empty_field("allowed_approval_policies"));
                 };
 
                 let requirement_source_for_error = requirement_source.clone();
                 let constrained = Constrained::new(initial_value, move |candidate| {
-                    if policies.contains(candidate) {
+                    if policies
+                        .iter()
+                        .any(|requirement| requirement.matches(*candidate))
+                    {
                         Ok(())
                     } else {
                         Err(ConstraintError::InvalidValue {
@@ -1229,7 +1348,10 @@ mod tests {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
 
-        let allowed_approval_policies = vec![AskForApproval::UnlessTrusted, AskForApproval::Never];
+        let allowed_approval_policies = vec![
+            ApprovalPolicyConstraint::from(AskForApproval::UnlessTrusted),
+            ApprovalPolicyConstraint::from(AskForApproval::Never),
+        ];
         let allowed_approvals_reviewers =
             vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User];
         let allowed_sandbox_modes = vec![
@@ -1319,7 +1441,7 @@ mod tests {
             empty_target,
             ConfigRequirementsWithSources {
                 allowed_approval_policies: Some(Sourced::new(
-                    vec![AskForApproval::OnRequest],
+                    vec![ApprovalPolicyConstraint::from(AskForApproval::OnRequest)],
                     source_location,
                 )),
                 allowed_approvals_reviewers: None,
@@ -1365,7 +1487,7 @@ mod tests {
             populated_target,
             ConfigRequirementsWithSources {
                 allowed_approval_policies: Some(Sourced::new(
-                    vec![AskForApproval::Never],
+                    vec![ApprovalPolicyConstraint::from(AskForApproval::Never)],
                     existing_source,
                 )),
                 allowed_approvals_reviewers: None,
@@ -1872,6 +1994,100 @@ allowed_approvals_reviewers = ["user"]
                 .sandbox_policy
                 .can_set(&SandboxPolicy::new_read_only_policy())
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_approval_policies_support_any_granular_requirement() -> Result<()> {
+        let toml_str = r#"
+            allowed_approval_policies = ["on-request", { granular = "any" }]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert!(
+            requirements
+                .approval_policy
+                .can_set(&AskForApproval::Granular(
+                    codex_protocol::protocol::GranularApprovalConfig {
+                        sandbox_approval: true,
+                        rules: false,
+                        skill_approval: false,
+                        request_permissions: true,
+                        mcp_elicitations: false,
+                    }
+                ))
+                .is_ok()
+        );
+        assert!(
+            requirements
+                .approval_policy
+                .can_set(&AskForApproval::Granular(
+                    codex_protocol::protocol::GranularApprovalConfig {
+                        sandbox_approval: false,
+                        rules: true,
+                        skill_approval: true,
+                        request_permissions: false,
+                        mcp_elicitations: true,
+                    }
+                ))
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.approval_policy.can_set(&AskForApproval::Never),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                candidate: "Never".into(),
+                allowed: "[OnRequest, Granular(Any)]".into(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_approval_policies_keep_exact_granular_requirement() -> Result<()> {
+        let toml_str = r#"
+            allowed_approval_policies = [
+                { granular = { sandbox_approval = true, rules = false, skill_approval = false, request_permissions = true, mcp_elicitations = false } }
+            ]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert!(
+            requirements
+                .approval_policy
+                .can_set(&AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval: true,
+                    rules: false,
+                    skill_approval: false,
+                    request_permissions: true,
+                    mcp_elicitations: false,
+                }))
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.approval_policy.can_set(&AskForApproval::Granular(
+                GranularApprovalConfig {
+                    sandbox_approval: false,
+                    rules: false,
+                    skill_approval: false,
+                    request_permissions: true,
+                    mcp_elicitations: false,
+                }
+            )),
+            Err(ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                candidate: "Granular(GranularApprovalConfig { sandbox_approval: false, rules: false, skill_approval: false, request_permissions: true, mcp_elicitations: false })"
+                    .into(),
+                allowed: "[Granular(Exact(GranularApprovalConfig { sandbox_approval: true, rules: false, skill_approval: false, request_permissions: true, mcp_elicitations: false }))]"
+                    .into(),
+                requirement_source: RequirementSource::Unknown,
+            })
         );
 
         Ok(())

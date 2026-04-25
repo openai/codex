@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1198,7 +1198,7 @@ mod tests {
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1230,7 +1230,7 @@ mod tests {
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1279,7 +1279,7 @@ mod tests {
         assert_eq!(
             result,
             Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1364,7 +1364,7 @@ enabled = false
         assert_eq!(
             handle.await.expect("cloud requirements task"),
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1440,7 +1440,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1514,7 +1514,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1715,7 +1715,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1753,7 +1753,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1811,7 +1811,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1864,7 +1864,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1921,7 +1921,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -1979,7 +1979,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -2037,7 +2037,7 @@ enabled = false
                 .as_deref()
                 .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
             Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -2125,7 +2125,7 @@ enabled = false
         assert_eq!(
             service.fetch().await,
             Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approval_policies: Some(vec![AskForApproval::Never.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
@@ -2155,7 +2155,7 @@ enabled = false
                 .as_deref()
                 .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
             Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest.into()]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,

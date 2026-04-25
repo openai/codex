@@ -6577,7 +6577,7 @@ trust_level = "untrusted"
         .fallback_cwd(Some(workspace.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest.into()]),
                 ..Default::default()
             }))
         }))
@@ -6606,7 +6606,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                allowed_approval_policies: Some(vec![AskForApproval::OnRequest.into()]),
                 ..Default::default()
             }))
         }))

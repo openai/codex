@@ -16,6 +16,9 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
+use codex_app_server_protocol::GranularApprovalConfig;
+use codex_app_server_protocol::GranularApprovalConstraint;
+use codex_app_server_protocol::GranularApprovalWildcard;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::NetworkDomainPermission;
@@ -24,7 +27,9 @@ use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config_loader::ApprovalPolicyConstraint as CoreApprovalPolicyConstraint;
 use codex_core::config_loader::ConfigRequirementsToml;
+use codex_core::config_loader::GranularApprovalConstraint as CoreGranularApprovalConstraint;
 use codex_core::config_loader::HookEventsToml;
 use codex_core::config_loader::HookHandlerConfig as CoreHookHandlerConfig;
 use codex_core::config_loader::ManagedHooksRequirementsToml;
@@ -269,7 +274,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()
-                .map(codex_app_server_protocol::AskForApproval::from)
+                .map(map_approval_policy_constraint_to_api)
                 .collect()
         }),
         allowed_approvals_reviewers: requirements.allowed_approvals_reviewers.map(|reviewers| {
@@ -302,6 +307,49 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+    }
+}
+
+fn map_approval_policy_constraint_to_api(
+    constraint: CoreApprovalPolicyConstraint,
+) -> codex_app_server_protocol::ApprovalPolicyConstraint {
+    match constraint {
+        CoreApprovalPolicyConstraint::UnlessTrusted => {
+            codex_app_server_protocol::ApprovalPolicyConstraint::UnlessTrusted
+        }
+        CoreApprovalPolicyConstraint::OnFailure => {
+            codex_app_server_protocol::ApprovalPolicyConstraint::OnFailure
+        }
+        CoreApprovalPolicyConstraint::OnRequest => {
+            codex_app_server_protocol::ApprovalPolicyConstraint::OnRequest
+        }
+        CoreApprovalPolicyConstraint::Granular(granular) => {
+            codex_app_server_protocol::ApprovalPolicyConstraint::Granular(
+                map_granular_approval_constraint_to_api(granular),
+            )
+        }
+        CoreApprovalPolicyConstraint::Never => {
+            codex_app_server_protocol::ApprovalPolicyConstraint::Never
+        }
+    }
+}
+
+fn map_granular_approval_constraint_to_api(
+    constraint: CoreGranularApprovalConstraint,
+) -> GranularApprovalConstraint {
+    match constraint {
+        CoreGranularApprovalConstraint::Any => {
+            GranularApprovalConstraint::Any(GranularApprovalWildcard::Any)
+        }
+        CoreGranularApprovalConstraint::Exact(config) => {
+            GranularApprovalConstraint::Exact(GranularApprovalConfig {
+                sandbox_approval: config.sandbox_approval,
+                rules: config.rules,
+                skill_approval: config.skill_approval,
+                request_permissions: config.request_permissions,
+                mcp_elicitations: config.mcp_elicitations,
+            })
+        }
     }
 }
 
@@ -527,8 +575,8 @@ mod tests {
     fn map_requirements_toml_to_api_converts_core_enums() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![
-                CoreAskForApproval::Never,
-                CoreAskForApproval::OnRequest,
+                CoreAskForApproval::Never.into(),
+                CoreAskForApproval::OnRequest.into(),
             ]),
             allowed_approvals_reviewers: Some(vec![
                 CoreApprovalsReviewer::User,
@@ -605,8 +653,8 @@ mod tests {
         assert_eq!(
             mapped.allowed_approval_policies,
             Some(vec![
-                codex_app_server_protocol::AskForApproval::Never,
-                codex_app_server_protocol::AskForApproval::OnRequest,
+                codex_app_server_protocol::ApprovalPolicyConstraint::Never,
+                codex_app_server_protocol::ApprovalPolicyConstraint::OnRequest,
             ])
         );
         assert_eq!(
@@ -679,6 +727,28 @@ mod tests {
                 allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
                 allow_local_binding: Some(true),
             }),
+        );
+    }
+
+    #[test]
+    fn map_requirements_toml_to_api_preserves_any_granular_approval_constraint() {
+        let requirements: ConfigRequirementsToml = toml::from_str(
+            r#"
+                allowed_approval_policies = ["on-request", { granular = "any" }]
+            "#,
+        )
+        .expect("requirements should parse");
+
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped.allowed_approval_policies,
+            Some(vec![
+                codex_app_server_protocol::ApprovalPolicyConstraint::OnRequest,
+                codex_app_server_protocol::ApprovalPolicyConstraint::Granular(
+                    GranularApprovalConstraint::Any(GranularApprovalWildcard::Any)
+                ),
+            ])
         );
     }
 
