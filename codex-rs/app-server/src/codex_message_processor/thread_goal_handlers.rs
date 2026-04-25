@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::validate_thread_goal_objective;
 
 impl CodexMessageProcessor {
     pub(super) async fn thread_goal_set(
@@ -83,12 +84,8 @@ impl CodexMessageProcessor {
         let objective = params.objective.as_deref().map(str::trim);
 
         if let Some(objective) = objective {
-            if objective.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "goal objective must not be empty".to_string(),
-                )
-                .await;
+            if let Err(message) = validate_thread_goal_objective(objective) {
+                self.send_invalid_request_error(request_id, message).await;
                 return;
             }
             if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
@@ -100,6 +97,10 @@ impl CodexMessageProcessor {
         {
             self.send_invalid_request_error(request_id, message).await;
             return;
+        }
+
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
         }
 
         let goal = if let Some(objective) = objective {
@@ -165,6 +166,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let goal_status = goal.status;
         let goal = api_thread_goal_from_state(goal);
         self.outgoing
             .send_response(
@@ -174,6 +176,9 @@ impl CodexMessageProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
+        if let Some(thread) = running_thread.as_ref() {
+            thread.apply_external_goal_set(goal_status).await;
+        }
     }
 
     pub(super) async fn thread_goal_get(
@@ -287,6 +292,10 @@ impl CodexMessageProcessor {
         )
         .await;
 
+        if let Some(thread) = running_thread.as_ref() {
+            thread.prepare_external_goal_mutation().await;
+        }
+
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let thread_state = thread_state.lock().await;
@@ -300,6 +309,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        if cleared && let Some(thread) = running_thread.as_ref() {
+            thread.apply_external_goal_clear().await;
+        }
 
         self.outgoing
             .send_response(request_id, ThreadGoalClearResponse { cleared })

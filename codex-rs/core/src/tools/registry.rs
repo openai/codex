@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
@@ -474,6 +475,17 @@ impl ToolRegistry {
                     ));
                 }
             }
+        }
+
+        if let Err(err) = invocation
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+                turn_context: invocation.turn.as_ref(),
+                tool_name: tool_name.name.as_str(),
+            })
+            .await
+        {
+            warn!("failed to account thread goal progress after tool call: {err}");
         }
 
         match result {

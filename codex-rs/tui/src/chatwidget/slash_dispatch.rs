@@ -6,6 +6,7 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
 
@@ -28,6 +29,8 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+const GOAL_USAGE: &str = "Usage: /goal <objective>";
+const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -37,6 +40,9 @@ impl ChatWidget {
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
         self.dispatch_command(cmd);
+        if cmd == SlashCommand::Goal {
+            self.bottom_pane.drain_pending_submission_state();
+        }
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -200,6 +206,20 @@ impl ChatWidget {
             }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
+            }
+            SlashCommand::Goal => {
+                if !self.config.features.enabled(Feature::Goals) {
+                    return;
+                }
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx
+                        .send(AppEvent::OpenThreadGoalMenu { thread_id });
+                } else {
+                    self.add_info_message(
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
+                    );
+                }
             }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
@@ -580,6 +600,87 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Goal if !trimmed.is_empty() => {
+                if !self.config.features.enabled(Feature::Goals) {
+                    return;
+                }
+                enum GoalControlCommand {
+                    Clear,
+                    SetStatus(AppThreadGoalStatus),
+                }
+                let control_command = match trimmed.to_ascii_lowercase().as_str() {
+                    "clear" => Some(GoalControlCommand::Clear),
+                    "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
+                    "unpause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
+                    _ => None,
+                };
+                if let Some(command) = control_command {
+                    let Some(thread_id) = self.thread_id else {
+                        self.add_info_message(
+                            GOAL_USAGE.to_string(),
+                            Some(
+                                "The session must start before you can change a goal.".to_string(),
+                            ),
+                        );
+                        return;
+                    };
+                    match command {
+                        GoalControlCommand::Clear => {
+                            self.app_event_tx
+                                .send(AppEvent::ClearThreadGoal { thread_id });
+                        }
+                        GoalControlCommand::SetStatus(status) => {
+                            self.app_event_tx
+                                .send(AppEvent::SetThreadGoalStatus { thread_id, status });
+                        }
+                    }
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let objective = args.trim();
+                if objective.is_empty() {
+                    self.add_error_message("Goal objective must not be empty.".to_string());
+                    self.add_info_message(
+                        GOAL_USAGE.to_string(),
+                        Some(GOAL_USAGE_HINT.to_string()),
+                    );
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let Some(thread_id) = self.thread_id else {
+                    if source == SlashCommandDispatchSource::Live {
+                        self.queue_user_message_with_options(
+                            UserMessage {
+                                text: format!("/goal {args}"),
+                                local_images: Vec::new(),
+                                remote_image_urls: Vec::new(),
+                                text_elements: Vec::new(),
+                                mention_bindings: Vec::new(),
+                            },
+                            QueuedInputAction::ParseSlash,
+                        );
+                        self.bottom_pane.drain_pending_submission_state();
+                    } else {
+                        self.add_info_message(
+                            GOAL_USAGE.to_string(),
+                            Some("The session must start before you can set a goal.".to_string()),
+                        );
+                    }
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::SetThreadGoalObjective {
+                    thread_id,
+                    objective: objective.to_string(),
+                    mode: ThreadGoalSetMode::ConfirmIfExists,
+                });
+                if source == SlashCommandDispatchSource::Live {
+                    self.bottom_pane.drain_pending_submission_state();
+                }
+            }
             SlashCommand::Side if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     self.add_error_message(
@@ -613,7 +714,7 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
-        if source == SlashCommandDispatchSource::Live {
+        if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
     }
@@ -675,11 +776,18 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let args_elements = Self::slash_command_args_elements(rest, rest_offset, &text_elements);
+        let trimmed_start = rest.trim_start();
+        let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
+        let trimmed_rest = trimmed_start.trim_end();
+        let args_elements = Self::slash_command_args_elements(
+            trimmed_rest,
+            rest_offset + leading_trimmed,
+            &text_elements,
+        );
         self.dispatch_prepared_command_with_args(
             cmd,
             PreparedSlashCommandArgs {
-                args: rest.trim().to_string(),
+                args: trimmed_rest.to_string(),
                 text_elements: args_elements,
                 local_images,
                 remote_image_urls,
@@ -703,6 +811,7 @@ impl ChatWidget {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
+            goal_command_enabled: self.config.features.enabled(Feature::Goals),
             fast_command_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
@@ -745,6 +854,7 @@ impl ChatWidget {
             | SlashCommand::Settings
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Goal
             | SlashCommand::Collab
             | SlashCommand::Side
             | SlashCommand::Agent

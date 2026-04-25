@@ -256,6 +256,7 @@ pub(super) async fn make_chatwidget_manual(
         suppress_queue_autosend: false,
         thread_id: None,
         last_turn_id: None,
+        budget_limited_turn_ids: HashSet::new(),
         thread_name: None,
         thread_rename_block_message: None,
         active_side_conversation: false,
@@ -267,8 +268,10 @@ pub(super) async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        queued_user_message_history_records: VecDeque::new(),
         user_turn_pending_start: false,
         rejected_steers_queue: VecDeque::new(),
+        rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -304,6 +307,9 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        current_goal_status_indicator: None,
+        current_goal_status: None,
+        goal_status_active_turn_started_at: None,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
@@ -584,6 +590,7 @@ pub(super) fn complete_assistant_message(
 pub(super) fn pending_steer(text: &str) -> PendingSteer {
     PendingSteer {
         user_message: UserMessage::from(text),
+        history_record: UserMessageHistoryRecord::UserMessageText,
         compare_key: PendingSteerCompareKey {
             message: text.to_string(),
             image_count: 0,

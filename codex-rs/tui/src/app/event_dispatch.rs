@@ -471,6 +471,24 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::OpenThreadGoalMenu { thread_id } => {
+                self.open_thread_goal_menu(app_server, thread_id).await;
+            }
+            AppEvent::SetThreadGoalObjective {
+                thread_id,
+                objective,
+                mode,
+            } => {
+                self.set_thread_goal_objective(app_server, thread_id, objective, mode)
+                    .await;
+            }
+            AppEvent::SetThreadGoalStatus { thread_id, status } => {
+                self.set_thread_goal_status(app_server, thread_id, status)
+                    .await;
+            }
+            AppEvent::ClearThreadGoal { thread_id } => {
+                self.clear_thread_goal(app_server, thread_id).await;
+            }
             AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
                 if self
                     .chat_widget

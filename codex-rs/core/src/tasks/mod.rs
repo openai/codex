@@ -21,6 +21,7 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -291,7 +292,7 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
-    async fn start_task<T: SessionTask>(
+    pub(crate) async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
@@ -316,6 +317,15 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+                turn_context: turn_context.as_ref(),
+                token_usage: token_usage_at_turn_start.clone(),
+            })
+            .await
+        {
+            warn!("failed to apply goal runtime turn-start event: {err}");
+        }
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
         let turn_state = {
@@ -391,7 +401,7 @@ impl Session {
             .ok();
         let running_task = RunningTask {
             done,
-            handle: Arc::new(AbortOnDropHandle::new(handle)),
+            handle: AbortOnDropHandle::new(handle),
             kind: task_kind,
             task,
             cancellation_token,
@@ -444,15 +454,37 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        let mut aborted_turn = false;
+        let mut active_turn_to_clear = None;
+        let mut turn_context = None;
         if let Some(mut active_turn) = self.take_active_turn().await {
-            for task in active_turn.drain_tasks() {
+            let tasks = active_turn.drain_tasks();
+            aborted_turn = !tasks.is_empty();
+            turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
+            for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }
+            if aborted_turn {
+                active_turn_to_clear = Some(active_turn);
+            }
+        }
+
+        if (aborted_turn || reason == TurnAbortReason::Interrupted)
+            && let Err(err) = self
+                .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+                    turn_context: turn_context.as_deref(),
+                    reason: reason.clone(),
+                })
+                .await
+        {
+            warn!("failed to apply goal runtime abort event: {err}");
+        }
+        if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
         }
-        if reason == TurnAbortReason::Interrupted {
+        if reason == TurnAbortReason::Interrupted && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
         }
     }
@@ -477,8 +509,19 @@ impl Session {
             return false;
         };
 
-        for task in active_turn.drain_tasks() {
+        let tasks = active_turn.drain_tasks();
+        let turn_context = tasks.first().map(|task| Arc::clone(&task.turn_context));
+        for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
+        }
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
+                turn_context: turn_context.as_deref(),
+                reason: reason.clone(),
+            })
+            .await
+        {
+            warn!("failed to apply goal runtime abort event: {err}");
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -512,15 +555,12 @@ impl Session {
             {
                 should_clear_active_turn = true;
                 let turn_state = Arc::clone(&at.turn_state);
-                if should_clear_active_turn {
-                    *active = None;
-                }
                 Some(turn_state)
             } else {
                 None
             }
         };
-        if let Some(turn_state) = turn_state {
+        if let Some(turn_state) = turn_state.as_ref() {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
             turn_had_memory_citation = ts.has_memory_citation;
@@ -641,6 +681,16 @@ impl Session {
             .turn_timing_state
             .time_to_first_token_ms()
             .await;
+        if let Err(err) = self
+            .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
+                turn_context: turn_context.as_ref(),
+                turn_completed: should_clear_active_turn,
+                tool_calls: turn_tool_calls,
+            })
+            .await
+        {
+            warn!("failed to apply goal runtime turn-finished event: {err}");
+        }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -656,12 +706,29 @@ impl Session {
             .clear_turn(&turn_context.sub_id);
 
         if should_clear_active_turn {
-            let session = Arc::clone(self);
-            let _scheduler = tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
-                    session.maybe_start_turn_for_pending_work().await;
-                });
-            });
+            let cleared_active_turn = {
+                let mut active = self.active_turn.lock().await;
+                if let Some(active_turn) = active.as_ref()
+                    && active_turn.tasks.is_empty()
+                    && turn_state
+                        .as_ref()
+                        .is_some_and(|turn_state| Arc::ptr_eq(&active_turn.turn_state, turn_state))
+                {
+                    *active = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            if !cleared_active_turn {
+                return;
+            }
+            if let Err(err) = self
+                .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+                .await
+            {
+                warn!("failed to apply goal runtime maybe-continue event: {err}");
+            }
         }
     }
 

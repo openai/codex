@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -101,6 +102,53 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
+            .await
+    }
+
+    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+            .await
+    }
+
+    pub async fn prepare_external_goal_mutation(&self) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
+            .await
+        {
+            tracing::warn!("failed to prepare external goal mutation: {err}");
+        }
+    }
+
+    pub async fn apply_external_goal_set(&self, status: codex_state::ThreadGoalStatus) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { status })
+            .await
+        {
+            tracing::warn!("failed to apply external goal status runtime effects: {err}");
+        }
+    }
+
+    pub async fn apply_external_goal_clear(&self) {
+        if let Err(err) = self
+            .codex
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
+            .await
+        {
+            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
+        }
     }
 
     #[doc(hidden)]

@@ -30,6 +30,19 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
+fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::AddToHistory { text }) => return text,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected AddToHistory op but queue was empty"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected AddToHistory op but channel closed")
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -665,6 +678,445 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_emits_set_goal_event() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let command = "/goal --tokens 98.5K improve benchmark coverage";
+
+    submit_composer_text(&mut chat, command);
+
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        mode,
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "--tokens 98.5K improve benchmark coverage");
+    assert_eq!(mode, crate::app_event::ThreadGoalSetMode::ConfirmIfExists);
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(recall_latest_after_clearing(&mut chat), command);
+}
+
+#[tokio::test]
+async fn goal_slash_command_uses_plain_text_for_mentions() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/goal use $figma for the mockup".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "use $figma for the mockup");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn goal_slash_command_drops_attached_images() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let remote_url = "https://example.com/goal.png".to_string();
+    let local_image = PathBuf::from("/tmp/goal-local.png");
+    let placeholder = "[Image #2]";
+    let command = format!("/goal describe {placeholder}");
+    let placeholder_start = command.find(placeholder).expect("placeholder in command");
+    chat.set_remote_image_urls(vec![remote_url]);
+    chat.bottom_pane.set_composer_text(
+        command,
+        vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![local_image],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "describe [Image #2]");
+    assert!(chat.remote_image_urls().is_empty());
+    assert!(chat.bottom_pane.composer_local_image_paths().is_empty());
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn bare_goal_slash_command_drains_pending_submission_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let remote_url = "https://example.com/goal-menu.png".to_string();
+    let local_image = PathBuf::from("/tmp/goal-menu-local.png");
+    chat.set_remote_image_urls(vec![remote_url]);
+    chat.bottom_pane
+        .set_composer_text("/goal".to_string(), Vec::new(), vec![local_image]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenThreadGoalMenu { thread_id: opened }) if opened == thread_id
+    );
+    assert!(chat.remote_image_urls().is_empty());
+    assert!(chat.bottom_pane.composer_local_image_paths().is_empty());
+}
+
+#[tokio::test]
+async fn goal_control_slash_commands_emit_goal_events() {
+    let cases = [
+        ("/goal clear", None),
+        ("/goal pause", Some(AppThreadGoalStatus::Paused)),
+        ("/goal unpause", Some(AppThreadGoalStatus::Active)),
+    ];
+
+    for (command, status) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+
+        submit_composer_text(&mut chat, command);
+
+        match status {
+            Some(status) => {
+                let event = rx.try_recv().expect("expected goal status event");
+                let AppEvent::SetThreadGoalStatus {
+                    thread_id: actual_thread_id,
+                    status: actual_status,
+                } = event
+                else {
+                    panic!("expected SetThreadGoalStatus, got {event:?}");
+                };
+                assert_eq!(actual_thread_id, thread_id);
+                assert_eq!(actual_status, status);
+            }
+            None => {
+                let event = rx.try_recv().expect("expected clear goal event");
+                let AppEvent::ClearThreadGoal {
+                    thread_id: actual_thread_id,
+                } = event
+                else {
+                    panic!("expected ClearThreadGoal, got {event:?}");
+                };
+                assert_eq!(actual_thread_id, thread_id);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_goal_slash_command_emits_set_goal_event_after_thread_starts() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let command = "/goal improve benchmark coverage";
+
+    submit_composer_text(&mut chat, command);
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.maybe_send_next_queued_input();
+
+    let event = rx.try_recv().expect("expected goal objective event");
+    let AppEvent::SetThreadGoalObjective {
+        thread_id: actual_thread_id,
+        objective,
+        ..
+    } = event
+    else {
+        panic!("expected SetThreadGoalObjective, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(objective, "improve benchmark coverage");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn queued_goal_slash_command_preserves_current_draft_metadata() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let command = "/goal improve benchmark coverage";
+
+    submit_composer_text(&mut chat, command);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let remote_url = "https://example.com/current-draft.png".to_string();
+    let local_image = PathBuf::from("/tmp/current-draft-local.png");
+    let placeholder = "[Image #3]";
+    let draft = format!("draft with {placeholder}");
+    let placeholder_start = draft.find(placeholder).expect("placeholder in draft");
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane.set_composer_text(
+        draft.clone(),
+        vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![local_image.clone()],
+    );
+
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.maybe_send_next_queued_input();
+
+    let event = rx.try_recv().expect("expected goal objective event");
+    assert_matches!(
+        event,
+        AppEvent::SetThreadGoalObjective {
+            thread_id: actual_thread_id,
+            ..
+        } if actual_thread_id == thread_id
+    );
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.bottom_pane.composer_text(), draft);
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![local_image]
+    );
+}
+
+#[tokio::test]
+async fn restored_queued_goal_slash_command_emits_set_goal_event() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let command = "/goal improve benchmark coverage";
+
+    submit_composer_text(&mut chat, command);
+    let input_state = chat
+        .capture_thread_input_state()
+        .expect("expected queued input state");
+
+    let (mut restored_chat, mut restored_rx, mut restored_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    restored_chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    restored_chat.restore_thread_input_state(Some(input_state));
+    let thread_id = ThreadId::new();
+    restored_chat.thread_id = Some(thread_id);
+    restored_chat.maybe_send_next_queued_input();
+
+    let event = restored_rx
+        .try_recv()
+        .expect("expected goal objective event");
+    assert_matches!(
+        event,
+        AppEvent::SetThreadGoalObjective {
+            thread_id: actual_thread_id,
+            ..
+        } if actual_thread_id == thread_id
+    );
+    assert_no_submit_op(&mut restored_op_rx);
+}
+
+#[test]
+fn merged_history_record_preserves_raw_text_and_rebased_elements() {
+    let first = UserMessage {
+        text: "Ask $figma".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+        mention_bindings: vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    };
+    let second = UserMessage::from("internal prompt");
+
+    let (_message, history_record) = merge_user_messages_with_history_record(vec![
+        (first, UserMessageHistoryRecord::UserMessageText),
+        (
+            second,
+            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                text: "/goal inspect [Image #1]".to_string(),
+                text_elements: vec![TextElement::new(
+                    (14..24).into(),
+                    Some("[Image #1]".to_string()),
+                )],
+            }),
+        ),
+    ]);
+
+    assert_eq!(
+        history_record,
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: "Ask $figma\n/goal inspect [Image #1]".to_string(),
+            text_elements: vec![
+                TextElement::new((4..10).into(), Some("$figma".to_string())),
+                TextElement::new((25..35).into(), Some("[Image #1]".to_string())),
+            ],
+        })
+    );
+}
+
+#[test]
+fn merged_history_record_remaps_override_image_placeholders() {
+    let first_placeholder = "[Image #1]";
+    let second_placeholder = "[Image #1]";
+    let first = UserMessage {
+        text: format!("first {first_placeholder}"),
+        local_images: vec![LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/first.png"),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new(
+            (6..16).into(),
+            Some(first_placeholder.to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    };
+    let second = UserMessage {
+        text: format!("internal {second_placeholder}"),
+        local_images: vec![LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/second.png"),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new(
+            (9..19).into(),
+            Some(second_placeholder.to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    };
+
+    let (message, history_record) = merge_user_messages_with_history_record(vec![
+        (first, UserMessageHistoryRecord::UserMessageText),
+        (
+            second,
+            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                text: format!("goal {second_placeholder}"),
+                text_elements: vec![TextElement::new(
+                    (5..15).into(),
+                    Some(second_placeholder.to_string()),
+                )],
+            }),
+        ),
+    ]);
+
+    assert_eq!(message.text, "first [Image #1]\ninternal [Image #2]");
+    assert_eq!(
+        message.text_elements,
+        vec![
+            TextElement::new((6..16).into(), Some("[Image #1]".to_string())),
+            TextElement::new((26..36).into(), Some("[Image #2]".to_string())),
+        ]
+    );
+    assert_eq!(
+        message
+            .local_images
+            .iter()
+            .map(|image| image.placeholder.as_str())
+            .collect::<Vec<_>>(),
+        vec!["[Image #1]", "[Image #2]"]
+    );
+    assert_eq!(
+        history_record,
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: "first [Image #1]\ngoal [Image #2]".to_string(),
+            text_elements: vec![
+                TextElement::new((6..16).into(), Some("[Image #1]".to_string())),
+                TextElement::new((22..32).into(), Some("[Image #2]".to_string())),
+            ],
+        })
+    );
+}
+
+#[tokio::test]
+async fn interrupted_merged_message_history_encodes_mentions_once() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    let text = "use $figma now";
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        text.to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [
+                UserInput::Text {
+                    text: submitted, ..
+                },
+            ] = items.as_slice()
+            else {
+                panic!("expected text item, got {items:?}");
+            };
+            assert_eq!(submitted, text);
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    let encoded = "use [$figma](app://figma) now";
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [
+                UserInput::Text {
+                    text: submitted, ..
+                },
+            ] = items.as_slice()
+            else {
+                panic!("expected resubmitted text item, got {items:?}");
+            };
+            assert_eq!(submitted, text);
+        }
+        other => panic!("expected resubmitted user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+}
+
+#[tokio::test]
 async fn slash_rename_prefills_existing_thread_name() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_name = Some("Current project title".to_string());
@@ -1032,6 +1484,91 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
         chat.pending_notification,
         Some(Notification::AgentTurnComplete { ref response }) if response.is_empty()
     );
+}
+
+#[tokio::test]
+async fn active_goal_without_follow_up_suppresses_agent_turn_complete_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal: codex_app_server_protocol::ThreadGoal {
+                    thread_id: "thread-1".to_string(),
+                    objective: "finish the benchmark".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::Active,
+                    token_budget: None,
+                    tokens_used: 0,
+                    time_used_seconds: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
+    });
+
+    assert_matches!(chat.pending_notification, None);
+}
+
+#[tokio::test]
+async fn queued_follow_up_suppresses_agent_turn_complete_notification() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message("Continue".into());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
+    });
+
+    assert_matches!(chat.pending_notification, None);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+}
+
+#[tokio::test]
+async fn queued_menu_slash_keeps_agent_turn_complete_notification() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    queue_composer_text_with_tab(&mut chat, "/model");
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Done"))),
+    });
+
+    assert_matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { ref response }) if response == "Done"
+    );
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Select Model"));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

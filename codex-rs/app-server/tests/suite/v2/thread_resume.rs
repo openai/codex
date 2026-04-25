@@ -387,7 +387,7 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_emits_paused_goal_update() -> Result<()> {
+async fn thread_resume_emits_active_goal_update_before_continuation() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -459,6 +459,7 @@ async fn thread_resume_emits_paused_goal_update() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/goal/updated"),
     )
     .await??;
+    mcp.clear_message_buffer();
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -481,7 +482,13 @@ async fn thread_resume_emits_paused_goal_update() -> Result<()> {
     let ServerNotification::ThreadGoalUpdated(notification) = notification else {
         anyhow::bail!("expected thread goal update notification");
     };
-    assert_eq!(notification.goal.status, ThreadGoalStatus::Paused);
+    assert_eq!(notification.goal.status, ThreadGoalStatus::Active);
+    assert!(
+        !mcp.pending_notification_methods()
+            .iter()
+            .any(|method| method == "turn/started"),
+        "goal continuation should start only after the resume goal snapshot"
+    );
 
     Ok(())
 }

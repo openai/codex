@@ -121,6 +121,7 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
+use crate::bottom_pane::footer::goal_status_indicator_line;
 use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -156,6 +157,7 @@ use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::GoalStatusIndicator;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -371,9 +373,11 @@ pub(crate) struct ChatComposer {
     collaboration_modes_enabled: bool,
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    goal_status_indicator: Option<GoalStatusIndicator>,
     connectors_enabled: bool,
     plugins_command_enabled: bool,
     fast_command_enabled: bool,
+    goal_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -427,6 +431,15 @@ enum SlashValidation {
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
+fn status_line_right_indicator(
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    goal_status_indicator: Option<&GoalStatusIndicator>,
+    show_cycle_hint: bool,
+) -> Option<Line<'static>> {
+    mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
+        .or_else(|| goal_status_indicator_line(goal_status_indicator))
+}
+
 impl ChatComposer {
     fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
@@ -434,6 +447,7 @@ impl ChatComposer {
             connectors_enabled: self.connectors_enabled,
             plugins_command_enabled: self.plugins_command_enabled,
             fast_command_enabled: self.fast_command_enabled,
+            goal_command_enabled: self.goal_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
@@ -516,9 +530,11 @@ impl ChatComposer {
             collaboration_modes_enabled: false,
             config,
             collaboration_mode_indicator: None,
+            goal_status_indicator: None,
             connectors_enabled: false,
             plugins_command_enabled: false,
             fast_command_enabled: false,
+            goal_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -606,11 +622,19 @@ impl ChatComposer {
         self.fast_command_enabled = enabled;
     }
 
+    pub fn set_goal_command_enabled(&mut self, enabled: bool) {
+        self.goal_command_enabled = enabled;
+    }
+
     pub fn set_collaboration_mode_indicator(
         &mut self,
         indicator: Option<CollaborationModeIndicator>,
     ) {
         self.collaboration_mode_indicator = indicator;
+    }
+
+    pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
+        self.goal_status_indicator = indicator;
     }
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
@@ -3475,6 +3499,7 @@ impl ChatComposer {
                     let connectors_enabled = self.connectors_enabled;
                     let plugins_command_enabled = self.plugins_command_enabled;
                     let fast_command_enabled = self.fast_command_enabled;
+                    let goal_command_enabled = self.goal_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
@@ -3483,6 +3508,7 @@ impl ChatComposer {
                         connectors_enabled,
                         plugins_command_enabled,
                         fast_command_enabled,
+                        goal_command_enabled,
                         personality_command_enabled,
                         realtime_conversation_enabled,
                         audio_device_selection_enabled,
@@ -3963,31 +3989,34 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line = if let Some(label) =
-                        self.side_conversation_context_label.as_ref()
-                    {
-                        Some(side_conversation_context_line(label))
-                    } else if let Some(line) = self.shell_mode_footer_line() {
-                        Some(line)
-                    } else if status_line_active {
-                        let full =
-                            mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                        let compact = mode_indicator_line(
-                            self.collaboration_mode_indicator,
-                            /*show_cycle_hint*/ false,
-                        );
-                        let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                        if can_show_left_with_context(hint_rect, left_width, full_width) {
-                            full
+                    let right_line =
+                        if let Some(label) = self.side_conversation_context_label.as_ref() {
+                            Some(side_conversation_context_line(label))
+                        } else if let Some(line) = self.shell_mode_footer_line() {
+                            Some(line)
+                        } else if status_line_active {
+                            let full = status_line_right_indicator(
+                                self.collaboration_mode_indicator,
+                                self.goal_status_indicator.as_ref(),
+                                show_cycle_hint,
+                            );
+                            let compact = status_line_right_indicator(
+                                self.collaboration_mode_indicator,
+                                self.goal_status_indicator.as_ref(),
+                                /*show_cycle_hint*/ false,
+                            );
+                            let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                            if can_show_left_with_context(hint_rect, left_width, full_width) {
+                                full
+                            } else {
+                                compact
+                            }
                         } else {
-                            compact
-                        }
-                    } else {
-                        Some(context_window_line(
-                            footer_props.context_window_percent,
-                            footer_props.context_window_used_tokens,
-                        ))
-                    };
+                            Some(context_window_line(
+                                footer_props.context_window_percent,
+                                footer_props.context_window_used_tokens,
+                            ))
+                        };
                     let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if status_line_active
                         && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
