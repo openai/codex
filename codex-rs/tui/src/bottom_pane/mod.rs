@@ -1081,6 +1081,7 @@ impl BottomPane {
                 });
             self.maybe_show_delayed_approval_requests_at(now);
         } else {
+            // No recent composer activity, so show the approval modal immediately.
             let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
             self.pause_status_timer_for_modal();
             self.push_view(Box::new(modal));
