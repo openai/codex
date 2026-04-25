@@ -11,7 +11,9 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -40,6 +42,10 @@ fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSum
     }
 }
 
+fn normalized_canonical_path(path: impl AsRef<Path>) -> Result<PathBuf> {
+    Ok(AbsolutePathBuf::from_absolute_path(path.as_ref().canonicalize()?)?.into_path_buf())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -54,7 +60,7 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let expected = expected_summary(
         thread_id,
-        std::fs::canonicalize(rollout_path(
+        normalized_canonical_path(rollout_path(
             codex_home.path(),
             FILENAME_TS,
             &conversation_id,
@@ -126,7 +132,7 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let rollout_path = rollout_path(codex_home.path(), FILENAME_TS, &conversation_id);
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
-    let expected = expected_summary(thread_id, std::fs::canonicalize(rollout_path)?);
+    let expected = expected_summary(thread_id, normalized_canonical_path(rollout_path)?);
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
