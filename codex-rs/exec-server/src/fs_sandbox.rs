@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
@@ -60,31 +60,27 @@ impl FileSystemSandboxRunner {
         add_helper_runtime_permissions(&mut file_system_policy, &helper_read_roots, cwd.as_path());
         normalize_file_system_policy_root_aliases(&mut file_system_policy);
         let network_policy = NetworkSandboxPolicy::Restricted;
-        let sandbox_policy =
-            compatibility_sandbox_policy(&file_system_policy, network_policy, cwd.as_path());
-        let command = self.sandbox_exec_request(
-            &sandbox_policy,
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            sandbox.permissions.enforcement(),
             &file_system_policy,
             network_policy,
-            &cwd,
-            sandbox,
-        )?;
+        );
+        let command = self.sandbox_exec_request(&permission_profile, &cwd, sandbox)?;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
     }
 
     fn sandbox_exec_request(
         &self,
-        sandbox_policy: &SandboxPolicy,
-        file_system_policy: &FileSystemSandboxPolicy,
-        network_policy: NetworkSandboxPolicy,
+        permission_profile: &PermissionProfile,
         cwd: &AbsolutePathBuf,
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
         let sandbox_manager = SandboxManager::new();
+        let (file_system_policy, network_policy) = permission_profile.to_runtime_permissions();
         let sandbox = sandbox_manager.select_initial(
-            file_system_policy,
+            &file_system_policy,
             network_policy,
             SandboxablePreference::Auto,
             sandbox_context.windows_sandbox_level,
@@ -100,9 +96,7 @@ impl FileSystemSandboxRunner {
         sandbox_manager
             .transform(SandboxTransformRequest {
                 command,
-                policy: sandbox_policy,
-                file_system_policy,
-                network_policy,
+                permissions: permission_profile,
                 sandbox,
                 enforce_managed_network: false,
                 network: None,
@@ -176,36 +170,6 @@ fn add_helper_runtime_permissions(
             },
             access: FileSystemAccessMode::Read,
         });
-    }
-}
-
-fn compatibility_sandbox_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
-    network_policy: NetworkSandboxPolicy,
-    cwd: &std::path::Path,
-) -> SandboxPolicy {
-    file_system_policy
-        .to_legacy_sandbox_policy(network_policy, cwd)
-        .unwrap_or_else(|_| compatibility_workspace_write_policy(file_system_policy, cwd))
-}
-
-fn compatibility_workspace_write_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
-    cwd: &std::path::Path,
-) -> SandboxPolicy {
-    let cwd_abs = AbsolutePathBuf::from_absolute_path(cwd).ok();
-    let writable_roots = file_system_policy
-        .get_writable_roots_with_cwd(cwd)
-        .into_iter()
-        .map(|root| root.root)
-        .filter(|root| cwd_abs.as_ref() != Some(root))
-        .collect();
-
-    SandboxPolicy::WorkspaceWrite {
-        writable_roots,
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
     }
 }
 
@@ -347,7 +311,6 @@ mod tests {
 
     use super::FileSystemSandboxRunner;
     use super::add_helper_runtime_permissions;
-    use super::compatibility_sandbox_policy;
     use super::helper_env;
     use super::helper_env_from_vars;
     use super::helper_env_key_is_allowed;
@@ -488,18 +451,12 @@ mod tests {
         let file_system_policy =
             restricted_policy(vec![path_entry(cwd.clone(), FileSystemAccessMode::Write)]);
         let network_policy = NetworkSandboxPolicy::Restricted;
-        let sandbox_policy =
-            compatibility_sandbox_policy(&file_system_policy, network_policy, cwd.as_path());
+        let permission_profile =
+            PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
         let sandbox_context = sandbox_context_with_cwd(&file_system_policy, cwd.clone());
 
         let request = runner
-            .sandbox_exec_request(
-                &sandbox_policy,
-                &file_system_policy,
-                network_policy,
-                &cwd,
-                &sandbox_context,
-            )
+            .sandbox_exec_request(&permission_profile, &cwd, &sandbox_context)
             .expect("sandbox exec request");
 
         assert_eq!(request.env.get(&path_key), Some(&path));
