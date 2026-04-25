@@ -383,10 +383,10 @@ impl Session {
         per_turn_config.permissions.permission_profile =
             session_configuration.permission_profile.clone();
         let sandbox_policy = session_configuration.sandbox_policy();
-        per_turn_config.permissions.sandbox_policy =
-            Constrained::allow_only(sandbox_policy.clone());
+        per_turn_config.permissions.sandbox_policy = Constrained::allow_only(sandbox_policy);
+        let permission_profile = session_configuration.permission_profile();
         let resolved_web_search_mode =
-            resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &sandbox_policy);
+            resolve_web_search_mode_for_turn(&per_turn_config.web_search_mode, &permission_profile);
         if let Err(err) = per_turn_config
             .web_search_mode
             .set(resolved_web_search_mode)
