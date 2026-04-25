@@ -642,6 +642,56 @@ async fn evaluates_bash_lc_inner_commands() {
     .await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn evaluates_powershell_command_inner_commands() {
+    let tempdir = tempdir().expect("create fake PowerShell dir");
+    let powershell_path = tempdir.path().join("powershell.exe");
+    fs::write(
+        &powershell_path,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  test -n "$id" || id=0
+  printf '{"id":%s,"status":"ok","commands":[["ssh","-V"]]}\n' "$id"
+done
+"#,
+    )
+    .expect("write fake PowerShell executable");
+    let mut permissions = fs::metadata(&powershell_path)
+        .expect("stat fake PowerShell executable")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&powershell_path, permissions).expect("make fake PowerShell executable");
+
+    let command = vec![
+        powershell_path.to_string_lossy().into_owned(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "ssh -V".to_string(),
+    ];
+    let expected_reason = format!(
+        "`{}` rejected: policy forbids commands starting with `ssh`",
+        render_shlex_command(&command)
+    );
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["ssh"], decision="forbidden")"#.to_string()),
+            command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: expected_reason,
+        },
+    )
+    .await;
+}
+
 #[test]
 fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
