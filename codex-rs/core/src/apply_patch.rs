@@ -35,11 +35,10 @@ pub(crate) async fn apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
-    let sandbox_policy = turn_context.sandbox_policy();
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
-        &sandbox_policy,
+        &turn_context.permission_profile(),
         file_system_sandbox_policy,
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
