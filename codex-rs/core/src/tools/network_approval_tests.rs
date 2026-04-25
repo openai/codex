@@ -6,6 +6,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
@@ -213,7 +214,8 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
 async fn register_call_with_default_shell_trigger(
     service: &NetworkApprovalService,
     registration_id: &str,
-) {
+) -> CancellationToken {
+    let cancellation_token = CancellationToken::new();
     service
         .register_call(
             registration_id.to_string(),
@@ -229,8 +231,10 @@ async fn register_call_with_default_shell_trigger(
                 tty: None,
             },
             "curl https://example.com".to_string(),
+            cancellation_token.clone(),
         )
         .await;
+    cancellation_token
 }
 
 #[tokio::test]
@@ -253,6 +257,7 @@ async fn active_call_preserves_triggering_command_context() {
             "turn-1".to_string(),
             expected.clone(),
             "curl https://example.com".to_string(),
+            CancellationToken::new(),
         )
         .await;
 
@@ -268,12 +273,14 @@ async fn active_call_preserves_triggering_command_context() {
 #[tokio::test]
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
-    register_call_with_default_shell_trigger(&service, "registration-1").await;
+    let cancellation_token =
+        register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
 
+    assert!(cancellation_token.is_cancelled());
     assert_eq!(
             service.take_call_outcome("registration-1").await,
             Some(NetworkApprovalOutcome::DeniedByPolicy(
@@ -298,6 +305,46 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
         service.take_call_outcome("registration-1").await,
         Some(NetworkApprovalOutcome::DeniedByUser)
     );
+}
+
+#[tokio::test]
+async fn finish_call_returns_denial_and_unregisters_active_call() {
+    let service = NetworkApprovalService::default();
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+
+    service
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
+        )
+        .await;
+
+    let err = service
+        .finish_call("registration-1")
+        .await
+        .expect_err("denial should be returned");
+
+    assert!(matches!(err, ToolError::Rejected(message) if message == "network denied"));
+    assert!(service.resolve_single_active_call().await.is_none());
+    assert_eq!(service.take_call_outcome("registration-1").await, None);
+}
+
+#[tokio::test]
+async fn record_call_outcome_ignores_inactive_call() {
+    let service = NetworkApprovalService::default();
+    let cancellation_token =
+        register_call_with_default_shell_trigger(&service, "registration-1").await;
+    service.unregister_call("registration-1").await;
+
+    service
+        .record_call_outcome(
+            "registration-1",
+            NetworkApprovalOutcome::DeniedByPolicy("network denied".to_string()),
+        )
+        .await;
+
+    assert!(!cancellation_token.is_cancelled());
+    assert_eq!(service.take_call_outcome("registration-1").await, None);
 }
 
 #[tokio::test]

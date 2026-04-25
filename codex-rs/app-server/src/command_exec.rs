@@ -462,6 +462,15 @@ async fn run_command(params: RunCommandParams) {
             ExecExpiration::Cancellation(cancel) => {
                 cancel.cancelled().await;
             }
+            ExecExpiration::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => {
+                tokio::select! {
+                    _ = tokio::time::sleep(timeout) => {}
+                    _ = cancellation.cancelled() => {}
+                }
+            }
         }
     };
     tokio::pin!(expiration);

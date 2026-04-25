@@ -115,7 +115,7 @@ async fn exec_command_with_tty(
             process_id,
             hook_command: cmd.to_string(),
             tty,
-            network_approval_id: None,
+            network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
         };

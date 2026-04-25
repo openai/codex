@@ -127,6 +127,16 @@ fn exec_server_process_id_matches_unified_exec_process_id() {
     assert_eq!(exec_server_process_id(/*process_id*/ 4321), "4321");
 }
 
+#[tokio::test]
+async fn network_denial_fallback_message_names_sandbox_network_proxy() {
+    let message = network_denial_message_for_session(/*session*/ None, /*deferred*/ None).await;
+
+    assert_eq!(
+        message,
+        "Network access was denied by the Codex sandbox network proxy."
+    );
+}
+
 #[test]
 fn pruning_prefers_exited_processes_outside_recently_used() {
     let now = Instant::now();

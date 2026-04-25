@@ -113,6 +113,20 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 }
 
 #[tokio::test]
+async fn fail_and_terminate_preserves_failure_message() {
+    let process = remote_process(WriteStatus::Accepted).await;
+
+    process.fail_and_terminate("network denied".to_string());
+    process.fail_and_terminate("second failure".to_string());
+
+    assert!(process.has_exited());
+    assert_eq!(
+        process.failure_message(),
+        Some("network denied".to_string())
+    );
+}
+
+#[tokio::test]
 async fn remote_process_waits_for_early_exit_event() {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {

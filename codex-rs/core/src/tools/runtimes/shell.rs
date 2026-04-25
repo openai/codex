@@ -273,8 +273,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.env,
             req.additional_permissions.clone(),
         )?;
+        let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
+        if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
+            expiration = expiration.with_cancellation(cancellation);
+        }
         let options = ExecOptions {
-            expiration: req.timeout_ms.into(),
+            expiration,
             capture_policy: ExecCapturePolicy::ShellTool,
         };
         let env = attempt
