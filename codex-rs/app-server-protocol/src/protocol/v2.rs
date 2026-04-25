@@ -4634,7 +4634,12 @@ pub struct PluginInstallResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
-    pub plugin_id: String,
+    #[ts(optional = nullable)]
+    pub plugin_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub remote_marketplace_name: Option<String>,
+    #[ts(optional = nullable)]
+    pub plugin_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -10261,11 +10266,15 @@ mod tests {
     fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
-                plugin_id: "gmail@openai-curated".to_string(),
+                plugin_id: Some("gmail@openai-curated".to_string()),
+                remote_marketplace_name: None,
+                plugin_name: None,
             })
             .unwrap(),
             json!({
                 "pluginId": "gmail@openai-curated",
+                "remoteMarketplaceName": null,
+                "pluginName": null,
             }),
         );
 
@@ -10276,7 +10285,37 @@ mod tests {
             }))
             .unwrap(),
             PluginUninstallParams {
-                plugin_id: "gmail@openai-curated".to_string(),
+                plugin_id: Some("gmail@openai-curated".to_string()),
+                remote_marketplace_name: None,
+                plugin_name: None,
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: None,
+                remote_marketplace_name: Some("chatgpt-global".to_string()),
+                plugin_name: Some("plugins~Plugin_gmail".to_string()),
+            })
+            .unwrap(),
+            json!({
+                "pluginId": null,
+                "remoteMarketplaceName": "chatgpt-global",
+                "pluginName": "plugins~Plugin_gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginUninstallParams>(json!({
+                "remoteMarketplaceName": "chatgpt-global",
+                "pluginName": "plugins~Plugin_gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginUninstallParams {
+                plugin_id: None,
+                remote_marketplace_name: Some("chatgpt-global".to_string()),
+                plugin_name: Some("plugins~Plugin_gmail".to_string()),
             },
         );
     }
