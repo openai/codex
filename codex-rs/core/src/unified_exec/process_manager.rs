@@ -169,7 +169,7 @@ struct PreparedProcessHandles {
     output_closed_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
     pause_state: Option<watch::Receiver<bool>>,
-    command: Vec<String>,
+    hook_command: String,
     process_id: i32,
     tty: bool,
 }
@@ -279,6 +279,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&process),
                 context,
                 &request.command,
+                request.hook_command.clone(),
                 cwd.clone(),
                 start,
                 request.process_id,
@@ -398,7 +399,7 @@ impl UnifiedExecProcessManager {
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(request.command.clone()),
+            hook_command: Some(request.hook_command.clone()),
         };
 
         Ok(response)
@@ -418,7 +419,7 @@ impl UnifiedExecProcessManager {
             output_closed_notify,
             cancellation_token,
             pause_state,
-            command: session_command,
+            hook_command,
             process_id,
             tty,
             ..
@@ -517,7 +518,7 @@ impl UnifiedExecProcessManager {
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(session_command.clone()),
+            hook_command: Some(hook_command),
         };
 
         Ok(response)
@@ -585,7 +586,7 @@ impl UnifiedExecProcessManager {
             output_closed_notify,
             cancellation_token,
             pause_state,
-            command: entry.command.clone(),
+            hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -597,6 +598,7 @@ impl UnifiedExecProcessManager {
         process: Arc<UnifiedExecProcess>,
         context: &UnifiedExecContext,
         command: &[String],
+        hook_command: String,
         cwd: AbsolutePathBuf,
         started_at: Instant,
         process_id: i32,
@@ -608,7 +610,7 @@ impl UnifiedExecProcessManager {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            command: command.to_vec(),
+            hook_command,
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),
@@ -659,6 +661,60 @@ impl UnifiedExecProcessManager {
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
+
+        #[cfg(target_os = "windows")]
+        if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
+            let policy_json = serde_json::to_string(&request.sandbox_policy).map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "failed to serialize Windows sandbox policy: {err}"
+                ))
+            })?;
+            let codex_home = crate::config::find_codex_home().map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "windows sandbox: failed to resolve codex_home: {err}"
+                ))
+            })?;
+            let spawned = match request.windows_sandbox_level {
+                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
+                        policy_json.as_str(),
+                        request.windows_sandbox_policy_cwd.as_path(),
+                        codex_home.as_ref(),
+                        request.command.clone(),
+                        request.cwd.as_path(),
+                        request.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        request.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+                codex_protocol::config_types::WindowsSandboxLevel::RestrictedToken
+                | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
+                        policy_json.as_str(),
+                        request.windows_sandbox_policy_cwd.as_path(),
+                        codex_home.as_ref(),
+                        request.command.clone(),
+                        request.cwd.as_path(),
+                        request.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        request.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+            };
+            spawn_lifecycle.after_spawn();
+            return UnifiedExecProcess::from_spawned(
+                spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
+                request.sandbox,
+                spawn_lifecycle,
+            )
+            .await;
+        }
         if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(

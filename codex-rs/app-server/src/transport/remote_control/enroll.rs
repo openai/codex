@@ -2,6 +2,7 @@ use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
 use axum::http::HeaderMap;
+use codex_api::SharedAuthProvider;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -17,7 +18,6 @@ const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
-const REMOTE_CONTROL_FEDRAMP_HEADER: &str = "X-OpenAI-Fedramp";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,11 +28,9 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) server_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlConnectionAuth {
-    pub(super) authorization_header_value: String,
+    pub(super) auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
-    pub(super) is_fedramp_account: bool,
 }
 
 pub(super) async fn load_persisted_remote_control_enrollment(
@@ -201,15 +199,14 @@ pub(super) async fn enroll_remote_control_server(
         app_server_version: env!("CARGO_PKG_VERSION"),
     };
     let client = build_reqwest_client();
-    let mut http_request = client
+    let mut auth_headers = HeaderMap::new();
+    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    let http_request = client
         .post(enroll_url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
-        .header("authorization", &auth.authorization_header_value)
-        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id);
-    if auth.is_fedramp_account {
-        http_request = http_request.header(REMOTE_CONTROL_FEDRAMP_HEADER, "true");
-    }
-    let http_request = http_request.json(&request);
+        .headers(auth_headers)
+        .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
+        .json(&request);
 
     let response = http_request.send().await.map_err(|err| {
         io::Error::other(format!(
@@ -450,9 +447,8 @@ mod tests {
         let err = enroll_remote_control_server(
             &remote_control_target,
             &RemoteControlConnectionAuth {
-                authorization_header_value: "Bearer Access Token".to_string(),
+                auth_provider: codex_model_provider::unauthenticated_auth_provider(),
                 account_id: "account_id".to_string(),
-                is_fedramp_account: false,
             },
         )
         .await

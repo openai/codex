@@ -2,9 +2,6 @@ use codex_core::config::Config;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 
-use crate::chatgpt_token::get_chatgpt_token_data;
-use crate::chatgpt_token::init_chatgpt_token_from_auth;
-
 use anyhow::Context;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
@@ -23,41 +20,33 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     timeout: Option<Duration>,
 ) -> anyhow::Result<T> {
     let chatgpt_base_url = &config.chatgpt_base_url;
-    init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
-        .await?;
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
+    let auth = auth_manager
+        .auth()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
+    anyhow::ensure!(
+        auth.uses_codex_backend(),
+        "ChatGPT backend requests require Codex backend auth"
+    );
+    anyhow::ensure!(
+        auth.get_account_id().is_some(),
+        "ChatGPT account ID not available, please re-run `codex login`"
+    );
 
     // Make direct HTTP request to ChatGPT backend API with the token
     let client = create_client();
-    let url = format!("{chatgpt_base_url}{path}");
-
-    let token =
-        get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
-    let auth = auth_manager.auth().await;
-    let is_fedramp_account = auth
-        .as_ref()
-        .is_some_and(codex_login::CodexAuth::is_fedramp_account);
-    let authorization_header_value = match auth.as_ref() {
-        Some(auth) if auth.is_chatgpt_auth() => auth_manager
-            .chatgpt_authorization_header_for_auth(auth)
-            .await
-            .unwrap_or_else(|| format!("Bearer {}", token.access_token)),
-        _ => format!("Bearer {}", token.access_token),
-    };
-
-    let account_id = token.account_id.ok_or_else(|| {
-        anyhow::anyhow!("ChatGPT account ID not available, please re-run `codex login`")
-    })?;
+    let url = format!(
+        "{}/{}",
+        chatgpt_base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
 
     let mut request = client
         .get(&url)
-        .header("authorization", authorization_header_value)
-        .header("chatgpt-account-id", account_id)
+        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
         .header("Content-Type", "application/json");
-    if is_fedramp_account {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
 
     if let Some(timeout) = timeout {
         request = request.timeout(timeout);

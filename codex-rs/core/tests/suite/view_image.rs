@@ -160,6 +160,7 @@ async fn assert_user_turn_local_image_resizes_to(
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],
@@ -168,6 +169,7 @@ async fn assert_user_turn_local_image_resizes_to(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -279,6 +281,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
@@ -288,6 +291,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -410,6 +414,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please add the original screenshot".into(),
                 text_elements: Vec::new(),
@@ -419,6 +424,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -509,6 +515,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please attach the image at low detail".into(),
                 text_elements: Vec::new(),
@@ -518,6 +525,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -599,6 +607,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please attach the image with a null detail".into(),
                 text_elements: Vec::new(),
@@ -608,6 +617,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -699,6 +709,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
@@ -708,6 +719,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -803,6 +815,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
@@ -812,6 +825,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -905,6 +919,7 @@ await codex.emitImage(out);
     let session_model = session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "use js_repl to write an image and attach it".into(),
                 text_elements: Vec::new(),
@@ -914,6 +929,7 @@ await codex.emitImage(out);
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1025,6 +1041,7 @@ console.log(out.type);
     let session_model = session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "use js_repl to write an image but do not emit it".into(),
                 text_elements: Vec::new(),
@@ -1034,6 +1051,7 @@ console.log(out.type);
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             service_tier: None,
@@ -1118,6 +1136,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please attach the folder".into(),
                 text_elements: Vec::new(),
@@ -1127,6 +1146,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1199,6 +1219,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please use the view_image tool to read the json file".into(),
                 text_elements: Vec::new(),
@@ -1208,6 +1229,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1285,6 +1307,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please attach the missing image".into(),
                 text_elements: Vec::new(),
@@ -1294,6 +1317,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1422,6 +1446,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "please attach the image".into(),
                 text_elements: Vec::new(),
@@ -1431,6 +1456,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: model_slug.to_string(),
             effort: None,
             summary: None,
@@ -1503,6 +1529,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],
@@ -1511,6 +1538,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

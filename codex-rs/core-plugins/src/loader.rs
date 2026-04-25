@@ -1,3 +1,4 @@
+use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
@@ -40,8 +41,8 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 const CONFIG_TOML_FILE: &str = "config.toml";
+const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NonCuratedCacheRefreshMode {
@@ -67,9 +68,24 @@ pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginMcpFile {
-    #[serde(default)]
+struct PluginMcpServersFile {
     mcp_servers: HashMap<String, JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PluginMcpFile {
+    McpServersObject(PluginMcpServersFile),
+    ServerMap(HashMap<String, JsonValue>),
+}
+
+impl PluginMcpFile {
+    fn into_mcp_servers(self) -> HashMap<String, JsonValue> {
+        match self {
+            Self::McpServersObject(file) => file.mcp_servers,
+            Self::ServerMap(mcp_servers) => mcp_servers,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -129,6 +145,7 @@ pub fn refresh_curated_plugin_cache(
     plugin_version: &str,
     configured_curated_plugin_ids: &[PluginId],
 ) -> Result<bool, String> {
+    let cache_plugin_version = curated_plugin_cache_version(plugin_version);
     let store = PluginStore::try_new(codex_home.to_path_buf()).map_err(|err| err.to_string())?;
     let curated_marketplace_path = AbsolutePathBuf::try_from(
         codex_home
@@ -166,7 +183,8 @@ pub fn refresh_curated_plugin_cache(
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        if store.active_plugin_version(plugin_id).as_deref() == Some(plugin_version) {
+        if store.active_plugin_version(plugin_id).as_deref() == Some(cache_plugin_version.as_str())
+        {
             continue;
         }
 
@@ -180,7 +198,7 @@ pub fn refresh_curated_plugin_cache(
         };
 
         store
-            .install_with_version(source_path, plugin_id.clone(), plugin_version.to_string())
+            .install_with_version(source_path, plugin_id.clone(), cache_plugin_version.clone())
             .map_err(|err| {
                 format!(
                     "failed to refresh curated plugin cache for {}: {err}",
@@ -191,6 +209,14 @@ pub fn refresh_curated_plugin_cache(
     }
 
     Ok(cache_refreshed)
+}
+
+pub fn curated_plugin_cache_version(plugin_version: &str) -> String {
+    if is_full_git_sha(plugin_version) {
+        plugin_version[..CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN].to_string()
+    } else {
+        plugin_version.to_string()
+    }
 }
 
 pub fn refresh_non_curated_plugin_cache(
@@ -311,6 +337,10 @@ fn configured_plugins_from_stack(
         return HashMap::new();
     };
     configured_plugins_from_user_config_value(&user_layer.config)
+}
+
+fn is_full_git_sha(value: &str) -> bool {
+    value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn configured_plugins_from_user_config_value(
@@ -775,7 +805,7 @@ async fn load_mcp_servers_from_file(
     };
     normalize_plugin_mcp_servers(
         plugin_root,
-        parsed.mcp_servers,
+        parsed.into_mcp_servers(),
         mcp_config_path.to_string_lossy().as_ref(),
     )
 }
@@ -987,6 +1017,99 @@ fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plugin_mcp_file_supports_mcp_servers_object_format() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "mcpServers": {
+    "sample": {
+      "command": "sample-mcp"
+    }
+  }
+}"#,
+        )
+        .expect("parse wrapped plugin mcp config")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "sample".to_string(),
+                serde_json::json!({
+                    "command": "sample-mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn plugin_mcp_file_supports_mcp_servers_object_format_with_metadata() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "$schema": "https://example.com/plugin-mcp.schema.json",
+  "mcpServers": {
+    "sample": {
+      "command": "sample-mcp"
+    }
+  }
+}"#,
+        )
+        .expect("parse plugin mcp config with metadata")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "sample".to_string(),
+                serde_json::json!({
+                    "command": "sample-mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn plugin_mcp_file_supports_top_level_server_map_format() {
+        let parsed = serde_json::from_str::<PluginMcpFile>(
+            r#"{
+  "linear": {
+    "type": "http",
+    "url": "https://mcp.linear.app/mcp"
+  }
+}"#,
+        )
+        .expect("parse flat plugin mcp config")
+        .into_mcp_servers();
+
+        assert_eq!(
+            parsed,
+            HashMap::from([(
+                "linear".to_string(),
+                serde_json::json!({
+                    "type": "http",
+                    "url": "https://mcp.linear.app/mcp"
+                }),
+            )])
+        );
+    }
+
+    #[test]
+    fn curated_plugin_cache_version_shortens_full_git_sha() {
+        assert_eq!(
+            curated_plugin_cache_version("0123456789abcdef0123456789abcdef01234567"),
+            "01234567"
+        );
+    }
+
+    #[test]
+    fn curated_plugin_cache_version_preserves_non_git_sha_versions() {
+        assert_eq!(
+            curated_plugin_cache_version("export-backup"),
+            "export-backup"
+        );
+        assert_eq!(curated_plugin_cache_version("0123456"), "0123456");
+    }
 
     #[test]
     fn materialize_git_subdir_uses_sparse_checkout() {

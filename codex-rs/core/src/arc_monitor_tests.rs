@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
@@ -9,37 +10,18 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_json;
 use wiremock::matchers::header;
-use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
-use crate::agent_identity::AgentIdentityManager;
-use crate::agent_identity::RegisteredAgentTask;
+use crate::context::ContextualUserFragment;
 use crate::session::tests::make_session_and_context;
-use chrono::Utc;
-use codex_login::AuthCredentialsStoreMode;
-use codex_login::AuthDotJson;
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
-use codex_login::save_auth;
-use codex_login::token_data::IdTokenInfo;
-use codex_login::token_data::TokenData;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::SessionSource;
-use tempfile::tempdir;
-
-const TEST_ID_TOKEN: &str = concat!(
-    "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.",
-    "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91c2VyX2lk",
-    "IjpudWxsLCJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2NvdW50X2lkIn19.",
-    "c2ln",
-);
 
 struct EnvVarGuard {
     key: &'static str,
@@ -69,58 +51,6 @@ impl Drop for EnvVarGuard {
     }
 }
 
-async fn install_cached_agent_task_auth(
-    session: &mut Session,
-    turn_context: &mut TurnContext,
-    chatgpt_base_url: String,
-) {
-    let auth_dir = tempdir().expect("temp auth dir");
-    let auth_json = AuthDotJson {
-        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token: IdTokenInfo {
-                email: None,
-                chatgpt_plan_type: None,
-                chatgpt_user_id: None,
-                chatgpt_account_id: Some("account_id".to_string()),
-                chatgpt_account_is_fedramp: false,
-                raw_jwt: TEST_ID_TOKEN.to_string(),
-            },
-            access_token: "Access Token".to_string(),
-            refresh_token: "test".to_string(),
-            account_id: Some("account_id".to_string()),
-        }),
-        last_refresh: Some(Utc::now()),
-        agent_identity: None,
-    };
-    save_auth(auth_dir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save test auth");
-    let auth = CodexAuth::from_auth_storage(auth_dir.path(), AuthCredentialsStoreMode::File)
-        .expect("load test auth")
-        .expect("test auth");
-    let auth_manager = AuthManager::from_auth_for_testing(auth);
-    let agent_identity_manager = Arc::new(AgentIdentityManager::new_for_tests(
-        Arc::clone(&auth_manager),
-        /*feature_enabled*/ true,
-        chatgpt_base_url,
-        SessionSource::Exec,
-    ));
-    let stored_identity = agent_identity_manager
-        .seed_generated_identity_for_tests("agent-123")
-        .await
-        .expect("seed test identity");
-    session.services.auth_manager = Arc::clone(&auth_manager);
-    session.services.agent_identity_manager = agent_identity_manager;
-    turn_context.auth_manager = Some(auth_manager);
-    session
-        .cache_agent_task_for_tests(RegisteredAgentTask {
-            agent_runtime_id: stored_identity.agent_runtime_id,
-            task_id: "task-123".to_string(),
-            registered_at: "2026-04-15T00:00:00Z".to_string(),
-        })
-        .await;
-}
-
 #[tokio::test]
 async fn build_arc_monitor_request_includes_relevant_history_and_null_policies() {
     let (session, mut turn_context) = make_session_and_context().await;
@@ -143,11 +73,16 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
         .await;
     session
         .record_into_history(
-            &[
-                crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT.into_message(
-                    "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+            &[ContextualUserFragment::into(
+                crate::context::EnvironmentContext::new(
+                    Some(PathBuf::from("/tmp")),
+                    "zsh".to_string(),
+                    /*current_date*/ None,
+                    /*timezone*/ None,
+                    /*network*/ None,
+                    /*subagents*/ None,
                 ),
-            ],
+            )],
             &turn_context,
         )
         .await;
@@ -317,80 +252,6 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 .expect("action should deserialize"),
         }
     );
-}
-
-#[tokio::test]
-#[serial(arc_monitor_env)]
-async fn monitor_action_uses_agent_assertion_for_cached_task() {
-    let server = MockServer::start().await;
-    let (mut session, mut turn_context) = make_session_and_context().await;
-    install_cached_agent_task_auth(&mut session, &mut turn_context, server.uri()).await;
-
-    let mut config = (*turn_context.config).clone();
-    config.chatgpt_base_url = server.uri();
-    turn_context.config = Arc::new(config);
-
-    session
-        .record_into_history(
-            &[ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "please run the tool".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            }],
-            &turn_context,
-        )
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/codex/safety/arc"))
-        .and(header_regex("authorization", r"^AgentAssertion .+"))
-        .and(body_json(serde_json::json!({
-            "metadata": {
-                "codex_thread_id": session.conversation_id.to_string(),
-                "codex_turn_id": turn_context.sub_id.clone(),
-                "conversation_id": session.conversation_id.to_string(),
-                "protection_client_callsite": "normal",
-            },
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": "please run the tool",
-                }],
-            }],
-            "policies": {
-                "developer": null,
-                "user": null,
-            },
-            "action": {
-                "tool": "mcp_tool_call",
-            },
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "outcome": "ok",
-            "short_reason": "",
-            "rationale": "",
-            "risk_score": 1,
-            "risk_level": "low",
-            "evidence": [],
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let outcome = monitor_action(
-        &session,
-        &turn_context,
-        serde_json::json!({ "tool": "mcp_tool_call" }),
-        "normal",
-    )
-    .await;
-
-    assert_eq!(outcome, ArcMonitorOutcome::Ok);
 }
 
 #[tokio::test]

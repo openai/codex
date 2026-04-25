@@ -9,6 +9,7 @@ use super::protocol::ServerEvent;
 use super::protocol::StreamId;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
+use crate::transport::ConnectionOrigin;
 use crate::transport::remote_control::QueuedServerEnvelope;
 use codex_app_server_protocol::JSONRPCMessage;
 use std::collections::HashMap;
@@ -160,6 +161,7 @@ impl ClientTracker {
                 let disconnect_token = self.shutdown_token.child_token();
                 self.send_transport_event(TransportEvent::ConnectionOpened {
                     connection_id,
+                    origin: ConnectionOrigin::RemoteControl,
                     writer: writer_tx,
                     disconnect_sender: Some(disconnect_token.clone()),
                 })

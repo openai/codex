@@ -9,6 +9,12 @@ use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventRequest;
+use crate::events::GuardianApprovalRequestSource;
+use crate::events::GuardianReviewDecision;
+use crate::events::GuardianReviewEventParams;
+use crate::events::GuardianReviewFailureReason;
+use crate::events::GuardianReviewTerminalStatus;
+use crate::events::GuardianReviewedAction;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
@@ -59,6 +65,7 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NonSteerableTurnKind;
+use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
@@ -82,8 +89,10 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
@@ -145,9 +154,14 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
+}
+
+fn sample_permission_profile() -> AppServerPermissionProfile {
+    CorePermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess).into()
 }
 
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
@@ -196,6 +210,7 @@ fn sample_thread_resume_response_with_source(
             approval_policy: AppServerAskForApproval::OnFailure,
             approvals_reviewer: AppServerApprovalsReviewer::User,
             sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            permission_profile: Some(sample_permission_profile()),
             reasoning_effort: None,
         },
     }
@@ -305,7 +320,7 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
         reasoning_summary: None,
         service_tier: None,
         approval_policy: AskForApproval::OnRequest,
-        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,
@@ -1050,6 +1065,135 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 
+#[tokio::test]
+async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: false,
+                        opt_out_notification_methods: None,
+                    }),
+                },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Websocket,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-guardian",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
+                GuardianReviewEventParams {
+                    thread_id: "thread-guardian".to_string(),
+                    turn_id: "turn-guardian".to_string(),
+                    review_id: "review-guardian".to_string(),
+                    target_item_id: None,
+                    approval_request_source: GuardianApprovalRequestSource::DelegatedSubagent,
+                    reviewed_action: GuardianReviewedAction::NetworkAccess {
+                        protocol: NetworkApprovalProtocol::Https,
+                        port: 443,
+                    },
+                    reviewed_action_truncated: false,
+                    decision: GuardianReviewDecision::Denied,
+                    terminal_status: GuardianReviewTerminalStatus::TimedOut,
+                    failure_reason: Some(GuardianReviewFailureReason::Timeout),
+                    risk_level: None,
+                    user_authorization: None,
+                    outcome: None,
+                    guardian_thread_id: None,
+                    guardian_session_kind: None,
+                    guardian_model: None,
+                    guardian_reasoning_effort: None,
+                    had_prior_review_context: None,
+                    review_timeout_ms: 90_000,
+                    tool_call_count: None,
+                    time_to_first_token_ms: None,
+                    completion_latency_ms: Some(90_000),
+                    started_at: 100,
+                    completed_at: Some(190),
+                    input_tokens: None,
+                    cached_input_tokens: None,
+                    output_tokens: None,
+                    reasoning_output_tokens: None,
+                    total_tokens: None,
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_guardian_review");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-guardian");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-guardian");
+    assert_eq!(payload[0]["event_params"]["review_id"], "review-guardian");
+    assert_eq!(payload[0]["event_params"]["target_item_id"], json!(null));
+    assert_eq!(
+        payload[0]["event_params"]["approval_request_source"],
+        "delegated_subagent"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_ORIGINATOR
+    );
+    assert_eq!(
+        payload[0]["event_params"]["runtime"]["codex_rs_version"],
+        "0.1.0"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["reviewed_action"]["type"],
+        "network_access"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["reviewed_action"]["protocol"],
+        "https"
+    );
+    assert_eq!(payload[0]["event_params"]["reviewed_action"]["port"], 443);
+    assert!(payload[0]["event_params"].get("retry_reason").is_none());
+    assert!(payload[0]["event_params"].get("rationale").is_none());
+    assert!(
+        payload[0]["event_params"]["reviewed_action"]
+            .get("target")
+            .is_none()
+    );
+    assert!(
+        payload[0]["event_params"]["reviewed_action"]
+            .get("host")
+            .is_none()
+    );
+    assert_eq!(payload[0]["event_params"]["terminal_status"], "timed_out");
+    assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
+    assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
+}
+
 #[test]
 fn subagent_thread_started_review_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
@@ -1186,7 +1330,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
         },
     ));
 
-    let payload = serde_json::to_value(&event).expect("serialize guardian subagent event");
+    let payload = serde_json::to_value(&event).expect("serialize auto-review subagent event");
     assert_eq!(payload["event_params"]["subagent_source"], "guardian");
     assert_eq!(
         payload["event_params"]["parent_thread_id"],
@@ -1610,7 +1754,7 @@ fn turn_event_serializes_expected_shape() {
             reasoning_summary: Some("detailed".to_string()),
             service_tier: "flex".to_string(),
             approval_policy: "on-request".to_string(),
-            approvals_reviewer: "guardian_subagent".to_string(),
+            approvals_reviewer: "auto_review".to_string(),
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
             personality: Some("pragmatic".to_string()),
@@ -1671,7 +1815,7 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
                 "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
+                "approvals_reviewer": "auto_review",
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",

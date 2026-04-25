@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ExperimentalFeature;
@@ -14,7 +16,9 @@ use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::LoaderOverrides;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
@@ -23,6 +27,12 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -32,6 +42,9 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::with_managed_config_path_for_tests(
+            codex_home.path().join("managed_config.toml"),
+        ))
         .build()
         .await?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -86,6 +99,63 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
 }
 
 #[tokio::test]
+async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_policy()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/account-123/settings"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
+        .await?;
+
+    let actual = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
+    let apps = actual
+        .data
+        .iter()
+        .find(|feature| feature.name == "apps")
+        .expect("apps feature should be present");
+    let plugins = actual
+        .data
+        .iter()
+        .find(|feature| feature.name == "plugins")
+        .expect("plugins feature should be present");
+    assert!(!apps.enabled);
+    assert!(!plugins.enabled);
+    assert!(apps.default_enabled);
+    assert!(plugins.default_enabled);
+    Ok(())
+}
+
+#[tokio::test]
 async fn experimental_feature_enablement_set_applies_to_global_and_thread_config_reads()
 -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -125,18 +195,20 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\napps = false\n",
+        "[features]\nmemories = false\n",
     )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let actual =
-        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
-            .await?;
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("memories".to_string(), true)]),
+    )
+    .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureEnablementSetResponse {
-            enablement: BTreeMap::from([("apps".to_string(), true)]),
+            enablement: BTreeMap::from([("memories".to_string(), true)]),
         }
     );
 
@@ -146,7 +218,7 @@ async fn experimental_feature_enablement_set_does_not_override_user_config() -> 
         config
             .additional
             .get("features")
-            .and_then(|features| features.get("apps")),
+            .and_then(|features| features.get("memories")),
         Some(&json!(false))
     );
 
@@ -164,6 +236,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
     let actual = set_experimental_feature_enablement(
         &mut mcp,
         BTreeMap::from([
+            ("memories".to_string(), true),
             ("plugins".to_string(), true),
             ("tool_search".to_string(), true),
             ("tool_suggest".to_string(), true),
@@ -176,6 +249,7 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         actual,
         ExperimentalFeatureEnablementSetResponse {
             enablement: BTreeMap::from([
+                ("memories".to_string(), true),
                 ("plugins".to_string(), true),
                 ("tool_search".to_string(), true),
                 ("tool_suggest".to_string(), true),
@@ -191,6 +265,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .additional
             .get("features")
             .and_then(|features| features.get("apps")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("memories")),
         Some(&json!(true))
     );
     assert_eq!(
@@ -281,9 +362,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         error.message
     );
     assert!(
-        error
-            .message
-            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
+        error.message.contains(
+            "apps, memories, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"
+        ),
         "{}",
         error.message
     );

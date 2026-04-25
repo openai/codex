@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::HookEventsToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
@@ -29,6 +30,7 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -47,7 +49,6 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
@@ -56,7 +57,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
+    AMAZON_BEDROCK_PROVIDER_ID,
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
@@ -87,6 +89,10 @@ pub struct ConfigToml {
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Optional policy instructions for the guardian auto-reviewer.
+    #[serde(default)]
+    pub auto_review: Option<AutoReviewToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -302,6 +308,17 @@ pub struct ConfigToml {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+
+    /// Experimental / do not use. When set, app-server uses a remote thread
+    /// store at this endpoint instead of the local filesystem/SQLite store.
+    pub experimental_thread_store_endpoint: Option<String>,
+
+    /// Experimental / do not use. When set, app-server fetches thread-scoped
+    /// config from a remote service at this endpoint.
+    pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Experimental / do not use. Selects the thread store implementation.
+    pub experimental_thread_store: Option<ThreadStoreToml>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -321,6 +338,9 @@ pub struct ConfigToml {
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
+
+    /// Lifecycle hooks configured inline in TOML.
+    pub hooks: Option<HookEventsToml>,
 
     /// User-level plugin config entries keyed by plugin name.
     #[serde(default)]
@@ -393,6 +413,26 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThreadStoreToml {
+    Local {},
+    Remote {
+        endpoint: String,
+    },
+    #[cfg(debug_assertions)]
+    #[schemars(skip)]
+    InMemory {
+        id: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct AutoReviewToml {
+    /// Additional policy instructions inserted into the guardian prompt.
+    pub policy: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -542,6 +582,9 @@ pub struct AgentsToml {
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
+    /// Whether to record a model-visible message when an agent turn is interrupted.
+    /// Defaults to true.
+    pub interrupt_message: Option<bool>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -641,7 +684,6 @@ impl ConfigToml {
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
-                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -776,7 +818,10 @@ pub fn validate_reserved_model_provider_ids(
 ) -> Result<(), String> {
     let mut conflicts = model_providers
         .keys()
-        .filter(|key| RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str()))
+        .filter(|key| {
+            key.as_str() != AMAZON_BEDROCK_PROVIDER_ID
+                && RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str())
+        })
         .map(|key| format!("`{key}`"))
         .collect::<Vec<_>>();
     conflicts.sort_unstable();
@@ -796,6 +841,19 @@ pub fn validate_model_providers(
 ) -> Result<(), String> {
     validate_reserved_model_provider_ids(model_providers)?;
     for (key, provider) in model_providers {
+        if key == AMAZON_BEDROCK_PROVIDER_ID {
+            continue;
+        }
+        if provider.aws.is_some() {
+            return Err(format!(
+                "model_providers.{key}: provider aws is only supported for `{AMAZON_BEDROCK_PROVIDER_ID}`"
+            ));
+        }
+        if provider.name.trim().is_empty() {
+            return Err(format!(
+                "model_providers.{key}: provider name must not be empty"
+            ));
+        }
         provider
             .validate()
             .map_err(|message| format!("model_providers.{key}: {message}"))?;

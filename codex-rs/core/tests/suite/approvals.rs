@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::config::Constrained;
 use codex_core::config_loader::ConfigLayerStack;
@@ -584,6 +585,7 @@ async fn submit_turn(
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
@@ -591,8 +593,9 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
-            approvals_reviewer: None,
+            approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_policy,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -765,7 +768,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
 
     let workspace_write = |network_access| SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1796,7 +1798,6 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1808,6 +1809,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config.approvals_reviewer = ApprovalsReviewer::User;
         });
     let test = builder.build(&server).await?;
 
@@ -2525,7 +2527,6 @@ allow_local_binding = true
     let approval_policy = AskForApproval::OnFailure;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -2827,7 +2828,6 @@ allow_local_binding = true
     let approval_policy = AskForApproval::OnFailure;
     let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,

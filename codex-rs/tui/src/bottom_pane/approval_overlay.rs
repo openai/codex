@@ -20,7 +20,7 @@ use crate::render::renderable::Renderable;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -58,7 +58,7 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         available_decisions: Vec<ReviewDecision>,
         network_approval_context: Option<NetworkApprovalContext>,
-        additional_permissions: Option<PermissionProfile>,
+        additional_permissions: Option<AdditionalPermissionProfile>,
     },
     Permissions {
         thread_id: ThreadId,
@@ -278,8 +278,8 @@ impl ApprovalOverlay {
                         permissions,
                         ..
                     },
-                    ApprovalDecision::Review(decision),
-                ) => self.handle_permissions_decision(call_id, permissions, decision.clone()),
+                    ApprovalDecision::Permissions(decision),
+                ) => self.handle_permissions_decision(call_id, permissions, *decision),
                 (ApprovalRequest::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
@@ -322,27 +322,31 @@ impl ApprovalOverlay {
         &self,
         call_id: &str,
         permissions: &RequestPermissionProfile,
-        decision: ReviewDecision,
+        decision: PermissionsDecision,
     ) {
         let Some(request) = self.current_request.as_ref() else {
             return;
         };
         let granted_permissions = match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
-            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
-                Default::default()
-            }
-            ReviewDecision::ApprovedExecpolicyAmendment { .. }
-            | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
+            PermissionsDecision::GrantForTurn
+            | PermissionsDecision::GrantForTurnWithStrictAutoReview
+            | PermissionsDecision::GrantForSession => permissions.clone(),
+            PermissionsDecision::Deny => Default::default(),
         };
-        let scope = if matches!(decision, ReviewDecision::ApprovedForSession) {
+        let scope = if matches!(decision, PermissionsDecision::GrantForSession) {
             PermissionGrantScope::Session
         } else {
             PermissionGrantScope::Turn
         };
+        let strict_auto_review = matches!(
+            decision,
+            PermissionsDecision::GrantForTurnWithStrictAutoReview
+        );
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
                 "You did not grant additional permissions"
+            } else if strict_auto_review {
+                "You granted additional permissions with strict auto review"
             } else if matches!(scope, PermissionGrantScope::Session) {
                 "You granted additional permissions for this session"
             } else {
@@ -359,6 +363,7 @@ impl ApprovalOverlay {
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: granted_permissions,
                 scope,
+                strict_auto_review,
             },
         );
     }
@@ -482,7 +487,11 @@ impl BottomPaneView for ApprovalOverlay {
                     permissions,
                     ..
                 } => {
-                    self.handle_permissions_decision(call_id, permissions, ReviewDecision::Abort);
+                    self.handle_permissions_decision(
+                        call_id,
+                        permissions,
+                        PermissionsDecision::Deny,
+                    );
                 }
                 ApprovalRequest::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
@@ -679,7 +688,16 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
+    Permissions(PermissionsDecision),
     McpElicitation(ElicitationAction),
+}
+
+#[derive(Clone, Copy)]
+enum PermissionsDecision {
+    GrantForTurn,
+    GrantForTurnWithStrictAutoReview,
+    GrantForSession,
+    Deny,
 }
 
 #[derive(Clone)]
@@ -701,7 +719,7 @@ impl ApprovalOption {
 fn exec_options(
     available_decisions: &[ReviewDecision],
     network_approval_context: Option<&NetworkApprovalContext>,
-    additional_permissions: Option<&PermissionProfile>,
+    additional_permissions: Option<&AdditionalPermissionProfile>,
 ) -> Vec<ApprovalOption> {
     available_decisions
         .iter()
@@ -790,7 +808,7 @@ fn exec_options(
 }
 
 pub(crate) fn format_additional_permissions_rule(
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &AdditionalPermissionProfile,
 ) -> Option<String> {
     let mut parts = Vec::new();
     if additional_permissions
@@ -901,20 +919,28 @@ fn patch_options() -> Vec<ApprovalOption> {
 fn permissions_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Yes, grant these permissions".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Approved),
+            label: "Yes, grant these permissions for this turn".to_string(),
+            decision: ApprovalDecision::Permissions(PermissionsDecision::GrantForTurn),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
+            label: "Yes, grant for this turn with strict auto review".to_string(),
+            decision: ApprovalDecision::Permissions(
+                PermissionsDecision::GrantForTurnWithStrictAutoReview,
+            ),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('r'))],
+        },
+        ApprovalOption {
             label: "Yes, grant these permissions for this session".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+            decision: ApprovalDecision::Permissions(PermissionsDecision::GrantForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, continue without permissions".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Denied),
+            decision: ApprovalDecision::Permissions(PermissionsDecision::Deny),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
@@ -1315,7 +1341,7 @@ mod tests {
 
     #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
-        let additional_permissions = PermissionProfile {
+        let additional_permissions = AdditionalPermissionProfile {
             file_system: Some(FileSystemPermissions::from_read_write_roots(
                 Some(vec![absolute_path("/tmp/readme.txt")]),
                 Some(vec![absolute_path("/tmp/out.txt")]),
@@ -1347,7 +1373,8 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, grant these permissions".to_string(),
+                "Yes, grant these permissions for this turn".to_string(),
+                "Yes, grant for this turn with strict auto review".to_string(),
                 "Yes, grant these permissions for this session".to_string(),
                 "No, continue without permissions".to_string(),
             ]
@@ -1356,7 +1383,7 @@ mod tests {
 
     #[test]
     fn additional_permissions_rule_shows_non_path_file_system_entries() {
-        let additional_permissions = PermissionProfile {
+        let additional_permissions = AdditionalPermissionProfile {
             file_system: Some(FileSystemPermissions {
                 entries: vec![
                     FileSystemSandboxEntry {
@@ -1372,6 +1399,7 @@ mod tests {
                         access: FileSystemAccessMode::None,
                     },
                 ],
+                glob_scan_max_depth: None,
             }),
             ..Default::default()
         };
@@ -1410,6 +1438,34 @@ mod tests {
     }
 
     #[test]
+    fn permissions_strict_auto_review_shortcut_submits_turn_scope_with_strict_review() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view =
+            ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(response.scope, PermissionGrantScope::Turn);
+                assert!(response.strict_auto_review);
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected permission approval decision to emit a strict auto review response"
+        );
+    }
+
+    #[test]
     fn additional_permissions_prompt_shows_permission_rule_line() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -1421,7 +1477,7 @@ mod tests {
             reason: None,
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
-            additional_permissions: Some(PermissionProfile {
+            additional_permissions: Some(AdditionalPermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
@@ -1471,7 +1527,7 @@ mod tests {
             reason: Some("need filesystem access".into()),
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
-            additional_permissions: Some(PermissionProfile {
+            additional_permissions: Some(AdditionalPermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),

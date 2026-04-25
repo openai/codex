@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::SkillLoadOutcome;
@@ -16,6 +17,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
@@ -93,7 +95,9 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -127,6 +131,10 @@ use tracing::warn;
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
 ///
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "turn execution must keep active-turn state transitions atomic"
+)]
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -241,7 +249,7 @@ pub(crate) async fn run_turn(
         turn_context.sub_id.clone(),
     );
     let SkillInjections {
-        items: skill_items,
+        items: skill_injections,
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
@@ -256,6 +264,11 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+
+    let skill_items: Vec<ResponseItem> = skill_injections
+        .iter()
+        .map(|skill| ContextualUserFragment::into(crate::context::SkillInstructions::from(skill)))
+        .collect();
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
@@ -333,24 +346,6 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    let agent_task = match sess.ensure_agent_task_registered().await {
-        Ok(agent_task) => agent_task,
-        Err(error) => {
-            warn!(error = %error, "agent task registration failed");
-            sess.send_event(
-                turn_context.as_ref(),
-                EventMsg::Error(ErrorEvent {
-                    message: format!(
-                        "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
-                    ),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            )
-            .await;
-            return None;
-        }
-    };
-
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;
@@ -370,25 +365,11 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut server_model_warning_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut prewarmed_client_session = prewarmed_client_session;
-    if agent_task.is_some()
-        && let Some(prewarmed_client_session) = prewarmed_client_session.as_mut()
-    {
-        prewarmed_client_session.disable_cached_websocket_session_on_drop();
-    }
-    let mut client_session = if let Some(agent_task) = agent_task {
-        sess.services
-            .model_client
-            .new_session_with_agent_task(Some(agent_task))
-    } else if let Some(prewarmed_client_session) = prewarmed_client_session.take() {
-        prewarmed_client_session
-    } else {
-        sess.services.model_client.new_session()
-    };
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
@@ -474,7 +455,6 @@ pub(crate) async fn run_turn(
             sampling_request_input,
             &explicitly_enabled_connectors,
             skills_outcome,
-            &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
         )
         .await
@@ -969,7 +949,7 @@ pub(crate) fn build_prompt(
         .dynamic_tools
         .iter()
         .filter(|tool| tool.defer_loading)
-        .map(|tool| tool.name.as_str())
+        .map(|tool| ToolName::new(tool.namespace.clone(), tool.name.clone()))
         .collect::<HashSet<_>>();
     let tools = if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
@@ -977,7 +957,7 @@ pub(crate) fn build_prompt(
         router
             .model_visible_specs()
             .into_iter()
-            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
+            .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
 
@@ -988,6 +968,38 @@ pub(crate) fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+        output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
+            &turn_context.session_source,
+        ),
+    }
+}
+
+fn filter_deferred_dynamic_tool_spec(
+    spec: ToolSpec,
+    deferred_dynamic_tools: &HashSet<ToolName>,
+) -> Option<ToolSpec> {
+    match spec {
+        ToolSpec::Function(tool) => {
+            if deferred_dynamic_tools.contains(&ToolName::plain(tool.name.as_str())) {
+                None
+            } else {
+                Some(ToolSpec::Function(tool))
+            }
+        }
+        ToolSpec::Namespace(mut namespace) => {
+            let namespace_name = namespace.name.clone();
+            namespace.tools.retain(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool) => !deferred_dynamic_tools.contains(
+                    &ToolName::namespaced(namespace_name.as_str(), tool.name.as_str()),
+                ),
+            });
+            if namespace.tools.is_empty() {
+                None
+            } else {
+                Some(ToolSpec::Namespace(namespace))
+            }
+        }
+        spec => Some(spec),
     }
 }
 
@@ -1009,7 +1021,6 @@ async fn run_sampling_request(
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
-    server_model_warning_emitted_for_turn: &mut bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -1063,7 +1074,6 @@ async fn run_sampling_request(
             client_session,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
-            server_model_warning_emitted_for_turn,
             &prompt,
             cancellation_token.child_token(),
         )
@@ -1143,6 +1153,10 @@ async fn run_sampling_request(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "tool router construction reads through the session-owned manager guard"
+)]
 pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
@@ -1467,11 +1481,13 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         },
         EventMsg::Error(_)
         | EventMsg::Warning(_)
+        | EventMsg::GuardianWarning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationSdp(_)
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
+        | EventMsg::ModelVerification(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnStarted(_)
@@ -1848,7 +1864,6 @@ async fn try_run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -1860,6 +1875,11 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
+        turn_context.sub_id.as_str(),
+        turn_context.model_info.slug.as_str(),
+        turn_context.provider.info().name.as_str(),
+    );
     let mut stream = client_session
         .stream(
             prompt,
@@ -1869,6 +1889,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
@@ -2074,12 +2095,25 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
-                if !*server_model_warning_emitted_for_turn
+                if !turn_context
+                    .server_model_warning_emitted
+                    .load(Ordering::Relaxed)
                     && sess
                         .maybe_warn_on_server_model_mismatch(&turn_context, server_model)
                         .await
                 {
-                    *server_model_warning_emitted_for_turn = true;
+                    turn_context
+                        .server_model_warning_emitted
+                        .store(true, Ordering::Relaxed);
+                }
+            }
+            ResponseEvent::ModelVerifications(verifications) => {
+                if !turn_context
+                    .model_verification_emitted
+                    .swap(true, Ordering::Relaxed)
+                {
+                    sess.emit_model_verification(&turn_context, verifications)
+                        .await;
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {

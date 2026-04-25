@@ -4,6 +4,7 @@ mod common;
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
@@ -16,11 +17,14 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 use test_case::test_case;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+use common::DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG;
+use common::current_test_binary_helper_paths;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 
@@ -48,13 +52,13 @@ enum ProcessEventSnapshot {
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
     if use_remote {
         let server = exec_server().await?;
-        let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
             server: Some(server),
         })
     } else {
-        let environment = Environment::create(/*exec_server_url*/ None).await?;
+        let environment = Environment::create_for_tests(/*exec_server_url*/ None)?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
             server: None,
@@ -319,6 +323,81 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
     Ok(())
 }
 
+async fn assert_exec_process_retains_output_after_exit_until_streams_close(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let (helper_binary, _) = current_test_binary_helper_paths()?;
+    let release_dir = TempDir::new()?;
+    let release_path = release_dir.path().join("release-delayed-output");
+    let process_id = "proc-output-after-exit".to_string();
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone().into(),
+            argv: vec![
+                helper_binary.to_string_lossy().into_owned(),
+                DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
+                release_path.to_string_lossy().into_owned(),
+            ],
+            cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    assert_eq!(session.process.process_id().as_str(), process_id);
+
+    let StartedExecProcess { process } = session;
+
+    let exit_response = timeout(
+        Duration::from_secs(2),
+        process.read(
+            /*after_seq*/ None,
+            /*max_bytes*/ None,
+            /*wait_ms*/ Some(2_000),
+        ),
+    )
+    .await??;
+    assert!(
+        exit_response.chunks.is_empty(),
+        "parent should exit before child writes delayed output"
+    );
+    assert_eq!(exit_response.exit_code, Some(0));
+    assert!(!exit_response.closed);
+    let exit_seq = exit_response
+        .next_seq
+        .checked_sub(1)
+        .context("exit response should advance next_seq")?;
+    std::fs::write(&release_path, b"go")?;
+
+    let late_response = timeout(
+        Duration::from_secs(2),
+        process.read(
+            /*after_seq*/ Some(exit_seq),
+            /*max_bytes*/ None,
+            /*wait_ms*/ Some(2_000),
+        ),
+    )
+    .await??;
+    let mut late_output = String::new();
+    for chunk in late_response.chunks {
+        assert_eq!(chunk.stream, ExecOutputStream::Stdout);
+        late_output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+    }
+    assert_eq!(late_output, "late output after exit\n");
+
+    let wake_rx = process.subscribe_wake();
+    let actual = collect_process_output_from_reads(process, wake_rx).await?;
+    assert_eq!(
+        actual,
+        ("late output after exit\n".to_string(), Some(0), true)
+    );
+    Ok(())
+}
+
 async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let context = create_process_context(use_remote).await?;
     let process_id = "proc-stdin".to_string();
@@ -484,6 +563,16 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
 
     let process = Arc::clone(&session.process);
     let mut events = process.subscribe_events();
+    let process_for_pending_read = Arc::clone(&process);
+    let pending_read = tokio::spawn(async move {
+        process_for_pending_read
+            .read(
+                /*after_seq*/ None,
+                /*max_bytes*/ None,
+                /*wait_ms*/ Some(60_000),
+            )
+            .await
+    });
     let server = context
         .server
         .as_mut()
@@ -499,6 +588,15 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
         "unexpected failure event: {event_message}"
     );
 
+    let pending_response = timeout(Duration::from_secs(2), pending_read).await???;
+    let pending_message = pending_response
+        .failure
+        .expect("pending read should surface disconnect as a failure");
+    assert!(
+        pending_message.starts_with("exec-server transport disconnected"),
+        "unexpected pending failure message: {pending_message}"
+    );
+
     let mut wake_rx = process.subscribe_wake();
     let response = read_process_until_change(process, &mut wake_rx, /*after_seq*/ None).await?;
     let message = response
@@ -511,6 +609,20 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     assert!(
         response.closed,
         "disconnect should close the process session"
+    );
+
+    let write_result = timeout(
+        Duration::from_secs(2),
+        session.process.write(b"hello".to_vec()),
+    )
+    .await
+    .context("timed out waiting for write after disconnect")?;
+    let write_error = write_result.expect_err("write after disconnect should fail");
+    assert!(
+        write_error
+            .to_string()
+            .starts_with("exec-server transport disconnected"),
+        "unexpected write error: {write_error}"
     );
 
     Ok(())
@@ -550,6 +662,17 @@ async fn exec_process_pushes_events(use_remote: bool) -> Result<()> {
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_replays_events_after_close(use_remote: bool) -> Result<()> {
     assert_exec_process_replays_events_after_close(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
+async fn exec_process_retains_output_after_exit_until_streams_close(
+    use_remote: bool,
+) -> Result<()> {
+    assert_exec_process_retains_output_after_exit_until_streams_close(use_remote).await
 }
 
 #[test_case(false ; "local")]

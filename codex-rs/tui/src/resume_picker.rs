@@ -7,7 +7,6 @@ use crate::app_server_session::AppServerSession;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::path_utils;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -15,10 +14,12 @@ use crate::tui::TuiEvent;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::ThreadId;
+use codex_utils_path as path_utils;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1002,7 +1003,8 @@ fn thread_list_params(
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
-        cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
+        cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
+        use_state_db_only: false,
         search_term: None,
     }
 }
@@ -1573,7 +1575,10 @@ mod tests {
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
         );
-        assert_eq!(params.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
+        );
     }
 
     #[test]

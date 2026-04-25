@@ -24,6 +24,7 @@ use codex_tools::ToolsConfig;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
@@ -267,6 +268,7 @@ impl ToolRouter {
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
@@ -279,7 +281,7 @@ impl ToolRouter {
 
         let direct_js_repl_call = tool_name.namespace.is_none()
             && matches!(tool_name.name.as_str(), "js_repl" | "js_repl_reset");
-        if source == ToolCallSource::Direct
+        if matches!(&source, ToolCallSource::Direct)
             && turn.tools_config.js_repl_tools_only
             && !direct_js_repl_call
         {
@@ -292,9 +294,11 @@ impl ToolRouter {
         let invocation = ToolInvocation {
             session,
             turn,
+            cancellation_token,
             tracker,
             call_id,
             tool_name,
+            source,
             payload,
         };
 

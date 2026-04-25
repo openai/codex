@@ -15,13 +15,15 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::SessionThreadConfig;
+use codex_config::StaticThreadConfigLoader;
+use codex_config::ThreadConfigSource;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
-#[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -100,6 +102,8 @@ async fn returns_config_error_for_invalid_user_config_toml() {
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect_err("expected error");
@@ -131,6 +135,8 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
             ..Default::default()
         },
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -161,6 +167,8 @@ async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io:
             ..Default::default()
         },
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -185,6 +193,8 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
         &[] as &[(String, TomlValue)],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect_err("expected error");
@@ -270,6 +280,8 @@ extra = true
         &[] as &[(String, TomlValue)],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect("load config");
@@ -303,6 +315,8 @@ async fn returns_empty_when_all_layers_missing() {
         &[] as &[(String, TomlValue)],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect("load layers");
@@ -354,6 +368,57 @@ async fn returns_empty_when_all_layers_missing() {
     }
 }
 
+#[tokio::test]
+async fn includes_thread_config_layers_in_stack() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let cwd_dir = tmp.path().join("project");
+    tokio::fs::create_dir_all(&cwd_dir).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&cwd_dir)?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[("features.plugins".to_string(), TomlValue::Boolean(true))],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudRequirementsLoader::default(),
+        &StaticThreadConfigLoader::new(vec![ThreadConfigSource::Session(SessionThreadConfig {
+            features: BTreeMap::from([("plugins".to_string(), false)]),
+            ..Default::default()
+        })]),
+        /*host_name*/ None,
+    )
+    .await?;
+
+    let layer_sources = layers
+        .layers_high_to_low()
+        .into_iter()
+        .map(|layer| layer.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        layer_sources,
+        vec![
+            super::ConfigLayerSource::SessionFlags,
+            super::ConfigLayerSource::SessionFlags,
+            super::ConfigLayerSource::User {
+                file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path()),
+            },
+            super::ConfigLayerSource::System {
+                file: super::system_config_toml_file()?,
+            },
+        ]
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("features")
+            .and_then(TomlValue::as_table)
+            .and_then(|features| features.get("plugins")),
+        Some(&TomlValue::Boolean(false))
+    );
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn managed_preferences_take_highest_precedence() {
@@ -396,6 +461,8 @@ flag = false
         &[] as &[(String, TomlValue)],
         overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect("load config");
@@ -498,6 +565,8 @@ allowed_sandbox_modes = ["read-only"]
         &[] as &[(String, TomlValue)],
         loader_overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -522,7 +591,6 @@ allowed_sandbox_modes = ["read-only"]
             .sandbox_policy
             .can_set(&SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
-                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -560,6 +628,8 @@ allowed_approval_policies = ["never"]
         &[] as &[(String, TomlValue)],
         loader_overrides,
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -601,6 +671,7 @@ personality = true
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -702,8 +773,10 @@ allowed_approval_policies = ["on-request"]
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_sandbox_config: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 mcp_servers: None,
                 apps: None,
                 rules: None,
@@ -713,6 +786,8 @@ allowed_approval_policies = ["on-request"]
                 guardian_policy_config: None,
             }))
         }),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -755,8 +830,10 @@ allowed_approval_policies = ["on-request"]
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_sandbox_config: None,
             allowed_web_search_modes: None,
             feature_requirements: None,
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -770,6 +847,7 @@ allowed_approval_policies = ["on-request"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &AbsolutePathBuf::try_from(requirements_file)?,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -786,6 +864,54 @@ allowed_approval_policies = ["on-request"]
             .as_ref()
             .map(|sourced| sourced.source.clone()),
         Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn system_remote_sandbox_config_keeps_cloud_sandbox_modes() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[[remote_sandbox_config]]
+hostname_patterns = ["runner-*.ci.example.com"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+"#,
+    )
+    .await?;
+
+    let cloud_source = RequirementSource::CloudRequirements;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    config_requirements_toml.merge_unset_fields(
+        cloud_source.clone(),
+        toml::from_str(
+            r#"
+allowed_sandbox_modes = ["read-only"]
+"#,
+        )?,
+    );
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &AbsolutePathBuf::try_from(requirements_file)?,
+        Some("runner-01.ci.example.com"),
+    )
+    .await?;
+    let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
+
+    assert_eq!(
+        config_requirements
+            .sandbox_policy
+            .can_set(&SandboxPolicy::new_workspace_write_policy()),
+        Err(ConstraintError::InvalidValue {
+            field_name: "sandbox_mode",
+            candidate: "WorkspaceWrite".into(),
+            allowed: "[ReadOnly]".into(),
+            requirement_source: cloud_source,
+        })
     );
 
     Ok(())
@@ -812,6 +938,7 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -866,6 +993,7 @@ deny_read = ["./sensitive/**/*.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -911,8 +1039,10 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_sandbox_config: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
+        hooks: None,
         mcp_servers: None,
         apps: None,
         rules: None,
@@ -931,6 +1061,8 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -949,6 +1081,109 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
             allowed: "[Never]".into(),
             requirement_source: RequirementSource::CloudRequirements,
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_includes_cloud_hook_requirements() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let managed_dir = tmp.path().join("managed-hooks");
+    tokio::fs::create_dir_all(&managed_dir).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements = ConfigRequirementsToml {
+        hooks: Some(codex_config::ManagedHooksRequirementsToml {
+            managed_dir: Some(managed_dir.clone()),
+            windows_managed_dir: None,
+            hooks: codex_config::HookEventsToml {
+                pre_tool_use: vec![codex_config::MatcherGroup {
+                    matcher: Some("^Bash$".to_string()),
+                    hooks: vec![codex_config::HookHandlerConfig::Command {
+                        command: format!("python3 {}/pre.py", managed_dir.display()),
+                        timeout_sec: Some(10),
+                        r#async: false,
+                        status_message: Some("checking".to_string()),
+                    }],
+                }],
+                ..Default::default()
+            },
+        }),
+        ..ConfigRequirementsToml::default()
+    };
+    let expected = requirements.clone();
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
+    )
+    .await?;
+
+    assert_eq!(layers.requirements_toml().hooks, expected.hooks);
+    assert_eq!(
+        layers
+            .requirements()
+            .managed_hooks
+            .as_ref()
+            .map(|hooks| hooks.source.clone()),
+        Some(Some(RequirementSource::CloudRequirements))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    let requirements: ConfigRequirementsToml = toml::from_str(
+        r#"
+            allowed_sandbox_modes = ["read-only"]
+
+            [[remote_sandbox_config]]
+            hostname_patterns = ["runner-*.ci.example.com"]
+            allowed_sandbox_modes = ["read-only", "workspace-write"]
+        "#,
+    )?;
+    let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        cloud_requirements,
+        &codex_config::NoopThreadConfigLoader,
+        Some("runner-01.ci.example.com"),
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_sandbox_modes,
+        Some(vec![
+            crate::config_loader::SandboxModeRequirement::ReadOnly,
+            crate::config_loader::SandboxModeRequirement::WorkspaceWrite,
+        ])
+    );
+    assert!(
+        layers
+            .requirements()
+            .sandbox_policy
+            .can_set(&SandboxPolicy::new_workspace_write_policy())
+            .is_ok()
     );
 
     Ok(())
@@ -974,6 +1209,8 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
                 "cloud requirements failed",
             ))
         }),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await
     .expect_err("cloud requirements failure should fail closed");
@@ -1021,6 +1258,8 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1166,6 +1405,8 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1206,6 +1447,8 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1263,6 +1506,8 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1334,6 +1579,8 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let project_layers_untrusted: Vec<_> = layers_untrusted
@@ -1373,6 +1620,8 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
     let project_layers_unknown: Vec<_> = layers_unknown
@@ -1439,6 +1688,8 @@ async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> st
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1592,6 +1843,8 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            &codex_config::NoopThreadConfigLoader,
+            /*host_name*/ None,
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -1660,6 +1913,8 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
             &[] as &[(String, TomlValue)],
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            &codex_config::NoopThreadConfigLoader,
+            /*host_name*/ None,
         )
         .await?;
         let project_layers: Vec<_> = layers
@@ -1720,6 +1975,8 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 
@@ -1763,6 +2020,8 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+        /*host_name*/ None,
     )
     .await?;
 

@@ -76,13 +76,34 @@ async fn request_permissions_round_trip() -> Result<()> {
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
+    assert!(params.cwd.as_path().is_absolute());
     assert_eq!(params.reason, Some("Select a workspace root".to_string()));
-    let requested_writes = params
+    let requested_file_system = params
         .permissions
         .file_system
-        .and_then(|file_system| file_system.write)
+        .expect("request should include file system permissions");
+    let requested_writes = requested_file_system
+        .write
+        .clone()
         .expect("request should include write permissions");
     assert_eq!(requested_writes.len(), 2);
+    assert_eq!(
+        requested_file_system.entries,
+        Some(vec![
+            codex_app_server_protocol::FileSystemSandboxEntry {
+                path: codex_app_server_protocol::FileSystemPath::Path {
+                    path: requested_writes[0].clone(),
+                },
+                access: codex_app_server_protocol::FileSystemAccessMode::Write,
+            },
+            codex_app_server_protocol::FileSystemSandboxEntry {
+                path: codex_app_server_protocol::FileSystemPath::Path {
+                    path: requested_writes[1].clone(),
+                },
+                access: codex_app_server_protocol::FileSystemAccessMode::Write,
+            },
+        ])
+    );
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(
@@ -93,10 +114,12 @@ async fn request_permissions_round_trip() -> Result<()> {
                 file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
                     read: None,
                     write: Some(vec![requested_writes[0].clone()]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             },
             scope: PermissionGrantScope::Turn,
+            strict_auto_review: None,
         })?,
     )
     .await?;

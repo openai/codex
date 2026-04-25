@@ -2556,6 +2556,7 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
         .start_thread_with_tools(
             base_test.config.clone(),
             vec![DynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
                 name: "hidden_dynamic_tool".to_string(),
                 description: "A hidden dynamic tool.".to_string(),
                 input_schema: serde_json::json!({
@@ -2576,8 +2577,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
-const out = await tools.hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
+const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -2608,6 +2609,7 @@ text(
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "use exec to inspect and call hidden tools".into(),
                 text_elements: Vec::new(),
@@ -2617,6 +2619,7 @@ text(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
@@ -2636,6 +2639,7 @@ text(
         _ => None,
     })
     .await;
+    assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, "hidden_dynamic_tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
     test.codex
@@ -2669,7 +2673,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("hidden_dynamic_tool".to_string()))
+        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -2682,7 +2686,7 @@ text(
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("hidden_dynamic_tool(args:")
+                    && description.contains("codex_app_hidden_dynamic_tool(args:")
             })
     );
 

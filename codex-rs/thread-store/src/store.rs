@@ -1,36 +1,51 @@
 use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use std::any::Any;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
+use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
-use crate::ResumeThreadRecorderParams;
+use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
-use crate::ThreadRecorder;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 
 /// Storage-neutral thread persistence boundary.
 #[async_trait]
-pub trait ThreadStore: Send + Sync {
-    /// Creates a new thread and returns a live recorder for future appends.
-    async fn create_thread(
-        &self,
-        params: CreateThreadParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>>;
+pub trait ThreadStore: Any + Send + Sync {
+    /// Return this store as [`Any`] for implementation-owned escape hatches.
+    fn as_any(&self) -> &dyn Any;
 
-    /// Reopens a live recorder for an existing thread.
-    async fn resume_thread_recorder(
-        &self,
-        params: ResumeThreadRecorderParams,
-    ) -> ThreadStoreResult<Box<dyn ThreadRecorder>>;
+    /// Creates a new live thread.
+    async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()>;
 
-    /// Appends items to a stored thread outside the live-recorder path.
+    /// Reopens an existing thread for live appends.
+    async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()>;
+
+    /// Appends items to a live thread.
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()>;
+
+    /// Materializes the thread if persistence is lazy, then persists all queued items.
+    async fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes all queued items and returns once they are durable/readable.
+    async fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Flushes pending items and closes the live thread writer.
+    async fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
+
+    /// Discards the live thread writer without forcing pending in-memory items to become durable.
+    ///
+    /// Core calls this when session initialization fails after a live writer has been created.
+    /// Implementations should release any live writer resources for the thread while preserving
+    /// already-durable thread data.
+    async fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreResult<()>;
 
     /// Loads persisted history for resume, fork, rollback, and memory jobs.
     async fn load_history(
@@ -40,6 +55,14 @@ pub trait ThreadStore: Send + Sync {
 
     /// Reads a thread summary and optionally its persisted history.
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread>;
+
+    /// Reads a rollout-backed thread by path when the store supports path-addressed lookups.
+    ///
+    /// Deprecated: new callers should use [`ThreadStore::read_thread`] instead.
+    async fn read_thread_by_rollout_path(
+        &self,
+        params: ReadThreadByRolloutPathParams,
+    ) -> ThreadStoreResult<StoredThread>;
 
     /// Lists stored threads matching the supplied filters.
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage>;

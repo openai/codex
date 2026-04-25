@@ -103,6 +103,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let dynamic_tools = vec![
         DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "geo_lookup".to_string(),
             description: "lookup a city".to_string(),
             input_schema: json!({
@@ -113,6 +114,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             defer_loading: true,
         },
         DynamicToolSpec {
+            namespace: None,
             name: "weather_lookup".to_string(),
             description: "lookup weather".to_string(),
             input_schema: json!({
@@ -397,6 +399,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),
@@ -406,6 +409,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

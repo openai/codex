@@ -5,55 +5,12 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AdditionalFileSystemPermissions": {
-      "properties": {
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/FileSystemSandboxEntry"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "read": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "write": {
-          "items": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AdditionalNetworkPermissions": {
-      "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "AdditionalPermissionProfile": {
       "properties": {
         "fileSystem": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+              "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
             },
             {
               "type": "null"
@@ -63,12 +20,13 @@
         "network": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
+              "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
             },
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Partial overlay used for per-command permission requests."
         }
       },
       "type": "object"
@@ -498,6 +456,30 @@
             },
             "method": {
               "enum": [
+                "thread/approveGuardianDeniedAction"
+              ],
+              "title": "Thread/approveGuardianDeniedActionRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadApproveGuardianDeniedActionParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/approveGuardianDeniedActionRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -715,6 +697,30 @@
             },
             "method": {
               "enum": [
+                "marketplace/upgrade"
+              ],
+              "title": "Marketplace/upgradeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MarketplaceUpgradeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/upgradeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "plugin/list"
               ],
               "title": "Plugin/listRequestMethod",
@@ -778,6 +784,78 @@
             "params"
           ],
           "title": "App/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "device/key/create"
+              ],
+              "title": "Device/key/createRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeyCreateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/createRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "device/key/public"
+              ],
+              "title": "Device/key/publicRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeyPublicParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/publicRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "device/key/sign"
+              ],
+              "title": "Device/key/signRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/DeviceKeySignParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Device/key/signRequest",
           "type": "object"
         },
         {
@@ -2008,6 +2086,12 @@
         "callId": {
           "type": "string"
         },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         },
@@ -2260,217 +2344,6 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
-    "FileSystemAccessMode": {
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/v2/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "PathFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "title": "GlobPatternFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "title": "SpecialFileSystemPath",
-          "type": "object"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      },
-      "required": [
-        "access",
-        "path"
-      ],
-      "type": "object"
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "root"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "RootFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "minimal"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "current_working_directory"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "project_roots"
-              ],
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "tmpdir"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "TmpdirFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "SlashTmpFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "unknown"
-              ],
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "FuzzyFileSearchMatchType": {
       "enum": [
         "file",
@@ -2603,7 +2476,7 @@
         "fileSystem": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+              "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
             },
             {
               "type": "null"
@@ -2613,7 +2486,7 @@
         "network": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
+              "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
             },
             {
               "type": "null"
@@ -3608,11 +3481,14 @@
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "cwd": {
+          "$ref": "#/definitions/v2/AbsolutePathBuf"
+        },
         "itemId": {
           "type": "string"
         },
         "permissions": {
-          "$ref": "#/definitions/RequestPermissionProfile"
+          "$ref": "#/definitions/v2/RequestPermissionProfile"
         },
         "reason": {
           "type": [
@@ -3628,6 +3504,7 @@
         }
       },
       "required": [
+        "cwd",
         "itemId",
         "permissions",
         "threadId",
@@ -3649,6 +3526,13 @@
             }
           ],
           "default": "turn"
+        },
+        "strictAutoReview": {
+          "description": "Review every subsequent command in this turn before normal sandboxed execution.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3669,32 +3553,6 @@
         }
       ],
       "title": "RequestId"
-    },
-    "RequestPermissionProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "fileSystem": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AdditionalNetworkPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "ReviewDecision": {
       "description": "User's decision in response to an ExecApprovalRequest.",
@@ -4595,6 +4453,26 @@
           "properties": {
             "method": {
               "enum": [
+                "model/verification"
+              ],
+              "title": "Model/verificationNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelVerificationNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/verificationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "warning"
               ],
               "title": "WarningNotificationMethod",
@@ -4609,6 +4487,26 @@
             "params"
           ],
           "title": "WarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "guardianWarning"
+              ],
+              "title": "GuardianWarningNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/GuardianWarningNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "GuardianWarningNotification",
           "type": "object"
         },
         {
@@ -5323,6 +5221,22 @@
             ],
             "title": "ChatgptAccount",
             "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "amazonBedrock"
+                ],
+                "title": "AmazonBedrockAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AmazonBedrockAccount",
+            "type": "object"
           }
         ]
       },
@@ -5404,6 +5318,59 @@
           "cooldown_active"
         ],
         "type": "string"
+      },
+      "AdditionalFileSystemPermissions": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "globScanMaxDepth": {
+            "format": "uint",
+            "minimum": 1.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "read": {
+            "description": "This will be removed in favor of `entries`.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "write": {
+            "description": "This will be removed in favor of `entries`.",
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AdditionalNetworkPermissions": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "AgentMessageDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5831,9 +5798,10 @@
         "type": "object"
       },
       "ApprovalsReviewer": {
-        "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+        "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `auto_review` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request. The legacy value `guardian_subagent` is accepted for compatibility.",
         "enum": [
           "user",
+          "auto_review",
           "guardian_subagent"
         ],
         "type": "string"
@@ -6003,6 +5971,13 @@
               "chatgptAuthTokens"
             ],
             "type": "string"
+          },
+          {
+            "description": "Programmatic Codex auth backed by a registered Agent Identity.",
+            "enum": [
+              "agentIdentity"
+            ],
+            "type": "string"
           }
         ]
       },
@@ -6073,6 +6048,7 @@
               "contextWindowExceeded",
               "usageLimitExceeded",
               "serverOverloaded",
+              "cyberPolicy",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -6520,6 +6496,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional full permissions profile for this command.\n\nDefaults to the user's configured permissions when omitted. Cannot be combined with `sandboxPolicy`."
+          },
           "processId": {
             "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
             "type": [
@@ -6536,7 +6523,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+            "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted. Cannot be combined with `permissionProfile`."
           },
           "size": {
             "anyOf": [
@@ -7413,6 +7400,100 @@
         "title": "ConfigWriteResponse",
         "type": "object"
       },
+      "ConfiguredHookHandler": {
+        "oneOf": [
+          {
+            "properties": {
+              "async": {
+                "type": "boolean"
+              },
+              "command": {
+                "type": "string"
+              },
+              "statusMessage": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeoutSec": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "command"
+                ],
+                "title": "CommandConfiguredHookHandlerType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "async",
+              "command",
+              "type"
+            ],
+            "title": "CommandConfiguredHookHandler",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "prompt"
+                ],
+                "title": "PromptConfiguredHookHandlerType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "PromptConfiguredHookHandler",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "agent"
+                ],
+                "title": "AgentConfiguredHookHandlerType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AgentConfiguredHookHandler",
+            "type": "object"
+          }
+        ]
+      },
+      "ConfiguredHookMatcherGroup": {
+        "properties": {
+          "hooks": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookHandler"
+            },
+            "type": "array"
+          },
+          "matcher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "hooks"
+        ],
+        "type": "object"
+      },
       "ContentItem": {
         "oneOf": [
           {
@@ -7547,6 +7628,300 @@
         "title": "DeprecationNoticeNotification",
         "type": "object"
       },
+      "DeviceKeyAlgorithm": {
+        "description": "Device-key algorithm reported at enrollment and signing boundaries.",
+        "enum": [
+          "ecdsa_p256_sha256"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyCreateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Create a controller-local device key with a random key id.",
+        "properties": {
+          "accountUserId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "protectionPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/DeviceKeyProtectionPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to `hardware_only` when omitted."
+          }
+        },
+        "required": [
+          "accountUserId",
+          "clientId"
+        ],
+        "title": "DeviceKeyCreateParams",
+        "type": "object"
+      },
+      "DeviceKeyCreateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Device-key metadata and public key returned by create/public APIs.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "protectionClass": {
+            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
+          },
+          "publicKeySpkiDerBase64": {
+            "description": "SubjectPublicKeyInfo DER encoded as base64.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "keyId",
+          "protectionClass",
+          "publicKeySpkiDerBase64"
+        ],
+        "title": "DeviceKeyCreateResponse",
+        "type": "object"
+      },
+      "DeviceKeyProtectionClass": {
+        "description": "Platform protection class for a controller-local device key.",
+        "enum": [
+          "hardware_secure_enclave",
+          "hardware_tpm",
+          "os_protected_nonextractable"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyProtectionPolicy": {
+        "description": "Protection policy for creating or loading a controller-local device key.",
+        "enum": [
+          "hardware_only",
+          "allow_os_protected_nonextractable"
+        ],
+        "type": "string"
+      },
+      "DeviceKeyPublicParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Fetch a controller-local device key public key by id.",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyId"
+        ],
+        "title": "DeviceKeyPublicParams",
+        "type": "object"
+      },
+      "DeviceKeyPublicResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Device-key public metadata returned by `device/key/public`.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "protectionClass": {
+            "$ref": "#/definitions/v2/DeviceKeyProtectionClass"
+          },
+          "publicKeySpkiDerBase64": {
+            "description": "SubjectPublicKeyInfo DER encoded as base64.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "keyId",
+          "protectionClass",
+          "publicKeySpkiDerBase64"
+        ],
+        "title": "DeviceKeyPublicResponse",
+        "type": "object"
+      },
+      "DeviceKeySignParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Sign an accepted structured payload with a controller-local device key.",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/definitions/v2/DeviceKeySignPayload"
+          }
+        },
+        "required": [
+          "keyId",
+          "payload"
+        ],
+        "title": "DeviceKeySignParams",
+        "type": "object"
+      },
+      "DeviceKeySignPayload": {
+        "description": "Structured payloads accepted by `device/key/sign`.",
+        "oneOf": [
+          {
+            "description": "Payload bound to one remote-control controller websocket `/client` connection challenge.",
+            "properties": {
+              "accountUserId": {
+                "type": "string"
+              },
+              "audience": {
+                "$ref": "#/definitions/v2/RemoteControlClientConnectionAudience"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "nonce": {
+                "type": "string"
+              },
+              "scopes": {
+                "description": "Must contain exactly `remote_control_controller_websocket`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sessionId": {
+                "description": "Backend-issued websocket session id that this proof authorizes.",
+                "type": "string"
+              },
+              "targetOrigin": {
+                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
+                "type": "string"
+              },
+              "targetPath": {
+                "description": "Websocket route path that this proof authorizes.",
+                "type": "string"
+              },
+              "tokenExpiresAt": {
+                "description": "Remote-control token expiration as Unix seconds.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "tokenSha256Base64url": {
+                "description": "SHA-256 of the controller-scoped remote-control token, encoded as unpadded base64url.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "remoteControlClientConnection"
+                ],
+                "title": "RemoteControlClientConnectionDeviceKeySignPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accountUserId",
+              "audience",
+              "clientId",
+              "nonce",
+              "scopes",
+              "sessionId",
+              "targetOrigin",
+              "targetPath",
+              "tokenExpiresAt",
+              "tokenSha256Base64url",
+              "type"
+            ],
+            "title": "RemoteControlClientConnectionDeviceKeySignPayload",
+            "type": "object"
+          },
+          {
+            "description": "Payload bound to a remote-control client `/client/enroll` ownership challenge.",
+            "properties": {
+              "accountUserId": {
+                "type": "string"
+              },
+              "audience": {
+                "$ref": "#/definitions/v2/RemoteControlClientEnrollmentAudience"
+              },
+              "challengeExpiresAt": {
+                "description": "Enrollment challenge expiration as Unix seconds.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "challengeId": {
+                "description": "Backend-issued enrollment challenge id that this proof authorizes.",
+                "type": "string"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "deviceIdentitySha256Base64url": {
+                "description": "SHA-256 of the requested device identity operation, encoded as unpadded base64url.",
+                "type": "string"
+              },
+              "nonce": {
+                "type": "string"
+              },
+              "targetOrigin": {
+                "description": "Origin of the backend endpoint that issued the challenge and will verify this proof.",
+                "type": "string"
+              },
+              "targetPath": {
+                "description": "HTTP route path that this proof authorizes.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "remoteControlClientEnrollment"
+                ],
+                "title": "RemoteControlClientEnrollmentDeviceKeySignPayloadType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accountUserId",
+              "audience",
+              "challengeExpiresAt",
+              "challengeId",
+              "clientId",
+              "deviceIdentitySha256Base64url",
+              "nonce",
+              "targetOrigin",
+              "targetPath",
+              "type"
+            ],
+            "title": "RemoteControlClientEnrollmentDeviceKeySignPayload",
+            "type": "object"
+          }
+        ]
+      },
+      "DeviceKeySignResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "ASN.1 DER signature returned by `device/key/sign`.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/definitions/v2/DeviceKeyAlgorithm"
+          },
+          "signatureDerBase64": {
+            "description": "ECDSA signature DER encoded as base64.",
+            "type": "string"
+          },
+          "signedPayloadBase64": {
+            "description": "Exact bytes signed by the device key, encoded as base64. Verifiers must verify this byte string directly and must not reserialize `payload`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "signatureDerBase64",
+          "signedPayloadBase64"
+        ],
+        "title": "DeviceKeySignResponse",
+        "type": "object"
+      },
       "DynamicToolCallOutputContentItem": {
         "oneOf": [
           {
@@ -7610,6 +7985,12 @@
           "inputSchema": true,
           "name": {
             "type": "string"
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -8032,6 +8413,217 @@
         ],
         "title": "FileChangePatchUpdatedNotification",
         "type": "object"
+      },
+      "FileSystemAccessMode": {
+        "enum": [
+          "read",
+          "write",
+          "none"
+        ],
+        "type": "string"
+      },
+      "FileSystemPath": {
+        "oneOf": [
+          {
+            "properties": {
+              "path": {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              "type": {
+                "enum": [
+                  "path"
+                ],
+                "title": "PathFileSystemPathType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "type"
+            ],
+            "title": "PathFileSystemPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "glob_pattern"
+                ],
+                "title": "GlobPatternFileSystemPathType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern",
+              "type"
+            ],
+            "title": "GlobPatternFileSystemPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "special"
+                ],
+                "title": "SpecialFileSystemPathType",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/definitions/v2/FileSystemSpecialPath"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ],
+            "title": "SpecialFileSystemPath",
+            "type": "object"
+          }
+        ]
+      },
+      "FileSystemSandboxEntry": {
+        "properties": {
+          "access": {
+            "$ref": "#/definitions/v2/FileSystemAccessMode"
+          },
+          "path": {
+            "$ref": "#/definitions/v2/FileSystemPath"
+          }
+        },
+        "required": [
+          "access",
+          "path"
+        ],
+        "type": "object"
+      },
+      "FileSystemSpecialPath": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "root"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "RootFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "minimal"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "MinimalFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "current_working_directory"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "CurrentWorkingDirectoryFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "project_roots"
+                ],
+                "type": "string"
+              },
+              "subpath": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "KindFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "tmpdir"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "TmpdirFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "slash_tmp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "SlashTmpFileSystemSpecialPath",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "subpath": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "FileUpdateChange": {
         "properties": {
@@ -8826,6 +9418,32 @@
             ],
             "title": "McpToolCallGuardianApprovalReviewAction",
             "type": "object"
+          },
+          {
+            "properties": {
+              "permissions": {
+                "$ref": "#/definitions/v2/RequestPermissionProfile"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "requestPermissions"
+                ],
+                "title": "RequestPermissionsGuardianApprovalReviewActionType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "permissions",
+              "type"
+            ],
+            "title": "RequestPermissionsGuardianApprovalReviewAction",
+            "type": "object"
           }
         ]
       },
@@ -8866,6 +9484,25 @@
           "high"
         ],
         "type": "string"
+      },
+      "GuardianWarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "message": {
+            "description": "Concise guardian warning message for the user.",
+            "type": "string"
+          },
+          "threadId": {
+            "description": "Thread target for the guardian warning.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "threadId"
+        ],
+        "title": "GuardianWarningNotification",
+        "type": "object"
       },
       "HookCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9550,6 +10187,67 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "ManagedHooksRequirements": {
+        "properties": {
+          "PermissionRequest": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "PostToolUse": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "PreToolUse": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "SessionStart": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "Stop": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "UserPromptSubmit": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
+          "managedDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "windowsManagedDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "PermissionRequest",
+          "PostToolUse",
+          "PreToolUse",
+          "SessionStart",
+          "Stop",
+          "UserPromptSubmit"
+        ],
+        "type": "object"
+      },
       "MarketplaceAddParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -9661,6 +10359,64 @@
         "title": "MarketplaceRemoveResponse",
         "type": "object"
       },
+      "MarketplaceUpgradeErrorInfo": {
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "message"
+        ],
+        "type": "object"
+      },
+      "MarketplaceUpgradeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplaceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "MarketplaceUpgradeParams",
+        "type": "object"
+      },
+      "MarketplaceUpgradeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/definitions/v2/MarketplaceUpgradeErrorInfo"
+            },
+            "type": "array"
+          },
+          "selectedMarketplaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "upgradedRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "errors",
+          "selectedMarketplaces",
+          "upgradedRoots"
+        ],
+        "title": "MarketplaceUpgradeResponse",
+        "type": "object"
+      },
       "McpAuthStatus": {
         "enum": [
           "unsupported",
@@ -9677,7 +10433,10 @@
             "type": "string"
           },
           "threadId": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "uri": {
             "type": "string"
@@ -9685,7 +10444,6 @@
         },
         "required": [
           "server",
-          "threadId",
           "uri"
         ],
         "title": "McpResourceReadParams",
@@ -10268,6 +11026,36 @@
         ],
         "type": "object"
       },
+      "ModelVerification": {
+        "enum": [
+          "trustedAccessForCyber"
+        ],
+        "type": "string"
+      },
+      "ModelVerificationNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "verifications": {
+            "items": {
+              "$ref": "#/definitions/v2/ModelVerification"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId",
+          "verifications"
+        ],
+        "title": "ModelVerificationNotification",
+        "type": "object"
+      },
       "NetworkAccess": {
         "enum": [
           "restricted",
@@ -10497,6 +11285,135 @@
           }
         ]
       },
+      "PermissionProfile": {
+        "oneOf": [
+          {
+            "description": "Codex owns sandbox construction for this profile.",
+            "properties": {
+              "fileSystem": {
+                "$ref": "#/definitions/v2/PermissionProfileFileSystemPermissions"
+              },
+              "network": {
+                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
+              },
+              "type": {
+                "enum": [
+                  "managed"
+                ],
+                "title": "ManagedPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "fileSystem",
+              "network",
+              "type"
+            ],
+            "title": "ManagedPermissionProfile",
+            "type": "object"
+          },
+          {
+            "description": "Do not apply an outer sandbox.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "disabled"
+                ],
+                "title": "DisabledPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DisabledPermissionProfile",
+            "type": "object"
+          },
+          {
+            "description": "Filesystem isolation is enforced by an external caller.",
+            "properties": {
+              "network": {
+                "$ref": "#/definitions/v2/PermissionProfileNetworkPermissions"
+              },
+              "type": {
+                "enum": [
+                  "external"
+                ],
+                "title": "ExternalPermissionProfileType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "network",
+              "type"
+            ],
+            "title": "ExternalPermissionProfile",
+            "type": "object"
+          }
+        ]
+      },
+      "PermissionProfileFileSystemPermissions": {
+        "oneOf": [
+          {
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+                },
+                "type": "array"
+              },
+              "globScanMaxDepth": {
+                "format": "uint",
+                "minimum": 1.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedPermissionProfileFileSystemPermissionsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entries",
+              "type"
+            ],
+            "title": "RestrictedPermissionProfileFileSystemPermissions",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "unrestricted"
+                ],
+                "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "UnrestrictedPermissionProfileFileSystemPermissions",
+            "type": "object"
+          }
+        ]
+      },
+      "PermissionProfileNetworkPermissions": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
       "Personality": {
         "enum": [
           "none",
@@ -10573,7 +11490,14 @@
             "type": "string"
           },
           "marketplacePath": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "mcpServers": {
             "items": {
@@ -10594,7 +11518,6 @@
         "required": [
           "apps",
           "marketplaceName",
-          "marketplacePath",
           "mcpServers",
           "skills",
           "summary"
@@ -11305,53 +12228,6 @@
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
       },
-      "ReadOnlyAccess": {
-        "oneOf": [
-          {
-            "properties": {
-              "includePlatformDefaults": {
-                "default": true,
-                "type": "boolean"
-              },
-              "readableRoots": {
-                "default": [],
-                "items": {
-                  "$ref": "#/definitions/v2/AbsolutePathBuf"
-                },
-                "type": "array"
-              },
-              "type": {
-                "enum": [
-                  "restricted"
-                ],
-                "title": "RestrictedReadOnlyAccessType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "RestrictedReadOnlyAccess",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "fullAccess"
-                ],
-                "title": "FullAccessReadOnlyAccessType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "FullAccessReadOnlyAccess",
-            "type": "object"
-          }
-        ]
-      },
       "RealtimeConversationVersion": {
         "enum": [
           "v1",
@@ -11620,6 +12496,20 @@
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
       },
+      "RemoteControlClientConnectionAudience": {
+        "description": "Audience for a remote-control client connection device-key proof.",
+        "enum": [
+          "remote_control_client_websocket"
+        ],
+        "type": "string"
+      },
+      "RemoteControlClientEnrollmentAudience": {
+        "description": "Audience for a remote-control client enrollment device-key proof.",
+        "enum": [
+          "remote_control_client_enrollment"
+        ],
+        "type": "string"
+      },
       "RequestId": {
         "anyOf": [
           {
@@ -11630,6 +12520,32 @@
             "type": "integer"
           }
         ]
+      },
+      "RequestPermissionProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "fileSystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalFileSystemPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AdditionalNetworkPermissions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "ResidencyRequirement": {
         "enum": [
@@ -12520,16 +13436,6 @@
           },
           {
             "properties": {
-              "access": {
-                "allOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReadOnlyAccess"
-                  }
-                ],
-                "default": {
-                  "type": "fullAccess"
-                }
-              },
               "networkAccess": {
                 "default": false,
                 "type": "boolean"
@@ -12585,16 +13491,6 @@
               "networkAccess": {
                 "default": false,
                 "type": "boolean"
-              },
-              "readOnlyAccess": {
-                "allOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReadOnlyAccess"
-                  }
-                ],
-                "default": {
-                  "type": "fullAccess"
-                }
               },
               "type": {
                 "enum": [
@@ -12924,7 +13820,14 @@
             "type": "string"
           },
           "path": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "shortDescription": {
             "type": [
@@ -12936,8 +13839,7 @@
         "required": [
           "description",
           "enabled",
-          "name",
-          "path"
+          "name"
         ],
         "type": "object"
       },
@@ -13420,6 +14322,28 @@
         ],
         "type": "string"
       },
+      "ThreadApproveGuardianDeniedActionParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "description": "Serialized `codex_protocol::protocol::GuardianAssessmentEvent`."
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "ThreadApproveGuardianDeniedActionParams",
+        "type": "object"
+      },
+      "ThreadApproveGuardianDeniedActionResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadApproveGuardianDeniedActionResponse",
+        "type": "object"
+      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13535,6 +14459,10 @@
           "ephemeral": {
             "type": "boolean"
           },
+          "excludeTurns": {
+            "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
+            "type": "boolean"
+          },
           "model": {
             "description": "Configuration overrides for the forked thread, if any.",
             "type": [
@@ -13547,6 +14475,17 @@
               "string",
               "null"
             ]
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the forked thread. Cannot be combined with `sandbox`."
           },
           "sandbox": {
             "anyOf": [
@@ -13616,6 +14555,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -13627,7 +14578,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [
@@ -14049,6 +15005,12 @@
               "id": {
                 "type": "string"
               },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "status": {
                 "$ref": "#/definitions/v2/DynamicToolCallStatus"
               },
@@ -14336,6 +15298,19 @@
           }
         ]
       },
+      "ThreadListCwdFilter": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ]
+      },
       "ThreadListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14354,11 +15329,15 @@
             ]
           },
           "cwd": {
-            "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadListCwdFilter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cwd filter or filters; when set, only threads whose session cwd exactly matches one of these paths are returned."
           },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -14417,6 +15396,10 @@
               "array",
               "null"
             ]
+          },
+          "useStateDbOnly": {
+            "description": "If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
+            "type": "boolean"
           }
         },
         "title": "ThreadListParams",
@@ -14909,6 +15892,10 @@
               "null"
             ]
           },
+          "excludeTurns": {
+            "description": "When true, return only thread metadata and live-resume state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after resuming.",
+            "type": "boolean"
+          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -14921,6 +15908,17 @@
               "string",
               "null"
             ]
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for the resumed thread. Cannot be combined with `sandbox`."
           },
           "personality": {
             "anyOf": [
@@ -15000,6 +15998,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15011,7 +16021,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [
@@ -15211,6 +16226,17 @@
               "null"
             ]
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Full permissions override for this thread. Cannot be combined with `sandbox`."
+          },
           "personality": {
             "anyOf": [
               {
@@ -15299,6 +16325,18 @@
           "modelProvider": {
             "type": "string"
           },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Canonical active permissions view for this thread."
+          },
           "reasoningEffort": {
             "anyOf": [
               {
@@ -15310,7 +16348,12 @@
             ]
           },
           "sandbox": {
-            "$ref": "#/definitions/v2/SandboxPolicy"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              }
+            ],
+            "description": "Legacy sandbox policy retained for compatibility. New clients should use `permissionProfile` when present as the canonical active permissions view."
           },
           "serviceTier": {
             "anyOf": [
@@ -15822,6 +16865,21 @@
         "title": "TurnDiffUpdatedNotification",
         "type": "object"
       },
+      "TurnEnvironmentParams": {
+        "properties": {
+          "cwd": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "environmentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "environmentId"
+        ],
+        "type": "object"
+      },
       "TurnError": {
         "properties": {
           "additionalDetails": {
@@ -15983,6 +17041,17 @@
           },
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+          },
+          "permissionProfile": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PermissionProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the full permissions profile for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`."
           },
           "personality": {
             "anyOf": [

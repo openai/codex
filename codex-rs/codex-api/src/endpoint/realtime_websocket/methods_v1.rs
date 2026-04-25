@@ -55,6 +55,7 @@ pub(super) fn session_update_session(
                     rate: REALTIME_AUDIO_SAMPLE_RATE,
                 },
                 noise_reduction: None,
+                transcription: None,
                 turn_detection: None,
             },
             output: Some(SessionAudioOutput {

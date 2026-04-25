@@ -1,15 +1,15 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::config_manager::ConfigManager;
+use crate::device_key_api::DeviceKeyApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -19,6 +19,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
+use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use axum::http::HeaderValue;
@@ -36,6 +37,9 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::DeviceKeyCreateParams;
+use codex_app_server_protocol::DeviceKeyPublicParams;
+use codex_app_server_protocol::DeviceKeySignParams;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -65,8 +69,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
@@ -90,7 +92,6 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
-use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -168,6 +169,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     thread_manager: Arc<ThreadManager>,
     config_api: ConfigApi,
+    device_key_api: DeviceKeyApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
@@ -179,8 +181,9 @@ pub(crate) struct MessageProcessor {
     remote_control_handle: Option<RemoteControlHandle>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
+    origin: ConnectionOrigin,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -192,9 +195,26 @@ struct InitializedConnectionSessionState {
     client_version: String,
 }
 
+impl Default for ConnectionSessionState {
+    fn default() -> Self {
+        Self::new(ConnectionOrigin::WebSocket)
+    }
+}
+
 impl ConnectionSessionState {
+    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
+        Self {
+            origin,
+            initialized: OnceLock::new(),
+        }
+    }
+
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
+    }
+
+    fn allows_device_key_requests(&self) -> bool {
+        self.origin.allows_device_key_requests()
     }
 
     pub(crate) fn experimental_api_enabled(&self) -> bool {
@@ -231,10 +251,8 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
+    pub(crate) config_manager: ConfigManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) cli_overrides: Vec<(String, TomlValue)>,
-    pub(crate) loader_overrides: LoaderOverrides,
-    pub(crate) cloud_requirements: CloudRequirementsLoader,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -252,10 +270,8 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
+            config_manager,
             environment_manager,
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements,
             feedback,
             log_db,
             config_warnings,
@@ -288,9 +304,6 @@ impl MessageProcessor {
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
 
-        let cli_overrides = Arc::new(RwLock::new(cli_overrides));
-        let runtime_feature_enablement = Arc::new(RwLock::new(BTreeMap::new()));
-        let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
@@ -298,9 +311,7 @@ impl MessageProcessor {
             analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
-            cli_overrides: cli_overrides.clone(),
-            runtime_feature_enablement: runtime_feature_enablement.clone(),
-            cloud_requirements: cloud_requirements.clone(),
+            config_manager: config_manager.clone(),
             feedback,
             log_db,
         });
@@ -310,17 +321,20 @@ impl MessageProcessor {
             .plugins_manager()
             .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
-            config.codex_home.to_path_buf(),
-            cli_overrides,
-            runtime_feature_enablement,
-            loader_overrides,
-            cloud_requirements,
+            config_manager,
             thread_manager.clone(),
             analytics_events_client.clone(),
         );
+        let device_key_api =
+            DeviceKeyApi::new(config.sqlite_home.clone(), config.model_provider_id.clone());
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
-        let fs_api = FsApi::default();
+        let fs_api = FsApi::new(
+            thread_manager
+                .environment_manager()
+                .local_environment()
+                .get_filesystem(),
+        );
         let fs_watch_manager = FsWatchManager::new(outgoing.clone());
 
         Self {
@@ -328,6 +342,7 @@ impl MessageProcessor {
             codex_message_processor,
             thread_manager: Arc::clone(&thread_manager),
             config_api,
+            device_key_api,
             external_agent_config_api,
             fs_api,
             auth_manager,
@@ -348,7 +363,7 @@ impl MessageProcessor {
         self: &Arc<Self>,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
-        transport: AppServerTransport,
+        transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
         let request_method = request.method.as_str();
@@ -765,6 +780,7 @@ impl MessageProcessor {
 
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let device_key_requests_allowed = session.allows_device_key_requests();
         Arc::clone(self)
             .handle_initialized_client_request(
                 connection_request_id,
@@ -772,6 +788,7 @@ impl MessageProcessor {
                 request_context,
                 app_server_client_name,
                 client_version,
+                device_key_requests_allowed,
             )
             .await;
     }
@@ -783,6 +800,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
+        device_key_requests_allowed: bool,
     ) {
         let connection_id = connection_request_id.connection_id;
 
@@ -856,6 +874,36 @@ impl MessageProcessor {
                     request_id,
                 })
                 .await;
+            }
+            ClientRequest::DeviceKeyCreate { request_id, params } => {
+                self.handle_device_key_create(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                );
+            }
+            ClientRequest::DeviceKeyPublic { request_id, params } => {
+                self.handle_device_key_public(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                );
+            }
+            ClientRequest::DeviceKeySign { request_id, params } => {
+                self.handle_device_key_sign(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                );
             }
             ClientRequest::FsReadFile { request_id, params } => {
                 self.handle_fs_read_file(
@@ -1028,17 +1076,20 @@ impl MessageProcessor {
         let auth = self.auth_manager.auth().await;
         if !config.features.apps_enabled_for_auth(
             auth.as_ref()
-                .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
+                .is_some_and(codex_login::CodexAuth::uses_codex_backend),
         ) {
             return;
         }
 
         let outgoing = Arc::clone(&self.outgoing);
+        let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
             let (all_connectors_result, accessible_connectors_result) = tokio::join!(
                 connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                connectors::list_accessible_connectors_from_mcp_tools_with_options(
-                    &config, /*force_refetch*/ true,
+                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                    &config,
+                    /*force_refetch*/ true,
+                    &environment_manager,
                 ),
             );
             let all_connectors = match all_connectors_result {
@@ -1051,7 +1102,7 @@ impl MessageProcessor {
                 }
             };
             let accessible_connectors = match accessible_connectors_result {
-                Ok(connectors) => connectors,
+                Ok(status) => status.connectors,
                 Err(err) => {
                     tracing::warn!(
                         "failed to force-refresh accessible apps after experimental feature enablement: {err:#}"
@@ -1118,6 +1169,83 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    fn handle_device_key_create(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeyCreateParams,
+        device_key_requests_allowed: bool,
+    ) {
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/create",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.create(params).await },
+        );
+    }
+
+    fn handle_device_key_public(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeyPublicParams,
+        device_key_requests_allowed: bool,
+    ) {
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/public",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.public(params).await },
+        );
+    }
+
+    fn handle_device_key_sign(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeySignParams,
+        device_key_requests_allowed: bool,
+    ) {
+        self.spawn_device_key_request(
+            request_id,
+            "device/key/sign",
+            device_key_requests_allowed,
+            move |device_key_api| async move { device_key_api.sign(params).await },
+        );
+    }
+
+    fn spawn_device_key_request<R, F, Fut>(
+        &self,
+        request_id: ConnectionRequestId,
+        method: &'static str,
+        device_key_requests_allowed: bool,
+        run_request: F,
+    ) where
+        R: serde::Serialize + Send + 'static,
+        F: FnOnce(DeviceKeyApi) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        let device_key_api = self.device_key_api.clone();
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            if !device_key_requests_allowed {
+                outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("{method} is not available over remote transports"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+
+            match run_request(device_key_api).await {
+                Ok(response) => outgoing.send_response(request_id, response).await,
+                Err(error) => outgoing.send_error(request_id, error).await,
+            }
+        });
     }
 
     async fn handle_external_agent_config_detect(

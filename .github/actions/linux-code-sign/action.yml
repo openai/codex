@@ -7,6 +7,9 @@ inputs:
   artifacts-dir:
     description: Absolute path to the directory containing built binaries to sign.
     required: true
+  binaries:
+    description: Space-delimited binary basenames to sign.
+    default: "codex codex-responses-api-proxy"
 
 runs:
   using: composite
@@ -18,6 +21,7 @@ runs:
       shell: bash
       env:
         ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        BINARIES: ${{ inputs.binaries }}
         COSIGN_EXPERIMENTAL: "1"
         COSIGN_YES: "true"
         COSIGN_OIDC_CLIENT_ID: "sigstore"
@@ -31,7 +35,7 @@ runs:
           exit 1
         fi
 
-        for binary in codex codex-responses-api-proxy; do
+        for binary in ${BINARIES}; do
           artifact="${dest}/${binary}"
           if [[ ! -f "$artifact" ]]; then
             echo "Binary $artifact not found"

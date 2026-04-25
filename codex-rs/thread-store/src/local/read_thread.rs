@@ -29,17 +29,16 @@ pub(super) async fn read_thread(
     let thread_id = params.thread_id;
     if let Some(metadata) = read_sqlite_metadata(store, thread_id).await
         && (params.include_archived || metadata.archived_at.is_none())
+        && (!params.include_history
+            || sqlite_rollout_path_can_load_history_for_thread(
+                store,
+                &metadata.rollout_path,
+                thread_id,
+            )
+            .await)
     {
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
-        if params.include_history {
-            let Some(path) = thread.rollout_path.clone() else {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("failed to locate rollout for thread {thread_id}"),
-                });
-            };
-            let items = load_history_items(&path).await?;
-            thread.history = Some(StoredThreadHistory { thread_id, items });
-        }
+        attach_history_if_requested(&mut thread, params.include_history).await?;
         return Ok(thread);
     }
 
@@ -49,17 +48,74 @@ pub(super) async fn read_thread(
             message: format!("no rollout found for thread id {thread_id}"),
         })?;
 
-    let mut thread = read_thread_from_rollout_path(store, thread_id, path).await?;
-    if params.include_history {
-        let Some(path) = thread.rollout_path.clone() else {
-            return Err(ThreadStoreError::Internal {
-                message: format!("failed to load thread history for thread {thread_id}"),
-            });
-        };
-        let items = load_history_items(&path).await?;
-        thread.history = Some(StoredThreadHistory { thread_id, items });
-    }
+    let mut thread = read_thread_from_rollout_path(store, path).await?;
+    attach_history_if_requested(&mut thread, params.include_history).await?;
     Ok(thread)
+}
+
+async fn sqlite_rollout_path_can_load_history_for_thread(
+    store: &LocalThreadStore,
+    path: &std::path::Path,
+    thread_id: codex_protocol::ThreadId,
+) -> bool {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return false;
+    }
+    // SQLite metadata can outlive a moved/recreated rollout path. When history is
+    // requested, verify the path still resolves to the requested thread before
+    // trusting it as the source replay.
+    read_thread_from_rollout_path(store, path.to_path_buf())
+        .await
+        .is_ok_and(|thread| thread.thread_id == thread_id)
+}
+
+pub(super) async fn read_thread_by_rollout_path(
+    store: &LocalThreadStore,
+    rollout_path: std::path::PathBuf,
+    include_archived: bool,
+    include_history: bool,
+) -> ThreadStoreResult<StoredThread> {
+    let path = resolve_requested_rollout_path(store, rollout_path)?;
+    let mut thread = read_thread_from_rollout_path(store, path).await?;
+    if !include_archived && thread.archived_at.is_some() {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!("thread {} is archived", thread.thread_id),
+        });
+    }
+    attach_history_if_requested(&mut thread, include_history).await?;
+    Ok(thread)
+}
+
+fn resolve_requested_rollout_path(
+    store: &LocalThreadStore,
+    rollout_path: std::path::PathBuf,
+) -> ThreadStoreResult<std::path::PathBuf> {
+    let path = if rollout_path.is_relative() {
+        store.config.codex_home.join(rollout_path)
+    } else {
+        rollout_path
+    };
+    std::fs::canonicalize(&path).map_err(|err| ThreadStoreError::InvalidRequest {
+        message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
+    })
+}
+
+async fn attach_history_if_requested(
+    thread: &mut StoredThread,
+    include_history: bool,
+) -> ThreadStoreResult<()> {
+    if !include_history {
+        return Ok(());
+    }
+    let thread_id = thread.thread_id;
+    let Some(path) = thread.rollout_path.clone() else {
+        return Err(ThreadStoreError::Internal {
+            message: format!("failed to load thread history for thread {thread_id}"),
+        });
+    };
+    let items = load_history_items(&path).await?;
+    thread.history = Some(StoredThreadHistory { thread_id, items });
+    Ok(())
 }
 
 async fn resolve_rollout_path(
@@ -94,7 +150,6 @@ async fn resolve_rollout_path(
 
 async fn read_thread_from_rollout_path(
     store: &LocalThreadStore,
-    thread_id: codex_protocol::ThreadId,
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {
     let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
@@ -116,7 +171,7 @@ async fn read_thread_from_rollout_path(
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id);
     if let Ok(Some(title)) =
-        find_thread_name_by_id(store.config.codex_home.as_path(), &thread_id).await
+        find_thread_name_by_id(store.config.codex_home.as_path(), &thread.thread_id).await
     {
         set_thread_name_from_title(&mut thread, title);
     }
@@ -349,6 +404,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_thread_returns_rollout_path_summary() {
+        let home = TempDir::new().expect("temp dir");
+        let store = LocalThreadStore::new(test_config(home.path()));
+        let uuid = Uuid::from_u128(211);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let relative_path = active_path
+            .strip_prefix(home.path())
+            .expect("path should be under codex home")
+            .to_path_buf();
+
+        let thread = store
+            .read_thread_by_rollout_path(
+                relative_path,
+                /*include_archived*/ false,
+                /*include_history*/ false,
+            )
+            .await
+            .expect("read thread by rollout path");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(
+            thread.rollout_path,
+            Some(std::fs::canonicalize(active_path).expect("canonical path"))
+        );
+        assert_eq!(thread.preview, "Hello from user");
+    }
+
+    #[tokio::test]
     async fn read_thread_returns_archived_rollout_when_requested() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()));
@@ -576,6 +661,102 @@ mod tests {
         let history = thread.history.expect("history should load");
         assert_eq!(history.thread_id, thread_id);
         assert_eq!(history.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn read_thread_falls_back_to_rollout_search_when_sqlite_path_is_stale() {
+        let home = TempDir::new().expect("temp dir");
+        let external = TempDir::new().expect("external temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(220);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let stale_path = external.path().join("missing-rollout.jsonl");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            stale_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some("stale-sqlite-provider".to_string());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.first_user_message = Some("stale sqlite preview".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert_eq!(thread.preview, "Hello from user");
+        assert_eq!(thread.model_provider, config.model_provider_id);
+        let history = thread.history.expect("history should load");
+        assert_eq!(history.thread_id, thread_id);
+        assert_eq!(history.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_thread_falls_back_when_sqlite_path_points_to_another_thread() {
+        let home = TempDir::new().expect("temp dir");
+        let external = TempDir::new().expect("external temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(221);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let other_uuid = Uuid::from_u128(222);
+        let stale_path = write_session_file(external.path(), "2025-01-04T12-00-00", other_uuid)
+            .expect("other session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, stale_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some("wrong-sqlite-provider".to_string());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.first_user_message = Some("wrong sqlite preview".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert_eq!(thread.preview, "Hello from user");
+        assert_eq!(thread.model_provider, config.model_provider_id);
+        let history = thread.history.expect("history should load");
+        assert_eq!(history.thread_id, thread_id);
+        assert_eq!(history.items.len(), 2);
     }
 
     #[tokio::test]

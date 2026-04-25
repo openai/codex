@@ -92,7 +92,21 @@ mod tests {
                 file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/read-only")]),
                     write: Some(vec![absolute_path("/tmp/write")]),
-                    entries: None,
+                    glob_scan_max_depth: None,
+                    entries: Some(vec![
+                        codex_app_server_protocol::FileSystemSandboxEntry {
+                            path: codex_app_server_protocol::FileSystemPath::Path {
+                                path: absolute_path("/tmp/read-only"),
+                            },
+                            access: codex_app_server_protocol::FileSystemAccessMode::Read,
+                        },
+                        codex_app_server_protocol::FileSystemSandboxEntry {
+                            path: codex_app_server_protocol::FileSystemPath::Path {
+                                path: absolute_path("/tmp/write"),
+                            },
+                            access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                        },
+                    ]),
                 }),
             }
         );
@@ -109,6 +123,7 @@ mod tests {
                         },
                         access: FileSystemAccessMode::Write,
                     }],
+                    glob_scan_max_depth: None,
                 }),
                 ..Default::default()
             }),
@@ -117,6 +132,7 @@ mod tests {
                 file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
                     read: None,
                     write: None,
+                    glob_scan_max_depth: None,
                     entries: Some(vec![codex_app_server_protocol::FileSystemSandboxEntry {
                         path: codex_app_server_protocol::FileSystemPath::Special {
                             value: codex_app_server_protocol::FileSystemSpecialPath::Root,

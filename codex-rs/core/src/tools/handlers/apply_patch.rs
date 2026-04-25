@@ -16,12 +16,16 @@ use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -34,8 +38,8 @@ use codex_apply_patch::Hunk;
 use codex_apply_patch::StreamingPatchParser;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
@@ -199,7 +203,7 @@ fn write_permissions_for_paths(
     file_paths: &[AbsolutePathBuf],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
-) -> Option<PermissionProfile> {
+) -> Option<AdditionalPermissionProfile> {
     let write_paths = file_paths
         .iter()
         .map(|path| {
@@ -216,7 +220,7 @@ fn write_permissions_for_paths(
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
 
-    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
+    let permissions = (!write_paths.is_empty()).then_some(AdditionalPermissionProfile {
         file_system: Some(FileSystemPermissions::from_read_write_roots(
             Some(vec![]),
             Some(write_paths),
@@ -225,6 +229,21 @@ fn write_permissions_for_paths(
     })?;
 
     normalize_additional_permissions(permissions).ok()
+}
+
+/// Extracts the raw patch text used as the command-shaped hook input for apply_patch.
+///
+/// The apply_patch tool can arrive as the older JSON/function shape or as a
+/// freeform custom tool call. Both represent the same file edit operation, so
+/// hooks see the raw patch body in `tool_input.command` either way.
+fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ApplyPatchToolArgs>(arguments)
+            .ok()
+            .map(|args| args.input),
+        ToolPayload::Custom { input } => Some(input.clone()),
+        _ => None,
+    }
 }
 
 async fn effective_patch_permissions(
@@ -247,6 +266,7 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        turn.cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
     )
@@ -279,6 +299,30 @@ impl ToolHandler for ApplyPatchHandler {
 
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        apply_patch_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: serde_json::json!({ "command": command }),
+        })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
+        Some(PostToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_use_id: invocation.call_id.clone(),
+            tool_input: serde_json::json!({
+                "command": apply_patch_payload_command(&invocation.payload)?,
+            }),
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

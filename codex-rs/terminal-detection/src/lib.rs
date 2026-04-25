@@ -145,10 +145,10 @@ impl TerminalInfo {
 
     /// Creates terminal metadata from a `TERM` capability value.
     fn from_term(term: String, multiplexer: Option<Multiplexer>) -> Self {
-        let name = if term == "dumb" {
-            TerminalName::Dumb
-        } else {
-            TerminalName::Unknown
+        let name = match term.as_str() {
+            "dumb" => TerminalName::Dumb,
+            "wezterm" | "wezterm-mux" => TerminalName::WezTerm,
+            _ => TerminalName::Unknown,
         };
         Self::new(
             name,

@@ -1,11 +1,11 @@
 use crate::mcp::RequestId;
+use crate::models::AdditionalPermissionProfile;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
-use crate::permissions::FileSystemSandboxPolicy;
-use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -15,18 +15,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
+/// Fully resolved permissions for rerunning an intercepted child process.
+///
+/// `permission_profile` is the canonical permission model. `sandbox_policy`
+/// remains as the legacy adapter for sandbox backends that still require it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Permissions {
+pub struct ResolvedPermissionProfile {
+    pub permission_profile: PermissionProfile,
     pub sandbox_policy: SandboxPolicy,
-    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
-    pub network_sandbox_policy: NetworkSandboxPolicy,
 }
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationPermissions {
-    PermissionProfile(PermissionProfile),
-    Permissions(Permissions),
+    /// Permissions to merge with the active turn permissions.
+    AdditionalPermissionProfile(AdditionalPermissionProfile),
+    /// Fully resolved permissions that should replace the active turn permissions.
+    ResolvedPermissionProfile(ResolvedPermissionProfile),
 }
 
 /// Proposed execpolicy change to allow commands starting with this prefix.
@@ -100,6 +105,14 @@ pub enum GuardianUserAuthorization {
     High,
 }
 
+/// Final allow/deny outcome returned by the guardian reviewer.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianAssessmentOutcome {
+    Allow,
+    Deny,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentStatus {
@@ -154,6 +167,10 @@ pub enum GuardianAssessmentAction {
         connector_id: Option<String>,
         connector_name: Option<String>,
         tool_title: Option<String>,
+    },
+    RequestPermissions {
+        reason: Option<String>,
+        permissions: RequestPermissionProfile,
     },
 }
 
@@ -233,7 +250,7 @@ pub struct ExecApprovalRequestEvent {
     /// Optional additional filesystem permissions requested for this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     /// Ordered list of decisions the client may present for this prompt.
     ///
     /// When absent, clients should derive the legacy default set from the
@@ -269,7 +286,7 @@ impl ExecApprovalRequestEvent {
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
-        additional_permissions: Option<&PermissionProfile>,
+        additional_permissions: Option<&AdditionalPermissionProfile>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];

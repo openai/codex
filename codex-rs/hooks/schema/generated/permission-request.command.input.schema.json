@@ -7,21 +7,6 @@
         "string",
         "null"
       ]
-    },
-    "PermissionRequestToolInput": {
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
     }
   },
   "properties": {
@@ -48,11 +33,8 @@
     "session_id": {
       "type": "string"
     },
-    "tool_input": {
-      "$ref": "#/definitions/PermissionRequestToolInput"
-    },
+    "tool_input": true,
     "tool_name": {
-      "const": "Bash",
       "type": "string"
     },
     "transcript_path": {

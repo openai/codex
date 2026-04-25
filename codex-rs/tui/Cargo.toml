@@ -34,6 +34,7 @@ codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
@@ -57,6 +58,7 @@ codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
 codex-utils-oss = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }

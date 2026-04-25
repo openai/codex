@@ -26,4 +26,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 › Ask Codex to do anything
 
-  gpt-5.3-codex default · /tmp/project
+  gpt-5.5 default · /tmp/project

@@ -41,10 +41,14 @@ use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::NoopThreadConfigLoader;
+use codex_config::RemoteThreadConfigLoader;
+use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 pub use codex_exec_server::EnvironmentManager;
+pub use codex_exec_server::EnvironmentManagerArgs;
 pub use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -73,7 +77,6 @@ pub mod legacy_core {
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
     pub use codex_core::message_history_metadata;
-    pub use codex_core::path_utils;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -82,10 +85,6 @@ pub mod legacy_core {
         pub mod edit {
             pub use codex_core::config::edit::*;
         }
-    }
-
-    pub mod config_loader {
-        pub use codex_core::config_loader::*;
     }
 
     pub mod connectors {
@@ -101,7 +100,7 @@ pub mod legacy_core {
     }
 
     pub mod plugins {
-        pub use codex_core::plugins::*;
+        pub use codex_core::plugins::PluginsManager;
     }
 
     pub mod review_format {
@@ -360,6 +359,13 @@ pub struct InProcessClientStartArgs {
     pub channel_capacity: usize,
 }
 
+fn configured_thread_config_loader(config: &Config) -> Arc<dyn ThreadConfigLoader> {
+    match config.experimental_thread_config_endpoint.as_deref() {
+        Some(endpoint) => Arc::new(RemoteThreadConfigLoader::new(endpoint)),
+        None => Arc::new(NoopThreadConfigLoader),
+    }
+}
+
 impl InProcessClientStartArgs {
     /// Builds initialize params from caller-provided metadata.
     pub fn initialize_params(&self) -> InitializeParams {
@@ -384,12 +390,14 @@ impl InProcessClientStartArgs {
 
     fn into_runtime_start_args(self) -> InProcessStartArgs {
         let initialize = self.initialize_params();
+        let thread_config_loader = configured_thread_config_loader(&self.config);
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
             config: self.config,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
+            thread_config_loader,
             feedback: self.feedback,
             log_db: self.log_db,
             environment_manager: self.environment_manager,
@@ -971,7 +979,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
@@ -1972,9 +1980,14 @@ mod tests {
     #[tokio::test]
     async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
-        let environment_manager = Arc::new(EnvironmentManager::new(Some(
-            "ws://127.0.0.1:8765".to_string(),
-        )));
+        let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
+            exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
+            local_runtime_paths: ExecServerRuntimePaths::new(
+                std::env::current_exe().expect("current exe"),
+                /*codex_linux_sandbox_exe*/ None,
+            )
+            .expect("runtime paths"),
+        }));
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
@@ -2001,7 +2014,49 @@ mod tests {
             &runtime_args.environment_manager,
             &environment_manager
         ));
-        assert!(runtime_args.environment_manager.is_remote());
+        assert!(
+            runtime_args
+                .environment_manager
+                .default_environment()
+                .expect("default environment")
+                .is_remote()
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_start_args_use_remote_thread_config_loader_when_configured() {
+        let mut config = build_test_config().await;
+        config.experimental_thread_config_endpoint = Some("not-a-valid-endpoint".to_string());
+
+        let runtime_args = InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            log_db: None,
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Exec,
+            enable_codex_api_key_env: false,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        }
+        .into_runtime_start_args();
+
+        let err = runtime_args
+            .thread_config_loader
+            .load(Default::default())
+            .await
+            .expect_err("configured remote loader should try to connect");
+        assert_eq!(
+            err.code(),
+            codex_config::ThreadConfigLoadErrorCode::RequestFailed
+        );
     }
 
     #[tokio::test]

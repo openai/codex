@@ -6,4 +6,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Check recently modified functions for compatibility                           "
 "                                                                                "
-"  gpt-5.3-codex                          Side from main thread · Esc to return  "
+"  gpt-5.5                                Side from main thread · Esc to return  "

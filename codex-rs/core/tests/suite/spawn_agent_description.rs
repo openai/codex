@@ -4,8 +4,8 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -23,7 +23,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::sleep;
@@ -89,7 +88,7 @@ fn test_model_info(
     }
 }
 
-async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) {
+async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let available_models = manager.list_models(RefreshStrategy::Online).await;
@@ -171,6 +170,23 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected visible model summary in spawn_agent description: {description:?}"
     );
     assert!(
+        description
+            .contains("Available model overrides (optional; inherited parent model is preferred):"),
+        "expected model choices to be framed as overrides in spawn_agent description: {description:?}"
+    );
+    assert!(
+        description.contains(
+            "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
+        ),
+        "expected inherited-model guidance in spawn_agent description: {description:?}"
+    );
+    assert!(
+        description.contains(
+            "Do not set the `model` field unless the user explicitly asks for a different model or there is a clear task-specific reason."
+        ),
+        "expected model override usage guidance in spawn_agent description: {description:?}"
+    );
+    assert!(
         description.contains("Default reasoning effort: medium."),
         "expected default reasoning effort in spawn_agent description: {description:?}"
     );
@@ -199,6 +215,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
             "Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself."
         ),
         "expected agent-role clarification in spawn_agent description: {description:?}"
+    );
+    assert!(
+        !description.contains("A mini model can solve many tasks faster than the main model."),
+        "spawn_agent description should not encourage choosing a smaller model by default: {description:?}"
     );
 
     Ok(())

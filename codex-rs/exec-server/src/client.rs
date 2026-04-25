@@ -2,12 +2,18 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use tokio::time::timeout;
@@ -16,6 +22,7 @@ use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -54,6 +61,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
+use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -68,6 +77,8 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
+
+pub(crate) mod http_client;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -140,6 +151,18 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
+    // Once the transport closes, every executor operation should fail quickly
+    // with the same canonical message. This client never reconnects, so the
+    // latch only moves from unset to set once.
+    disconnected: OnceLock<String>,
+    // Streaming HTTP responses are keyed by a client-generated request id
+    // because they share the same connection-global notification channel as
+    // process output. Keep the routing table local to the client so higher
+    // layers can consume body chunks like a normal byte stream.
+    http_body_streams: ArcSwap<HashMap<String, mpsc::Sender<HttpRequestBodyDeltaNotification>>>,
+    http_body_stream_failures: ArcSwap<HashMap<String, String>>,
+    http_body_streams_write_lock: Mutex<()>,
+    http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -153,6 +176,56 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct ExecServerClient {
     inner: Arc<Inner>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LazyRemoteExecServerClient {
+    websocket_url: String,
+    client: Arc<OnceCell<ExecServerClient>>,
+}
+
+impl LazyRemoteExecServerClient {
+    pub(crate) fn new(websocket_url: String) -> Self {
+        Self {
+            websocket_url,
+            client: Arc::new(OnceCell::new()),
+        }
+    }
+
+    pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
+        self.client
+            .get_or_try_init(|| async {
+                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+                    websocket_url: self.websocket_url.clone(),
+                    client_name: "codex-environment".to_string(),
+                    connect_timeout: Duration::from_secs(5),
+                    initialize_timeout: Duration::from_secs(5),
+                    resume_session_id: None,
+                })
+                .await
+            })
+            .await
+            .cloned()
+    }
+}
+
+impl HttpClient for LazyRemoteExecServerClient {
+    fn http_request(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<'_, Result<crate::HttpRequestResponse, ExecServerError>> {
+        async move { self.get().await?.http_request(params).await }.boxed()
+    }
+
+    fn http_request_stream(
+        &self,
+        params: crate::HttpRequestParams,
+    ) -> BoxFuture<
+        '_,
+        Result<(crate::HttpRequestResponse, crate::HttpResponseBodyStream), ExecServerError>,
+    > {
+        async move { self.get().await?.http_request_stream(params).await }.boxed()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,8 +244,12 @@ pub enum ExecServerError {
     InitializeTimedOut { timeout: Duration },
     #[error("exec-server transport closed")]
     Closed,
+    #[error("{0}")]
+    Disconnected(String),
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("HTTP request failed: {0}")]
+    HttpRequest(String),
     #[error("exec-server protocol error: {0}")]
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
@@ -246,19 +323,11 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(EXEC_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(EXEC_METHOD, &params).await
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(EXEC_READ_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(EXEC_READ_METHOD, &params).await
     }
 
     pub async fn write(
@@ -266,107 +335,73 @@ impl ExecServerClient {
         process_id: &ProcessId,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(
-                EXEC_WRITE_METHOD,
-                &WriteParams {
-                    process_id: process_id.clone(),
-                    chunk: chunk.into(),
-                },
-            )
-            .await
-            .map_err(Into::into)
+        self.call(
+            EXEC_WRITE_METHOD,
+            &WriteParams {
+                process_id: process_id.clone(),
+                chunk: chunk.into(),
+            },
+        )
+        .await
     }
 
     pub async fn terminate(
         &self,
         process_id: &ProcessId,
     ) -> Result<TerminateResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(
-                EXEC_TERMINATE_METHOD,
-                &TerminateParams {
-                    process_id: process_id.clone(),
-                },
-            )
-            .await
-            .map_err(Into::into)
+        self.call(
+            EXEC_TERMINATE_METHOD,
+            &TerminateParams {
+                process_id: process_id.clone(),
+            },
+        )
+        .await
     }
 
     pub async fn fs_read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_READ_FILE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_READ_FILE_METHOD, &params).await
     }
 
     pub async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_WRITE_FILE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_WRITE_FILE_METHOD, &params).await
     }
 
     pub async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_CREATE_DIRECTORY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_CREATE_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_GET_METADATA_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_GET_METADATA_METHOD, &params).await
     }
 
     pub async fn fs_read_directory(
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_READ_DIRECTORY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_READ_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_remove(
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_REMOVE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_REMOVE_METHOD, &params).await
     }
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_COPY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_COPY_METHOD, &params).await
     }
 
     pub(crate) async fn register_session(
@@ -411,18 +446,21 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
-                                fail_all_sessions(
+                                let message = record_disconnected(
                                     &inner,
                                     format!("exec-server notification handling failed: {err}"),
-                                )
-                                .await;
+                                );
+                                fail_all_in_flight_work(&inner, message).await;
                                 return;
                             }
                         }
                         RpcClientEvent::Disconnected { reason } => {
                             if let Some(inner) = weak.upgrade() {
-                                fail_all_sessions(&inner, disconnected_message(reason.as_deref()))
-                                    .await;
+                                let message = record_disconnected(
+                                    &inner,
+                                    disconnected_message(reason.as_deref()),
+                                );
+                                fail_all_in_flight_work(&inner, message).await;
                             }
                             return;
                         }
@@ -434,6 +472,11 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
+                disconnected: OnceLock::new(),
+                http_body_streams: ArcSwap::from_pointee(HashMap::new()),
+                http_body_stream_failures: ArcSwap::from_pointee(HashMap::new()),
+                http_body_streams_write_lock: Mutex::new(()),
+                http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
@@ -450,6 +493,36 @@ impl ExecServerClient {
             .notify(INITIALIZED_METHOD, &serde_json::json!({}))
             .await
             .map_err(ExecServerError::Json)
+    }
+
+    async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, ExecServerError>
+    where
+        P: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
+        // Reject new work before allocating a JSON-RPC request id. MCP tool
+        // calls, process writes, and fs operations all pass through here, so
+        // this is the shared low-level failure path after executor disconnect.
+        if let Some(error) = self.inner.disconnected_error() {
+            return Err(error);
+        }
+
+        match self.inner.client.call(method, params).await {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                let error = ExecServerError::from(error);
+                if is_transport_closed_error(&error) {
+                    // A call can race with disconnect after the preflight
+                    // check. Only the reader task drains sessions so queued
+                    // process notifications stay ordered before disconnect.
+                    let message = disconnected_message(/*reason*/ None);
+                    let message = record_disconnected(&self.inner, message);
+                    Err(ExecServerError::Disconnected(message))
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
@@ -630,6 +703,20 @@ impl Session {
 }
 
 impl Inner {
+    fn disconnected_error(&self) -> Option<ExecServerError> {
+        self.disconnected
+            .get()
+            .cloned()
+            .map(ExecServerError::Disconnected)
+    }
+
+    fn set_disconnected(&self, message: String) -> Option<String> {
+        match self.disconnected.set(message.clone()) {
+            Ok(()) => Some(message),
+            Err(_) => None,
+        }
+    }
+
     fn get_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
         self.sessions.load().get(process_id).cloned()
     }
@@ -640,6 +727,12 @@ impl Inner {
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
+        // Do not register a process session that can never receive executor
+        // notifications. Without this check, remote MCP startup could create a
+        // dead session and wait for process output that will never arrive.
+        if let Some(error) = self.disconnected_error() {
+            return Err(error);
+        }
         let sessions = self.sessions.load();
         if sessions.contains_key(process_id) {
             return Err(ExecServerError::Protocol(format!(
@@ -680,22 +773,44 @@ fn disconnected_message(reason: Option<&str>) -> String {
 }
 
 fn is_transport_closed_error(error: &ExecServerError) -> bool {
-    matches!(error, ExecServerError::Closed)
-        || matches!(
-            error,
-            ExecServerError::Server {
-                code: -32000,
-                message,
-            } if message == "JSON-RPC transport closed"
-        )
+    matches!(
+        error,
+        ExecServerError::Closed | ExecServerError::Disconnected(_)
+    ) || matches!(
+        error,
+        ExecServerError::Server {
+            code: -32000,
+            message,
+        } if message == "JSON-RPC transport closed"
+    )
+}
+
+fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {
+    // The first observer records the canonical disconnect reason. Session
+    // draining stays with the reader task so it can preserve notification
+    // ordering before publishing the terminal failure.
+    if let Some(message) = inner.set_disconnected(message.clone()) {
+        message
+    } else {
+        inner.disconnected.get().cloned().unwrap_or(message)
+    }
 }
 
 async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     let sessions = inner.take_all_sessions().await;
 
     for (_, session) in sessions {
+        // Sessions synthesize a closed read response and emit a pushed Failed
+        // event. That covers both polling consumers and streaming consumers
+        // such as executor-backed MCP stdio.
         session.set_failure(message.clone()).await;
     }
+}
+
+/// Fails all in-flight work that depends on the shared JSON-RPC transport.
+async fn fail_all_in_flight_work(inner: &Arc<Inner>, message: String) {
+    fail_all_sessions(inner, message.clone()).await;
+    inner.fail_all_http_body_streams(message).await;
 }
 
 async fn handle_server_notification(
@@ -747,6 +862,11 @@ async fn handle_server_notification(
                     inner.remove_session(&params.process_id).await;
                 }
             }
+        }
+        HTTP_REQUEST_BODY_DELTA_METHOD => {
+            inner
+                .handle_http_body_delta_notification(notification.params)
+                .await?;
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");

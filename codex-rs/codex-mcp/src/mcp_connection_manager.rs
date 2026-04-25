@@ -32,16 +32,20 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -120,21 +124,10 @@ fn sha1_hex(s: &str) -> String {
 }
 
 pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
-    let token_data = auth.and_then(|auth| auth.get_token_data().ok());
-    let account_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.account_id.clone());
-    let chatgpt_user_id = token_data
-        .as_ref()
-        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
-    let is_workspace_account = token_data
-        .as_ref()
-        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
-
     CodexAppsToolsCacheKey {
-        account_id,
-        chatgpt_user_id,
-        is_workspace_account,
+        account_id: auth.and_then(CodexAuth::get_account_id),
+        chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
+        is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
     }
 }
 
@@ -496,6 +489,7 @@ impl AsyncManagedClient {
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_environment: McpRuntimeEnvironment,
+        runtime_auth_provider: Option<SharedAuthProvider>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -518,6 +512,7 @@ impl AsyncManagedClient {
                         config.clone(),
                         store_mode,
                         runtime_environment,
+                        runtime_auth_provider,
                     )
                     .await?,
                 );
@@ -646,6 +641,8 @@ pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
     pub sandbox_policy: SandboxPolicy,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
@@ -666,8 +663,8 @@ pub struct McpConnectionManager {
 /// servers should run for the current caller. Keep it explicit at manager
 /// construction time so status/snapshot paths and real sessions make the same
 /// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
-/// used only when an executor-backed stdio server omits `cwd` and the executor
-/// API still needs a concrete process working directory.
+/// used when a stdio server omits `cwd` and the launcher needs a concrete
+/// process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Arc<Environment>,
@@ -755,6 +752,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
+        auth: Option<&CodexAuth>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
@@ -764,6 +762,9 @@ impl McpConnectionManager {
             ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
+        let codex_apps_auth_provider = auth
+            .filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -787,6 +788,19 @@ impl McpConnectionManager {
             } else {
                 None
             };
+            let uses_env_bearer_token = match &cfg.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            };
+            let runtime_auth_provider =
+                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
+                    codex_apps_auth_provider.clone()
+                } else {
+                    None
+                };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 cfg,
@@ -797,6 +811,7 @@ impl McpConnectionManager {
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_environment.clone(),
+                runtime_auth_provider,
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1530,6 +1545,7 @@ async fn make_rmcp_client(
     config: McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
     runtime_environment: McpRuntimeEnvironment,
+    runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let McpServerConfig {
         transport,
@@ -1538,7 +1554,14 @@ async fn make_rmcp_client(
     } = config;
     let remote_environment = match experimental_environment.as_deref() {
         None | Some("local") => false,
-        Some("remote") => true,
+        Some("remote") => {
+            if !runtime_environment.environment().is_remote() {
+                return Err(StartupOutcomeError::from(anyhow!(
+                    "remote MCP server `{server_name}` requires a remote environment"
+                )));
+            }
+            true
+        }
         Some(environment) => {
             return Err(StartupOutcomeError::from(anyhow!(
                 "unsupported experimental_environment `{environment}` for MCP server `{server_name}`"
@@ -1562,18 +1585,14 @@ async fn make_rmcp_client(
                     .collect::<HashMap<_, _>>()
             });
             let launcher = if remote_environment {
-                let exec_environment = runtime_environment.environment();
-                if !exec_environment.is_remote() {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server `{server_name}` requires a remote executor environment"
-                    )));
-                }
                 Arc::new(ExecutorStdioServerLauncher::new(
-                    exec_environment.get_exec_backend(),
+                    runtime_environment.environment().get_exec_backend(),
                     runtime_environment.fallback_cwd(),
                 ))
             } else {
-                Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>
+                Arc::new(LocalStdioServerLauncher::new(
+                    runtime_environment.fallback_cwd(),
+                )) as Arc<dyn StdioServerLauncher>
             };
 
             // `RmcpClient` always sees a launched MCP stdio server. The
@@ -1589,23 +1608,11 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
-            if remote_environment {
-                if !runtime_environment.environment().is_remote() {
-                    return Err(StartupOutcomeError::from(anyhow!(
-                        "remote MCP server `{server_name}` requires a remote executor environment"
-                    )));
-                }
-                return Err(StartupOutcomeError::from(anyhow!(
-                    // Remote HTTP needs the future low-level executor
-                    // `network/request` API so reqwest runs on the executor side.
-                    // Do not fall back to local HTTP here; the config explicitly
-                    // asked for remote placement.
-                    "remote streamable HTTP MCP server `{server_name}` is not implemented yet"
-                )));
-            }
-
-            // Local streamable HTTP remains the existing reqwest path from
-            // the orchestrator process.
+            let http_client: Arc<dyn HttpClient> = if remote_environment {
+                runtime_environment.environment().get_http_client()
+            } else {
+                Arc::new(ReqwestHttpClient)
+            };
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,
@@ -1618,6 +1625,8 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
+                http_client,
+                runtime_auth_provider,
             )
             .await
             .map_err(StartupOutcomeError::from)

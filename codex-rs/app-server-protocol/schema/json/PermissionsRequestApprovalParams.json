@@ -16,7 +16,16 @@
             "null"
           ]
         },
+        "globScanMaxDepth": {
+          "format": "uint",
+          "minimum": 1.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "read": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -26,6 +35,7 @@
           ]
         },
         "write": {
+          "description": "This will be removed in favor of `entries`.",
           "items": {
             "$ref": "#/definitions/AbsolutePathBuf"
           },
@@ -287,6 +297,9 @@
     }
   },
   "properties": {
+    "cwd": {
+      "$ref": "#/definitions/AbsolutePathBuf"
+    },
     "itemId": {
       "type": "string"
     },
@@ -307,6 +320,7 @@
     }
   },
   "required": [
+    "cwd",
     "itemId",
     "permissions",
     "threadId",

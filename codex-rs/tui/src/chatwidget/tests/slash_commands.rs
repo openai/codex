@@ -299,7 +299,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
 }
 
 async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -351,7 +351,7 @@ async fn queued_slash_menu_cancel_drains_next_input() {
 
 #[tokio::test]
 async fn queued_slash_menu_selection_drains_next_input() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -807,6 +807,7 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
             last_agent_message: Some("Final reply **markdown**".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -839,6 +840,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -925,6 +927,7 @@ async fn slash_copy_state_is_preserved_during_running_task() {
             last_agent_message: Some("Previous completed reply".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     chat.on_task_started();
@@ -955,6 +958,7 @@ async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omit
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -992,6 +996,7 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -1026,6 +1031,92 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
     assert_matches!(
         chat.pending_notification,
         Some(Notification::AgentTurnComplete { ref response }) if response.is_empty()
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_uses_latest_surviving_response_after_rollback() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "user-2".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "bar".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-2".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "bar response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    assert_eq!(chat.last_agent_markdown_text(), Some("bar response"));
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 1);
+
+    assert_eq!(chat.last_agent_markdown_text(), Some("foo response"));
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "foo response");
+        Ok(None)
+    });
+}
+
+#[tokio::test]
+async fn slash_copy_reports_when_rewind_exceeds_retained_copy_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 0);
+    chat.dispatch_command(SlashCommand::Copy);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(
+            "Cannot copy that response after rewinding. Only the most recent 32 responses are available to /copy."
+        ),
+        "expected evicted-history message, got {rendered:?}"
     );
 }
 
@@ -1459,7 +1550,7 @@ async fn queued_fast_slash_applies_before_next_queued_message() {
 }
 
 #[tokio::test]
-async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
+async fn user_turn_sends_standard_override_after_fast_is_turned_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
@@ -1469,7 +1560,24 @@ async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
     let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
 
     chat.dispatch_command_with_args(SlashCommand::Fast, "off".to_string(), Vec::new());
-    let _events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(None),
+                ..
+            })
+        )),
+        "expected fast-mode off override app event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistServiceTierSelection { service_tier: None }
+        )),
+        "expected fast-mode opt-out persistence app event; events: {events:?}"
+    );
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
@@ -1480,7 +1588,7 @@ async fn user_turn_clears_service_tier_after_fast_is_turned_off() {
             service_tier: Some(None),
             ..
         } => {}
-        other => panic!("expected Op::UserTurn to clear service tier, got {other:?}"),
+        other => panic!("expected Op::UserTurn with standard service tier override, got {other:?}"),
     }
 }
 
