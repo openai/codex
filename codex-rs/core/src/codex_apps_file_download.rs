@@ -36,19 +36,26 @@ fn codex_apps_download_base_url(turn_context: &TurnContext) -> &str {
 fn should_materialize_codex_apps_file_download(
     server: &str,
     codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
+    result_meta: Option<&JsonMap<String, JsonValue>>,
 ) -> bool {
     if server != codex_mcp::CODEX_APPS_MCP_SERVER_NAME {
         return false;
     }
 
-    let Some(codex_apps_meta) = codex_apps_meta else {
-        return false;
-    };
-
-    codex_apps_meta
-        .get(CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY)
-        .and_then(JsonValue::as_bool)
+    codex_apps_materialize_file_download_flag(result_meta)
+        .or_else(|| codex_apps_materialize_file_download_flag(codex_apps_meta))
         == Some(true)
+}
+
+fn codex_apps_materialize_file_download_flag(
+    codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
+) -> Option<bool> {
+    codex_apps_meta
+        .and_then(|codex_apps_meta| {
+            codex_apps_meta
+                .get(CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY)
+                .and_then(JsonValue::as_bool)
+        })
 }
 
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
@@ -58,7 +65,8 @@ pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
     codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
     mut result: CallToolResult,
 ) -> CallToolResult {
-    if !should_materialize_codex_apps_file_download(server, codex_apps_meta)
+    let result_meta = result.meta.as_ref().and_then(JsonValue::as_object);
+    if !should_materialize_codex_apps_file_download(server, codex_apps_meta, result_meta)
         || result.is_error == Some(true)
     {
         return result;
@@ -247,6 +255,19 @@ mod tests {
     use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+
+    #[test]
+    fn should_materialize_codex_apps_file_download_reads_result_meta() {
+        let result_meta = serde_json::json!({
+            CODEX_APPS_META_MATERIALIZE_FILE_DOWNLOAD_KEY: true,
+        });
+
+        assert!(should_materialize_codex_apps_file_download(
+            codex_mcp::CODEX_APPS_MCP_SERVER_NAME,
+            /*codex_apps_meta*/ None,
+            result_meta.as_object(),
+        ));
+    }
 
     #[tokio::test]
     async fn codex_apps_file_download_materialization_adds_local_path_for_marked_tools() {
