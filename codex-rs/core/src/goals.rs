@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
@@ -233,8 +234,15 @@ impl GoalWallClockAccountingSnapshot {
         i64::try_from(last.elapsed().as_secs()).unwrap_or(i64::MAX)
     }
 
-    fn mark_accounted(&mut self) {
-        self.reset_baseline();
+    fn mark_accounted(&mut self, accounted_seconds: i64) {
+        if accounted_seconds <= 0 {
+            return;
+        }
+        let advance = Duration::from_secs(u64::try_from(accounted_seconds).unwrap_or(u64::MAX));
+        self.last_accounted_at = self
+            .last_accounted_at
+            .checked_add(advance)
+            .unwrap_or_else(Instant::now);
     }
 
     fn reset_baseline(&mut self) {
@@ -885,7 +893,7 @@ impl Session {
                             turn.clear_active_goal();
                         }
                     }
-                    accounting.wall_clock.mark_accounted();
+                    accounting.wall_clock.mark_accounted(time_delta_seconds);
                     if clear_active_goal {
                         accounting.wall_clock.clear_active_goal();
                     }
@@ -977,7 +985,7 @@ impl Session {
                     .lock()
                     .await
                     .wall_clock
-                    .mark_accounted();
+                    .mark_accounted(time_delta_seconds);
                 let goal = protocol_goal_from_state(goal);
                 Ok(Some(goal))
             }
@@ -1509,6 +1517,8 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::TokenUsage;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn goal_continuation_is_ignored_only_in_plan_mode() {
@@ -1529,6 +1539,23 @@ mod tests {
         };
 
         assert_eq!(580, goal_token_delta_for_usage(&usage));
+    }
+
+    #[test]
+    fn wall_clock_accounting_advances_by_persisted_seconds() {
+        let mut snapshot = super::GoalWallClockAccountingSnapshot::new();
+        let original = Instant::now() - Duration::from_millis(1500);
+        snapshot.last_accounted_at = original;
+
+        snapshot.mark_accounted(/*accounted_seconds*/ 1);
+        assert_eq!(
+            original + Duration::from_secs(1),
+            snapshot.last_accounted_at
+        );
+
+        let token_only_original = snapshot.last_accounted_at;
+        snapshot.mark_accounted(/*accounted_seconds*/ 0);
+        assert_eq!(token_only_original, snapshot.last_accounted_at);
     }
 
     #[test]
