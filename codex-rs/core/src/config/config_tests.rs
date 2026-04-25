@@ -756,7 +756,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 
     let memories_root = codex_home.path().join("memories").abs();
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -794,7 +794,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
         }
     );
     assert_eq!(
-        config.permissions.network_sandbox_policy,
+        config.permissions.network_sandbox_policy(),
         NetworkSandboxPolicy::Restricted
     );
     Ok(())
@@ -923,7 +923,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert_eq!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .glob_scan_max_depth,
         Some(2)
     );
@@ -933,7 +933,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .contains(&FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
@@ -945,7 +945,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     assert!(
         !config
             .permissions
-            .file_system_sandbox_policy
+            .file_system_sandbox_policy()
             .entries
             .iter()
             .any(|entry| matches!(
@@ -1131,7 +1131,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(
@@ -1177,7 +1177,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
                 value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
@@ -1204,7 +1204,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert_eq!(
@@ -1235,7 +1235,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
     .await?;
 
     assert_eq!(
-        config.permissions.file_system_sandbox_policy,
+        config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(Vec::new())
     );
     assert!(
@@ -1332,7 +1332,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
     .await?;
 
     assert!(
-        config.permissions.network_sandbox_policy.is_enabled(),
+        config.permissions.network_sandbox_policy().is_enabled(),
         "expected network sandbox policy to be enabled",
     );
     assert!(
@@ -1568,20 +1568,20 @@ exclude_slash_tmp = true
 
         let sandbox_policy = config.permissions.sandbox_policy.get();
         assert_eq!(
-            config.permissions.file_system_sandbox_policy,
+            config.permissions.file_system_sandbox_policy(),
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(sandbox_policy, cwd.path()),
             "case `{name}` should preserve filesystem semantics from legacy config"
         );
         assert_eq!(
-            config.permissions.network_sandbox_policy,
+            config.permissions.network_sandbox_policy(),
             NetworkSandboxPolicy::from(sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
         );
         assert_eq!(
             config
                 .permissions
-                .file_system_sandbox_policy
-                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy, cwd.path())
+                .file_system_sandbox_policy()
+                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy(), cwd.path())
                 .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
             sandbox_policy.clone(),
             "case `{name}` should round-trip through split policies without drift"
@@ -5217,10 +5217,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                    &SandboxPolicy::new_read_only_policy(),
-                ),
-                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5414,10 +5410,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5565,10 +5557,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -5701,10 +5689,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),

@@ -2271,9 +2271,11 @@ impl CodexMessageProcessor {
                 Ok(()) => {
                     let (mut file_system_sandbox_policy, network_sandbox_policy) =
                         permission_profile.to_runtime_permissions();
+                    let configured_file_system_sandbox_policy =
+                        self.config.permissions.file_system_sandbox_policy();
                     Self::preserve_configured_deny_read_restrictions(
                         &mut file_system_sandbox_policy,
-                        &self.config.permissions.file_system_sandbox_policy,
+                        &configured_file_system_sandbox_policy,
                     );
                     codex_protocol::models::PermissionProfile::from_runtime_permissions_with_enforcement(
                         permission_profile.enforcement(),

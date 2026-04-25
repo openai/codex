@@ -200,18 +200,6 @@ pub struct Permissions {
     /// Legacy projection retained while runtime call sites migrate to
     /// `permission_profile`.
     pub sandbox_policy: Constrained<SandboxPolicy>,
-    /// Effective filesystem sandbox policy, including entries that cannot yet
-    /// be fully represented by the legacy [`SandboxPolicy`] projection.
-    ///
-    /// Runtime projection retained while callers migrate to
-    /// `permission_profile`.
-    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
-    /// Effective network sandbox policy split out from the legacy
-    /// [`SandboxPolicy`] projection.
-    ///
-    /// Runtime projection retained while callers migrate to
-    /// `permission_profile`.
-    pub network_sandbox_policy: NetworkSandboxPolicy,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
     /// Whether the model may request a login shell for shell-based tools.
@@ -239,6 +227,16 @@ impl Permissions {
         self.permission_profile.get().clone()
     }
 
+    /// Effective filesystem sandbox policy derived from the canonical profile.
+    pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
+        self.permission_profile.get().file_system_sandbox_policy()
+    }
+
+    /// Effective network sandbox policy derived from the canonical profile.
+    pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
+        self.permission_profile.get().network_sandbox_policy()
+    }
+
     /// Replace permissions from a legacy sandbox policy and keep every
     /// permission projection in sync.
     pub fn set_legacy_sandbox_policy(
@@ -259,8 +257,6 @@ impl Permissions {
 
         self.sandbox_policy.set(sandbox_policy)?;
         self.permission_profile.set(permission_profile)?;
-        self.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.network_sandbox_policy = network_sandbox_policy;
         Ok(())
     }
 
@@ -284,8 +280,6 @@ impl Permissions {
 
         self.permission_profile.set(permission_profile)?;
         self.sandbox_policy.set(sandbox_policy)?;
-        self.file_system_sandbox_policy = file_system_sandbox_policy;
-        self.network_sandbox_policy = network_sandbox_policy;
         Ok(())
     }
 }
@@ -2414,8 +2408,6 @@ impl Config {
                 approval_policy: constrained_approval_policy.value,
                 permission_profile: constrained_permission_profile,
                 sandbox_policy: constrained_sandbox_policy.value,
-                file_system_sandbox_policy: effective_file_system_sandbox_policy,
-                network_sandbox_policy: effective_network_sandbox_policy,
                 network,
                 allow_login_shell,
                 shell_environment_policy,
