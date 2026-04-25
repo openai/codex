@@ -483,6 +483,9 @@ impl BottomPane {
             return;
         }
 
+        // Promote the oldest delayed approval once typing has been idle long enough.
+        // `ApprovalOverlay` advances its internal queue with `pop()`, so drain the
+        // remaining delayed approvals from the back to preserve FIFO display order.
         let Some(first) = self.delayed_approval_requests.pop_front() else {
             return;
         };
