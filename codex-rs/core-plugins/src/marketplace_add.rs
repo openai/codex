@@ -278,10 +278,9 @@ mod tests {
         let expected_source = source_root.path().canonicalize()?.display().to_string();
         assert_eq!(result.marketplace_name, "debug");
         assert_eq!(result.source_display, expected_source);
-        assert_eq!(
-            result.installed_root.as_path(),
-            source_root.path().canonicalize()?
-        );
+        let expected_installed_root =
+            AbsolutePathBuf::from_absolute_path(source_root.path().canonicalize()?)?;
+        assert_eq!(result.installed_root, expected_installed_root);
         assert!(!result.already_added);
         assert!(
             !marketplace_install_root(codex_home.path())

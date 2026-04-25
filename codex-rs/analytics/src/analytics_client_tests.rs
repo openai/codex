@@ -161,7 +161,7 @@ fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -
 }
 
 fn sample_permission_profile() -> AppServerPermissionProfile {
-    CorePermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::DangerFullAccess).into()
+    CorePermissionProfile::Disabled.into()
 }
 
 fn sample_app_server_client_metadata() -> CodexAppServerClientMetadata {
