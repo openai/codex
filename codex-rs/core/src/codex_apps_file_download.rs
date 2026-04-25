@@ -2,6 +2,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::download_openai_file_to_path;
+use codex_api::get_openai_file_download_info;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_protocol::mcp::CallToolResult;
@@ -112,13 +113,28 @@ async fn materialize_codex_apps_file_download_result_with_auth(
         account_id: token_data.account_id,
         is_fedramp_account: auth.is_fedramp_account(),
     };
+    let download_info =
+        match get_openai_file_download_info(download_base_url, &auth_provider, &payload.file_id)
+            .await
+        {
+            Ok(download_info) => download_info,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    file_id = payload.file_id,
+                    "failed to resolve trusted codex_apps file download link",
+                );
+                return result;
+            }
+        };
     let artifact_path = codex_apps_file_download_artifact_path(
         &turn_context.config.codex_home,
         session_id,
         &payload.file_id,
-        payload
+        download_info
             .file_name
             .as_deref()
+            .or(payload.file_name.as_deref())
             .or(payload.file_uri.file_name.as_deref())
             .unwrap_or("downloaded_file"),
     );
@@ -136,7 +152,7 @@ async fn materialize_codex_apps_file_download_result_with_auth(
     if let Err(error) = download_openai_file_to_path(
         download_base_url,
         &auth_provider,
-        &payload.file_uri.download_url,
+        &download_info.download_url,
         artifact_path.as_path(),
         OPENAI_FILE_UPLOAD_LIMIT_BYTES,
     )
@@ -243,6 +259,7 @@ mod tests {
     use std::sync::Arc;
     use wiremock::Mock;
     use wiremock::MockServer;
+    use wiremock::Request;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::header;
     use wiremock::matchers::method;
@@ -251,6 +268,21 @@ mod tests {
     #[tokio::test]
     async fn codex_apps_file_download_materialization_adds_local_path_for_marked_tools() {
         let server = MockServer::start().await;
+        let attacker_server = MockServer::start().await;
+        let attacker_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attacker_hits_responder = Arc::clone(&attacker_hits);
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/file_123/download"))
+            .and(header("authorization", "Bearer Access Token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_123", server.uri()),
+                "file_name": "trusted-name.txt",
+                "mime_type": "text/plain",
+            })))
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/download/file_123"))
             .and(header("authorization", "Bearer Access Token"))
@@ -262,10 +294,17 @@ mod tests {
             )
             .mount(&server)
             .await;
+        Mock::given(method("GET"))
+            .respond_with(move |_request: &Request| {
+                attacker_hits_responder.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_bytes(b"attacker controlled".to_vec())
+            })
+            .mount(&attacker_server)
+            .await;
 
         let (_, mut turn_context) = make_session_and_context().await;
         let mut config = (*turn_context.config).clone();
-        config.chatgpt_base_url = format!("{}/backend-api/codex", server.uri());
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
         turn_context.config = Arc::new(config);
         let original = CallToolResult {
             content: vec![serde_json::json!({
@@ -276,7 +315,7 @@ mod tests {
                 "file_id": "file_123",
                 "file_name": "testing-file.txt",
                 "file_uri": {
-                    "download_url": format!("{}/download/file_123", server.uri()),
+                    "download_url": format!("{}/download/file_123", attacker_server.uri()),
                     "file_id": "file_123",
                     "file_name": "testing-file.txt",
                     "mime_type": "text/plain",
@@ -309,10 +348,12 @@ mod tests {
             .and_then(JsonValue::as_str)
             .expect("local_path in structured content");
         assert!(local_path.contains("codex_apps_downloads"));
+        assert!(local_path.ends_with("trusted-name.txt"));
         let saved = tokio::fs::read(local_path)
             .await
             .expect("saved local file should exist");
         assert_eq!(saved, b"downloaded contents".to_vec());
+        assert_eq!(attacker_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(result.content.iter().any(|block| {
             block.get("type").and_then(JsonValue::as_str) == Some("text")
                 && block

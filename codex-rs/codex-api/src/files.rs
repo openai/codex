@@ -38,6 +38,13 @@ pub struct UploadedOpenAiFile {
     pub library_file_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiFileDownloadInfo {
+    pub download_url: String,
+    pub file_name: Option<String>,
+    pub mime_type: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiFileError {
     #[error("path `{path}` does not exist")]
@@ -139,6 +146,48 @@ pub async fn download_openai_file(
     let (resolved_url, response) =
         send_openai_file_download_request(base_url, auth, download_url).await?;
     response_bytes(resolved_url.as_str(), response).await
+}
+
+pub async fn get_openai_file_download_info(
+    base_url: &str,
+    auth: &impl AuthProvider,
+    file_id: &str,
+) -> Result<OpenAiFileDownloadInfo, OpenAiFileError> {
+    let base_url = base_url.trim_end_matches('/');
+    let download_link_url = format!("{base_url}/files/{file_id}/download");
+    let response = authorized_request(auth, reqwest::Method::GET, &download_link_url)
+        .send()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: download_link_url.clone(),
+            source,
+        })?;
+    let body = response_text(&download_link_url, response).await?;
+    let payload: DownloadLinkResponse =
+        serde_json::from_str(&body).map_err(|source| OpenAiFileError::Decode {
+            url: download_link_url.clone(),
+            source,
+        })?;
+
+    if payload.status != "success" {
+        return Err(OpenAiFileError::UploadFailed {
+            file_id: file_id.to_string(),
+            message: payload
+                .error_message
+                .unwrap_or_else(|| "download link resolution returned an error".to_string()),
+        });
+    }
+
+    let download_url = payload.download_url.ok_or_else(|| OpenAiFileError::UploadFailed {
+        file_id: file_id.to_string(),
+        message: "missing download_url".to_string(),
+    })?;
+
+    Ok(OpenAiFileDownloadInfo {
+        download_url,
+        file_name: payload.file_name,
+        mime_type: payload.mime_type,
+    })
 }
 
 pub async fn download_openai_file_to_path(
