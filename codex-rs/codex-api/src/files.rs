@@ -183,10 +183,12 @@ pub async fn get_openai_file_download_info(
         });
     }
 
-    let download_url = payload.download_url.ok_or_else(|| OpenAiFileError::UploadFailed {
-        file_id: file_id.to_string(),
-        message: "missing download_url".to_string(),
-    })?;
+    let download_url = payload
+        .download_url
+        .ok_or_else(|| OpenAiFileError::UploadFailed {
+            file_id: file_id.to_string(),
+            message: "missing download_url".to_string(),
+        })?;
 
     Ok(OpenAiFileDownloadInfo {
         download_url,
@@ -814,9 +816,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let info = get_openai_file_download_info(&base_url_for(&server), &chatgpt_auth(), "file_123")
-            .await
-            .expect("download info should resolve");
+        let info =
+            get_openai_file_download_info(&base_url_for(&server), &chatgpt_auth(), "file_123")
+                .await
+                .expect("download info should resolve");
 
         assert_eq!(
             info,
@@ -839,10 +842,10 @@ mod tests {
             .and(path("/download/file_123"))
             .and(header("authorization", "Bearer token"))
             .and(header("chatgpt-account-id", "account_id"))
-            .respond_with(
-                ResponseTemplate::new(302)
-                    .append_header("location", format!("{}/redirected", redirected_server.uri())),
-            )
+            .respond_with(ResponseTemplate::new(302).append_header(
+                "location",
+                format!("{}/redirected", redirected_server.uri()),
+            ))
             .mount(&server)
             .await;
         Mock::given(method("GET"))

@@ -218,7 +218,10 @@ fn redact_download_url_from_value(value: &mut JsonValue) {
     let Some(object) = value.as_object_mut() else {
         return;
     };
-    let Some(file_uri) = object.get_mut("file_uri").and_then(JsonValue::as_object_mut) else {
+    let Some(file_uri) = object
+        .get_mut("file_uri")
+        .and_then(JsonValue::as_object_mut)
+    else {
         return;
     };
     file_uri.remove("download_url");
@@ -412,7 +415,8 @@ mod tests {
         assert_eq!(saved, b"downloaded contents".to_vec());
         assert_eq!(attacker_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!result.content.iter().any(|block| {
-            block.get("text")
+            block
+                .get("text")
                 .and_then(JsonValue::as_str)
                 .is_some_and(|text| text.contains(&attacker_server.uri()))
         }));
@@ -493,7 +497,8 @@ mod tests {
             None,
         );
         assert!(!result.content.iter().any(|block| {
-            block.get("text")
+            block
+                .get("text")
                 .and_then(JsonValue::as_str)
                 .is_some_and(|text| text.contains(&attacker_server.uri()))
         }));
