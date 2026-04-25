@@ -142,6 +142,8 @@ mod model_catalog;
 mod model_migration;
 mod multi_agents;
 mod notifications;
+#[cfg(any(not(debug_assertions), test))]
+mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -167,6 +169,8 @@ mod ui_consts;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
 mod update_prompt;
+#[cfg(any(not(debug_assertions), test))]
+mod update_versions;
 mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
