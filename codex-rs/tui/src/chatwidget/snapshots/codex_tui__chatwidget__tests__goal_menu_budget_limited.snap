@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/goal_menu.rs
+expression: rendered_goal_summary(&mut rx)
+---
+Goal
+Status: limited by budget
+Objective: Keep improving the bare goal command until it feels calm and useful.
+Time used: 1m
+Tokens used: 12.5K
+Token budget: 80K
+
+Commands: /goal clear

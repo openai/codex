@@ -24,7 +24,6 @@ use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpRequestParams;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_models_manager::manager::RefreshStrategy;
@@ -48,7 +47,6 @@ use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
-use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
@@ -341,6 +339,7 @@ async fn call_cwd_tool(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -475,6 +474,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -907,6 +907,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1040,6 +1041,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1140,6 +1142,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1292,6 +1295,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1321,90 +1325,6 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
             "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
             "detail": "original",
         })
-    );
-
-    server.verify().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[serial(mcp_test_value)]
-async fn js_repl_emit_image_preserves_original_detail_for_mcp_images() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let call_id = "js-repl-rmcp-image";
-    let rmcp_test_server_bin = stdio_server_bin()?;
-
-    let fixture = test_codex()
-        .with_model("gpt-5.3-codex")
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::JsRepl)
-                .expect("test config should allow feature update");
-            insert_mcp_server(
-                config,
-                "rmcp",
-                stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
-                TestMcpServerOptions::default(),
-            );
-        })
-        .build(&server)
-        .await?;
-
-    wait_for_mcp_tool(&fixture, "mcp__rmcp__image_scenario").await?;
-
-    mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            ev_custom_tool_call(
-                call_id,
-                "js_repl",
-                r#"
-const out = await codex.tool("mcp__rmcp__image_scenario", {
-  scenario: "image_only_original_detail",
-});
-const imageItem = out.output.find((item) => item.type === "input_image");
-await codex.emitImage(imageItem);
-"#,
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let final_mock = mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_assistant_message("msg-1", "done"),
-            responses::ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    fixture
-        .submit_turn("use js_repl to emit the rmcp image scenario output")
-        .await?;
-
-    let output = final_mock.single_request().custom_tool_call_output(call_id);
-    let output_items = output["output"]
-        .as_array()
-        .expect("js_repl output should be content items");
-    let image_item = output_items
-        .iter()
-        .find(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
-        .expect("js_repl should emit an input_image item");
-    assert_eq!(
-        image_item.get("detail").and_then(Value::as_str),
-        Some("original")
-    );
-    assert!(
-        image_item
-            .get("image_url")
-            .and_then(Value::as_str)
-            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,")),
-        "js_repl should emit a png data URL"
     );
 
     server.verify().await;
@@ -1530,6 +1450,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: text_only_model_slug.to_string(),
             effort: None,
             summary: None,
@@ -1639,6 +1560,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1776,6 +1698,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -1886,6 +1809,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -2139,6 +2063,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -2349,6 +2274,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -2594,6 +2520,7 @@ async fn streamable_http_with_oauth_refresh_round_trip_impl(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -2637,7 +2564,7 @@ async fn streamable_http_with_oauth_refresh_round_trip_impl(
     server.verify().await;
 
     assert_eq!(
-        read_fallback_oauth_access_token(temp_home.path())?,
+        read_fallback_oauth_access_token(temp_home.path(), server_name, http_server.url())?,
         refreshed_access_token
     );
 
@@ -2775,6 +2702,14 @@ async fn start_remote_streamable_http_test_server(
     // test is whether the remote-side MCP client can reach it. Probe through
     // remote HTTP before handing the URL to the Codex fixture.
     wait_for_remote_streamable_http_server(&server_url, Duration::from_secs(5)).await?;
+    if options.expected_bearer.is_some()
+        && matches!(
+            options.bind_mode,
+            StreamableHttpTestServerBindMode::HostVisible
+        )
+    {
+        wait_for_streamable_http_metadata(&server_url, Duration::from_secs(5)).await?;
+    }
 
     Ok(StreamableHttpTestServer {
         server_url,
@@ -2957,6 +2892,50 @@ async fn wait_for_remote_streamable_http_server(
     }
 }
 
+/// Waits for OAuth metadata from the host-side test process.
+async fn wait_for_streamable_http_metadata(
+    server_url: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let metadata_url = streamable_http_metadata_url(server_url);
+    let client = Client::builder().no_proxy().build()?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for streamable HTTP server metadata at {metadata_url}: deadline reached"
+            ));
+        }
+
+        match tokio::time::timeout(remaining, client.get(&metadata_url).send()).await {
+            Ok(Ok(response)) if response.status() == StatusCode::OK => return Ok(()),
+            Ok(Ok(response)) => {
+                if Instant::now() >= deadline {
+                    return Err(anyhow::anyhow!(
+                        "timed out waiting for streamable HTTP server metadata at {metadata_url}: HTTP {}",
+                        response.status()
+                    ));
+                }
+            }
+            Ok(Err(error)) => {
+                if Instant::now() >= deadline {
+                    return Err(anyhow::anyhow!(
+                        "timed out waiting for streamable HTTP server metadata at {metadata_url}: {error}"
+                    ));
+                }
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for streamable HTTP server metadata at {metadata_url}: request timed out"
+                ));
+            }
+        }
+
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// Builds the OAuth metadata URL for the test Streamable HTTP MCP endpoint.
 fn streamable_http_metadata_url(server_url: &str) -> String {
     let base_url = server_url.strip_suffix("/mcp").unwrap_or(server_url);
@@ -3000,12 +2979,28 @@ fn write_fallback_oauth_tokens(
     Ok(())
 }
 
-fn read_fallback_oauth_access_token(home: &Path) -> anyhow::Result<String> {
+fn read_fallback_oauth_access_token(
+    home: &Path,
+    server_name: &str,
+    server_url: &str,
+) -> anyhow::Result<String> {
     let file_path = home.join(".credentials.json");
     let store: Value = serde_json::from_slice(&fs::read(&file_path)?)?;
     store
-        .get("stub")
-        .and_then(|stub| stub.get("access_token"))
+        .as_object()
+        .into_iter()
+        .flat_map(|store| store.values())
+        .find(|entry| {
+            entry
+                .get("server_name")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == server_name)
+                && entry
+                    .get("server_url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == server_url)
+        })
+        .and_then(|entry| entry.get("access_token"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow::anyhow!("missing fallback OAuth access token"))

@@ -263,7 +263,9 @@ async fn run_codex_tool_session_inner(
                         outgoing.send_response(request_id.clone(), result).await;
                         break;
                     }
-                    EventMsg::Warning(_) | EventMsg::GuardianWarning(_) => {
+                    EventMsg::Warning(_)
+                    | EventMsg::GuardianWarning(_)
+                    | EventMsg::ModelVerification(_) => {
                         continue;
                     }
                     EventMsg::GuardianAssessment(_) => {
@@ -318,6 +320,9 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::ThreadNameUpdated(_) => {
                         // Ignore session metadata updates in MCP tool runner.
+                    }
+                    EventMsg::ThreadGoalUpdated(_) => {
+                        // Ignore thread goal metadata updates in MCP tool runner.
                     }
                     EventMsg::AgentMessageDelta(_) => {
                         // TODO: think how we want to support this in the MCP

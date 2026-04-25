@@ -138,11 +138,11 @@ async fn submit_turn_with_timeout(test: &TestCodex, prompt: &str) -> Result<()> 
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
-                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             },
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,

@@ -60,23 +60,6 @@ fn image_detail_original_is_removed_and_disabled_by_default() {
 }
 
 #[test]
-fn js_repl_is_experimental_and_user_toggleable() {
-    let spec = Feature::JsRepl.info();
-    let stage = spec.stage;
-    let expected_node_version = include_str!("../../node-version.txt").trim_end();
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("JavaScript REPL"));
-    assert_eq!(
-        stage.experimental_menu_description().map(str::to_owned),
-        Some(format!(
-            "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v{expected_node_version} installed."
-        ))
-    );
-    assert_eq!(Feature::JsRepl.default_enabled(), false);
-}
-
-#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);
@@ -153,15 +136,10 @@ fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::BrowserUse.stage(), Stage::Stable);
     assert_eq!(Feature::BrowserUse.default_enabled(), true);
     assert_eq!(feature_for_key("browser_use"), Some(Feature::BrowserUse));
-}
 
-#[test]
-fn unavailable_dummy_tools_is_under_development_and_disabled_by_default() {
-    assert_eq!(
-        Feature::UnavailableDummyTools.stage(),
-        Stage::UnderDevelopment
-    );
-    assert_eq!(Feature::UnavailableDummyTools.default_enabled(), false);
+    assert_eq!(Feature::ComputerUse.stage(), Stage::Stable);
+    assert_eq!(Feature::ComputerUse.default_enabled(), true);
+    assert_eq!(feature_for_key("computer_use"), Some(Feature::ComputerUse));
 }
 
 #[test]
@@ -215,6 +193,20 @@ fn image_detail_original_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("image_detail_original"),
         Some(Feature::ImageDetailOriginal)
+    );
+}
+
+#[test]
+fn js_repl_features_are_removed_feature_keys() {
+    assert_eq!(Feature::JsRepl.stage(), Stage::Removed);
+    assert_eq!(Feature::JsRepl.default_enabled(), false);
+    assert_eq!(feature_for_key("js_repl"), Some(Feature::JsRepl));
+
+    assert_eq!(Feature::JsReplToolsOnly.stage(), Stage::Removed);
+    assert_eq!(Feature::JsReplToolsOnly.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("js_repl_tools_only"),
+        Some(Feature::JsReplToolsOnly)
     );
 }
 
@@ -336,6 +328,25 @@ fn from_sources_ignores_removed_image_detail_original_feature_key() {
         "image_detail_original".to_string(),
         true,
     )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_js_repl_feature_keys() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([
+        ("js_repl".to_string(), true),
+        ("js_repl_tools_only".to_string(), true),
+    ]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

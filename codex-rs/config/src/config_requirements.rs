@@ -17,6 +17,7 @@ use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
+use crate::ManagedHooksRequirementsToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
@@ -86,6 +87,7 @@ pub struct ConfigRequirements {
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -117,6 +119,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             feature_requirements: None,
+            managed_hooks: None,
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
@@ -628,6 +631,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
+    pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
@@ -673,6 +677,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
@@ -707,6 +712,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             feature_requirements: _,
+            hooks: _,
             mcp_servers: _,
             apps: _,
             rules: _,
@@ -734,6 +740,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 feature_requirements,
+                hooks,
                 mcp_servers,
                 rules,
                 enforce_residency,
@@ -759,6 +766,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            hooks,
             mcp_servers,
             apps,
             rules,
@@ -774,6 +782,7 @@ impl ConfigRequirementsWithSources {
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
+            hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
@@ -858,6 +867,10 @@ impl ConfigRequirementsToml {
                 .feature_requirements
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
+            && self
+                .hooks
+                .as_ref()
+                .is_none_or(ManagedHooksRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
             && self
                 .apps
@@ -884,6 +897,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            hooks,
             mcp_servers,
             apps: _apps,
             rules,
@@ -1064,6 +1078,34 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         };
         let feature_requirements =
             feature_requirements.filter(|requirements| !requirements.value.is_empty());
+        let managed_hooks = hooks
+            .filter(|managed_hooks| managed_hooks.value.handler_count() > 0)
+            .map(|sourced_hooks| {
+                let Sourced {
+                    value,
+                    source: requirement_source,
+                } = sourced_hooks;
+                let allowed = value;
+                let allowed_for_error = format!("{allowed:?}");
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(allowed.clone(), move |candidate| {
+                    if candidate == &allowed {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "hooks",
+                            candidate: format!("{candidate:?}"),
+                            allowed: allowed_for_error.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                Ok(ConstrainedWithSource::new(
+                    constrained,
+                    Some(requirement_source),
+                ))
+            })
+            .transpose()?;
 
         let enforce_residency = match enforce_residency {
             Some(Sourced {
@@ -1106,6 +1148,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             sandbox_policy,
             web_search_mode,
             feature_requirements,
+            managed_hooks,
             mcp_servers,
             exec_policy,
             enforce_residency,
@@ -1119,6 +1162,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HookEventsToml;
     use anyhow::Result;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
@@ -1147,6 +1191,7 @@ mod tests {
             remote_sandbox_config: _,
             allowed_web_search_modes,
             feature_requirements,
+            hooks,
             mcp_servers,
             apps,
             rules,
@@ -1166,6 +1211,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1210,6 +1256,7 @@ mod tests {
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -1241,6 +1288,7 @@ mod tests {
                     feature_requirements,
                     enforce_source.clone(),
                 )),
+                hooks: None,
                 mcp_servers: None,
                 apps: None,
                 rules: None,
@@ -1278,6 +1326,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 mcp_servers: None,
                 apps: None,
                 rules: None,
@@ -1323,6 +1372,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                hooks: None,
                 mcp_servers: None,
                 apps: None,
                 rules: None,
@@ -1911,7 +1961,6 @@ allowed_approvals_reviewers = ["user"]
                 .sandbox_policy
                 .can_set(&SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
-                    read_only_access: Default::default(),
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
@@ -2020,7 +2069,6 @@ allowed_approvals_reviewers = ["user"]
                 .sandbox_policy
                 .can_set(&SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
-                    read_only_access: Default::default(),
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
@@ -2229,6 +2277,124 @@ allowed_approvals_reviewers = ["user"]
             ))
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_managed_hooks_requirements() -> Result<()> {
+        let toml_str = r#"
+managed_dir = "/enterprise/hooks"
+windows_managed_dir = 'C:\enterprise\hooks'
+
+[[PreToolUse]]
+matcher = "^Bash$"
+
+[[PreToolUse.hooks]]
+type = "command"
+command = "python3 /enterprise/hooks/pre.py"
+timeout = 10
+statusMessage = "checking"
+        "#;
+        let hooks: ManagedHooksRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            hooks.managed_dir.as_deref(),
+            Some(std::path::Path::new("/enterprise/hooks"))
+        );
+        assert_eq!(hooks.handler_count(), 1);
+        assert_eq!(hooks.hooks.pre_tool_use.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            from_str::<ConfigRequirementsToml>(
+                r#"
+[hooks]
+managed_dir = "/cloud/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /cloud/hooks/pre.py"
+                "#,
+            )?,
+        );
+        target.merge_unset_fields(
+            RequirementSource::SystemRequirementsToml {
+                file: system_requirements_toml_file_for_test()?,
+            },
+            from_str::<ConfigRequirementsToml>(
+                r#"
+[hooks]
+managed_dir = "/system/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /system/hooks/pre.py"
+                "#,
+            )?,
+        );
+
+        assert_eq!(
+            target
+                .hooks
+                .as_ref()
+                .and_then(|hooks| hooks.value.managed_dir.as_ref())
+                .map(std::path::PathBuf::as_path),
+            Some(std::path::Path::new("/cloud/hooks"))
+        );
+        assert_eq!(
+            target.hooks.as_ref().map(|hooks| hooks.source.clone()),
+            Some(RequirementSource::CloudRequirements)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_hooks_constraint_rejects_drift() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+[hooks]
+managed_dir = "/enterprise/hooks"
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /enterprise/hooks/pre.py"
+            "#,
+        )?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+        let mut managed_hooks = requirements
+            .managed_hooks
+            .expect("expected managed hooks requirements");
+
+        let err = managed_hooks
+            .set(ManagedHooksRequirementsToml {
+                managed_dir: Some(std::path::PathBuf::from("/other/hooks")),
+                windows_managed_dir: None,
+                hooks: HookEventsToml::default(),
+            })
+            .expect_err("managed hooks should reject drift");
+
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "hooks",
+                requirement_source: RequirementSource::Unknown,
+                ..
+            }
+        ));
         Ok(())
     }
 

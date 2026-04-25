@@ -9,7 +9,6 @@ use codex_thread_store::ListThreadsParams;
 use codex_thread_store::SortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadSortKey;
-use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;

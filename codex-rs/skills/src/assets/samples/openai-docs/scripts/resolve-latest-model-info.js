@@ -71,7 +71,7 @@ function parseFlatInfo(block) {
   const info = {};
 
   for (const line of block.split(/\r?\n/)) {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.+?)\s*$/);
+    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9_-]*):\s*(.+?)\s*$/);
     if (match) {
       info[match[1]] = match[2].replace(/^["']|["']$/g, "");
     }

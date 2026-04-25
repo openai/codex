@@ -14,6 +14,7 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }

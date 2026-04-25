@@ -292,6 +292,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
+            ServerNotification::ModelVerification(_) => CodexStatus::Running,
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
                 CodexStatus::Running
@@ -483,7 +484,6 @@ fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
-            read_only_access: _,
         } => {
             let mut summary = "workspace-write".to_string();
             let mut writable_entries = vec!["workdir".to_string()];

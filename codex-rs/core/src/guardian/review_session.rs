@@ -148,8 +148,6 @@ struct GuardianReviewSessionReuseKey {
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     main_execve_wrapper_exe: Option<PathBuf>,
-    js_repl_node_path: Option<PathBuf>,
-    js_repl_node_module_dirs: Vec<PathBuf>,
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
     include_apply_patch_tool: bool,
@@ -175,8 +173,6 @@ impl GuardianReviewSessionReuseKey {
             mcp_servers: spawn_config.mcp_servers.clone(),
             codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
-            js_repl_node_path: spawn_config.js_repl_node_path.clone(),
-            js_repl_node_module_dirs: spawn_config.js_repl_node_module_dirs.clone(),
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
             include_apply_patch_tool: spawn_config.include_apply_patch_tool,
@@ -691,6 +687,7 @@ async fn run_review_on_session(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: params.model.clone(),
             effort: params.reasoning_effort,
             summary: Some(params.reasoning_summary),
@@ -751,7 +748,7 @@ async fn load_rollout_items_for_fork(
     session: &Session,
 ) -> anyhow::Result<Option<Vec<RolloutItem>>> {
     session.flush_rollout().await?;
-    let Some(rollout_path) = session.current_rollout_path().await else {
+    let Some(rollout_path) = session.current_rollout_path().await? else {
         return Ok(None);
     };
     let history = RolloutRecorder::get_rollout_history(rollout_path.as_path()).await?;
