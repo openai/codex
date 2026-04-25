@@ -29,6 +29,7 @@ use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
+use crate::terminal_palette;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -1049,7 +1050,57 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     }
 }
 
-pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+const CODEX_LOGO_LINES: [&str; 8] = [
+    "    ⢀⣠⣤⣤⣄⡀",
+    "   ⣠⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄",
+    " ⣴⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⡆",
+    "⢰⣿⣿⣿⣄⠈⢿⣿⣿⣿⣿⣿⣿⣿⣧",
+    " ⢻⣿⣿⠏⢀⣾⣿⠿⠿⠿⠿⣿⣿⣿⡇",
+    " ⢸⣿⣿⣶⣿⣿⣿⣶⣶⣶⣶⣿⣿⡟",
+    "  ⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠁",
+    "    ⠉⠉⠙⠻⠿⠿⠟⠋",
+];
+const CODEX_LOGO_WIDTH: usize = 16;
+const CODEX_LOGO_GAP_WIDTH: usize = 2;
+const SESSION_HEADER_TEXT_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize =
+    CODEX_LOGO_WIDTH + CODEX_LOGO_GAP_WIDTH + SESSION_HEADER_TEXT_MAX_INNER_WIDTH;
+const CODEX_LOGO_BRIGHT_GRADIENT: [(u8, u8, u8); 8] = [
+    (169, 162, 255),
+    (151, 161, 255),
+    (130, 160, 255),
+    (112, 143, 255),
+    (88, 119, 255),
+    (75, 96, 255),
+    (63, 78, 250),
+    (49, 66, 245),
+];
+const CODEX_LOGO_DARK_GRADIENT: [(u8, u8, u8); 8] = [
+    (88, 76, 189),
+    (77, 89, 203),
+    (67, 103, 216),
+    (57, 109, 225),
+    (48, 91, 215),
+    (41, 72, 201),
+    (36, 54, 184),
+    (31, 42, 166),
+];
+
+fn codex_logo_gradient_for_bg(terminal_bg: Option<(u8, u8, u8)>) -> [(u8, u8, u8); 8] {
+    if terminal_bg.is_some_and(crate::color::is_light) {
+        CODEX_LOGO_DARK_GRADIENT
+    } else {
+        CODEX_LOGO_BRIGHT_GRADIENT
+    }
+}
+
+fn padded_logo_line(line: &str) -> String {
+    let width = UnicodeWidthStr::width(line);
+    format!(
+        "{line}{}",
+        " ".repeat(CODEX_LOGO_WIDTH.saturating_sub(width))
+    )
+}
 
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
@@ -1383,8 +1434,19 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
+        let show_logo = usize::from(width) >= SESSION_HEADER_MAX_INNER_WIDTH + 4;
+        let max_inner_width = if show_logo {
+            SESSION_HEADER_MAX_INNER_WIDTH
+        } else {
+            SESSION_HEADER_TEXT_MAX_INNER_WIDTH
+        };
+        let Some(inner_width) = card_inner_width(width, max_inner_width) else {
             return Vec::new();
+        };
+        let text_width = if show_logo {
+            inner_width.saturating_sub(CODEX_LOGO_WIDTH + CODEX_LOGO_GAP_WIDTH)
+        } else {
+            inner_width
         };
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
@@ -1435,11 +1497,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
         let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
+        let dir_max_width = text_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let mut lines = vec![
+        let mut text_lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
@@ -1448,10 +1510,33 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         if self.yolo_mode {
             let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
-            lines.push(make_row(vec![
+            text_lines.push(make_row(vec![
                 Span::from(format!("{permissions_label} ")).dim(),
                 "YOLO mode".magenta().bold(),
             ]));
+        }
+
+        if !show_logo {
+            return with_border(text_lines);
+        }
+
+        let logo_gradient = codex_logo_gradient_for_bg(terminal_palette::default_bg());
+        let text_top_padding = CODEX_LOGO_LINES.len().saturating_sub(text_lines.len()) / 2;
+        let mut lines = Vec::with_capacity(CODEX_LOGO_LINES.len());
+        for (idx, logo) in CODEX_LOGO_LINES.iter().enumerate() {
+            let mut spans = vec![
+                Span::styled(
+                    padded_logo_line(logo),
+                    Style::default().fg(terminal_palette::best_color(logo_gradient[idx])),
+                ),
+                Span::from(" ".repeat(CODEX_LOGO_GAP_WIDTH)).dim(),
+            ];
+            if let Some(text_idx) = idx.checked_sub(text_top_padding)
+                && let Some(text_line) = text_lines.get(text_idx)
+            {
+                spans.extend(text_line.spans.clone());
+            }
+            lines.push(Line::from(spans));
         }
 
         with_border(lines)
@@ -4057,6 +4142,59 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(!model_line.contains("fast"));
+    }
+
+    #[test]
+    fn session_header_places_logo_to_left_of_text() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-5".to_string(),
+            Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ false,
+            test_path_buf("/tmp/project").abs().to_path_buf(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(/*width*/ 100));
+        let title_line = lines
+            .iter()
+            .find(|line| line.contains("OpenAI Codex"))
+            .expect("title line");
+        let logo_column = title_line.find("⣴").expect("logo");
+        let title_column = title_line.find("OpenAI Codex").expect("title");
+
+        assert!(logo_column < title_column);
+        assert_eq!(lines.len(), 10);
+        assert_eq!(lines[3], title_line.as_str());
+    }
+
+    #[test]
+    fn session_header_logo_gradient_uses_terminal_background() {
+        assert_eq!(
+            codex_logo_gradient_for_bg(Some((8, 8, 8))),
+            CODEX_LOGO_BRIGHT_GRADIENT
+        );
+        assert_eq!(
+            codex_logo_gradient_for_bg(Some((250, 250, 250))),
+            CODEX_LOGO_DARK_GRADIENT
+        );
+        assert_eq!(codex_logo_gradient_for_bg(None), CODEX_LOGO_BRIGHT_GRADIENT);
+    }
+
+    #[test]
+    fn session_header_falls_back_to_text_only_when_width_is_narrow() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-5".to_string(),
+            Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ false,
+            test_path_buf("/tmp/project").abs().to_path_buf(),
+            "test",
+        );
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 60)).join("\n");
+
+        assert!(rendered.contains(">_ OpenAI Codex (vtest)"));
+        assert!(!rendered.contains("⣿"));
+        assert_eq!(rendered.lines().count(), 6);
     }
 
     #[test]
