@@ -41,6 +41,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+#[cfg(unix)]
 const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 #[cfg(windows)]
