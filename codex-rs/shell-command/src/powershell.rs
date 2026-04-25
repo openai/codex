@@ -1,11 +1,33 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::command_safety::PowershellParseOutcome;
+use crate::command_safety::parse_with_powershell_ast;
 use crate::shell_detect::ShellType;
 use crate::shell_detect::detect_shell_type;
 
 const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
+const POWERSHELL_BENIGN_FLAGS: &[&str] =
+    &["-nologo", "-noprofile", "-noninteractive", "-mta", "-sta"];
+
+/// Parse a PowerShell wrapper invocation into one or more inner command vectors.
+///
+/// Examples:
+/// - `["pwsh", "-NoProfile", "-Command", "ssh -V"]` -> `[["ssh", "-V"]]`
+/// - `["powershell.exe", "git", "status"]` -> `[["git", "status"]]`
+///
+/// Returns `None` when the invocation is not PowerShell-backed or when the
+/// script shape cannot be safely normalized into concrete command tokens.
+pub fn parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let (executable, args) = command.split_first()?;
+    if !is_powershell_executable(executable) {
+        return None;
+    }
+
+    parse_powershell_invocation(executable, args)
+}
 
 /// Prefixed command for powershell shell calls to force UTF-8 console output.
 pub const UTF8_OUTPUT_PREFIX: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
@@ -66,6 +88,101 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         i += 1;
     }
     None
+}
+
+fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<Vec<String>>> {
+    if args.is_empty() {
+        return None;
+    }
+
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = &args[idx];
+        let lower = arg.to_ascii_lowercase();
+        match lower.as_str() {
+            "-command" | "/command" | "-c" => {
+                let script = args.get(idx + 1)?;
+                if idx + 2 != args.len() {
+                    return None;
+                }
+                return parse_powershell_script(executable, script);
+            }
+            _ if lower.starts_with("-command:") || lower.starts_with("/command:") => {
+                if idx + 1 != args.len() {
+                    return None;
+                }
+                let (_, script) = arg.split_once(':')?;
+                return parse_powershell_script(executable, script);
+            }
+            _ if POWERSHELL_BENIGN_FLAGS.contains(&lower.as_str()) => {
+                idx += 1;
+            }
+            _ if lower.starts_with('-') => {
+                return None;
+            }
+            _ => {
+                let script = join_arguments_as_script(&args[idx..]);
+                return parse_powershell_script(executable, &script);
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
+    if let PowershellParseOutcome::Commands(commands) =
+        parse_with_powershell_ast(executable, script)
+    {
+        Some(commands)
+    } else {
+        None
+    }
+}
+
+fn is_powershell_executable(exe: &str) -> bool {
+    let executable_name = Path::new(exe)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+        .unwrap_or(exe)
+        .to_ascii_lowercase();
+
+    matches!(
+        executable_name.as_str(),
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    )
+}
+
+fn join_arguments_as_script(args: &[String]) -> String {
+    let mut words = Vec::with_capacity(args.len());
+    if let Some((first, rest)) = args.split_first() {
+        words.push(first.clone());
+        for arg in rest {
+            words.push(quote_argument(arg));
+        }
+    }
+    words.join(" ")
+}
+
+fn quote_argument(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.chars().all(|ch| !ch.is_whitespace()) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "''"))
+}
+
+/// This function attempts to find a valid PowerShell executable on the system.
+/// It first tries to find pwsh.exe, and if that fails, it tries to find
+/// powershell.exe.
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePathBuf> {
+    try_find_pwsh_executable_blocking().or_else(try_find_powershell_executable_blocking)
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
@@ -139,6 +256,8 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 #[cfg(test)]
 mod tests {
     use super::extract_powershell_command;
+    #[cfg(windows)]
+    use super::parse_powershell_command_sequence;
 
     #[test]
     fn extracts_basic_powershell_command() {
@@ -185,5 +304,19 @@ mod tests {
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Get-ChildItem | Select-String foo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_powershell_wrapper_into_inner_command() {
+        let cmd = vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "ssh -V".to_string(),
+        ];
+        let commands =
+            parse_powershell_command_sequence(&cmd).expect("PowerShell wrapper should parse");
+        assert_eq!(commands, vec![vec!["ssh".to_string(), "-V".to_string()]]);
     }
 }
