@@ -2341,11 +2341,12 @@ impl CodexMessageProcessor {
             persist_extended_history,
         } = params;
         if sandbox.is_some() && permission_profile.is_some() {
-            self.send_invalid_request_error(
-                request_id,
-                "`permissionProfile` cannot be combined with `sandbox`".to_string(),
-            )
-            .await;
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request("`permissionProfile` cannot be combined with `sandbox`"),
+                )
+                .await;
             return;
         }
         let environments = environments.map(|environments| {
@@ -2362,7 +2363,11 @@ impl CodexMessageProcessor {
                 .thread_manager
                 .validate_environment_selections(environments)
         {
-            self.send_invalid_request_error(request_id, environment_selection_error_message(err))
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(environment_selection_error_message(err)),
+                )
                 .await;
             return;
         }
@@ -2485,248 +2490,225 @@ impl CodexMessageProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
-        let requested_cwd = typesafe_overrides.cwd.clone();
-        let mut config = match config_manager
-            .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
-            .await
-        {
-            Ok(config) => config,
-            Err(err) => {
-                let error = config_load_error(&err);
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-                return;
-            }
-        };
-
-        // The user may have requested WorkspaceWrite or DangerFullAccess via
-        // the command line, though in the process of deriving the Config, it
-        // could be downgraded to ReadOnly (perhaps there is no sandbox
-        // available on Windows or the enterprise config disallows it). The cwd
-        // should still be considered "trusted" in this case.
-        let requested_permissions_trust_project =
-            requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
-
-        if requested_cwd.is_some()
-            && config.active_project.trust_level.is_none()
-            && (requested_permissions_trust_project
-                || matches!(
-                    config.permissions.sandbox_policy.get(),
-                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
-                        | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
-                ))
-        {
-            let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
+        let result = async {
+            let requested_cwd = typesafe_overrides.cwd.clone();
+            let mut config = config_manager
+                .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
                 .await
-                .unwrap_or_else(|| config.cwd.clone());
-            let current_cli_overrides = config_manager.current_cli_overrides();
-            let cli_overrides_with_trust;
-            let cli_overrides_for_reload = if let Err(err) =
-                codex_core::config::set_project_trust_level(
-                    &listener_task_context.codex_home,
-                    trust_target.as_path(),
-                    TrustLevel::Trusted,
-                ) {
-                warn!(
-                    "failed to persist trusted project state for {}; continuing with in-memory trust for this thread: {err}",
-                    trust_target.display()
-                );
-                let mut project = toml::map::Map::new();
-                project.insert(
-                    "trust_level".to_string(),
-                    TomlValue::String("trusted".to_string()),
-                );
-                let mut projects = toml::map::Map::new();
-                projects.insert(
-                    project_trust_key(trust_target.as_path()),
-                    TomlValue::Table(project),
-                );
-                cli_overrides_with_trust = current_cli_overrides
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once((
-                        "projects".to_string(),
-                        TomlValue::Table(projects),
-                    )))
-                    .collect::<Vec<_>>();
-                cli_overrides_with_trust.as_slice()
-            } else {
-                current_cli_overrides.as_slice()
-            };
+                .map_err(|err| config_load_error(&err))?;
 
-            config = match config_manager
-                .load_with_cli_overrides(
-                    cli_overrides_for_reload,
-                    config_overrides,
-                    typesafe_overrides,
-                    /*fallback_cwd*/ None,
-                )
-                .await
+            // The user may have requested WorkspaceWrite or DangerFullAccess via
+            // the command line, though in the process of deriving the Config, it
+            // could be downgraded to ReadOnly (perhaps there is no sandbox
+            // available on Windows or the enterprise config disallows it). The cwd
+            // should still be considered "trusted" in this case.
+            let requested_permissions_trust_project =
+                requested_permissions_trust_project(&typesafe_overrides, config.cwd.as_path());
+
+            if requested_cwd.is_some()
+                && config.active_project.trust_level.is_none()
+                && (requested_permissions_trust_project
+                    || matches!(
+                        config.permissions.sandbox_policy.get(),
+                        codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                            | codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+                            | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+                    ))
             {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = config_load_error(&err);
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-            };
-        }
+                let trust_target =
+                    resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
+                        .await
+                        .unwrap_or_else(|| config.cwd.clone());
+                let current_cli_overrides = config_manager.current_cli_overrides();
+                let cli_overrides_with_trust;
+                let cli_overrides_for_reload =
+                    if let Err(err) = codex_core::config::set_project_trust_level(
+                        &listener_task_context.codex_home,
+                        trust_target.as_path(),
+                        TrustLevel::Trusted,
+                    ) {
+                        warn!(
+                            "failed to persist trusted project state for {}; continuing with in-memory trust for this thread: {err}",
+                            trust_target.display()
+                        );
+                        let mut project = toml::map::Map::new();
+                        project.insert(
+                            "trust_level".to_string(),
+                            TomlValue::String("trusted".to_string()),
+                        );
+                        let mut projects = toml::map::Map::new();
+                        projects.insert(
+                            project_trust_key(trust_target.as_path()),
+                            TomlValue::Table(project),
+                        );
+                        cli_overrides_with_trust = current_cli_overrides
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once((
+                                "projects".to_string(),
+                                TomlValue::Table(projects),
+                            )))
+                            .collect::<Vec<_>>();
+                        cli_overrides_with_trust.as_slice()
+                    } else {
+                        current_cli_overrides.as_slice()
+                    };
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
-        let environments = environments.unwrap_or_else(|| {
-            listener_task_context
-                .thread_manager
-                .default_environment_selections(&config.cwd)
-        });
-        let dynamic_tools = dynamic_tools.unwrap_or_default();
-        let core_dynamic_tools = if dynamic_tools.is_empty() {
-            Vec::new()
-        } else {
-            if let Err(message) = validate_dynamic_tools(&dynamic_tools) {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message,
-                    data: None,
-                };
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-                return;
-            }
-            dynamic_tools
-                .into_iter()
-                .map(|tool| CoreDynamicToolSpec {
-                    namespace: tool.namespace,
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                    defer_loading: tool.defer_loading,
-                })
-                .collect()
-        };
-        let core_dynamic_tool_count = core_dynamic_tools.len();
-
-        match listener_task_context
-            .thread_manager
-            .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
-                config,
-                initial_history: match session_start_source
-                    .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
-                {
-                    codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
-                    codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
-                },
-                dynamic_tools: core_dynamic_tools,
-                persist_extended_history,
-                metrics_service_name: service_name,
-                parent_trace: request_trace,
-                environments,
-            })
-            .instrument(tracing::info_span!(
-                "app_server.thread_start.create_thread",
-                otel.name = "app_server.thread_start.create_thread",
-                thread_start.dynamic_tool_count = core_dynamic_tool_count,
-                thread_start.persist_extended_history = persist_extended_history,
-            ))
-            .await
-        {
-            Ok(new_conv) => {
-                let NewThread {
-                    thread_id,
-                    thread,
-                    session_configured,
-                    ..
-                } = new_conv;
-                if let Err(error) = Self::set_app_server_client_info(
-                    thread.as_ref(),
-                    app_server_client_name,
-                    app_server_client_version,
-                )
-                .await
-                {
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-                let config_snapshot = thread
-                    .config_snapshot()
-                    .instrument(tracing::info_span!(
-                        "app_server.thread_start.config_snapshot",
-                        otel.name = "app_server.thread_start.config_snapshot",
-                    ))
-                    .await;
-                let mut thread = build_thread_from_snapshot(
-                    thread_id,
-                    &config_snapshot,
-                    session_configured.rollout_path.clone(),
-                );
-
-                // Auto-attach a thread listener when starting a thread.
-                Self::log_listener_attach_result(
-                    Self::ensure_conversation_listener_task(
-                        listener_task_context.clone(),
-                        thread_id,
-                        request_id.connection_id,
-                        experimental_raw_events,
-                        ApiVersion::V2,
+                config = config_manager
+                    .load_with_cli_overrides(
+                        cli_overrides_for_reload,
+                        config_overrides,
+                        typesafe_overrides,
+                        /*fallback_cwd*/ None,
                     )
-                    .instrument(tracing::info_span!(
-                        "app_server.thread_start.attach_listener",
-                        otel.name = "app_server.thread_start.attach_listener",
-                        thread_start.experimental_raw_events = experimental_raw_events,
-                    ))
-                    .await,
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+            }
+
+            let instruction_sources = Self::instruction_sources_from_config(&config).await;
+            let environments = environments.unwrap_or_else(|| {
+                listener_task_context
+                    .thread_manager
+                    .default_environment_selections(&config.cwd)
+            });
+            let dynamic_tools = dynamic_tools.unwrap_or_default();
+            let core_dynamic_tools = if dynamic_tools.is_empty() {
+                Vec::new()
+            } else {
+                validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
+                dynamic_tools
+                    .into_iter()
+                    .map(|tool| CoreDynamicToolSpec {
+                        namespace: tool.namespace,
+                        name: tool.name,
+                        description: tool.description,
+                        input_schema: tool.input_schema,
+                        defer_loading: tool.defer_loading,
+                    })
+                    .collect()
+            };
+            let core_dynamic_tool_count = core_dynamic_tools.len();
+
+            let NewThread {
+                thread_id,
+                thread,
+                session_configured,
+                ..
+            } = listener_task_context
+                .thread_manager
+                .start_thread_with_tools_and_service_name(StartThreadWithToolsOptions {
+                    config,
+                    initial_history: match session_start_source
+                        .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
+                    {
+                        codex_app_server_protocol::ThreadStartSource::Startup => {
+                            InitialHistory::New
+                        }
+                        codex_app_server_protocol::ThreadStartSource::Clear => {
+                            InitialHistory::Cleared
+                        }
+                    },
+                    dynamic_tools: core_dynamic_tools,
+                    persist_extended_history,
+                    metrics_service_name: service_name,
+                    parent_trace: request_trace,
+                    environments,
+                })
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.create_thread",
+                    otel.name = "app_server.thread_start.create_thread",
+                    thread_start.dynamic_tool_count = core_dynamic_tool_count,
+                    thread_start.persist_extended_history = persist_extended_history,
+                ))
+                .await
+                .map_err(|err| match err {
+                    CodexErr::InvalidRequest(message) => invalid_request(message),
+                    err => internal_error(format!("error creating thread: {err}")),
+                })?;
+
+            Self::set_app_server_client_info(
+                thread.as_ref(),
+                app_server_client_name,
+                app_server_client_version,
+            )
+            .await?;
+
+            let config_snapshot = thread
+                .config_snapshot()
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.config_snapshot",
+                    otel.name = "app_server.thread_start.config_snapshot",
+                ))
+                .await;
+            let mut thread = build_thread_from_snapshot(
+                thread_id,
+                &config_snapshot,
+                session_configured.rollout_path.clone(),
+            );
+
+            // Auto-attach a thread listener when starting a thread.
+            Self::log_listener_attach_result(
+                Self::ensure_conversation_listener_task(
+                    listener_task_context.clone(),
                     thread_id,
                     request_id.connection_id,
-                    "thread",
-                );
+                    experimental_raw_events,
+                    ApiVersion::V2,
+                )
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.attach_listener",
+                    otel.name = "app_server.thread_start.attach_listener",
+                    thread_start.experimental_raw_events = experimental_raw_events,
+                ))
+                .await,
+                thread_id,
+                request_id.connection_id,
+                "thread",
+            );
 
+            listener_task_context
+                .thread_watch_manager
+                .upsert_thread_silently(thread.clone())
+                .instrument(tracing::info_span!(
+                    "app_server.thread_start.upsert_thread",
+                    otel.name = "app_server.thread_start.upsert_thread",
+                ))
+                .await;
+
+            thread.status = resolve_thread_status(
                 listener_task_context
                     .thread_watch_manager
-                    .upsert_thread_silently(thread.clone())
+                    .loaded_status_for_thread(&thread.id)
                     .instrument(tracing::info_span!(
-                        "app_server.thread_start.upsert_thread",
-                        otel.name = "app_server.thread_start.upsert_thread",
+                        "app_server.thread_start.resolve_status",
+                        otel.name = "app_server.thread_start.resolve_status",
                     ))
-                    .await;
+                    .await,
+                /*has_in_progress_turn*/ false,
+            );
 
-                thread.status = resolve_thread_status(
-                    listener_task_context
-                        .thread_watch_manager
-                        .loaded_status_for_thread(&thread.id)
-                        .instrument(tracing::info_span!(
-                            "app_server.thread_start.resolve_status",
-                            otel.name = "app_server.thread_start.resolve_status",
-                        ))
-                        .await,
-                    /*has_in_progress_turn*/ false,
-                );
+            let permission_profile =
+                thread_response_permission_profile(config_snapshot.permission_profile);
 
-                let permission_profile =
-                    thread_response_permission_profile(config_snapshot.permission_profile);
+            let response = ThreadStartResponse {
+                thread: thread.clone(),
+                model: config_snapshot.model,
+                model_provider: config_snapshot.model_provider_id,
+                service_tier: config_snapshot.service_tier,
+                cwd: config_snapshot.cwd,
+                instruction_sources,
+                approval_policy: config_snapshot.approval_policy.into(),
+                approvals_reviewer: config_snapshot.approvals_reviewer.into(),
+                sandbox: config_snapshot.sandbox_policy.into(),
+                permission_profile,
+                reasoning_effort: config_snapshot.reasoning_effort,
+            };
+            Ok::<_, JSONRPCErrorError>((response, thread_started_notification(thread)))
+        }
+        .await;
 
-                let response = ThreadStartResponse {
-                    thread: thread.clone(),
-                    model: config_snapshot.model,
-                    model_provider: config_snapshot.model_provider_id,
-                    service_tier: config_snapshot.service_tier,
-                    cwd: config_snapshot.cwd,
-                    instruction_sources,
-                    approval_policy: config_snapshot.approval_policy.into(),
-                    approvals_reviewer: config_snapshot.approvals_reviewer.into(),
-                    sandbox: config_snapshot.sandbox_policy.into(),
-                    permission_profile,
-                    reasoning_effort: config_snapshot.reasoning_effort,
-                };
+        match result {
+            Ok((response, notif)) => {
                 if listener_task_context.general_analytics_enabled {
                     listener_task_context
                         .analytics_events_client
@@ -2748,7 +2730,6 @@ impl CodexMessageProcessor {
                     ))
                     .await;
 
-                let notif = thread_started_notification(thread);
                 listener_task_context
                     .outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -2758,23 +2739,7 @@ impl CodexMessageProcessor {
                     ))
                     .await;
             }
-            Err(CodexErr::InvalidRequest(message)) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message,
-                    data: None,
-                };
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error creating thread: {err}"),
-                    data: None,
-                };
+            Err(error) => {
                 listener_task_context
                     .outgoing
                     .send_error(request_id, error)
