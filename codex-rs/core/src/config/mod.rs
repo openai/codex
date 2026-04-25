@@ -115,6 +115,7 @@ pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
+use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
@@ -191,13 +192,25 @@ pub(crate) async fn test_config() -> Config {
 pub struct Permissions {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
+    /// Canonical effective runtime permissions after config requirements and
+    /// runtime readable-root additions have been applied.
+    pub permission_profile: Constrained<PermissionProfile>,
     /// Effective sandbox policy used for shell/unified exec.
+    ///
+    /// Legacy projection retained while runtime call sites migrate to
+    /// `permission_profile`.
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective filesystem sandbox policy, including entries that cannot yet
     /// be fully represented by the legacy [`SandboxPolicy`] projection.
+    ///
+    /// Runtime projection retained while callers migrate to
+    /// `permission_profile`.
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     /// Effective network sandbox policy split out from the legacy
     /// [`SandboxPolicy`] projection.
+    ///
+    /// Runtime projection retained while callers migrate to
+    /// `permission_profile`.
     pub network_sandbox_policy: NetworkSandboxPolicy,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
@@ -223,12 +236,87 @@ impl Permissions {
     /// Effective runtime permissions after config requirements and runtime
     /// readable-root additions have been applied.
     pub fn permission_profile(&self) -> PermissionProfile {
-        PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(self.sandbox_policy.get()),
-            &self.file_system_sandbox_policy,
-            self.network_sandbox_policy,
-        )
+        self.permission_profile.get().clone()
     }
+
+    /// Effective filesystem sandbox policy projection.
+    pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
+        self.file_system_sandbox_policy.clone()
+    }
+
+    /// Effective network sandbox policy projection.
+    pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
+        self.network_sandbox_policy
+    }
+
+    /// Replace permissions from a legacy sandbox policy and keep every
+    /// permission projection in sync.
+    pub fn set_legacy_sandbox_policy(
+        &mut self,
+        sandbox_policy: SandboxPolicy,
+        cwd: &Path,
+    ) -> ConstraintResult<()> {
+        self.sandbox_policy.can_set(&sandbox_policy)?;
+        let file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
+        let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+        let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
+        self.permission_profile.can_set(&permission_profile)?;
+
+        self.sandbox_policy.set(sandbox_policy)?;
+        self.permission_profile.set(permission_profile)?;
+        self.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.network_sandbox_policy = network_sandbox_policy;
+        Ok(())
+    }
+
+    /// Replace permissions from the canonical profile and update compatibility
+    /// projections for legacy consumers.
+    pub fn set_permission_profile(
+        &mut self,
+        permission_profile: PermissionProfile,
+        cwd: &Path,
+    ) -> ConstraintResult<()> {
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+            &permission_profile,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+            cwd,
+        );
+        self.permission_profile.can_set(&permission_profile)?;
+        self.sandbox_policy.can_set(&sandbox_policy)?;
+
+        self.permission_profile.set(permission_profile)?;
+        self.sandbox_policy.set(sandbox_policy)?;
+        self.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.network_sandbox_policy = network_sandbox_policy;
+        Ok(())
+    }
+}
+
+fn constrained_permission_profile_from_sandbox_projection(
+    initial_value: PermissionProfile,
+    sandbox_constraint: Constrained<SandboxPolicy>,
+    cwd: AbsolutePathBuf,
+) -> std::io::Result<Constrained<PermissionProfile>> {
+    Constrained::new(initial_value, move |candidate| {
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            candidate.to_runtime_permissions();
+        let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+            candidate,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
+            cwd.as_path(),
+        );
+        sandbox_constraint.can_set(&sandbox_policy)
+    })
+    .map_err(std::io::Error::from)
 }
 
 /// Configured thread persistence backend.
@@ -1774,10 +1862,11 @@ impl Config {
             && has_permission_profiles);
         let (
             configured_network_proxy_config,
+            permission_profile,
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-        ) = if let Some(permission_profile) = permission_profile {
+        ) = if let Some(mut permission_profile) = permission_profile {
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
@@ -1803,25 +1892,33 @@ impl Config {
                 } else {
                     NetworkProxyConfig::default()
                 };
-            let mut sandbox_policy = permission_profile
-                .to_legacy_sandbox_policy(resolved_cwd.as_path())
-                .map_err(|err| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("invalid permission_profile override: {err}"),
-                    )
-                })?;
+            let mut sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+                &permission_profile,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+                resolved_cwd.as_path(),
+            );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+                    permission_profile.enforcement(),
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                );
+                sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+                    &permission_profile,
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                    resolved_cwd.as_path(),
+                );
             }
             (
                 configured_network_proxy_config,
+                permission_profile,
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
@@ -1849,19 +1946,36 @@ impl Config {
                     resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
-            let mut sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+            let mut permission_profile = PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+            );
+            let mut sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+                &permission_profile,
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+                resolved_cwd.as_path(),
+            );
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
                         resolved_cwd.as_path(),
                         &additional_writable_roots,
                     );
-                sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+                permission_profile = PermissionProfile::from_runtime_permissions(
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                );
+                sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
+                    &permission_profile,
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
+                    resolved_cwd.as_path(),
+                );
             }
             (
                 configured_network_proxy_config,
+                permission_profile,
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
@@ -1890,8 +2004,14 @@ impl Config {
                 resolved_cwd.as_path(),
             );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+            let permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+                SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                &file_system_sandbox_policy,
+                network_sandbox_policy,
+            );
             (
                 configured_network_proxy_config,
+                permission_profile,
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
@@ -2309,6 +2429,22 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
+        let effective_enforcement = if effective_sandbox_policy == original_sandbox_policy {
+            permission_profile.enforcement()
+        } else {
+            SandboxEnforcement::from_legacy_sandbox_policy(&effective_sandbox_policy)
+        };
+        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            effective_enforcement,
+            &effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+        );
+        let constrained_permission_profile =
+            constrained_permission_profile_from_sandbox_projection(
+                effective_permission_profile,
+                constrained_sandbox_policy.value.clone(),
+                resolved_cwd.clone(),
+            )?;
         let config = Self {
             model,
             service_tier,
@@ -2321,6 +2457,7 @@ impl Config {
             startup_warnings,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
+                permission_profile: constrained_permission_profile,
                 sandbox_policy: constrained_sandbox_policy.value,
                 file_system_sandbox_policy: effective_file_system_sandbox_policy,
                 network_sandbox_policy: effective_network_sandbox_policy,
