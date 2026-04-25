@@ -29,7 +29,7 @@ pub(crate) struct CreateGoalRequest {
 impl Session {
     pub(crate) async fn get_thread_goal(&self) -> anyhow::Result<Option<ThreadGoal>> {
         if !self.enabled(Feature::Goals) {
-            return Ok(None);
+            anyhow::bail!("goals feature is disabled");
         }
 
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
