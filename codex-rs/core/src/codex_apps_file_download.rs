@@ -1,3 +1,4 @@
+use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::download_openai_file;
 use codex_login::CodexAuth;
@@ -50,9 +51,8 @@ fn should_materialize_codex_apps_file_download(
 }
 
 pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
+    sess: &Session,
     turn_context: &TurnContext,
-    session_id: &str,
-    auth: Option<&CodexAuth>,
     server: &str,
     codex_apps_meta: Option<&JsonMap<String, JsonValue>>,
     mut result: CallToolResult,
@@ -73,12 +73,32 @@ pub(crate) async fn maybe_materialize_codex_apps_file_download_result(
         result.structured_content = Some(structured_content);
     }
 
-    let Some(auth) = auth else {
+    let auth = sess.services.auth_manager.auth().await;
+    let Some(auth) = auth.as_ref() else {
         warn!(
             "skipping codex_apps file download materialization because ChatGPT auth is unavailable"
         );
         return result;
     };
+    materialize_codex_apps_file_download_result_with_auth(
+        turn_context,
+        download_base_url,
+        &sess.conversation_id.to_string(),
+        auth,
+        payload,
+        result,
+    )
+    .await
+}
+
+async fn materialize_codex_apps_file_download_result_with_auth(
+    turn_context: &TurnContext,
+    download_base_url: &str,
+    session_id: &str,
+    auth: &CodexAuth,
+    payload: CodexAppsFileDownloadPayload,
+    mut result: CallToolResult,
+) -> CallToolResult {
     let token_data = match auth.get_token_data() {
         Ok(token_data) => token_data,
         Err(error) => {
@@ -235,15 +255,6 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    fn download_materialization_meta() -> JsonMap<String, JsonValue> {
-        serde_json::json!({
-            "materialize_file_download": true,
-        })
-        .as_object()
-        .cloned()
-        .expect("_codex_apps metadata object")
-    }
-
     #[tokio::test]
     async fn codex_apps_file_download_materialization_adds_local_path_for_marked_tools() {
         let server = MockServer::start().await;
@@ -282,12 +293,18 @@ mod tests {
             meta: None,
         };
 
-        let result = maybe_materialize_codex_apps_file_download_result(
+        let result = materialize_codex_apps_file_download_result_with_auth(
             &turn_context,
+            turn_context.config.chatgpt_base_url.as_str(),
             "session-1",
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            codex_mcp::CODEX_APPS_MCP_SERVER_NAME,
-            Some(&download_materialization_meta()),
+            &CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            serde_json::from_value(
+                original
+                    .structured_content
+                    .clone()
+                    .expect("structured content should exist"),
+            )
+            .expect("download payload"),
             original,
         )
         .await;
