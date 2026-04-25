@@ -1,6 +1,8 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
 use codex_network_proxy::BlockedRequestArgs;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathBufExt;
@@ -185,14 +187,19 @@ fn only_never_policy_disables_network_approval_flow() {
 
 #[test]
 fn network_approval_flow_is_limited_to_restricted_sandbox_modes() {
-    assert!(sandbox_policy_allows_network_approval_flow(
-        &SandboxPolicy::new_read_only_policy()
+    assert!(permission_profile_allows_network_approval_flow(
+        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_read_only_policy())
     ));
-    assert!(sandbox_policy_allows_network_approval_flow(
-        &SandboxPolicy::new_workspace_write_policy()
+    assert!(permission_profile_allows_network_approval_flow(
+        &PermissionProfile::from_legacy_sandbox_policy(&SandboxPolicy::new_workspace_write_policy())
     ));
-    assert!(!sandbox_policy_allows_network_approval_flow(
-        &SandboxPolicy::DangerFullAccess
+    assert!(!permission_profile_allows_network_approval_flow(
+        &PermissionProfile::Disabled
+    ));
+    assert!(!permission_profile_allows_network_approval_flow(
+        &PermissionProfile::External {
+            network: NetworkSandboxPolicy::Restricted,
+        }
     ));
 }
 
