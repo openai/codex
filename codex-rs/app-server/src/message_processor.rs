@@ -10,7 +10,7 @@ use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::config_manager::ConfigManager;
 use crate::device_key_api::DeviceKeyApi;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::invalid_request;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
 use crate::fs_watch::FsWatchManager;
@@ -34,7 +34,6 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::DeviceKeyCreateParams;
@@ -42,20 +41,10 @@ use codex_app_server_protocol::DeviceKeyPublicParams;
 use codex_app_server_protocol::DeviceKeySignParams;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
-use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
-use codex_app_server_protocol::FsCopyParams;
-use codex_app_server_protocol::FsCreateDirectoryParams;
-use codex_app_server_protocol::FsGetMetadataParams;
-use codex_app_server_protocol::FsReadDirectoryParams;
-use codex_app_server_protocol::FsReadFileParams;
-use codex_app_server_protocol::FsRemoveParams;
-use codex_app_server_protocol::FsUnwatchParams;
-use codex_app_server_protocol::FsWatchParams;
-use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -390,12 +379,12 @@ impl MessageProcessor {
                 let request_json = match serde_json::to_value(&request) {
                     Ok(request_json) => request_json,
                     Err(err) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("Invalid request: {err}"),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request_id.clone(), error).await;
+                        self.outgoing
+                            .send_error(
+                                request_id.clone(),
+                                invalid_request(format!("Invalid request: {err}")),
+                            )
+                            .await;
                         return;
                     }
                 };
@@ -403,12 +392,12 @@ impl MessageProcessor {
                 let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
                     Ok(codex_request) => codex_request,
                     Err(err) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("Invalid request: {err}"),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request_id.clone(), error).await;
+                        self.outgoing
+                            .send_error(
+                                request_id.clone(),
+                                invalid_request(format!("Invalid request: {err}")),
+                            )
+                            .await;
                         return;
                     }
                 };
@@ -605,12 +594,12 @@ impl MessageProcessor {
                 request_id,
             };
             if session.initialized() {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: "Already initialized".to_string(),
-                    data: None,
-                };
-                self.outgoing.send_error(connection_request_id, error).await;
+                self.outgoing
+                    .send_error(
+                        connection_request_id,
+                        invalid_request("Already initialized"),
+                    )
+                    .await;
                 return;
             }
 
@@ -639,15 +628,13 @@ impl MessageProcessor {
             // Validate before committing; set_default_originator validates while
             // mutating process-global metadata.
             if HeaderValue::from_str(&name).is_err() {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!(
-                        "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
-                    ),
-                    data: None,
-                };
                 self.outgoing
-                    .send_error(connection_request_id.clone(), error)
+                    .send_error(
+                        connection_request_id.clone(),
+                        invalid_request(format!(
+                            "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                        )),
+                    )
                     .await;
                 return;
             }
@@ -665,12 +652,12 @@ impl MessageProcessor {
                 })
                 .is_err()
             {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: "Already initialized".to_string(),
-                    data: None,
-                };
-                self.outgoing.send_error(connection_request_id, error).await;
+                self.outgoing
+                    .send_error(
+                        connection_request_id,
+                        invalid_request("Already initialized"),
+                    )
+                    .await;
                 return;
             }
 
@@ -746,24 +733,21 @@ impl MessageProcessor {
         request_context: RequestContext,
     ) {
         if !session.initialized() {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "Not initialized".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(connection_request_id, error).await;
+            self.outgoing
+                .send_error(connection_request_id, invalid_request("Not initialized"))
+                .await;
             return;
         }
 
         if let Some(reason) = codex_request.experimental_reason()
             && !session.experimental_api_enabled()
         {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: experimental_required_message(reason),
-                data: None,
-            };
-            self.outgoing.send_error(connection_request_id, error).await;
+            self.outgoing
+                .send_error(
+                    connection_request_id,
+                    invalid_request(experimental_required_message(reason)),
+                )
+                .await;
             return;
         }
         let connection_id = connection_request_id.connection_id;
@@ -803,64 +787,46 @@ impl MessageProcessor {
         device_key_requests_allowed: bool,
     ) {
         let connection_id = connection_request_id.connection_id;
+        let request_id_for_connection = |request_id| ConnectionRequestId {
+            connection_id,
+            request_id,
+        };
 
         match codex_request {
             ClientRequest::ConfigRead { request_id, params } => {
-                self.handle_config_read(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.config_api.read(params).await,
+                    )
+                    .await;
             }
             ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
-                self.handle_external_agent_config_detect(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.external_agent_config_api.detect(params).await,
+                    )
+                    .await;
             }
             ClientRequest::ExternalAgentConfigImport { request_id, params } => {
                 self.handle_external_agent_config_import(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
+                    request_id_for_connection(request_id),
                     params,
                 )
                 .await;
             }
             ClientRequest::ConfigValueWrite { request_id, params } => {
-                self.handle_config_value_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.handle_config_value_write(request_id_for_connection(request_id), params)
+                    .await;
             }
             ClientRequest::ConfigBatchWrite { request_id, params } => {
-                self.handle_config_batch_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.handle_config_batch_write(request_id_for_connection(request_id), params)
+                    .await;
             }
             ClientRequest::ExperimentalFeatureEnablementSet { request_id, params } => {
                 self.handle_experimental_feature_enablement_set(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
+                    request_id_for_connection(request_id),
                     params,
                 )
                 .await;
@@ -869,133 +835,105 @@ impl MessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.handle_config_requirements_read(ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                })
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.config_api.config_requirements_read().await,
+                    )
+                    .await;
             }
             ClientRequest::DeviceKeyCreate { request_id, params } => {
                 self.handle_device_key_create(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
+                    request_id_for_connection(request_id),
                     params,
                     device_key_requests_allowed,
                 );
             }
             ClientRequest::DeviceKeyPublic { request_id, params } => {
                 self.handle_device_key_public(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
+                    request_id_for_connection(request_id),
                     params,
                     device_key_requests_allowed,
                 );
             }
             ClientRequest::DeviceKeySign { request_id, params } => {
                 self.handle_device_key_sign(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
+                    request_id_for_connection(request_id),
                     params,
                     device_key_requests_allowed,
                 );
             }
             ClientRequest::FsReadFile { request_id, params } => {
-                self.handle_fs_read_file(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.read_file(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsWriteFile { request_id, params } => {
-                self.handle_fs_write_file(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.write_file(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsCreateDirectory { request_id, params } => {
-                self.handle_fs_create_directory(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.create_directory(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsGetMetadata { request_id, params } => {
-                self.handle_fs_get_metadata(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.get_metadata(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsReadDirectory { request_id, params } => {
-                self.handle_fs_read_directory(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.read_directory(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsRemove { request_id, params } => {
-                self.handle_fs_remove(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.remove(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsCopy { request_id, params } => {
-                self.handle_fs_copy(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_api.copy(params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsWatch { request_id, params } => {
-                self.handle_fs_watch(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    connection_id,
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_watch_manager.watch(connection_id, params).await,
+                    )
+                    .await;
             }
             ClientRequest::FsUnwatch { request_id, params } => {
-                self.handle_fs_unwatch(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    connection_id,
-                    params,
-                )
-                .await;
+                self.outgoing
+                    .send_result(
+                        request_id_for_connection(request_id),
+                        self.fs_watch_manager.unwatch(connection_id, params).await,
+                    )
+                    .await;
             }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
@@ -1012,13 +950,6 @@ impl MessageProcessor {
                     .boxed()
                     .await;
             }
-        }
-    }
-
-    async fn handle_config_read(&self, request_id: ConnectionRequestId, params: ConfigReadParams) {
-        match self.config_api.read(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
 
@@ -1164,13 +1095,6 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
-        match self.config_api.config_requirements_read().await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
     fn handle_device_key_create(
         &self,
         request_id: ConnectionRequestId,
@@ -1231,32 +1155,18 @@ impl MessageProcessor {
                 outgoing
                     .send_error(
                         request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("{method} is not available over remote transports"),
-                            data: None,
-                        },
+                        invalid_request(format!(
+                            "{method} is not available over remote transports"
+                        )),
                     )
                     .await;
                 return;
             }
 
-            match run_request(device_key_api).await {
-                Ok(response) => outgoing.send_response(request_id, response).await,
-                Err(error) => outgoing.send_error(request_id, error).await,
-            }
+            outgoing
+                .send_result(request_id, run_request(device_key_api).await)
+                .await;
         });
-    }
-
-    async fn handle_external_agent_config_detect(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ExternalAgentConfigDetectParams,
-    ) {
-        match self.external_agent_config_api.detect(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
     }
 
     async fn handle_external_agent_config_import(
@@ -1323,95 +1233,6 @@ impl MessageProcessor {
                         .await;
                 });
             }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_read_file(&self, request_id: ConnectionRequestId, params: FsReadFileParams) {
-        match self.fs_api.read_file(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_write_file(
-        &self,
-        request_id: ConnectionRequestId,
-        params: FsWriteFileParams,
-    ) {
-        match self.fs_api.write_file(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_create_directory(
-        &self,
-        request_id: ConnectionRequestId,
-        params: FsCreateDirectoryParams,
-    ) {
-        match self.fs_api.create_directory(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_get_metadata(
-        &self,
-        request_id: ConnectionRequestId,
-        params: FsGetMetadataParams,
-    ) {
-        match self.fs_api.get_metadata(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_read_directory(
-        &self,
-        request_id: ConnectionRequestId,
-        params: FsReadDirectoryParams,
-    ) {
-        match self.fs_api.read_directory(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_remove(&self, request_id: ConnectionRequestId, params: FsRemoveParams) {
-        match self.fs_api.remove(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_copy(&self, request_id: ConnectionRequestId, params: FsCopyParams) {
-        match self.fs_api.copy(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_watch(
-        &self,
-        request_id: ConnectionRequestId,
-        connection_id: ConnectionId,
-        params: FsWatchParams,
-    ) {
-        match self.fs_watch_manager.watch(connection_id, params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
-            Err(error) => self.outgoing.send_error(request_id, error).await,
-        }
-    }
-
-    async fn handle_fs_unwatch(
-        &self,
-        request_id: ConnectionRequestId,
-        connection_id: ConnectionId,
-        params: FsUnwatchParams,
-    ) {
-        match self.fs_watch_manager.unwatch(connection_id, params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
