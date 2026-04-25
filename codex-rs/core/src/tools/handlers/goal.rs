@@ -49,16 +49,25 @@ struct GoalToolResponse {
     completion_budget_report: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum CompletionBudgetReport {
+    Include,
+    Omit,
+}
+
 impl GoalToolResponse {
-    fn new(goal: Option<ThreadGoal>) -> Self {
+    fn new(goal: Option<ThreadGoal>, report_mode: CompletionBudgetReport) -> Self {
         let remaining_tokens = goal.as_ref().and_then(|goal| {
             goal.token_budget
                 .map(|budget| (budget - goal.tokens_used).max(0))
         });
-        let completion_budget_report = goal
-            .as_ref()
-            .filter(|goal| goal.status == ThreadGoalStatus::Complete)
-            .and_then(completion_budget_report);
+        let completion_budget_report = match report_mode {
+            CompletionBudgetReport::Include => goal
+                .as_ref()
+                .filter(|goal| goal.status == ThreadGoalStatus::Complete)
+                .and_then(completion_budget_report),
+            CompletionBudgetReport::Omit => None,
+        };
         Self {
             goal,
             remaining_tokens,
@@ -110,7 +119,7 @@ async fn handle_get_goal(session: &Session) -> Result<FunctionToolOutput, Functi
         .get_thread_goal()
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    goal_response(goal)
+    goal_response(goal, CompletionBudgetReport::Omit)
 }
 
 async fn handle_create_goal(
@@ -141,7 +150,7 @@ async fn handle_create_goal(
                 FunctionCallError::RespondToModel(format_goal_error(err))
             }
         })?;
-    goal_response(Some(goal))
+    goal_response(Some(goal), CompletionBudgetReport::Omit)
 }
 
 async fn handle_update_goal(
@@ -171,7 +180,7 @@ async fn handle_update_goal(
         )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    goal_response(Some(goal))
+    goal_response(Some(goal), CompletionBudgetReport::Include)
 }
 
 fn format_goal_error(err: anyhow::Error) -> String {
@@ -182,9 +191,13 @@ fn format_goal_error(err: anyhow::Error) -> String {
     message
 }
 
-fn goal_response(goal: Option<ThreadGoal>) -> Result<FunctionToolOutput, FunctionCallError> {
-    let response = serde_json::to_string_pretty(&GoalToolResponse::new(goal))
-        .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+fn goal_response(
+    goal: Option<ThreadGoal>,
+    completion_budget_report: CompletionBudgetReport,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let response =
+        serde_json::to_string_pretty(&GoalToolResponse::new(goal, completion_budget_report))
+            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
     Ok(FunctionToolOutput::from_text(response, Some(true)))
 }
 
@@ -225,7 +238,7 @@ mod tests {
             updated_at: 2,
         };
 
-        let response = GoalToolResponse::new(Some(goal.clone()));
+        let response = GoalToolResponse::new(Some(goal.clone()), CompletionBudgetReport::Include);
 
         assert_eq!(
             response,
@@ -253,7 +266,7 @@ mod tests {
             updated_at: 2,
         };
 
-        let response = GoalToolResponse::new(Some(goal.clone()));
+        let response = GoalToolResponse::new(Some(goal.clone()), CompletionBudgetReport::Include);
 
         assert_eq!(
             response,

@@ -262,6 +262,11 @@ impl ToolsConfig {
         self
     }
 
+    pub fn with_goal_tools_enabled(mut self, goal_tools: bool) -> Self {
+        self.goal_tools = goal_tools;
+        self
+    }
+
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
         self
