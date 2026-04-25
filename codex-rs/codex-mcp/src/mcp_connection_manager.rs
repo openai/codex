@@ -21,12 +21,8 @@ use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
-use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
-use crate::mcp::configured_mcp_servers;
-use crate::mcp::effective_mcp_servers;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
-use crate::mcp::tool_plugin_provenance;
 pub(crate) use crate::mcp_tool_names::qualify_tools;
 use anyhow::Context;
 use anyhow::Result;
@@ -101,7 +97,7 @@ use codex_utils_plugins::mcp_connector::sanitize_name;
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 
 /// Default timeout for initializing MCP server & initially listing tools.
-pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -692,22 +688,6 @@ impl McpRuntimeEnvironment {
 }
 
 impl McpConnectionManager {
-    pub fn configured_servers(&self, config: &McpConfig) -> HashMap<String, McpServerConfig> {
-        configured_mcp_servers(config)
-    }
-
-    pub fn effective_servers(
-        &self,
-        config: &McpConfig,
-        auth: Option<&CodexAuth>,
-    ) -> HashMap<String, McpServerConfig> {
-        effective_mcp_servers(config, auth)
-    }
-
-    pub fn tool_plugin_provenance(&self, config: &McpConfig) -> ToolPluginProvenance {
-        tool_plugin_provenance(config)
-    }
-
     pub fn new_uninitialized(
         approval_policy: &Constrained<AskForApproval>,
         sandbox_policy: &Constrained<SandboxPolicy>,
