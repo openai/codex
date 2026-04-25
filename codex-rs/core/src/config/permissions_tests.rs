@@ -77,7 +77,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
     let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;
     let expected_allowed_arg0_dir = AbsolutePathBuf::try_from(allowed_arg0_dir)?;
     let expected_sibling_arg0_dir = AbsolutePathBuf::try_from(sibling_arg0_dir)?;
-    let policy = &config.permissions.file_system_sandbox_policy;
+    let policy = config.permissions.file_system_sandbox_policy();
 
     assert!(
         policy.can_read_path_with_cwd(expected_zsh.as_path(), &cwd),

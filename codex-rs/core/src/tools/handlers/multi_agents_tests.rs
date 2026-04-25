@@ -2113,11 +2113,6 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.sandbox_policy
-        .set(expected_sandbox.clone())
-        .expect("sandbox policy should be set");
-    turn.file_system_sandbox_policy = expected_file_system_sandbox_policy.clone();
-    turn.network_sandbox_policy = expected_network_sandbox_policy;
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_sandbox,
@@ -2164,11 +2159,11 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .expect("spawned agent thread should exist");
     let child_turn = child_thread.codex.session.new_default_turn().await;
     assert_eq!(
-        child_turn.file_system_sandbox_policy,
+        child_turn.file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
     );
     assert_eq!(
-        child_turn.network_sandbox_policy,
+        child_turn.network_sandbox_policy(),
         expected_network_sandbox_policy
     );
     assert_eq!(child_turn.permission_profile(), expected_permission_profile);
@@ -3637,11 +3632,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
-    turn.sandbox_policy
-        .set(sandbox_policy)
-        .expect("sandbox policy set");
-    turn.file_system_sandbox_policy = file_system_sandbox_policy;
-    turn.network_sandbox_policy = network_sandbox_policy;
     turn.permission_profile = permission_profile.clone();
     turn.approval_policy
         .set(AskForApproval::OnRequest)
@@ -3718,7 +3708,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected
         .permissions
         .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
+        .set(turn.sandbox_policy())
         .expect("sandbox policy set");
     assert_eq!(config, expected);
 }

@@ -3,7 +3,11 @@ use codex_config::Constrained;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,6 +62,38 @@ fn qualified_mcp_tool_name_prefix_sanitizes_server_names_without_lowercasing() {
 fn split_qualified_tool_name_rejects_invalid_names() {
     assert_eq!(split_qualified_tool_name("other__alpha__do_thing"), None);
     assert_eq!(split_qualified_tool_name("mcp__alpha__"), None);
+}
+
+#[test]
+fn mcp_prompt_auto_approval_honors_unrestricted_managed_profiles() {
+    assert!(mcp_permission_prompt_is_auto_approved(
+        AskForApproval::Never,
+        &PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Enabled,
+        },
+    ));
+    assert!(mcp_permission_prompt_is_auto_approved(
+        AskForApproval::Never,
+        &PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Restricted,
+        },
+    ));
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::Never,
+        &PermissionProfile::from_legacy_sandbox_policy(
+            &SandboxPolicy::new_read_only_policy(),
+            std::path::Path::new("/"),
+        ),
+    ));
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Enabled,
+        },
+    ));
 }
 
 #[test]
