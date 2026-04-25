@@ -98,7 +98,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         &command,
         &cwd,
         &exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
-        None,
+        /*additional_permissions*/ None,
     )
     .expect("build sandbox command");
     let options = ExecOptions {
