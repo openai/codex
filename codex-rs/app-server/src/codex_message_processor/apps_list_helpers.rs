@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_app_server_protocol::AppInfo;
@@ -13,11 +14,17 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub(super) fn merge_loaded_apps(
     all_connectors: Option<&[AppInfo]>,
     accessible_connectors: Option<&[AppInfo]>,
+    plugin_declared_connector_ids: &HashSet<String>,
 ) -> Vec<AppInfo> {
     let all_connectors_loaded = all_connectors.is_some();
     let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-    connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
+    connectors::merge_connectors_with_accessible(
+        all,
+        accessible,
+        all_connectors_loaded,
+        plugin_declared_connector_ids,
+    )
 }
 
 pub(super) fn should_send_app_list_updated_notification(

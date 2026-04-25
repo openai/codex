@@ -6,6 +6,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
@@ -71,6 +72,16 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
                 ("beta".to_string(), vec!["beta-plugin".to_string()]),
             ]),
         }
+    );
+    assert!(provenance.connector_id_is_plugin_declared("connector_example"));
+    assert!(provenance.connector_id_is_plugin_declared("connector_gmail"));
+    assert!(!provenance.connector_id_is_plugin_declared("connector_missing"));
+    assert_eq!(
+        provenance.plugin_declared_connector_ids(),
+        HashSet::from([
+            "connector_example".to_string(),
+            "connector_gmail".to_string()
+        ])
     );
 }
 

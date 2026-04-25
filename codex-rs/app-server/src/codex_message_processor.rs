@@ -6612,6 +6612,8 @@ impl CodexMessageProcessor {
             connectors::list_cached_all_connectors(&config)
         );
         let cached_all_connectors = all_connectors.clone();
+        let plugin_declared_connector_ids =
+            connectors::plugin_declared_connector_ids_for_config(&config).await;
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -6648,6 +6650,7 @@ impl CodexMessageProcessor {
                 apps_list_helpers::merge_loaded_apps(
                     all_connectors.as_deref(),
                     accessible_connectors.as_deref(),
+                    &plugin_declared_connector_ids,
                 ),
                 &config,
             );
@@ -6734,6 +6737,7 @@ impl CodexMessageProcessor {
                 apps_list_helpers::merge_loaded_apps(
                     all_connectors_for_update,
                     accessible_connectors_for_update,
+                    &plugin_declared_connector_ids,
                 ),
                 &config,
             );

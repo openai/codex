@@ -232,7 +232,8 @@ async fn refresh_missing_suggested_connectors(
                 &turn.config,
                 auth,
                 &mcp_tools,
-            );
+            )
+            .await;
             Some(accessible_connectors)
         }
         Err(err) => {

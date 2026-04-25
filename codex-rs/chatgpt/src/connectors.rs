@@ -57,9 +57,13 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
+    let plugin_declared_connector_ids = plugin_declared_connector_ids_for_config(config).await;
     Ok(with_app_enabled_state(
         merge_connectors_with_accessible(
-            connectors, accessible, /*all_connectors_loaded*/ true,
+            connectors,
+            accessible,
+            /*all_connectors_loaded*/ true,
+            &plugin_declared_connector_ids,
         ),
         config,
     ))
@@ -77,16 +81,16 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     let auth = connector_auth(config).await.ok()?;
     let cache_key = all_connectors_cache_key(config, &auth);
     let connectors = codex_connectors::cached_all_connectors(&cache_key)?;
+    let plugin_apps = plugin_apps_for_config(config).await;
+    let plugin_declared_connector_ids = plugin_declared_connector_ids(&plugin_apps);
     let connectors = merge_plugin_connectors(
         connectors,
-        plugin_apps_for_config(config)
-            .await
-            .into_iter()
-            .map(|connector_id| connector_id.0),
+        plugin_apps.into_iter().map(|connector_id| connector_id.0),
     );
     Some(filter_disallowed_connectors(
         connectors,
         originator().value.as_str(),
+        &plugin_declared_connector_ids,
     ))
 }
 
@@ -113,16 +117,16 @@ pub async fn list_all_connectors_with_options(
         },
     )
     .await?;
+    let plugin_apps = plugin_apps_for_config(config).await;
+    let plugin_declared_connector_ids = plugin_declared_connector_ids(&plugin_apps);
     let connectors = merge_plugin_connectors(
         connectors,
-        plugin_apps_for_config(config)
-            .await
-            .into_iter()
-            .map(|connector_id| connector_id.0),
+        plugin_apps.into_iter().map(|connector_id| connector_id.0),
     );
     Ok(filter_disallowed_connectors(
         connectors,
         originator().value.as_str(),
+        &plugin_declared_connector_ids,
     ))
 }
 
@@ -142,6 +146,17 @@ async fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::App
         .effective_apps()
 }
 
+pub async fn plugin_declared_connector_ids_for_config(config: &Config) -> HashSet<String> {
+    plugin_declared_connector_ids(&plugin_apps_for_config(config).await)
+}
+
+fn plugin_declared_connector_ids(plugin_apps: &[AppConnectorId]) -> HashSet<String> {
+    plugin_apps
+        .iter()
+        .map(|connector_id| connector_id.0.clone())
+        .collect()
+}
+
 pub fn connectors_for_plugin_apps(
     connectors: Vec<AppInfo>,
     plugin_apps: &[AppConnectorId],
@@ -150,6 +165,7 @@ pub fn connectors_for_plugin_apps(
         .iter()
         .map(|connector_id| connector_id.0.as_str())
         .collect::<HashSet<_>>();
+    let plugin_declared_connector_ids = plugin_declared_connector_ids(plugin_apps);
 
     let connectors = merge_plugin_connectors(
         connectors,
@@ -157,16 +173,21 @@ pub fn connectors_for_plugin_apps(
             .iter()
             .map(|connector_id| connector_id.0.clone()),
     );
-    filter_disallowed_connectors(connectors, originator().value.as_str())
-        .into_iter()
-        .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
-        .collect()
+    filter_disallowed_connectors(
+        connectors,
+        originator().value.as_str(),
+        &plugin_declared_connector_ids,
+    )
+    .into_iter()
+    .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
+    .collect()
 }
 
 pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
     all_connectors_loaded: bool,
+    plugin_declared_connector_ids: &HashSet<String>,
 ) -> Vec<AppInfo> {
     let accessible_connectors = if all_connectors_loaded {
         let connector_ids: HashSet<&str> = connectors
@@ -181,7 +202,11 @@ pub fn merge_connectors_with_accessible(
         accessible_connectors
     };
     let merged = merge_connectors(connectors, accessible_connectors);
-    filter_disallowed_connectors(merged, originator().value.as_str())
+    filter_disallowed_connectors(
+        merged,
+        originator().value.as_str(),
+        plugin_declared_connector_ids,
+    )
 }
 
 #[cfg(test)]
@@ -233,6 +258,7 @@ mod tests {
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
             /*all_connectors_loaded*/ true,
+            &HashSet::new(),
         );
         assert_eq!(merged, vec![merged_app("alpha", /*is_accessible*/ true)]);
     }
@@ -243,12 +269,38 @@ mod tests {
             vec![app("alpha")],
             vec![app("alpha"), app("beta")],
             /*all_connectors_loaded*/ false,
+            &HashSet::new(),
         );
         assert_eq!(
             merged,
             vec![
                 merged_app("alpha", /*is_accessible*/ true),
                 merged_app("beta", /*is_accessible*/ true)
+            ]
+        );
+    }
+
+    #[test]
+    fn filters_disallowed_accessible_connectors_while_all_loading() {
+        let plugin_declared_connector_ids =
+            HashSet::from(["connector_openai_appgarden".to_string()]);
+        let merged = merge_connectors_with_accessible(
+            Vec::new(),
+            vec![
+                app("connector_openai_appgarden"),
+                app("connector_openai_hidden"),
+                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+                app("beta"),
+            ],
+            /*all_connectors_loaded*/ false,
+            &plugin_declared_connector_ids,
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                merged_app("beta", /*is_accessible*/ true),
+                merged_app("connector_openai_appgarden", /*is_accessible*/ true),
             ]
         );
     }
@@ -277,5 +329,21 @@ mod tests {
             )],
         );
         assert_eq!(connectors, Vec::<AppInfo>::new());
+    }
+
+    #[test]
+    fn connectors_for_plugin_apps_returns_openai_prefixed_plugin_apps() {
+        let connectors = connectors_for_plugin_apps(
+            Vec::new(),
+            &[AppConnectorId("connector_openai_appgarden".to_string())],
+        );
+
+        assert_eq!(
+            connectors,
+            vec![merged_app(
+                "connector_openai_appgarden",
+                /*is_accessible*/ false
+            )]
+        );
     }
 }

@@ -8395,12 +8395,15 @@ impl ChatWidget {
             });
 
             let result: Result<ConnectorsSnapshot, String> = async {
+                let plugin_declared_connector_ids =
+                    connectors::plugin_declared_connector_ids_for_config(&config).await;
                 let all_connectors =
                     connectors::list_all_connectors_with_options(&config, force_refetch).await?;
                 let connectors = connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
                     /*all_connectors_loaded*/ true,
+                    &plugin_declared_connector_ids,
                 );
                 Ok(ConnectorsSnapshot { connectors })
             }
@@ -11553,13 +11556,6 @@ impl ChatWidget {
 
         match result {
             Ok(mut snapshot) => {
-                if !is_final {
-                    snapshot.connectors = connectors::merge_connectors_with_accessible(
-                        Vec::new(),
-                        snapshot.connectors,
-                        /*all_connectors_loaded*/ false,
-                    );
-                }
                 snapshot.connectors =
                     connectors::with_app_enabled_state(snapshot.connectors, &self.config);
                 if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors_cache {
