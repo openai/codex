@@ -2,8 +2,8 @@ use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::server_request_error::is_turn_transition_server_request_error;
@@ -51,7 +51,6 @@ use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
@@ -1875,12 +1874,12 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             if let Some(request_id) = pending {
                 let Some(rollout_path) = conversation.rollout_path() else {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: "thread has no persisted rollout".to_string(),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
+                    outgoing
+                        .send_error(
+                            request_id,
+                            invalid_request("thread has no persisted rollout"),
+                        )
+                        .await;
                     return;
                 };
                 let response = match read_summary_from_rollout(
@@ -1911,29 +1910,29 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {
-                                let error = JSONRPCErrorError {
-                                    code: INTERNAL_ERROR_CODE,
-                                    message: format!(
-                                        "failed to load rollout `{}`: {err}",
-                                        rollout_path.display()
-                                    ),
-                                    data: None,
-                                };
-                                outgoing.send_error(request_id.clone(), error).await;
+                                outgoing
+                                    .send_error(
+                                        request_id.clone(),
+                                        internal_error(format!(
+                                            "failed to load rollout `{}`: {err}",
+                                            rollout_path.display()
+                                        )),
+                                    )
+                                    .await;
                                 return;
                             }
                         }
                     }
                     Err(err) => {
-                        let error = JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!(
-                                "failed to load rollout `{}`: {err}",
-                                rollout_path.display()
-                            ),
-                            data: None,
-                        };
-                        outgoing.send_error(request_id.clone(), error).await;
+                        outgoing
+                            .send_error(
+                                request_id.clone(),
+                                internal_error(format!(
+                                    "failed to load rollout `{}`: {err}",
+                                    rollout_path.display()
+                                )),
+                            )
+                            .await;
                         return;
                     }
                 };
@@ -2317,14 +2316,7 @@ async fn handle_thread_rollback_failed(
 
     if let Some(request_id) = pending_rollback {
         outgoing
-            .send_error(
-                request_id,
-                JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: message.clone(),
-                    data: None,
-                },
-            )
+            .send_error(request_id, invalid_request(message))
             .await;
     }
 }
