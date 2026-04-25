@@ -393,9 +393,10 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 }
 
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
-    items
-        .iter()
-        .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
+    let mut messages = Vec::new();
+    let mut previous_message: Option<String> = Some(String::new());
+    for item in items {
+        let message = match crate::event_mapping::parse_turn_item(item) {
             Some(TurnItem::UserMessage(user)) => {
                 if is_summary_message(&user.message()) {
                     None
@@ -404,8 +405,21 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
                 }
             }
             _ => None,
-        })
-        .collect()
+        };
+        let Some(message) = message else {
+            previous_message = None;
+            continue;
+        };
+        if message.is_empty() {
+            continue;
+        }
+        if previous_message.as_deref() == Some(message.as_str()) {
+            continue;
+        }
+        previous_message = Some(message.clone());
+        messages.push(message);
+    }
+    messages
 }
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
