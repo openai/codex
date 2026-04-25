@@ -794,6 +794,52 @@ fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
 }
 
 #[test]
+fn openai_file_upload_options_are_enabled_for_library_connector() {
+    let meta = serde_json::json!({
+        MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: {
+            "store_in_library": true,
+        },
+    });
+
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some(OPENAI_LIBRARY_CONNECTOR_ID),
+            meta.as_object(),
+        ),
+        Some(OpenAiFileUploadOptions {
+            store_in_library: true,
+        })
+    );
+}
+
+#[test]
+fn openai_file_upload_options_ignore_untrusted_connectors() {
+    let meta = serde_json::json!({
+        MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: {
+            "store_in_library": true,
+        },
+    });
+
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            Some("connector_third_party_drive"),
+            meta.as_object(),
+        ),
+        None
+    );
+    assert_eq!(
+        openai_file_upload_options_for_tool(
+            "docs",
+            Some(OPENAI_LIBRARY_CONNECTOR_ID),
+            meta.as_object(),
+        ),
+        None
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {

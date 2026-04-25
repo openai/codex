@@ -679,6 +679,7 @@ pub(crate) struct McpToolApprovalMetadata {
 }
 
 const CODEX_APPS_META_KEY: &str = "_codex_apps";
+const OPENAI_LIBRARY_CONNECTOR_ID: &str = "connector_openai_library";
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
@@ -705,6 +706,18 @@ fn parse_openai_file_upload_options(
     Some(OpenAiFileUploadOptions {
         store_in_library: true,
     })
+}
+
+fn openai_file_upload_options_for_tool(
+    server: &str,
+    connector_id: Option<&str>,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<OpenAiFileUploadOptions> {
+    if server != CODEX_APPS_MCP_SERVER_NAME || connector_id != Some(OPENAI_LIBRARY_CONNECTOR_ID) {
+        return None;
+    }
+
+    parse_openai_file_upload_options(meta)
 }
 
 fn custom_mcp_tool_approval_mode(
@@ -1216,6 +1229,11 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     } else {
         None
     };
+    let openai_file_upload_options = openai_file_upload_options_for_tool(
+        server,
+        tool_info.connector_id.as_deref(),
+        tool_info.tool.meta.as_deref(),
+    );
 
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
@@ -1236,9 +1254,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             tool_info.tool.meta.as_deref(),
         ))
         .filter(|params| !params.is_empty()),
-        openai_file_upload_options: parse_openai_file_upload_options(
-            tool_info.tool.meta.as_deref(),
-        ),
+        openai_file_upload_options,
     })
 }
 
