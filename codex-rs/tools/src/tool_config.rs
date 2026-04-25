@@ -4,13 +4,13 @@ use codex_features::Features;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -120,7 +120,7 @@ pub struct ToolsConfigParams<'a> {
     pub image_generation_tool_auth_allowed: bool,
     pub web_search_mode: Option<WebSearchMode>,
     pub session_source: SessionSource,
-    pub sandbox_policy: &'a SandboxPolicy,
+    pub permission_profile: &'a PermissionProfile,
     pub windows_sandbox_level: WindowsSandboxLevel,
 }
 
@@ -133,7 +133,7 @@ impl ToolsConfig {
             image_generation_tool_auth_allowed,
             web_search_mode,
             session_source,
-            sandbox_policy,
+            permission_profile,
             windows_sandbox_level,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
@@ -165,7 +165,7 @@ impl ToolsConfig {
             };
         let unified_exec_allowed = unified_exec_allowed_in_environment(
             cfg!(target_os = "windows"),
-            sandbox_policy,
+            permission_profile,
             *windows_sandbox_level,
         );
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -314,15 +314,19 @@ fn supports_image_generation(model_info: &ModelInfo) -> bool {
 
 fn unified_exec_allowed_in_environment(
     is_windows: bool,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> bool {
+    let managed_sandbox_required = match permission_profile {
+        PermissionProfile::Managed {
+            file_system,
+            network,
+        } => !file_system.to_sandbox_policy().has_full_disk_write_access() || !network.is_enabled(),
+        PermissionProfile::Disabled | PermissionProfile::External { .. } => false,
+    };
     !(is_windows
         && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ))
+        && managed_sandbox_required)
 }
 
 #[cfg(test)]
