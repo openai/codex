@@ -4,6 +4,9 @@ inputs:
   target:
     description: Target triple for the artifacts to sign.
     required: true
+  binaries:
+    description: Space-delimited binary basenames to sign.
+    default: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner"
   client-id:
     description: Azure Trusted Signing client ID.
     required: true
@@ -33,6 +36,23 @@ runs:
         tenant-id: ${{ inputs.tenant-id }}
         subscription-id: ${{ inputs.subscription-id }}
 
+    - name: Prepare file list
+      id: prepare
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "files<<EOF"
+          for binary in ${BINARIES}; do
+            echo "${GITHUB_WORKSPACE}/codex-rs/target/${TARGET}/release/${binary}.exe"
+          done
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Sign Windows binaries with Azure Trusted Signing
       uses: azure/trusted-signing-action@1d365fec12862c4aa68fcac418143d73f0cea293 # v0
       with:
@@ -50,8 +70,4 @@ runs:
         exclude-azure-developer-cli-credential: true
         exclude-interactive-browser-credential: true
         cache-dependencies: false
-        files: |
-          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex.exe
-          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-responses-api-proxy.exe
-          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-windows-sandbox-setup.exe
-          ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-command-runner.exe
+        files: ${{ steps.prepare.outputs.files }}
