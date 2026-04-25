@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "openai-codex-cli-bin"
-PINNED_RUNTIME_VERSION = "0.116.0-alpha.1"
+PINNED_RUNTIME_VERSION = "0.116.0a1"
 REPO_SLUG = "openai/codex"
 
 
@@ -39,7 +40,10 @@ def ensure_runtime_package_installed(
         installed_version = _installed_runtime_version(python_executable)
     normalized_requested = _normalized_package_version(requested_version)
 
-    if installed_version is not None and _normalized_package_version(installed_version) == normalized_requested:
+    if (
+        installed_version is not None
+        and _normalized_package_version(installed_version) == normalized_requested
+    ):
         return requested_version
 
     with tempfile.TemporaryDirectory(prefix="codex-python-runtime-") as temp_root_str:
@@ -61,7 +65,10 @@ def ensure_runtime_package_installed(
         importlib.invalidate_caches()
 
     installed_version = _installed_runtime_version(python_executable)
-    if installed_version is None or _normalized_package_version(installed_version) != normalized_requested:
+    if (
+        installed_version is None
+        or _normalized_package_version(installed_version) != normalized_requested
+    ):
         raise RuntimeSetupError(
             f"Expected {PACKAGE_NAME} {requested_version} in {python_executable}, "
             f"but found {installed_version!r} after installation."
@@ -121,7 +128,8 @@ def _installed_runtime_version(python_executable: str | Path) -> str | None:
 
 
 def _release_metadata(version: str) -> dict[str, object]:
-    url = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags/rust-v{version}"
+    release_tag = _release_tag(version)
+    url = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags/{release_tag}"
     token = _github_token()
     attempts = [True, False] if token is not None else [False]
     last_error: urllib.error.HTTPError | None = None
@@ -146,7 +154,7 @@ def _release_metadata(version: str) -> dict[str, object]:
 
     assert last_error is not None
     raise RuntimeSetupError(
-        f"Failed to resolve release metadata for rust-v{version} from {REPO_SLUG}: "
+        f"Failed to resolve release metadata for {release_tag} from {REPO_SLUG}: "
         f"{last_error.code} {last_error.reason}"
     ) from last_error
 
@@ -154,9 +162,10 @@ def _release_metadata(version: str) -> dict[str, object]:
 def _download_release_archive(version: str, temp_root: Path) -> Path:
     asset_name = platform_asset_name()
     archive_path = temp_root / asset_name
+    release_tag = _release_tag(version)
 
     browser_download_url = (
-        f"https://github.com/{REPO_SLUG}/releases/download/rust-v{version}/{asset_name}"
+        f"https://github.com/{REPO_SLUG}/releases/download/{release_tag}/{asset_name}"
     )
     request = urllib.request.Request(
         browser_download_url,
@@ -172,7 +181,9 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
-        raise RuntimeSetupError(f"Release rust-v{version} returned malformed assets metadata.")
+        raise RuntimeSetupError(
+            f"Release {release_tag} returned malformed assets metadata."
+        )
     asset = next(
         (
             item
@@ -183,7 +194,7 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
     )
     if asset is None:
         raise RuntimeSetupError(
-            f"Release rust-v{version} does not contain asset {asset_name} for this platform."
+            f"Release {release_tag} does not contain asset {asset_name} for this platform."
         )
 
     api_url = asset.get("url")
@@ -198,7 +209,10 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
                 headers=_github_api_headers("application/octet-stream"),
             )
             try:
-                with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
+                with (
+                    urllib.request.urlopen(request) as response,
+                    archive_path.open("wb") as fh,
+                ):
                     shutil.copyfileobj(response, fh)
                 return archive_path
             except urllib.error.HTTPError:
@@ -216,7 +230,7 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
                 "gh",
                 "release",
                 "download",
-                f"rust-v{version}",
+                release_tag,
                 "--repo",
                 REPO_SLUG,
                 "--pattern",
@@ -230,7 +244,7 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeSetupError(
-            f"gh release download failed for rust-v{version} asset {asset_name}.\n"
+            f"gh release download failed for {release_tag} asset {asset_name}.\n"
             f"STDOUT:\n{exc.stdout}\nSTDERR:\n{exc.stderr}"
         ) from exc
     return archive_path
@@ -249,7 +263,9 @@ def _extract_runtime_binary(archive_path: Path, temp_root: Path) -> Path:
         with zipfile.ZipFile(archive_path) as zip_file:
             zip_file.extractall(extract_dir)
     else:
-        raise RuntimeSetupError(f"Unsupported release archive format: {archive_path.name}")
+        raise RuntimeSetupError(
+            f"Unsupported release archive format: {archive_path.name}"
+        )
 
     binary_name = runtime_binary_name()
     archive_stem = archive_path.name.removesuffix(".tar.gz").removesuffix(".zip")
@@ -346,7 +362,31 @@ def _github_token() -> str | None:
 
 
 def _normalized_package_version(version: str) -> str:
-    return version.strip().replace("-alpha.", "a").replace("-beta.", "b")
+    normalized = version.strip()
+    if normalized.startswith("rust-v"):
+        normalized = normalized.removeprefix("rust-v")
+    elif normalized.startswith("v"):
+        normalized = normalized.removeprefix("v")
+
+    normalized = re.sub(r"-alpha\.?([0-9]+)$", r"a\1", normalized)
+    normalized = re.sub(r"-beta\.?([0-9]+)$", r"b\1", normalized)
+    normalized = re.sub(r"-rc\.?([0-9]+)$", r"rc\1", normalized)
+    return normalized
+
+
+def _codex_release_version(version: str) -> str:
+    normalized = _normalized_package_version(version)
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)*)(a|b|rc)([0-9]+)", normalized)
+    if match is None:
+        return normalized
+
+    base, prerelease, number = match.groups()
+    prerelease_name = {"a": "alpha", "b": "beta", "rc": "rc"}[prerelease]
+    return f"{base}-{prerelease_name}.{number}"
+
+
+def _release_tag(version: str) -> str:
+    return f"rust-v{_codex_release_version(version)}"
 
 
 __all__ = [

@@ -129,7 +129,7 @@ class AppServerConfig:
     env: dict[str, str] | None = None
     client_name: str = "codex_python_sdk"
     client_title: str = "Codex Python SDK"
-    client_version: str = "0.2.0"
+    client_version: str = "0.116.0a1"
     experimental_api: bool = True
 
 
