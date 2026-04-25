@@ -1,7 +1,9 @@
-use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_shell_command::shell_detect::ShellType as DetectedShellType;
+use codex_shell_command::shell_detect::detect_shell_type as detect_known_shell_type;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -87,6 +89,16 @@ impl PartialEq for Shell {
 }
 
 impl Eq for Shell {}
+
+fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
+    match detect_known_shell_type(shell_path)? {
+        DetectedShellType::Zsh => Some(ShellType::Zsh),
+        DetectedShellType::Bash => Some(ShellType::Bash),
+        DetectedShellType::PowerShell => Some(ShellType::PowerShell),
+        DetectedShellType::Sh => Some(ShellType::Sh),
+        DetectedShellType::Cmd => Some(ShellType::Cmd),
+    }
+}
 
 #[cfg(unix)]
 fn get_user_shell_path() -> Option<PathBuf> {
@@ -367,6 +379,9 @@ mod detect_shell_type_tests {
             detect_shell_type(&PathBuf::from("/bin/bash")),
             Some(ShellType::Bash)
         );
+        assert_eq!(detect_shell_type(&PathBuf::from(".poc/bash")), None);
+        assert_eq!(detect_shell_type(&PathBuf::from("/tmp/bash")), None);
+        assert_eq!(detect_shell_type(&PathBuf::from("/tmp/bash.evil")), None);
         assert_eq!(
             detect_shell_type(&PathBuf::from("powershell.exe")),
             Some(ShellType::PowerShell)
@@ -400,6 +415,12 @@ mod detect_shell_type_tests {
             detect_shell_type(&PathBuf::from("cmd.exe")),
             Some(ShellType::Cmd)
         );
+    }
+
+    #[test]
+    fn model_provided_shell_does_not_accept_repo_local_shell_names() {
+        let shell = get_shell_by_model_provided_path(&PathBuf::from(".poc/bash"));
+        assert_ne!(shell.shell_path, PathBuf::from(".poc/bash"));
     }
 }
 

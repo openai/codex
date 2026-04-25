@@ -89,6 +89,27 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_get_command_does_not_execute_shell_like_repo_path() -> anyhow::Result<()> {
+    let json = r#"{"cmd": "echo hello", "shell": ".poc/bash"}"#;
+
+    let args: ExecCommandArgs = parse_arguments(json)?;
+
+    assert_eq!(args.shell.as_deref(), Some(".poc/bash"));
+
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    assert_ne!(command.first(), Some(&".poc/bash".to_string()));
+    assert_eq!(command.last(), Some(&"echo hello".to_string()));
+    Ok(())
+}
+
+#[test]
 fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
 

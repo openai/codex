@@ -454,6 +454,18 @@ mod tests {
     }
 
     #[test]
+    fn extract_bash_command_rejects_shell_like_attacker_paths() {
+        for shell in [".poc/bash", "/tmp/bash", "/tmp/bash.evil"] {
+            let command = vec![
+                shell.to_string(),
+                "-lc".to_string(),
+                "echo INNOCENT_COMMAND".to_string(),
+            ];
+            assert_eq!(extract_bash_command(&command), None);
+        }
+    }
+
+    #[test]
     fn accepts_concatenated_flag_and_value() {
         // Test case: -g"*.py" (flag directly concatenated with quoted value)
         let cmds = parse_seq("rg -n \"foo\" -g\"*.py\"").unwrap();

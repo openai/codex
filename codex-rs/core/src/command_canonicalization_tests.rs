@@ -86,3 +86,14 @@ fn preserves_non_shell_commands() {
     let command = vec!["cargo".to_string(), "fmt".to_string()];
     assert_eq!(canonicalize_command_for_approval(&command), command);
 }
+
+#[test]
+fn preserves_shell_like_paths_in_approval_keys() {
+    let command = vec![
+        ".poc/bash".to_string(),
+        "-lc".to_string(),
+        "cargo test -p codex-core".to_string(),
+    ];
+
+    assert_eq!(canonicalize_command_for_approval(&command), command);
+}
