@@ -3771,6 +3771,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "tokio",
  "windows 0.58.0",
