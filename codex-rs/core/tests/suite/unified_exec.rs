@@ -213,10 +213,9 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config.include_apply_patch_tool = true;
         config.use_experimental_unified_exec_tool = true;
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
+        if let Err(err) = config.features.enable(Feature::UnifiedExec) {
+            panic!("test config should allow feature update: {err}");
+        }
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
@@ -761,6 +760,99 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_network_denial_emits_failed_background_end_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
+
+    let call_id = "uexec-network-denied";
+    let args = json!({
+        "cmd": "python3 -c \"import os, socket, time, urllib.parse; time.sleep(0.3); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024); time.sleep(5)\"",
+        "yield_time_ms": 50,
+    });
+    let response_mock =
+        mount_unified_exec_network_denial_responses(&server, call_id, &args).await?;
+
+    submit_unified_exec_turn(&test, "exercise network denial", sandbox_policy).await?;
+
+    let (end_event, turn_completed) =
+        wait_for_unified_exec_end(&test, call_id, &response_mock).await;
+
+    assert_eq!(end_event.status, ExecCommandStatus::Failed);
+    assert_eq!(end_event.exit_code, -1);
+    assert!(
+        end_event.aggregated_output.contains("Network access"),
+        "expected network denial message in aggregated output: {:?}",
+        end_event.aggregated_output
+    );
+    assert!(
+        end_event.process_id.is_some(),
+        "background denial should end the stored unified exec process"
+    );
+
+    if !turn_completed {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_short_lived_network_denial_emits_failed_end_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+    let (test, sandbox_policy) = unified_exec_network_denial_test(&server).await?;
+
+    let call_id = "uexec-short-network-denied";
+    let args = json!({
+        "cmd": "python3 -c \"import os, socket, urllib.parse; print('PRE_DENIAL_MARKER', flush=True); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-short-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-short-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024)\"",
+        "yield_time_ms": 1000,
+    });
+    let response_mock =
+        mount_unified_exec_network_denial_responses(&server, call_id, &args).await?;
+
+    submit_unified_exec_turn(&test, "exercise short network denial", sandbox_policy).await?;
+
+    let (end_event, turn_completed) =
+        wait_for_unified_exec_end(&test, call_id, &response_mock).await;
+
+    assert_eq!(end_event.status, ExecCommandStatus::Failed);
+    assert_eq!(end_event.exit_code, -1);
+    assert!(
+        end_event.aggregated_output.contains("Network access"),
+        "expected network denial message in aggregated output: {:?}",
+        end_event.aggregated_output
+    );
+    assert!(
+        end_event.aggregated_output.contains("PRE_DENIAL_MARKER"),
+        "expected pre-denial output in aggregated output: {:?}",
+        end_event.aggregated_output
+    );
+    assert!(
+        end_event.process_id.is_some(),
+        "short-lived denial should still emit an end event for the command"
+    );
+
+    if !turn_completed {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    Ok(())
+}
+
+#[allow(clippy::expect_used)]
+async fn unified_exec_network_denial_test(
+    server: &wiremock::MockServer,
+) -> Result<(TestCodex, SandboxPolicy)> {
     use codex_config::Constrained;
     use codex_core::config_loader::ConfigLayerStack;
     use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -771,11 +863,6 @@ async fn unified_exec_network_denial_emits_failed_background_end_event() -> Resu
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    skip_if_no_network!(Ok(()));
-    skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
-
-    let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     fs::write(
         home.path().join("config.toml"),
@@ -827,20 +914,26 @@ allow_local_binding = true
             allow_local_binding: Some(true),
             ..Default::default()
         });
-        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
-            .expect("rebuild config layer stack with network requirements");
+        config.config_layer_stack =
+            match ConfigLayerStack::new(layers, requirements, requirements_toml) {
+                Ok(stack) => stack,
+                Err(err) => panic!("rebuild config layer stack with network requirements: {err}"),
+            };
     });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_remote_aware(server).await?;
     assert!(
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
 
-    let call_id = "uexec-network-denied";
-    let args = json!({
-        "cmd": "python3 -c \"import os, socket, time, urllib.parse; time.sleep(0.3); proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=2); sock.sendall(b'GET http://codex-network-denied.invalid/ HTTP/1.1\\r\\nHost: codex-network-denied.invalid\\r\\n\\r\\n'); sock.recv(1024); time.sleep(5)\"",
-        "yield_time_ms": 50,
-    });
+    Ok((test, sandbox_policy))
+}
+
+async fn mount_unified_exec_network_denial_responses(
+    server: &wiremock::MockServer,
+    call_id: &str,
+    args: &Value,
+) -> Result<core_test_support::responses::ResponseMock> {
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
@@ -853,10 +946,14 @@ allow_local_binding = true
             ev_completed("resp-2"),
         ]),
     ];
-    let response_mock = mount_sse_sequence(&server, responses).await;
+    Ok(mount_sse_sequence(server, responses).await)
+}
 
-    submit_unified_exec_turn(&test, "exercise network denial", sandbox_policy).await?;
-
+async fn wait_for_unified_exec_end(
+    test: &TestCodex,
+    call_id: &str,
+    response_mock: &core_test_support::responses::ResponseMock,
+) -> (codex_protocol::protocol::ExecCommandEndEvent, bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut observed_events = Vec::new();
     let mut turn_completed = false;
@@ -886,26 +983,7 @@ allow_local_binding = true
             break ev;
         }
     };
-
-    assert_eq!(end_event.status, ExecCommandStatus::Failed);
-    assert_eq!(end_event.exit_code, -1);
-    assert!(
-        end_event.aggregated_output.contains("Network access"),
-        "expected network denial message in aggregated output: {:?}",
-        end_event.aggregated_output
-    );
-    assert!(
-        end_event.process_id.is_some(),
-        "background denial should end the stored unified exec process"
-    );
-
-    if !turn_completed {
-        wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-    }
-    Ok(())
+    (end_event, turn_completed)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

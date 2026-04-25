@@ -242,6 +242,36 @@ fn fail_process_with_message(process: &UnifiedExecProcess, message: String) -> U
     UnifiedExecError::process_failed(process.failure_message().unwrap_or(message))
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn emit_failed_initial_exec_end_if_unstored(
+    process_started_alive: bool,
+    context: &UnifiedExecContext,
+    request: &ExecCommandRequest,
+    cwd: AbsolutePathBuf,
+    transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    fallback_output: String,
+    message: String,
+    wall_time: Duration,
+) {
+    if process_started_alive {
+        return;
+    }
+
+    emit_failed_exec_end_for_unified_exec(
+        Arc::clone(&context.session),
+        Arc::clone(&context.turn),
+        context.call_id.clone(),
+        request.command.clone(),
+        cwd,
+        Some(request.process_id.to_string()),
+        transcript,
+        fallback_output,
+        message,
+        wall_time,
+    )
+    .await;
+}
+
 fn terminate_process_on_network_denial(
     process: Arc<UnifiedExecProcess>,
     session: std::sync::Weak<crate::session::session::Session>,
@@ -407,6 +437,17 @@ impl UnifiedExecProcessManager {
                 deferred_network_approval.take(),
             )
             .await;
+            emit_failed_initial_exec_end_if_unstored(
+                process_started_alive,
+                context,
+                &request,
+                cwd.clone(),
+                Arc::clone(&transcript),
+                text.clone(),
+                message.clone(),
+                wall_time,
+            )
+            .await;
             self.release_process_id(request.process_id).await;
             return Err(fail_process_with_message(process.as_ref(), message));
         }
@@ -416,20 +457,17 @@ impl UnifiedExecProcessManager {
                 deferred_network_approval.take(),
             )
             .await;
-            if !process_started_alive {
-                emit_failed_exec_end_for_unified_exec(
-                    Arc::clone(&context.session),
-                    Arc::clone(&context.turn),
-                    context.call_id.clone(),
-                    request.command.clone(),
-                    cwd.clone(),
-                    Some(request.process_id.to_string()),
-                    Arc::clone(&transcript),
-                    message.clone(),
-                    wall_time,
-                )
-                .await;
-            }
+            emit_failed_initial_exec_end_if_unstored(
+                process_started_alive,
+                context,
+                &request,
+                cwd.clone(),
+                Arc::clone(&transcript),
+                text.clone(),
+                message.clone(),
+                wall_time,
+            )
+            .await;
             self.release_process_id(request.process_id).await;
             if let Err(message) = finish_result {
                 return Err(fail_process_with_message(process.as_ref(), message));
@@ -470,6 +508,17 @@ impl UnifiedExecProcessManager {
             )
             .await;
             if let Err(message) = finish_result {
+                emit_failed_initial_exec_end_if_unstored(
+                    process_started_alive,
+                    context,
+                    &request,
+                    cwd.clone(),
+                    Arc::clone(&transcript),
+                    text.clone(),
+                    message.clone(),
+                    wall_time,
+                )
+                .await;
                 self.release_process_id(request.process_id).await;
                 return Err(fail_process_with_message(process.as_ref(), message));
             }

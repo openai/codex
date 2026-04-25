@@ -1,6 +1,7 @@
 #![cfg(target_os = "windows")]
 
 use super::spawn_windows_sandbox_session_legacy;
+use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
@@ -14,6 +15,8 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -367,6 +370,7 @@ fn legacy_capture_powershell_emits_output() {
         cwd.as_path(),
         HashMap::new(),
         Some(10_000),
+        /*cancellation*/ None,
         /*use_private_desktop*/ true,
     )
     .expect("run legacy capture powershell");
@@ -380,6 +384,54 @@ fn legacy_capture_powershell_emits_output() {
         stdout.contains("LEGACY-CAPTURE-DIRECT"),
         "stdout={stdout:?}"
     );
+}
+
+#[test]
+fn legacy_capture_cancellation_is_not_reported_as_timeout() {
+    let Some(pwsh) = pwsh_path() else {
+        return;
+    };
+    let cwd = sandbox_cwd();
+    let codex_home = sandbox_home("legacy-capture-cancel");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_for_token = Arc::clone(&cancelled);
+    let cancellation =
+        WindowsSandboxCancellationToken::new(move || cancelled_for_token.load(Ordering::SeqCst));
+    let cancelled_for_thread = Arc::clone(&cancelled);
+    let cancel_thread = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        cancelled_for_thread.store(true, Ordering::SeqCst);
+    });
+
+    let started_at = Instant::now();
+    let result = run_windows_sandbox_capture(
+        "workspace-write",
+        cwd.as_path(),
+        codex_home.path(),
+        vec![
+            pwsh.display().to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30".to_string(),
+        ],
+        cwd.as_path(),
+        HashMap::new(),
+        Some(30_000),
+        Some(cancellation),
+        /*use_private_desktop*/ true,
+    )
+    .expect("run legacy capture powershell with cancellation");
+    cancel_thread.join().expect("cancel thread should finish");
+
+    assert!(
+        started_at.elapsed() < Duration::from_secs(10),
+        "cancellation should end capture before the timeout"
+    );
+    assert!(
+        !result.timed_out,
+        "cancellation should not be reported as a timeout"
+    );
+    assert_ne!(result.exit_code, 0);
 }
 
 #[test]

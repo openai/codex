@@ -19,8 +19,8 @@ use codex_app_server_protocol::CommandExecWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::StartedNetworkProxy;
-use codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
 use codex_core::exec::ExecExpiration;
+use codex_core::exec::ExecExpirationOutcome;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
 use codex_core::sandboxing::ExecRequest;
 use codex_protocol::exec_output::bytes_to_string_smart;
@@ -453,26 +453,7 @@ async fn run_command(params: RunCommandParams) {
     } = params;
     let mut control_rx = control_rx;
     let mut control_open = true;
-    let expiration = async {
-        match expiration {
-            ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
-            ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
-            }
-            ExecExpiration::Cancellation(cancel) => {
-                cancel.cancelled().await;
-            }
-            ExecExpiration::TimeoutOrCancellation {
-                timeout,
-                cancellation,
-            } => {
-                tokio::select! {
-                    _ = tokio::time::sleep(timeout) => {}
-                    _ = cancellation.cancelled() => {}
-                }
-            }
-        }
-    };
+    let expiration = expiration.wait_with_outcome();
     tokio::pin!(expiration);
     let SpawnedProcess {
         session,
@@ -481,7 +462,7 @@ async fn run_command(params: RunCommandParams) {
         exit_rx,
     } = spawned;
     tokio::pin!(exit_rx);
-    let mut timed_out = false;
+    let mut expiration_outcome = None;
     let (stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
 
     let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
@@ -537,12 +518,12 @@ async fn run_command(params: RunCommandParams) {
                     }
                 }
             }
-            _ = &mut expiration, if !timed_out => {
-                timed_out = true;
+            outcome = &mut expiration, if expiration_outcome.is_none() => {
+                expiration_outcome = Some(outcome);
                 session.request_terminate();
             }
             exit = &mut exit_rx => {
-                if timed_out {
+                if matches!(expiration_outcome, Some(ExecExpirationOutcome::TimedOut)) {
                     break EXEC_TIMEOUT_EXIT_CODE;
                 } else {
                     break exit.unwrap_or(-1);
@@ -920,6 +901,79 @@ mod tests {
         assert_eq!(response.stdout, "");
         // The deferred response now drains any already-emitted stderr before
         // replying, so shell startup noise is allowed here.
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn timeout_or_cancellation_reports_cancellation_without_timeout_exit_code() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let manager = CommandExecManager::default();
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(9),
+            request_id: codex_app_server_protocol::RequestId::Integer(101),
+        };
+        let sandbox_policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+        };
+        let cancellation = CancellationToken::new();
+        let cancel = cancellation.clone();
+
+        manager
+            .start(StartCommandExecParams {
+                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
+                request_id: request_id.clone(),
+                process_id: Some("proc-101".to_string()),
+                exec_request: ExecRequest::new(
+                    vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+                    AbsolutePathBuf::current_dir().expect("current dir"),
+                    HashMap::new(),
+                    /*network*/ None,
+                    ExecExpiration::TimeoutOrCancellation {
+                        timeout: Duration::from_secs(30),
+                        cancellation,
+                    },
+                    codex_core::exec::ExecCapturePolicy::ShellTool,
+                    SandboxType::None,
+                    WindowsSandboxLevel::Disabled,
+                    /*windows_sandbox_private_desktop*/ false,
+                    sandbox_policy.clone(),
+                    FileSystemSandboxPolicy::from(&sandbox_policy),
+                    NetworkSandboxPolicy::from(&sandbox_policy),
+                    /*arg0*/ None,
+                ),
+                started_network_proxy: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: Some(DEFAULT_OUTPUT_BYTES_CAP),
+                size: None,
+            })
+            .await
+            .expect("timeout-or-cancellation exec should start");
+
+        cancel.cancel();
+
+        let envelope = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for outgoing message")
+            .expect("channel closed before outgoing message");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+            ..
+        } = envelope
+        else {
+            panic!("expected connection-scoped outgoing message");
+        };
+        assert_eq!(connection_id, request_id.connection_id);
+        let OutgoingMessage::Response(response) = message else {
+            panic!("expected execution response after cancellation");
+        };
+        assert_eq!(response.id, request_id.request_id);
+        let response: CommandExecResponse =
+            serde_json::from_value(response.result).expect("deserialize command/exec response");
+        assert_ne!(response.exit_code, EXEC_TIMEOUT_EXIT_CODE);
     }
 
     #[tokio::test]

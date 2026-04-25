@@ -5,6 +5,36 @@
 #[cfg(any(target_os = "windows", test))]
 mod ssh_config_dependencies;
 
+use std::fmt;
+use std::sync::Arc;
+
+/// Cancellation hook used by Windows sandbox capture backends.
+#[derive(Clone)]
+pub struct WindowsSandboxCancellationToken {
+    is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl WindowsSandboxCancellationToken {
+    /// Creates a token backed by a cancellation predicate.
+    pub fn new(is_cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            is_cancelled: Arc::new(is_cancelled),
+        }
+    }
+
+    /// Returns whether the caller has requested cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        (self.is_cancelled)()
+    }
+}
+
+impl fmt::Debug for WindowsSandboxCancellationToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowsSandboxCancellationToken")
+            .finish_non_exhaustive()
+    }
+}
+
 macro_rules! windows_modules {
     ($($name:ident),+ $(,)?) => {
         $(#[cfg(target_os = "windows")] mod $name;)+
@@ -238,6 +268,7 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::WindowsSandboxCancellationToken;
     use super::acl::add_allow_ace;
     use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
@@ -263,6 +294,8 @@ mod windows_impl {
     use std::path::Path;
     use std::path::PathBuf;
     use std::ptr;
+    use std::time::Duration;
+    use std::time::Instant;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Foundation::HANDLE;
@@ -274,6 +307,50 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+
+    enum WaitOutcome {
+        Exited,
+        TimedOut,
+        Cancelled,
+    }
+
+    fn wait_for_process(
+        process: HANDLE,
+        timeout_ms: Option<u64>,
+        cancellation: Option<&WindowsSandboxCancellationToken>,
+    ) -> WaitOutcome {
+        let Some(cancellation) = cancellation else {
+            let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
+            let res = unsafe { WaitForSingleObject(process, timeout) };
+            return if res == 0x0000_0102 {
+                WaitOutcome::TimedOut
+            } else {
+                WaitOutcome::Exited
+            };
+        };
+
+        let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        loop {
+            if cancellation.is_cancelled() {
+                return WaitOutcome::Cancelled;
+            }
+            let wait_ms = match deadline {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return WaitOutcome::TimedOut;
+                    }
+                    remaining.min(Duration::from_millis(50)).as_millis() as u32
+                }
+                None => 50,
+            };
+            let res = unsafe { WaitForSingleObject(process, wait_ms) };
+            if res == 0x0000_0102 {
+                continue;
+            }
+            return WaitOutcome::Exited;
+        }
+    }
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
         let mut in_r: HANDLE = 0;
@@ -319,6 +396,7 @@ mod windows_impl {
         cwd: &Path,
         env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        cancellation: Option<WindowsSandboxCancellationToken>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         run_windows_sandbox_capture_with_extra_deny_write_paths(
@@ -329,6 +407,7 @@ mod windows_impl {
             cwd,
             env_map,
             timeout_ms,
+            cancellation,
             &[],
             use_private_desktop,
         )
@@ -343,6 +422,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        cancellation: Option<WindowsSandboxCancellationToken>,
         additional_deny_write_paths: &[PathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
@@ -536,11 +616,11 @@ mod windows_impl {
             let _ = tx_err.send(buf);
         });
 
-        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
-        let timed_out = res == 0x0000_0102;
+        let wait_outcome = wait_for_process(pi.hProcess, timeout_ms, cancellation.as_ref());
+        let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut);
+        let cancelled = matches!(wait_outcome, WaitOutcome::Cancelled);
         let mut exit_code_u32: u32 = 1;
-        if !timed_out {
+        if !timed_out && !cancelled {
             unsafe {
                 GetExitCodeProcess(pi.hProcess, &mut exit_code_u32);
             }
@@ -674,6 +754,7 @@ mod windows_impl {
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
+    use super::WindowsSandboxCancellationToken;
     use anyhow::Result;
     use anyhow::bail;
     use codex_protocol::protocol::SandboxPolicy;
@@ -697,6 +778,7 @@ mod stub {
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
+        _cancellation: Option<WindowsSandboxCancellationToken>,
         _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
