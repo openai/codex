@@ -317,6 +317,7 @@ connectors = false
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
     let connectors = vec![AppInfo {
         id: "beta".to_string(),
@@ -1269,6 +1270,7 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn experimental_feature_enablement_set_refreshes_apps_list_when_apps_turn_on() -> Result<()> {
     let initial_connectors = vec![AppInfo {
         id: "alpha".to_string(),

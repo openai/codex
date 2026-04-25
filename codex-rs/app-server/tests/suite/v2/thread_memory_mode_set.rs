@@ -63,6 +63,7 @@ async fn thread_memory_mode_set_updates_loaded_thread_state() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn thread_memory_mode_set_updates_stored_thread_state() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

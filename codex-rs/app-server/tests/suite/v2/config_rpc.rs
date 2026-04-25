@@ -572,6 +572,7 @@ model = "gpt-old"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn config_read_after_pipelined_write_sees_written_value() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let codex_home = temp_dir.path().canonicalize()?;

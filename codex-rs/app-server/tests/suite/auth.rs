@@ -503,6 +503,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(windows, ignore = "temporary CI isolation for #19606 Windows hang")]
 async fn login_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_forced_login(codex_home.path(), "chatgpt")?;
