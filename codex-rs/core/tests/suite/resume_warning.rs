@@ -74,7 +74,7 @@ fn resume_history(
                 time_to_first_token_ms: None,
             })),
         ],
-        rollout_path: rollout_path.to_path_buf(),
+        rollout_path: Some(rollout_path.to_path_buf()),
     })
 }
 

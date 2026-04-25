@@ -546,7 +546,7 @@ impl App {
 fn sync_runtime_permissions_from_legacy_sandbox_policy(config: &mut Config) {
     let sandbox_policy = config.permissions.sandbox_policy.get();
     config.permissions.file_system_sandbox_policy =
-        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
             sandbox_policy,
             &config.cwd,
         );

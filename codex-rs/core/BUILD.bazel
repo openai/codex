@@ -19,9 +19,7 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ) + [
-        "//codex-rs:node-version.txt",
-    ],
+    ),
     rustc_env = {
         # Keep manifest-root path lookups inside the Bazel execroot for code
         # that relies on env!("CARGO_MANIFEST_DIR").

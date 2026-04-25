@@ -1490,7 +1490,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
-                cwd: cwd.clone(),
+                cwd,
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
@@ -1498,7 +1498,6 @@ mod tests {
                 permission_profile: Some(
                     codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
                         &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-                        cwd.as_path(),
                     )
                     .into(),
                 ),

@@ -32,6 +32,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -49,6 +50,7 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INTERNAL_ERROR_CODE: i64 = -32603;
 
 #[tokio::test]
 async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
@@ -181,9 +183,98 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         Some(&Value::Null),
         "thread/started must serialize `name: null` when unset"
     );
+    assert_eq!(
+        started_thread_json.get("turns"),
+        Some(&json!([])),
+        "thread/started must not emit copied fork turns"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread;
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_can_load_source_by_path() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let preview = "Saved user message";
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        preview,
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let original_path = codex_home
+        .path()
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("05")
+        .join(format!(
+            "rollout-2025-01-05T12-00-00-{conversation_id}.jsonl"
+        ));
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(original_path),
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_ne!(thread.id, conversation_id);
+    assert_eq!(thread.forked_from_id, Some(conversation_id));
+    assert_eq!(thread.preview, preview);
+    assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(thread.turns.len(), 1, "expected copied fork history");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_by_path_uses_remote_thread_store_error() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_remote_thread_store(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(PathBuf::from("sessions/2025/01/05/rollout.jsonl")),
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+
+    assert_eq!(fork_err.error.code, INTERNAL_ERROR_CODE);
+    assert_eq!(
+        fork_err.error.message,
+        "failed to read thread: thread-store internal error: remote thread store does not support read_thread_by_rollout_path"
+    );
 
     Ok(())
 }
@@ -582,9 +673,16 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         Some(true),
         "thread/started should serialize `ephemeral: true` for ephemeral forks"
     );
+    assert_eq!(
+        started_thread_json.get("turns"),
+        Some(&json!([])),
+        "thread/started must not emit copied ephemeral fork turns"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread;
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
 
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
@@ -650,6 +748,33 @@ fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_remote_thread_store(
+    codex_home: &Path,
+    server_uri: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+experimental_thread_store_endpoint = "http://127.0.0.1:1"
 
 model_provider = "mock_provider"
 

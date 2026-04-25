@@ -2125,7 +2125,7 @@ impl ChatWidget {
         {
             Some(permission_profile) => permission_profile.to_runtime_permissions(),
             None => (
-                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                     &event.sandbox_policy,
                     &event.cwd,
                 ),
@@ -9797,7 +9797,7 @@ impl ChatWidget {
         self.config.permissions.sandbox_policy.set(policy)?;
         let sandbox_policy = self.config.permissions.sandbox_policy.get();
         self.config.permissions.file_system_sandbox_policy =
-            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 sandbox_policy,
                 &self.config.cwd,
             );

@@ -80,8 +80,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::JsReplHandler;
-    use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -167,8 +165,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
-    let js_repl_handler = Arc::new(JsReplHandler);
-    let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let unavailable_tool_handler = Arc::new(UnavailableToolHandler);
     let mut existing_spec_names = plan
         .specs
@@ -211,12 +207,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::FollowupTaskV2 => {
                 builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
-            }
-            ToolHandlerKind::JsRepl => {
-                builder.register_handler(handler.name, js_repl_handler.clone());
-            }
-            ToolHandlerKind::JsReplReset => {
-                builder.register_handler(handler.name, js_repl_reset_handler.clone());
             }
             ToolHandlerKind::ListAgentsV2 => {
                 builder.register_handler(handler.name, Arc::new(ListAgentsHandlerV2));

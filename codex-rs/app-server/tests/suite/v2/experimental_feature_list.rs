@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ExperimentalFeature;
@@ -14,6 +16,7 @@ use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::LoaderOverrides;
 use codex_features::FEATURES;
@@ -24,6 +27,12 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -86,6 +95,63 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     };
 
     assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_list_marks_apps_and_plugins_disabled_by_workspace_policy()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{}/backend-api/"
+"#,
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/accounts/account-123/settings"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"beta_settings":{"plugins":false}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
+        .await?;
+
+    let actual = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
+    let apps = actual
+        .data
+        .iter()
+        .find(|feature| feature.name == "apps")
+        .expect("apps feature should be present");
+    let plugins = actual
+        .data
+        .iter()
+        .find(|feature| feature.name == "plugins")
+        .expect("plugins feature should be present");
+    assert!(!apps.enabled);
+    assert!(!plugins.enabled);
+    assert!(apps.default_enabled);
+    assert!(plugins.default_enabled);
     Ok(())
 }
 
