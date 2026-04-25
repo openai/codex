@@ -452,6 +452,392 @@ fn parse_tool_input_schema_fills_default_items_for_nullable_array_union() {
     );
 }
 
+#[test]
+fn parse_tool_input_schema_resolves_local_ref_objects() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "start": { "$ref": "#/$defs/date_time_zone" }
+        },
+        "$defs": {
+            "date_time_zone": {
+                "type": "object",
+                "properties": {
+                    "dateTime": {
+                        "type": "string",
+                        "description": "RFC3339 timestamp"
+                    },
+                    "timeZone": {
+                        "type": "string",
+                        "description": "IANA time zone"
+                    }
+                },
+                "required": ["dateTime", "timeZone"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "start".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(Some("RFC3339 timestamp".to_string())),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string(Some("IANA time zone".to_string())),
+                        ),
+                    ]),
+                    Some(vec!["dateTime".to_string(), "timeZone".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_merges_local_ref_sibling_constraints() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "start": {
+                "$ref": "#/$defs/date_time_zone",
+                "properties": {
+                    "timeZone": {
+                        "enum": ["UTC"]
+                    },
+                    "calendar": {
+                        "type": "string"
+                    }
+                },
+                "required": ["timeZone", "calendar"]
+            }
+        },
+        "$defs": {
+            "date_time_zone": {
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" },
+                    "timeZone": { "type": "string" }
+                },
+                "required": ["dateTime"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "start".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "calendar".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string_enum(
+                                vec![serde_json::json!("UTC")],
+                                /*description*/ None,
+                            ),
+                        ),
+                    ]),
+                    Some(vec![
+                        "dateTime".to_string(),
+                        "timeZone".to_string(),
+                        "calendar".to_string(),
+                    ]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_handles_cyclic_local_refs_without_recursing_forever() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "node": { "$ref": "#/$defs/node" }
+        },
+        "$defs": {
+            "node": {
+                "type": "object",
+                "properties": {
+                    "next": { "$ref": "#/$defs/node" }
+                },
+                "required": ["next"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "node".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([(
+                        "next".to_string(),
+                        JsonSchema::object(
+                            BTreeMap::new(),
+                            /*required*/ None,
+                            /*additional_properties*/ None,
+                        ),
+                    )]),
+                    Some(vec!["next".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_merges_outer_constraints_when_unwrapping_single_variant_combiners() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "wrapped": {
+                "allOf": [{
+                    "type": "object",
+                    "properties": {
+                        "a": { "type": "string" }
+                    },
+                    "required": ["a"]
+                }],
+                "properties": {
+                    "b": { "type": "string" }
+                },
+                "required": ["b"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "wrapped".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        ("a".to_string(), JsonSchema::string(/*description*/ None)),
+                        ("b".to_string(), JsonSchema::string(/*description*/ None)),
+                    ]),
+                    Some(vec!["a".to_string(), "b".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_merges_outer_constraints_when_unwrapping_true_combiners() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "wrapped": {
+                "allOf": [true],
+                "type": "object",
+                "properties": {
+                    "b": { "type": "string" }
+                },
+                "required": ["b"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "wrapped".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([("b".to_string(), JsonSchema::string(/*description*/ None),)]),
+                    Some(vec!["b".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_preserves_sibling_constraints_for_true_ref_targets() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "config": {
+                "$ref": "#/$defs/anything",
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" }
+                },
+                "required": ["dateTime"]
+            }
+        },
+        "$defs": {
+            "anything": true
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "config".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([(
+                        "dateTime".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
+                    Some(vec!["dateTime".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_intersects_enums_when_merging_ref_siblings() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "timeZone": {
+                "$ref": "#/$defs/supported_time_zone",
+                "enum": ["UTC", "PST"]
+            }
+        },
+        "$defs": {
+            "supported_time_zone": {
+                "enum": ["UTC", "EST"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "timeZone".to_string(),
+                JsonSchema::string_enum(vec![serde_json::json!("UTC")], /*description*/ None),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_narrows_number_and_integer_type_intersections() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "count": {
+                "$ref": "#/$defs/number_like",
+                "type": "integer"
+            }
+        },
+        "$defs": {
+            "number_like": {
+                "type": "number"
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "count".to_string(),
+                JsonSchema::integer(/*description*/ None),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_unwraps_single_variant_all_of_objects() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "end": {
+                "allOf": [{
+                    "type": "object",
+                    "properties": {
+                        "dateTime": { "type": "string" },
+                        "timeZone": { "type": "string" }
+                    },
+                    "required": ["dateTime", "timeZone"]
+                }]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "end".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                    ]),
+                    Some(vec!["dateTime".to_string(), "timeZone".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
 // Schemas that should be preserved for Responses API compatibility rather than
 // being rewritten into a different shape.
 
@@ -541,7 +927,7 @@ fn parse_tool_input_schema_preserves_nested_nullable_any_of_shape() {
                     ],
                     /*description*/ None,
                 ),
-            ),]),
+            )]),
             /*required*/ None,
             /*additional_properties*/ None
         )

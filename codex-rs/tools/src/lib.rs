@@ -25,6 +25,9 @@ mod tool_suggest;
 mod utility_tool;
 mod view_image;
 
+#[cfg(test)]
+mod json_schema_structured_outputs;
+
 pub use agent_job_tool::create_report_agent_job_result_tool;
 pub use agent_job_tool::create_spawn_agents_on_csv_tool;
 pub use agent_tool::SpawnAgentToolOptions;

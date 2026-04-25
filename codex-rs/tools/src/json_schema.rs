@@ -147,8 +147,9 @@ impl From<JsonSchema> for AdditionalProperties {
 
 /// Parse the tool `input_schema` or return an error for invalid schema.
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
+    let root_schema = input_schema.clone();
+    let mut input_schema = root_schema.clone();
+    sanitize_json_schema(&mut input_schema, &root_schema, &mut Vec::new());
     let schema: JsonSchema = serde_json::from_value(input_schema)?;
     if matches!(
         schema.schema_type,
@@ -159,45 +160,87 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     Ok(schema)
 }
 
-/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
-/// schema representation. This function:
+/// Sanitize one schema node so it can fit our limited schema representation.
+///
+/// `schema_node` is the current node being normalized in place.
+/// `root_schema` is the original top-level schema so local `$ref` pointers can
+/// be resolved against it.
+/// `active_refs` tracks the local `$ref` pointers on the current recursion
+/// stack so self-referential definitions can be cut off without recursing
+/// forever.
+///
+/// This function:
 /// - Ensures every typed schema object has a `"type"` when required.
+/// - Resolves local `$ref` indirections and unwraps single-variant
+///   `oneOf`/`anyOf`/`allOf` wrappers before inferring a fallback type.
 /// - Preserves explicit `anyOf`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue) {
-    match value {
+fn sanitize_json_schema(
+    schema_node: &mut JsonValue,
+    root_schema: &JsonValue,
+    active_refs: &mut Vec<String>,
+) {
+    match schema_node {
         JsonValue::Bool(_) => {
             // JSON Schema boolean form: true/false. Coerce to an accept-all string.
-            *value = json!({ "type": "string" });
+            *schema_node = json!({ "type": "string" });
         }
         JsonValue::Array(values) => {
-            for value in values {
-                sanitize_json_schema(value);
+            for array_value in values {
+                sanitize_json_schema(array_value, root_schema, active_refs);
             }
         }
         JsonValue::Object(map) => {
+            let active_ref_depth = active_refs.len();
+            if let Some(pointer) = map
+                .get("$ref")
+                .and_then(JsonValue::as_str)
+                .and_then(|reference| reference.strip_prefix('#'))
+            {
+                if active_refs.iter().any(|active_ref| active_ref == pointer) {
+                    *schema_node = cyclic_reference_fallback(map, root_schema.pointer(pointer));
+                    sanitize_json_schema(schema_node, root_schema, active_refs);
+                    return;
+                }
+
+                active_refs.push(pointer.to_string());
+            }
+
+            if let Some(replacement) = resolve_json_schema_reference(map, root_schema) {
+                *schema_node = replacement;
+                sanitize_json_schema(schema_node, root_schema, active_refs);
+                active_refs.pop();
+                return;
+            }
+
+            if let Some(replacement) = unwrap_single_variant_combiner(map) {
+                *schema_node = replacement;
+                sanitize_json_schema(schema_node, root_schema, active_refs);
+                return;
+            }
+
             if let Some(properties) = map.get_mut("properties")
                 && let Some(properties_map) = properties.as_object_mut()
             {
                 for value in properties_map.values_mut() {
-                    sanitize_json_schema(value);
+                    sanitize_json_schema(value, root_schema, active_refs);
                 }
             }
             if let Some(items) = map.get_mut("items") {
-                sanitize_json_schema(items);
+                sanitize_json_schema(items, root_schema, active_refs);
             }
             if let Some(additional_properties) = map.get_mut("additionalProperties")
                 && !matches!(additional_properties, JsonValue::Bool(_))
             {
-                sanitize_json_schema(additional_properties);
+                sanitize_json_schema(additional_properties, root_schema, active_refs);
             }
             if let Some(value) = map.get_mut("prefixItems") {
-                sanitize_json_schema(value);
+                sanitize_json_schema(value, root_schema, active_refs);
             }
             if let Some(value) = map.get_mut("anyOf") {
-                sanitize_json_schema(value);
+                sanitize_json_schema(value, root_schema, active_refs);
             }
 
             if let Some(const_value) = map.remove("const") {
@@ -234,9 +277,304 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 
             write_schema_types(map, &schema_types);
             ensure_default_children_for_schema_types(map, &schema_types);
+
+            active_refs.truncate(active_ref_depth);
         }
         _ => {}
     }
+}
+
+fn resolve_json_schema_reference(
+    map: &serde_json::Map<String, JsonValue>,
+    root_schema: &JsonValue,
+) -> Option<JsonValue> {
+    let reference = map.get("$ref")?.as_str()?;
+    let pointer = reference.strip_prefix('#')?;
+    let mut replacement = mergeable_schema_node(root_schema.pointer(pointer)?.clone());
+    if let JsonValue::Object(replacement_map) = &mut replacement {
+        merge_json_schema_objects(replacement_map, map);
+    }
+    Some(replacement)
+}
+
+fn cyclic_reference_fallback(
+    map: &serde_json::Map<String, JsonValue>,
+    reference_target: Option<&JsonValue>,
+) -> JsonValue {
+    let mut fallback = reference_target
+        .and_then(cyclic_reference_target_fallback)
+        .unwrap_or_else(|| json!({ "type": "string" }));
+
+    if let JsonValue::Object(fallback_map) = &mut fallback {
+        merge_json_schema_objects(fallback_map, map);
+        fallback_map.remove("$ref");
+    }
+
+    fallback
+}
+
+fn cyclic_reference_target_fallback(reference_target: &JsonValue) -> Option<JsonValue> {
+    let target_map = reference_target.as_object()?;
+    let schema_types = normalized_schema_types(target_map);
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Object)
+        || target_map.contains_key("properties")
+        || target_map.contains_key("required")
+        || target_map.contains_key("additionalProperties")
+    {
+        return Some(json!({ "type": "object", "properties": {} }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Array)
+        || target_map.contains_key("items")
+        || target_map.contains_key("prefixItems")
+    {
+        return Some(json!({ "type": "array", "items": { "type": "string" } }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Number) {
+        return Some(json!({ "type": "number" }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Integer) {
+        return Some(json!({ "type": "integer" }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Boolean) {
+        return Some(json!({ "type": "boolean" }));
+    }
+
+    Some(json!({ "type": "string" }))
+}
+
+/// Converts permissive schema nodes into an object form that can safely absorb
+/// adjacent constraints during local `$ref` resolution or single-variant
+/// combiner unwrapping.
+///
+/// In JSON Schema, `true` means "match anything". When a `true` node sits next
+/// to sibling keywords such as `properties` or `required`, those sibling
+/// constraints still matter. Representing `true` as `{}` keeps those constraints
+/// available to our merge logic instead of dropping them on the floor.
+fn mergeable_schema_node(schema_node: JsonValue) -> JsonValue {
+    match schema_node {
+        JsonValue::Bool(true) => JsonValue::Object(serde_json::Map::new()),
+        other => other,
+    }
+}
+
+/// Merges overlay keywords into a base schema object while preserving the
+/// narrowest combined constraint for overlapping keys.
+fn merge_json_schema_objects(
+    base: &mut serde_json::Map<String, JsonValue>,
+    overlay: &serde_json::Map<String, JsonValue>,
+) {
+    for (key, overlay_value) in overlay {
+        if key == "$ref" {
+            continue;
+        }
+
+        let Some(base_value) = base.get_mut(key) else {
+            base.insert(key.clone(), overlay_value.clone());
+            continue;
+        };
+
+        if base_value == overlay_value {
+            continue;
+        }
+
+        match key.as_str() {
+            "enum" => merge_enum_values(base_value, overlay_value),
+            "required" => merge_required_arrays(base_value, overlay_value),
+            "properties" => merge_property_maps(base_value, overlay_value),
+            "type" => merge_schema_types(base_value, overlay_value),
+            "additionalProperties" => {
+                if let Some(merged_value) =
+                    merge_additional_properties(base_value.clone(), overlay_value.clone())
+                {
+                    *base_value = merged_value;
+                }
+            }
+            "minimum" | "exclusiveMinimum" => {
+                merge_numeric_bound(base_value, overlay_value, /*take_max*/ true)
+            }
+            "maximum" | "exclusiveMaximum" => {
+                merge_numeric_bound(base_value, overlay_value, /*take_max*/ false)
+            }
+            _ => {
+                if let (Some(base_map), Some(overlay_map)) =
+                    (base_value.as_object_mut(), overlay_value.as_object())
+                {
+                    merge_json_schema_objects(base_map, overlay_map);
+                }
+            }
+        }
+    }
+}
+
+fn merge_enum_values(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_array) = base_value.as_array() else {
+        return;
+    };
+    let Some(overlay_array) = overlay_value.as_array() else {
+        return;
+    };
+
+    let intersection = base_array
+        .iter()
+        .filter(|value| overlay_array.contains(value))
+        .cloned()
+        .collect::<Vec<_>>();
+    *base_value = JsonValue::Array(intersection);
+}
+
+fn merge_required_arrays(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_array) = base_value.as_array_mut() else {
+        return;
+    };
+    let Some(overlay_array) = overlay_value.as_array() else {
+        return;
+    };
+
+    for required_value in overlay_array {
+        if !base_array.contains(required_value) {
+            base_array.push(required_value.clone());
+        }
+    }
+}
+
+fn merge_property_maps(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_map) = base_value.as_object_mut() else {
+        return;
+    };
+    let Some(overlay_map) = overlay_value.as_object() else {
+        return;
+    };
+
+    for (property_name, overlay_property) in overlay_map {
+        let Some(base_property) = base_map.get_mut(property_name) else {
+            base_map.insert(property_name.clone(), overlay_property.clone());
+            continue;
+        };
+
+        if let (Some(base_property_map), Some(overlay_property_map)) =
+            (base_property.as_object_mut(), overlay_property.as_object())
+        {
+            merge_json_schema_objects(base_property_map, overlay_property_map);
+        }
+    }
+}
+
+fn merge_schema_types(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let base_types = json_schema_type_names(base_value);
+    let overlay_types = json_schema_type_names(overlay_value);
+    if base_types.is_empty() || overlay_types.is_empty() {
+        return;
+    }
+
+    let merged_types: Vec<String> = [
+        "string", "number", "boolean", "integer", "object", "array", "null",
+    ]
+    .into_iter()
+    .filter(|candidate| type_sets_overlap(&base_types, &overlay_types, candidate))
+    .map(str::to_string)
+    .collect();
+    if merged_types.is_empty() {
+        return;
+    }
+
+    *base_value = match merged_types.as_slice() {
+        [schema_type] => JsonValue::String(schema_type.clone()),
+        _ => JsonValue::Array(
+            merged_types
+                .into_iter()
+                .map(JsonValue::String)
+                .collect::<Vec<_>>(),
+        ),
+    };
+}
+
+fn type_sets_overlap(base_types: &[String], overlay_types: &[String], candidate: &str) -> bool {
+    if base_types.iter().any(|base_type| base_type == candidate)
+        && overlay_types
+            .iter()
+            .any(|overlay_type| overlay_type == candidate)
+    {
+        return true;
+    }
+
+    candidate == "integer"
+        && ((base_types.iter().any(|base_type| base_type == "integer")
+            && overlay_types
+                .iter()
+                .any(|overlay_type| overlay_type == "number"))
+            || (base_types.iter().any(|base_type| base_type == "number")
+                && overlay_types
+                    .iter()
+                    .any(|overlay_type| overlay_type == "integer")))
+}
+
+fn json_schema_type_names(value: &JsonValue) -> Vec<String> {
+    match value {
+        JsonValue::String(schema_type) => vec![schema_type.clone()],
+        JsonValue::Array(values) => values
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn merge_additional_properties(
+    base_value: JsonValue,
+    overlay_value: JsonValue,
+) -> Option<JsonValue> {
+    match (base_value, overlay_value) {
+        (JsonValue::Bool(false), _) | (_, JsonValue::Bool(false)) => Some(JsonValue::Bool(false)),
+        (JsonValue::Bool(true), other) | (other, JsonValue::Bool(true)) => Some(other),
+        (JsonValue::Object(mut base_map), JsonValue::Object(overlay_map)) => {
+            merge_json_schema_objects(&mut base_map, &overlay_map);
+            Some(JsonValue::Object(base_map))
+        }
+        (base_value, overlay_value) if base_value == overlay_value => Some(base_value),
+        _ => None,
+    }
+}
+
+fn merge_numeric_bound(base_value: &mut JsonValue, overlay_value: &JsonValue, take_max: bool) {
+    let (Some(base_number), Some(overlay_number)) = (base_value.as_f64(), overlay_value.as_f64())
+    else {
+        return;
+    };
+
+    let merged_number = if take_max {
+        base_number.max(overlay_number)
+    } else {
+        base_number.min(overlay_number)
+    };
+    if let Some(number) = serde_json::Number::from_f64(merged_number) {
+        *base_value = JsonValue::Number(number);
+    }
+}
+
+fn unwrap_single_variant_combiner(map: &serde_json::Map<String, JsonValue>) -> Option<JsonValue> {
+    for combiner in ["oneOf", "anyOf", "allOf"] {
+        let Some(variants) = map.get(combiner).and_then(JsonValue::as_array) else {
+            continue;
+        };
+        if variants.len() != 1 {
+            continue;
+        }
+
+        let mut replacement = mergeable_schema_node(variants[0].clone());
+        if let JsonValue::Object(replacement_map) = &mut replacement {
+            merge_json_schema_objects(replacement_map, map);
+            replacement_map.remove(combiner);
+        }
+        return Some(replacement);
+    }
+
+    None
 }
 
 fn ensure_default_children_for_schema_types(
@@ -336,5 +674,12 @@ fn singleton_null_schema_error() -> serde_json::Error {
 }
 
 #[cfg(test)]
+pub(crate) use crate::json_schema_structured_outputs::validate_structured_outputs_schema;
+
+#[cfg(test)]
 #[path = "json_schema_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "json_schema_structured_outputs_tests.rs"]
+mod structured_outputs_tests;
