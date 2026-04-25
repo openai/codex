@@ -2,6 +2,14 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use owo_colors::Style;
 use pretty_assertions::assert_eq;
 
@@ -10,6 +18,7 @@ use super::final_message_from_turn_items;
 use super::reasoning_text;
 use super::should_print_final_message_to_stdout;
 use super::should_print_final_message_to_tty;
+use super::summarize_permission_profile;
 use crate::event_processor::EventProcessor;
 
 #[test]
@@ -87,6 +96,69 @@ fn reasoning_text_uses_raw_content_when_enabled() {
     );
 
     assert_eq!(text.as_deref(), Some("raw"));
+}
+
+#[test]
+fn summarizes_disabled_permission_profile_as_danger_full_access() {
+    assert_eq!(
+        summarize_permission_profile(
+            &PermissionProfile::Disabled,
+            test_path_buf("/tmp").as_path()
+        ),
+        "danger-full-access"
+    );
+}
+
+#[test]
+fn summarizes_external_permission_profile() {
+    assert_eq!(
+        summarize_permission_profile(
+            &PermissionProfile::External {
+                network: NetworkSandboxPolicy::Enabled,
+            },
+            test_path_buf("/tmp").as_path(),
+        ),
+        "external-sandbox (network access enabled)"
+    );
+}
+
+#[test]
+fn summarizes_managed_workspace_write_permission_profile() {
+    let cwd = test_path_buf("/tmp/project").abs();
+    let cache_root = test_path_buf("/tmp/cache").abs();
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: cwd.clone() },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: cache_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    assert_eq!(
+        summarize_permission_profile(&profile, cwd.as_path()),
+        format!("workspace-write [workdir, {}]", cache_root.display())
+    );
+}
+
+#[test]
+fn summarizes_managed_read_only_permission_profile() {
+    let profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(Vec::new()),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    assert_eq!(
+        summarize_permission_profile(&profile, test_path_buf("/tmp/project").as_path()),
+        "read-only"
+    );
 }
 
 #[test]
