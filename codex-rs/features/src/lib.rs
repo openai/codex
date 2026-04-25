@@ -71,7 +71,8 @@ impl Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // Stable.
-    /// Create a ghost commit at each turn.
+    /// Removed compatibility flag retained as a no-op so old configs can
+    /// still parse `undo`.
     GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
@@ -390,6 +391,9 @@ impl Features {
                 "tui_app_server" => {
                     continue;
                 }
+                "undo" => {
+                    continue;
+                }
                 "js_repl" => {
                     continue;
                 }
@@ -618,7 +622,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GhostCommit,
         key: "undo",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

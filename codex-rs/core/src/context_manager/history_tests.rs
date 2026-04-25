@@ -1,7 +1,6 @@
 use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_git_utils::GhostCommit;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
@@ -607,22 +606,6 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
             },
         ]
     );
-}
-
-#[test]
-fn get_history_for_prompt_drops_ghost_commits() {
-    let items = vec![ResponseItem::GhostSnapshot {
-        ghost_commit: GhostCommit::new(
-            "ghost-1".to_string(),
-            /*parent*/ None,
-            Vec::new(),
-            Vec::new(),
-        ),
-    }];
-    let history = create_history_with_items(items);
-    let modalities = default_input_modalities();
-    let filtered = history.for_prompt(&modalities);
-    assert_eq!(filtered, vec![]);
 }
 
 #[test]

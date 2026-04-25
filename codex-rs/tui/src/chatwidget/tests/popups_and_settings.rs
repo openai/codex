@@ -1692,9 +1692,9 @@ async fn experimental_features_popup_snapshot() {
 
     let features = vec![
         ExperimentalFeatureItem {
-            feature: Feature::GhostCommit,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
+            feature: Feature::JsRepl,
+            name: "JavaScript REPL".to_string(),
+            description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
         },
         ExperimentalFeatureItem {
@@ -1715,12 +1715,12 @@ async fn experimental_features_popup_snapshot() {
 async fn experimental_features_toggle_saves_on_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    let expected_feature = Feature::GhostCommit;
+    let expected_feature = Feature::JsRepl;
     let view = ExperimentalFeaturesView::new(
         vec![ExperimentalFeatureItem {
             feature: expected_feature,
-            name: "Ghost snapshots".to_string(),
-            description: "Capture undo snapshots each turn.".to_string(),
+            name: "JavaScript REPL".to_string(),
+            description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
         }],
         chat.app_event_tx.clone(),

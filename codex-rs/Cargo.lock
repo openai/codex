@@ -2719,7 +2719,6 @@ name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_matches",
  "chrono",
  "codex-exec-server",
  "codex-protocol",

@@ -775,7 +775,10 @@ pub enum Op {
     /// model.
     SetThreadMemoryMode { mode: ThreadMemoryMode },
 
-    /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
+    /// Legacy request to undo a turn.
+    ///
+    /// The op is still accepted for compatibility, but ghost snapshots are no
+    /// longer produced so the request reports unavailable.
     Undo,
 
     /// Request Codex to drop the last N user turns from in-memory context.

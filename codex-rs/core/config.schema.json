@@ -763,16 +763,16 @@
       "additionalProperties": false,
       "properties": {
         "disable_warnings": {
-          "description": "Disable all ghost snapshot warning events.",
+          "description": "Legacy no-op setting retained for compatibility.",
           "type": "boolean"
         },
         "ignore_large_untracked_dirs": {
-          "description": "Ignore untracked directories that contain this many files or more. (Still emits a warning unless warnings are disabled.)",
+          "description": "Legacy no-op setting retained for compatibility.",
           "format": "int64",
           "type": "integer"
         },
         "ignore_large_untracked_files": {
-          "description": "Exclude untracked files larger than this many bytes from ghost snapshots.",
+          "description": "Legacy no-op setting retained for compatibility.",
           "format": "int64",
           "type": "integer"
         }
@@ -2806,7 +2806,7 @@
         }
       ],
       "default": null,
-      "description": "Settings for ghost snapshots (used for undo)."
+      "description": "Compatibility-only settings retained so legacy `ghost_snapshot` config still loads."
     },
     "hide_agent_reasoning": {
       "description": "When set to `true`, `AgentReasoning` events will be hidden from the UI/output. Defaults to `false`.",
