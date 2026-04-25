@@ -376,43 +376,28 @@ impl MessageProcessor {
             Arc::clone(&self.outgoing),
             request_context.clone(),
             async {
-                let request_json = match serde_json::to_value(&request) {
-                    Ok(request_json) => request_json,
-                    Err(err) => {
-                        self.outgoing
-                            .send_error(
-                                request_id.clone(),
-                                invalid_request(format!("Invalid request: {err}")),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-
-                let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
-                    Ok(codex_request) => codex_request,
-                    Err(err) => {
-                        self.outgoing
-                            .send_error(
-                                request_id.clone(),
-                                invalid_request(format!("Invalid request: {err}")),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-                // Websocket callers finalize outbound readiness in lib.rs after mirroring
-                // session state into outbound state and sending initialize notifications to
-                // this specific connection. Passing `None` avoids marking the connection
-                // ready too early from inside the shared request handler.
-                self.handle_client_request(
-                    request_id.clone(),
-                    codex_request,
-                    Arc::clone(&session),
-                    /*outbound_initialized*/ None,
-                    request_context.clone(),
-                )
+                let result = async {
+                    let request_json = serde_json::to_value(&request)
+                        .map_err(|err| invalid_request(format!("Invalid request: {err}")))?;
+                    let codex_request = serde_json::from_value::<ClientRequest>(request_json)
+                        .map_err(|err| invalid_request(format!("Invalid request: {err}")))?;
+                    // Websocket callers finalize outbound readiness in lib.rs after mirroring
+                    // session state into outbound state and sending initialize notifications to
+                    // this specific connection. Passing `None` avoids marking the connection
+                    // ready too early from inside the shared request handler.
+                    self.handle_client_request(
+                        request_id.clone(),
+                        codex_request,
+                        Arc::clone(&session),
+                        /*outbound_initialized*/ None,
+                        request_context.clone(),
+                    )
+                    .await
+                }
                 .await;
+                if let Err(error) = result {
+                    self.outgoing.send_error(request_id.clone(), error).await;
+                }
             },
         )
         .await;
@@ -449,14 +434,18 @@ impl MessageProcessor {
                 // In-process clients do not have the websocket transport loop that performs
                 // post-initialize bookkeeping, so they still finalize outbound readiness in
                 // the shared request handler.
-                self.handle_client_request(
-                    request_id.clone(),
-                    request,
-                    Arc::clone(&session),
-                    Some(outbound_initialized),
-                    request_context.clone(),
-                )
-                .await;
+                let result = self
+                    .handle_client_request(
+                        request_id.clone(),
+                        request,
+                        Arc::clone(&session),
+                        Some(outbound_initialized),
+                        request_context.clone(),
+                    )
+                    .await;
+                if let Err(error) = result {
+                    self.outgoing.send_error(request_id.clone(), error).await;
+                }
             },
         )
         .await;
@@ -584,7 +573,7 @@ impl MessageProcessor {
         // lib.rs can deliver connection-scoped initialize notifications first.
         outbound_initialized: Option<&AtomicBool>,
         request_context: RequestContext,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         if let ClientRequest::Initialize { request_id, params } = codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
@@ -594,13 +583,7 @@ impl MessageProcessor {
                 request_id,
             };
             if session.initialized() {
-                self.outgoing
-                    .send_error(
-                        connection_request_id,
-                        invalid_request("Already initialized"),
-                    )
-                    .await;
-                return;
+                return Err(invalid_request("Already initialized"));
             }
 
             // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
@@ -628,15 +611,9 @@ impl MessageProcessor {
             // Validate before committing; set_default_originator validates while
             // mutating process-global metadata.
             if HeaderValue::from_str(&name).is_err() {
-                self.outgoing
-                    .send_error(
-                        connection_request_id.clone(),
-                        invalid_request(format!(
-                            "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
-                        )),
-                    )
-                    .await;
-                return;
+                return Err(invalid_request(format!(
+                    "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                )));
             }
             let originator = name.clone();
             let user_agent_suffix = format!("{name}; {version}");
@@ -652,13 +629,7 @@ impl MessageProcessor {
                 })
                 .is_err()
             {
-                self.outgoing
-                    .send_error(
-                        connection_request_id,
-                        invalid_request("Already initialized"),
-                    )
-                    .await;
-                return;
+                return Err(invalid_request("Already initialized"));
             }
 
             // Only the request that wins session initialization may mutate
@@ -713,7 +684,7 @@ impl MessageProcessor {
                     .connection_initialized(connection_id)
                     .await;
             }
-            return;
+            return Ok(());
         }
 
         self.dispatch_initialized_client_request(
@@ -722,7 +693,7 @@ impl MessageProcessor {
             session,
             request_context,
         )
-        .await;
+        .await
     }
 
     async fn dispatch_initialized_client_request(
@@ -731,24 +702,15 @@ impl MessageProcessor {
         codex_request: ClientRequest,
         session: Arc<ConnectionSessionState>,
         request_context: RequestContext,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         if !session.initialized() {
-            self.outgoing
-                .send_error(connection_request_id, invalid_request("Not initialized"))
-                .await;
-            return;
+            return Err(invalid_request("Not initialized"));
         }
 
         if let Some(reason) = codex_request.experimental_reason()
             && !session.experimental_api_enabled()
         {
-            self.outgoing
-                .send_error(
-                    connection_request_id,
-                    invalid_request(experimental_required_message(reason)),
-                )
-                .await;
-            return;
+            return Err(invalid_request(experimental_required_message(reason)));
         }
         let connection_id = connection_request_id.connection_id;
         if self.config.features.enabled(Feature::GeneralAnalytics)
@@ -774,7 +736,7 @@ impl MessageProcessor {
                 client_version,
                 device_key_requests_allowed,
             )
-            .await;
+            .await
     }
 
     async fn handle_initialized_client_request(
@@ -785,7 +747,7 @@ impl MessageProcessor {
         app_server_client_name: Option<String>,
         client_version: Option<String>,
         device_key_requests_allowed: bool,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
         let request_id_for_connection = |request_id| ConnectionRequestId {
             connection_id,
@@ -814,7 +776,7 @@ impl MessageProcessor {
                     request_id_for_connection(request_id),
                     params,
                 )
-                .await;
+                .await?;
             }
             ClientRequest::ConfigValueWrite { request_id, params } => {
                 self.handle_config_value_write(request_id_for_connection(request_id), params)
@@ -951,6 +913,7 @@ impl MessageProcessor {
                     .await;
             }
         }
+        Ok(())
     }
 
     async fn handle_config_value_write(
@@ -1151,21 +1114,16 @@ impl MessageProcessor {
         let device_key_api = self.device_key_api.clone();
         let outgoing = Arc::clone(&self.outgoing);
         tokio::spawn(async move {
-            if !device_key_requests_allowed {
-                outgoing
-                    .send_error(
-                        request_id,
-                        invalid_request(format!(
-                            "{method} is not available over remote transports"
-                        )),
-                    )
-                    .await;
-                return;
+            let result = async {
+                if !device_key_requests_allowed {
+                    return Err(invalid_request(format!(
+                        "{method} is not available over remote transports"
+                    )));
+                }
+                run_request(device_key_api).await
             }
-
-            outgoing
-                .send_result(request_id, run_request(device_key_api).await)
-                .await;
+            .await;
+            outgoing.send_result(request_id, result).await;
         });
     }
 
@@ -1173,68 +1131,63 @@ impl MessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
-    ) {
+    ) -> Result<(), JSONRPCErrorError> {
         let has_plugin_imports = params.migration_items.iter().any(|item| {
             matches!(
                 item.item_type,
                 ExternalAgentConfigMigrationItemType::Plugins
             )
         });
-        match self.external_agent_config_api.import(params).await {
-            Ok(pending_plugin_imports) => {
-                if has_plugin_imports {
-                    self.handle_config_mutation().await;
-                }
-                self.outgoing
-                    .send_response(request_id, ExternalAgentConfigImportResponse {})
-                    .await;
 
-                if !has_plugin_imports {
-                    return;
-                }
-
-                if pending_plugin_imports.is_empty() {
-                    self.outgoing
-                        .send_server_notification(
-                            ServerNotification::ExternalAgentConfigImportCompleted(
-                                ExternalAgentConfigImportCompletedNotification {},
-                            ),
-                        )
-                        .await;
-                    return;
-                }
-
-                let external_agent_config_api = self.external_agent_config_api.clone();
-                let outgoing = Arc::clone(&self.outgoing);
-                let thread_manager = Arc::clone(&self.thread_manager);
-                tokio::spawn(async move {
-                    for pending_plugin_import in pending_plugin_imports {
-                        match external_agent_config_api
-                            .complete_pending_plugin_import(pending_plugin_import)
-                            .await
-                        {
-                            Ok(()) => {}
-                            Err(error) => {
-                                tracing::warn!(
-                                    error = %error.message,
-                                    "external agent config plugin import failed"
-                                );
-                            }
-                        }
-                    }
-                    thread_manager.plugins_manager().clear_cache();
-                    thread_manager.skills_manager().clear_cache();
-                    outgoing
-                        .send_server_notification(
-                            ServerNotification::ExternalAgentConfigImportCompleted(
-                                ExternalAgentConfigImportCompletedNotification {},
-                            ),
-                        )
-                        .await;
-                });
-            }
-            Err(error) => self.outgoing.send_error(request_id, error).await,
+        let pending_plugin_imports = self.external_agent_config_api.import(params).await?;
+        if has_plugin_imports {
+            self.handle_config_mutation().await;
         }
+        self.outgoing
+            .send_response(request_id, ExternalAgentConfigImportResponse {})
+            .await;
+
+        if !has_plugin_imports {
+            return Ok(());
+        }
+
+        if pending_plugin_imports.is_empty() {
+            self.outgoing
+                .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
+                    ExternalAgentConfigImportCompletedNotification {},
+                ))
+                .await;
+            return Ok(());
+        }
+
+        let external_agent_config_api = self.external_agent_config_api.clone();
+        let outgoing = Arc::clone(&self.outgoing);
+        let thread_manager = Arc::clone(&self.thread_manager);
+        tokio::spawn(async move {
+            for pending_plugin_import in pending_plugin_imports {
+                match external_agent_config_api
+                    .complete_pending_plugin_import(pending_plugin_import)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error.message,
+                            "external agent config plugin import failed"
+                        );
+                    }
+                }
+            }
+            thread_manager.plugins_manager().clear_cache();
+            thread_manager.skills_manager().clear_cache();
+            outgoing
+                .send_server_notification(ServerNotification::ExternalAgentConfigImportCompleted(
+                    ExternalAgentConfigImportCompletedNotification {},
+                ))
+                .await;
+        });
+
+        Ok(())
     }
 }
 
