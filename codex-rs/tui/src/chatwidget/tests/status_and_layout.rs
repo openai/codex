@@ -1,4 +1,5 @@
 use super::*;
+use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
 
 /// Receiving a TokenCount event without usage clears the context indicator.
@@ -26,6 +27,46 @@ async fn token_count_none_resets_context_indicator() {
         }),
     });
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
+}
+
+#[tokio::test]
+async fn core_cyber_policy_error_renders_dedicated_notice() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "cyber-policy".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "server fallback message".to_string(),
+            codex_error_info: Some(CodexErrorInfo::CyberPolicy),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
+    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(!rendered.contains("server fallback message"));
+}
+
+#[tokio::test]
+async fn core_model_verification_renders_warning() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "model-verification".into(),
+        msg: EventMsg::ModelVerification(ModelVerificationEvent {
+            verifications: vec![CoreModelVerification::TrustedAccessForCyber],
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("multiple flags for possible cybersecurity risk"));
+    assert!(rendered.contains("extra safety checks are on"));
+    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(rendered.contains("https://chatgpt.com/cyber"));
 }
 
 #[tokio::test]
@@ -1586,6 +1627,279 @@ async fn status_line_model_with_reasoning_context_remaining_footer_snapshot() {
         "status_line_model_with_reasoning_context_remaining_footer",
         normalized_backend_snapshot(terminal.backend())
     );
+}
+
+#[tokio::test]
+async fn status_line_goal_active_token_budget_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
+    chat.refresh_status_line();
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Active,
+                    /*token_budget*/ Some(50_000),
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal status footer");
+    assert_chatwidget_snapshot!(
+        "status_line_goal_active_token_budget_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn status_line_goal_complete_elapsed_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
+    chat.refresh_status_line();
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Complete,
+                    /*token_budget*/ None,
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal status footer");
+    assert_chatwidget_snapshot!(
+        "status_line_goal_complete_elapsed_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn session_configured_clears_goal_status_footer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Active,
+                    /*token_budget*/ Some(50_000),
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(
+        chat.current_goal_status_indicator,
+        Some(GoalStatusIndicator::Active {
+            usage: Some("40K / 50K".to_string())
+        })
+    );
+    chat.budget_limited_turn_ids.insert("turn-1".to_string());
+
+    let rollout_file = NamedTempFile::new().unwrap();
+    chat.handle_codex_event(Event {
+        id: "session-2".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.4".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
+            cwd: test_path_buf("/home/user/project").abs(),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+
+    assert_eq!(chat.current_goal_status_indicator, None);
+    assert!(chat.budget_limited_turn_ids.is_empty());
+}
+
+#[tokio::test]
+async fn thread_goal_update_for_other_thread_is_ignored() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    let other_thread_id = ThreadId::new().to_string();
+    let mut goal = test_thread_goal(
+        codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
+        /*token_budget*/ Some(50_000),
+        /*tokens_used*/ 50_000,
+    );
+    goal.thread_id = other_thread_id.clone();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: other_thread_id,
+                turn_id: Some("turn-other".to_string()),
+                goal,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_goal_status_indicator, None);
+    assert!(chat.current_goal_status.is_none());
+    assert!(chat.budget_limited_turn_ids.is_empty());
+}
+
+#[test]
+fn goal_status_indicator_formats_statuses_and_budgets() {
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 40_000,
+        )),
+        Some(GoalStatusIndicator::Active {
+            usage: Some("40K / 50K".to_string()),
+        })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+            /*tokens_used*/ 0,
+        )),
+        Some(GoalStatusIndicator::Active {
+            usage: Some("30m".to_string()),
+        })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 51_000,
+        )),
+        Some(GoalStatusIndicator::BudgetLimited {
+            usage: Some("51K / 50K tokens".to_string()),
+        })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
+            /*token_budget*/ None,
+            /*tokens_used*/ 0,
+        )),
+        Some(GoalStatusIndicator::BudgetLimited { usage: None })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Complete,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 40_000,
+        )),
+        Some(GoalStatusIndicator::Complete {
+            usage: Some("40K tokens".to_string()),
+        })
+    );
+}
+
+#[test]
+fn goal_status_indicator_line_formats_goal_text() {
+    let cases = [
+        (
+            GoalStatusIndicator::Active {
+                usage: Some("4K / 5K".to_string()),
+            },
+            "Pursuing goal (4K / 5K)",
+        ),
+        (
+            GoalStatusIndicator::BudgetLimited {
+                usage: Some("4K / 5K tokens".to_string()),
+            },
+            "Goal unmet (4K / 5K tokens)",
+        ),
+        (
+            GoalStatusIndicator::Paused,
+            "Goal paused (/goal to unpause)",
+        ),
+        (
+            GoalStatusIndicator::BudgetLimited { usage: None },
+            "Goal abandoned",
+        ),
+        (
+            GoalStatusIndicator::Complete {
+                usage: Some("10h 12m".to_string()),
+            },
+            "Goal achieved (10h 12m)",
+        ),
+        (
+            GoalStatusIndicator::Complete { usage: None },
+            "Goal achieved",
+        ),
+    ];
+
+    for (indicator, expected) in cases {
+        let line =
+            goal_status_indicator_line(Some(&indicator)).expect("goal indicator should render");
+        let actual = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(expected, actual);
+    }
+}
+
+fn test_thread_goal(
+    status: codex_app_server_protocol::ThreadGoalStatus,
+    token_budget: Option<i64>,
+    tokens_used: i64,
+) -> codex_app_server_protocol::ThreadGoal {
+    codex_app_server_protocol::ThreadGoal {
+        thread_id: "thread-1".to_string(),
+        objective: "Keep improving the benchmark".to_string(),
+        status,
+        token_budget,
+        tokens_used,
+        time_used_seconds: 30 * 60,
+        created_at: 0,
+        updated_at: 0,
+    }
 }
 
 #[tokio::test]

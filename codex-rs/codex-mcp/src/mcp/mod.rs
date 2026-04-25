@@ -141,14 +141,14 @@ pub struct ToolPluginProvenance {
 }
 
 impl ToolPluginProvenance {
-    pub(crate) fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
+    pub fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
         self.plugin_display_names_by_connector_id
             .get(connector_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
 
-    pub(crate) fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
+    pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
         self.plugin_display_names_by_mcp_server_name
             .get(server_name)
             .map(Vec::as_slice)
@@ -201,31 +201,6 @@ fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
     }
 }
 
-fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
-    let token = auth.and_then(|auth| auth.get_token().ok())?;
-    let token = token.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
-    let mut headers = HashMap::new();
-    if let Some(token) = codex_apps_mcp_bearer_token(auth) {
-        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
-    }
-    if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
-        headers.insert("ChatGPT-Account-ID".to_string(), account_id);
-    }
-    if headers.is_empty() {
-        None
-    } else {
-        Some(headers)
-    }
-}
-
 fn normalize_codex_apps_base_url(base_url: &str) -> String {
     let mut base_url = base_url.trim_end_matches('/').to_string();
     if (base_url.starts_with("https://chatgpt.com")
@@ -252,20 +227,14 @@ pub(crate) fn codex_apps_mcp_url(config: &McpConfig) -> String {
     codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
 }
 
-fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) -> McpServerConfig {
-    let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
-    let http_headers = if bearer_token_env_var.is_some() {
-        None
-    } else {
-        codex_apps_mcp_http_headers(auth)
-    };
+fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
     let url = codex_apps_mcp_url(config);
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
             url,
-            bearer_token_env_var,
-            http_headers,
+            bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
+            http_headers: None,
             env_http_headers: None,
         },
         experimental_environment: None,
@@ -289,10 +258,10 @@ pub fn with_codex_apps_mcp(
     auth: Option<&CodexAuth>,
     config: &McpConfig,
 ) -> HashMap<String, McpServerConfig> {
-    if config.apps_enabled && auth.is_some_and(CodexAuth::is_chatgpt_auth) {
+    if config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            codex_apps_mcp_server_config(config, auth),
+            codex_apps_mcp_server_config(config),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -325,8 +294,12 @@ pub async fn read_mcp_resource(
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
-    let auth_statuses =
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+    let auth_statuses = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        auth,
+    )
+    .await;
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
     let (manager, cancel_token) = McpConnectionManager::new(
@@ -341,6 +314,7 @@ pub async fn read_mcp_resource(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance(config),
+        auth,
     )
     .await;
 
@@ -383,8 +357,12 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         };
     }
 
-    let auth_status_entries =
-        compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        auth,
+    )
+    .await;
 
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
@@ -401,6 +379,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
+        auth,
     )
     .await;
 

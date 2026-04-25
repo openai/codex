@@ -61,6 +61,7 @@ use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
@@ -77,6 +78,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
+use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
@@ -121,7 +123,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::items::parse_hook_prompt_message;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
@@ -221,6 +223,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnComplete(turn_complete_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
+            respond_to_pending_interrupts(&thread_state, &outgoing, /*abort_reason*/ None).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -396,6 +399,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 outgoing
                     .send_server_notification(ServerNotification::ModelRerouted(notification))
+                    .await;
+            }
+        }
+        EventMsg::ModelVerification(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ModelVerificationNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    verifications: event.verifications.into_iter().map(Into::into).collect(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ModelVerification(notification))
                     .await;
             }
         }
@@ -961,6 +976,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let empty = CoreRequestPermissionsResponse {
                     permissions: Default::default(),
                     scope: CorePermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionsResponse {
@@ -1832,26 +1848,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            let pending = {
-                let mut state = thread_state.lock().await;
-                std::mem::take(&mut state.pending_interrupts)
-            };
-            if !pending.is_empty() {
-                for (rid, ver) in pending {
-                    match ver {
-                        ApiVersion::V1 => {
-                            let response = InterruptConversationResponse {
-                                abort_reason: turn_aborted_event.reason.clone(),
-                            };
-                            outgoing.send_response(rid, response).await;
-                        }
-                        ApiVersion::V2 => {
-                            let response = TurnInterruptResponse {};
-                            outgoing.send_response(rid, response).await;
-                        }
-                    }
-                }
-            }
+            respond_to_pending_interrupts(
+                &thread_state,
+                &outgoing,
+                Some(turn_aborted_event.reason.clone()),
+            )
+            .await;
 
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
@@ -1948,6 +1950,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 outgoing
                     .send_global_server_notification(ServerNotification::ThreadNameUpdated(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::ThreadGoalUpdated(thread_goal_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadGoalUpdatedNotification {
+                    thread_id: thread_goal_event.thread_id.to_string(),
+                    turn_id: thread_goal_event.turn_id,
+                    goal: thread_goal_event.goal.clone().into(),
+                };
+                outgoing
+                    .send_global_server_notification(ServerNotification::ThreadGoalUpdated(
                         notification,
                     ))
                     .await;
@@ -2328,6 +2344,33 @@ async fn handle_thread_rollback_failed(
     }
 }
 
+async fn respond_to_pending_interrupts(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    abort_reason: Option<codex_protocol::protocol::TurnAbortReason>,
+) {
+    let pending = {
+        let mut state = thread_state.lock().await;
+        std::mem::take(&mut state.pending_interrupts)
+    };
+
+    for (rid, ver) in pending {
+        match ver {
+            ApiVersion::V1 => {
+                let Some(abort_reason) = abort_reason.clone() else {
+                    debug_assert!(false, "v1 interrupts only resolve from TurnAborted");
+                    continue;
+                };
+                let response = InterruptConversationResponse { abort_reason };
+                outgoing.send_response(rid, response).await;
+            }
+            ApiVersion::V2 => {
+                outgoing.send_response(rid, TurnInterruptResponse {}).await;
+            }
+        }
+    }
+}
+
 async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
@@ -2669,6 +2712,7 @@ fn request_permissions_response_from_client_result(
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
             });
         }
         Err(err) => {
@@ -2676,6 +2720,7 @@ fn request_permissions_response_from_client_result(
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
                 scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
             });
         }
     };
@@ -2686,9 +2731,24 @@ fn request_permissions_response_from_client_result(
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
                 scope: codex_app_server_protocol::PermissionGrantScope::Turn,
+                strict_auto_review: None,
             }
         });
-    let granted_permissions: CorePermissionProfile = response.permissions.into();
+    let strict_auto_review = response.strict_auto_review.unwrap_or(false);
+    if strict_auto_review
+        && matches!(
+            response.scope,
+            codex_app_server_protocol::PermissionGrantScope::Session
+        )
+    {
+        error!("strict auto review is only supported for turn-scoped permission grants");
+        return Some(CoreRequestPermissionsResponse {
+            permissions: Default::default(),
+            scope: CorePermissionGrantScope::Turn,
+            strict_auto_review: false,
+        });
+    }
+    let granted_permissions: CoreAdditionalPermissionProfile = response.permissions.into();
     let permissions = if granted_permissions.is_empty() {
         CoreRequestPermissionProfile::default()
     } else {
@@ -2697,6 +2757,7 @@ fn request_permissions_response_from_client_result(
     Some(CoreRequestPermissionsResponse {
         permissions,
         scope: response.scope.to_core(),
+        strict_auto_review,
     })
 }
 
@@ -3858,6 +3919,7 @@ mod tests {
                 CoreRequestPermissionsResponse {
                     permissions: expected_permissions,
                     scope: CorePermissionGrantScope::Turn,
+                    strict_auto_review: false,
                 }
             );
         }
@@ -3880,8 +3942,61 @@ mod tests {
             CoreRequestPermissionsResponse {
                 permissions: CoreRequestPermissionProfile::default(),
                 scope: CorePermissionGrantScope::Session,
+                strict_auto_review: false,
             }
         );
+    }
+
+    #[test]
+    fn request_permissions_response_rejects_session_scoped_strict_auto_review() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "strictAutoReview": true,
+                "permissions": {
+                    "network": {
+                        "enabled": true,
+                    },
+                },
+            }))),
+            std::env::current_dir().expect("current dir").as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CoreRequestPermissionProfile::default(),
+                scope: CorePermissionGrantScope::Turn,
+                strict_auto_review: false,
+            }
+        );
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_turn_scoped_strict_auto_review() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile {
+                network: Some(codex_protocol::models::NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..Default::default()
+            },
+            Ok(Ok(serde_json::json!({
+                "strictAutoReview": true,
+                "permissions": {
+                    "network": {
+                        "enabled": true,
+                    },
+                },
+            }))),
+            std::env::current_dir().expect("current dir").as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(response.scope, CorePermissionGrantScope::Turn);
+        assert!(response.strict_auto_review);
     }
 
     #[test]
@@ -4106,17 +4221,19 @@ mod tests {
         let thread_state = new_thread_state();
         {
             let mut state = thread_state.lock().await;
-            state.track_current_turn_event(&EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
+            state.track_current_turn_event(
+                &event_turn_id,
+                &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: event_turn_id.clone(),
                     started_at: Some(42),
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
-                },
-            ));
-            state.track_current_turn_event(&EventMsg::TurnComplete(turn_complete_event(
+                }),
+            );
+            state.track_current_turn_event(
                 &event_turn_id,
-            )));
+                &EventMsg::TurnComplete(turn_complete_event(&event_turn_id)),
+            );
         }
 
         handle_turn_complete(

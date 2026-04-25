@@ -81,6 +81,7 @@ pub fn telemetry_api_error_message(error: &ApiError) -> String {
         ApiError::Retryable { .. } => "retryable error".to_string(),
         ApiError::RateLimit(_) => "rate limit".to_string(),
         ApiError::InvalidRequest { .. } => "invalid request".to_string(),
+        ApiError::CyberPolicy { .. } => "cyber policy".to_string(),
         ApiError::ServerOverloaded => "server overloaded".to_string(),
     }
 }

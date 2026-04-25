@@ -433,7 +433,6 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let writable = TempDir::new().unwrap();
     let new_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![writable.path().try_into().unwrap()],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -712,7 +711,6 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let writable = TempDir::new().unwrap();
     let new_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![writable.abs()],
-        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -728,6 +726,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: new_policy.clone(),
+            permission_profile: None,
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),
@@ -842,6 +841,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             approval_policy: default_approval_policy,
             approvals_reviewer: None,
             sandbox_policy: default_sandbox_policy.clone(),
+            permission_profile: None,
             model: default_model.clone(),
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -864,6 +864,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             approval_policy: default_approval_policy,
             approvals_reviewer: None,
             sandbox_policy: default_sandbox_policy.clone(),
+            permission_profile: None,
             model: default_model.clone(),
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -970,6 +971,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             approval_policy: default_approval_policy,
             approvals_reviewer: None,
             sandbox_policy: default_sandbox_policy.clone(),
+            permission_profile: None,
             model: default_model,
             effort: default_effort,
             summary: Some(default_summary.unwrap_or(ReasoningSummary::Auto)),
@@ -992,6 +994,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),

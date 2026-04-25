@@ -4,6 +4,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -72,7 +73,6 @@ fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
 fn workspace_write_excluding_tmp() -> SandboxPolicy {
     SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
-        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -134,6 +134,7 @@ async fn submit_turn(
     prompt: &str,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
+    approvals_reviewer: Option<ApprovalsReviewer>,
 ) -> Result<()> {
     let session_model = test.session_configured.model.clone();
     test.codex
@@ -146,8 +147,9 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
-            approvals_reviewer: None,
+            approvals_reviewer,
             sandbox_policy,
+            permission_profile: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -157,6 +159,13 @@ async fn submit_turn(
         })
         .await?;
     Ok(())
+}
+
+async fn wait_for_completion(test: &TestCodex) {
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 }
 
 async fn expect_request_permissions_event(
@@ -248,6 +257,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         "write outside the workspace",
         approval_policy,
         sandbox_policy,
+        /*approvals_reviewer*/ None,
     )
     .await?;
 
@@ -262,6 +272,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review: false,
             },
         })
         .await?;
@@ -305,11 +316,17 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
-async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_without_prompt()
--> Result<()> {
+async fn approved_folder_write_request_permissions_unblocks_later_apply_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
+    apply_patch_after_request_permissions(/*strict_auto_review*/ false).await?;
+    apply_patch_after_request_permissions(/*strict_auto_review*/ true).await?;
+
+    Ok(())
+}
+
+async fn apply_patch_after_request_permissions(strict_auto_review: bool) -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = workspace_write_excluding_tmp();
@@ -330,43 +347,72 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
     let test = builder.build(&server).await?;
 
     let requested_dir = tempfile::tempdir()?;
-    let requested_file = requested_dir.path().join("allowed-patch.txt");
+    let requested_file_name = if strict_auto_review {
+        "strict-allowed-patch.txt"
+    } else {
+        "allowed-patch.txt"
+    };
+    let patch_content = if strict_auto_review {
+        "patched-after-strict-review"
+    } else {
+        "patched-via-request-permissions"
+    };
+    let requested_file = requested_dir.path().join(requested_file_name);
     let requested_permissions = requested_directory_write_permissions(requested_dir.path());
     let normalized_requested_permissions =
         normalized_directory_write_permissions(requested_dir.path())?;
-    let patch = build_add_file_patch(&requested_file, "patched-via-request-permissions");
+    let patch = build_add_file_patch(&requested_file, patch_content);
 
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-request-permissions-patch-1"),
-                request_permissions_tool_event(
-                    "permissions-call",
-                    "Allow patching outside the workspace",
-                    &requested_permissions,
-                )?,
-                ev_completed("resp-request-permissions-patch-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-request-permissions-patch-2"),
-                ev_apply_patch_function_call("apply-patch-call", &patch),
-                ev_completed("resp-request-permissions-patch-2"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-request-permissions-patch-3"),
-                ev_assistant_message("msg-request-permissions-patch-1", "done"),
-                ev_completed("resp-request-permissions-patch-3"),
-            ]),
-        ],
-    )
-    .await;
+    let response_prefix = if strict_auto_review {
+        "resp-strict-request-permissions-patch"
+    } else {
+        "resp-request-permissions-patch"
+    };
+    let mut sse_sequence = vec![
+        sse(vec![
+            ev_response_created(&format!("{response_prefix}-1")),
+            request_permissions_tool_event(
+                "permissions-call",
+                "Allow patching outside the workspace",
+                &requested_permissions,
+            )?,
+            ev_completed(&format!("{response_prefix}-1")),
+        ]),
+        sse(vec![
+            ev_response_created(&format!("{response_prefix}-2")),
+            ev_apply_patch_function_call("apply-patch-call", &patch),
+            ev_completed(&format!("{response_prefix}-2")),
+        ]),
+    ];
+    if strict_auto_review {
+        sse_sequence.push(sse(vec![
+            ev_response_created(&format!("{response_prefix}-guardian")),
+            ev_assistant_message(
+                "msg-strict-request-permissions-patch-guardian",
+                &serde_json::json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "The patch stays within the strict turn grant.",
+                })
+                .to_string(),
+            ),
+            ev_completed(&format!("{response_prefix}-guardian")),
+        ]));
+    }
+    sse_sequence.push(sse(vec![
+        ev_response_created(&format!("{response_prefix}-3")),
+        ev_assistant_message("msg-request-permissions-patch-1", "done"),
+        ev_completed(&format!("{response_prefix}-3")),
+    ]));
+    let responses = mount_sse_sequence(&server, sse_sequence).await;
 
     submit_turn(
         &test,
         "patch outside the workspace",
         approval_policy,
         sandbox_policy,
+        strict_auto_review.then_some(ApprovalsReviewer::User),
     )
     .await?;
 
@@ -381,26 +427,38 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
+                strict_auto_review,
             },
         })
         .await?;
 
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    match event {
-        EventMsg::TurnComplete(_) => {}
-        EventMsg::ApplyPatchApprovalRequest(approval) => {
-            panic!(
-                "unexpected apply_patch approval request after granted permissions: {:?}",
-                approval.call_id
+    if strict_auto_review {
+        wait_for_completion(&test).await;
+        let guardian_request = responses
+            .requests()
+            .into_iter()
+            .find(|request| request.body_contains_text(requested_file_name))
+            .expect("expected guardian request for strict apply_patch");
+        assert!(guardian_request.body_contains_text(requested_file_name));
+        assert!(guardian_request.body_contains_text(patch_content));
+    } else {
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
             )
+        })
+        .await;
+        match event {
+            EventMsg::TurnComplete(_) => {}
+            EventMsg::ApplyPatchApprovalRequest(approval) => {
+                panic!(
+                    "unexpected apply_patch approval request after granted permissions: {:?}",
+                    approval.call_id
+                )
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
-        other => panic!("unexpected event: {other:?}"),
     }
 
     let patch_output = responses
@@ -415,7 +473,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
     );
     assert_eq!(
         fs::read_to_string(&requested_file)?,
-        "patched-via-request-permissions\n"
+        format!("{patch_content}\n")
     );
 
     Ok(())

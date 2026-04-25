@@ -7,12 +7,16 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::QueuedOutgoingMessage;
+use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
+use codex_core::config::find_codex_home;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -31,16 +35,32 @@ pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
 mod remote_control;
 mod stdio;
+mod unix_socket;
+#[cfg(test)]
+mod unix_socket_tests;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
 pub(crate) use remote_control::start_remote_control;
 pub(crate) use stdio::start_stdio_connection;
+pub(crate) use unix_socket::start_control_socket_acceptor;
 pub(crate) use websocket::start_websocket_acceptor;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
+const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
+
+pub fn app_server_control_socket_path(codex_home: &Path) -> std::io::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path(
+        codex_home
+            .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
+            .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME),
+    )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
     Stdio,
+    UnixSocket { socket_path: AbsolutePathBuf },
     WebSocket { bind_address: SocketAddr },
     Off,
 }
@@ -48,6 +68,7 @@ pub enum AppServerTransport {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AppServerTransportParseError {
     UnsupportedListenUrl(String),
+    InvalidUnixSocketPath { listen_url: String, message: String },
     InvalidWebSocketListenUrl(String),
 }
 
@@ -56,7 +77,14 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `ws://IP:PORT`, or `off`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
+            ),
+            AppServerTransportParseError::InvalidUnixSocketPath {
+                listen_url,
+                message,
+            } => write!(
+                f,
+                "invalid unix socket --listen URL `{listen_url}`; failed to resolve socket path: {message}"
             ),
             AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -74,6 +102,31 @@ impl AppServerTransport {
     pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
         if listen_url == Self::DEFAULT_LISTEN_URL {
             return Ok(Self::Stdio);
+        }
+
+        if let Some(raw_socket_path) = listen_url.strip_prefix("unix://") {
+            let socket_path = if raw_socket_path.is_empty() {
+                let codex_home = find_codex_home().map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: format!("failed to resolve CODEX_HOME: {err}"),
+                    }
+                })?;
+                app_server_control_socket_path(&codex_home).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
+            } else {
+                AbsolutePathBuf::relative_to_current_dir(raw_socket_path).map_err(|err| {
+                    AppServerTransportParseError::InvalidUnixSocketPath {
+                        listen_url: listen_url.to_string(),
+                        message: err.to_string(),
+                    }
+                })?
+            };
+            return Ok(Self::UnixSocket { socket_path });
         }
 
         if listen_url == "off" {
@@ -285,6 +338,13 @@ fn should_skip_notification_for_connection(
     };
     match message {
         OutgoingMessage::AppServerNotification(notification) => {
+            if notification.experimental_reason().is_some()
+                && !connection_state
+                    .experimental_api_enabled
+                    .load(Ordering::Acquire)
+            {
+                return true;
+            }
             let method = notification.to_string();
             opted_out_notification_methods.contains(method.as_str())
         }
@@ -417,6 +477,9 @@ mod tests {
     use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ThreadGoal;
+    use codex_app_server_protocol::ThreadGoalStatus;
+    use codex_app_server_protocol::ThreadGoalUpdatedNotification;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -425,6 +488,23 @@ mod tests {
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+    }
+
+    fn thread_goal_updated_notification() -> ServerNotification {
+        ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: None,
+            goal: ThreadGoal {
+                thread_id: "thread-1".to_string(),
+                objective: "ship goal mode".to_string(),
+                status: ThreadGoalStatus::Active,
+                token_budget: None,
+                tokens_used: 0,
+                time_used_seconds: 0,
+                created_at: 1,
+                updated_at: 1,
+            },
+        })
     }
 
     #[test]
@@ -755,6 +835,76 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "task_started"
+        ));
+    }
+
+    #[tokio::test]
+    async fn experimental_notifications_are_dropped_without_capability() {
+        let connection_id = ConnectionId(12);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                /*disconnect_sender*/ None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "experimental notifications should not reach clients without capability"
+        );
+    }
+
+    #[tokio::test]
+    async fn experimental_notifications_are_preserved_with_capability() {
+        let connection_id = ConnectionId(13);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                /*disconnect_sender*/ None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("experimental notification should reach opted-in client");
+        assert!(matches!(
+            message.message,
+            OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(_))
         ));
     }
 

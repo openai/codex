@@ -183,6 +183,7 @@ impl PendingAppServerRequests {
                                 response.permissions.clone(),
                             ),
                             scope: response.scope.into(),
+                            strict_auto_review: response.strict_auto_review.then_some(true),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -543,6 +544,7 @@ mod tests {
                         )),
                     },
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
+                    strict_auto_review: false,
                 },
             })
             .expect("permissions response should serialize")
@@ -560,10 +562,24 @@ mod tests {
                         read: Some(vec![absolute_path(read_path)]),
                         write: Some(vec![absolute_path(write_path)]),
                         glob_scan_max_depth: None,
-                        entries: None,
+                        entries: Some(vec![
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(read_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Read,
+                            },
+                            codex_app_server_protocol::FileSystemSandboxEntry {
+                                path: codex_app_server_protocol::FileSystemPath::Path {
+                                    path: absolute_path(write_path),
+                                },
+                                access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                            },
+                        ]),
                     }),
                 },
                 scope: PermissionGrantScope::Session,
+                strict_auto_review: None,
             }
         );
 

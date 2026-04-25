@@ -4,9 +4,11 @@ ARG TZ
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=22
 ARG RUST_TOOLCHAIN=1.92.0
-ARG CODEX_NPM_VERSION=latest
+# Keep this in sync with .devcontainer/codex-install/package.json and pnpm-lock.yaml.
+ARG CODEX_NPM_VERSION=0.121.0
 
 ENV TZ="$TZ"
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -43,12 +45,18 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+COPY .devcontainer/codex-install/package.json \
+     .devcontainer/codex-install/pnpm-lock.yaml \
+     .devcontainer/codex-install/pnpm-workspace.yaml \
+     /opt/codex-install/
+
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g corepack@latest "@openai/codex@${CODEX_NPM_VERSION}" \
-    && corepack enable \
-    && corepack prepare pnpm@10.28.2 --activate \
+    && test "$(node -p "require('/opt/codex-install/package.json').dependencies['@openai/codex']")" = "${CODEX_NPM_VERSION}" \
+    && cd /opt/codex-install \
+    && corepack pnpm install --prod --frozen-lockfile \
+    && ln -s /opt/codex-install/node_modules/.bin/codex /usr/local/bin/codex \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

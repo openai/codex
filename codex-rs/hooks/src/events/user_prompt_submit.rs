@@ -414,6 +414,7 @@ mod tests {
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::UserPromptSubmit,
+            is_managed: false,
             matcher: None,
             command: "echo hook".to_string(),
             timeout_sec: 5,

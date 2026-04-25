@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
+use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
@@ -15,6 +16,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -70,8 +72,7 @@ pub trait ToolHandler: Send + Sync {
 
     fn post_tool_use_payload(
         &self,
-        _call_id: &str,
-        _payload: &ToolPayload,
+        _invocation: &ToolInvocation,
         _result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
         None
@@ -136,8 +137,11 @@ pub(crate) struct PreToolUsePayload {
     /// The canonical name is serialized to hook stdin, while aliases are used
     /// only for matcher compatibility.
     pub(crate) tool_name: HookToolName,
-    /// Command-shaped input exposed at `tool_input.command`.
-    pub(crate) command: String,
+    /// Tool-specific input exposed at `tool_input`.
+    ///
+    /// Shell-like tools use `{ "command": ... }`; MCP tools use their resolved
+    /// JSON arguments.
+    pub(crate) tool_input: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,8 +153,8 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_name: HookToolName,
     /// The originating tool-use id exposed at `tool_use_id`.
     pub(crate) tool_use_id: String,
-    /// Command-shaped input exposed at `tool_input.command`.
-    pub(crate) command: String,
+    /// Tool-specific input exposed at `tool_input`.
+    pub(crate) tool_input: Value,
     /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
 }
@@ -195,9 +199,9 @@ where
         Box::pin(async move {
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
-            let output = self.handle(invocation).await?;
+            let output = self.handle(invocation.clone()).await?;
             let post_tool_use_payload =
-                ToolHandler::post_tool_use_payload(self, &call_id, &payload, &output);
+                ToolHandler::post_tool_use_payload(self, &invocation, &output);
             Ok(AnyToolResult {
                 call_id,
                 payload,
@@ -215,6 +219,19 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     fn new(handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>) -> Self {
         Self { handlers }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self::new(HashMap::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_handler_for_test<T>(name: ToolName, handler: Arc<T>) -> Self
+    where
+        T: ToolHandler + 'static,
+    {
+        Self::new(HashMap::from([(name, handler as Arc<dyn AnyToolHandler>)]))
     }
 
     fn handler(&self, name: &ToolName) -> Option<Arc<dyn AnyToolHandler>> {
@@ -292,6 +309,8 @@ impl ToolRegistry {
             }
         }
 
+        let dispatch_trace = ToolDispatchTrace::start(&invocation);
+
         let handler = match self.handler(&tool_name) {
             Some(handler) => handler,
             None => {
@@ -307,7 +326,9 @@ impl ToolRegistry {
                     mcp_server_ref,
                     mcp_server_origin_ref,
                 );
-                return Err(FunctionCallError::RespondToModel(message));
+                let err = FunctionCallError::RespondToModel(message);
+                dispatch_trace.record_failed(&err);
+                return Err(err);
             }
         };
 
@@ -324,24 +345,24 @@ impl ToolRegistry {
                 mcp_server_ref,
                 mcp_server_origin_ref,
             );
-            return Err(FunctionCallError::Fatal(message));
+            let err = FunctionCallError::Fatal(message);
+            dispatch_trace.record_failed(&err);
+            return Err(err);
         }
 
         if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
-            && let Some(reason) = run_pre_tool_use_hooks(
+            && let Some(message) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                pre_tool_use_payload.tool_name.name().to_string(),
-                pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                pre_tool_use_payload.command.clone(),
+                &pre_tool_use_payload.tool_name,
+                &pre_tool_use_payload.tool_input,
             )
             .await
         {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Command blocked by PreToolUse hook: {reason}. Command: {}",
-                pre_tool_use_payload.command
-            )));
+            let err = FunctionCallError::RespondToModel(message);
+            dispatch_trace.record_failed(&err);
+            return Err(err);
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -402,7 +423,7 @@ impl ToolRegistry {
                     post_tool_use_payload.tool_use_id,
                     post_tool_use_payload.tool_name.name().to_string(),
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_input,
                     post_tool_use_payload.tool_response,
                 )
                 .await,
@@ -422,6 +443,7 @@ impl ToolRegistry {
         .await;
 
         if let Some(err) = hook_abort_error {
+            dispatch_trace.record_failed(&err);
             return Err(err);
         }
 
@@ -455,15 +477,35 @@ impl ToolRegistry {
             }
         }
 
+        if let Err(err) = invocation
+            .session
+            .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
+                turn_context: invocation.turn.as_ref(),
+                tool_name: tool_name.name.as_str(),
+            })
+            .await
+        {
+            warn!("failed to account thread goal progress after tool call: {err}");
+        }
+
         match result {
             Ok(_) => {
                 let mut guard = response_cell.lock().await;
                 let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                dispatch_trace.record_completed(
+                    &invocation,
+                    &result.call_id,
+                    &result.payload,
+                    result.result.as_ref(),
+                );
                 Ok(result)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                dispatch_trace.record_failed(&err);
+                Err(err)
+            }
         }
     }
 }

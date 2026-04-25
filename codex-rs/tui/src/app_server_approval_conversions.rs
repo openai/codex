@@ -93,7 +93,20 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/read-only")]),
                     write: Some(vec![absolute_path("/tmp/write")]),
                     glob_scan_max_depth: None,
-                    entries: None,
+                    entries: Some(vec![
+                        codex_app_server_protocol::FileSystemSandboxEntry {
+                            path: codex_app_server_protocol::FileSystemPath::Path {
+                                path: absolute_path("/tmp/read-only"),
+                            },
+                            access: codex_app_server_protocol::FileSystemAccessMode::Read,
+                        },
+                        codex_app_server_protocol::FileSystemSandboxEntry {
+                            path: codex_app_server_protocol::FileSystemPath::Path {
+                                path: absolute_path("/tmp/write"),
+                            },
+                            access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                        },
+                    ]),
                 }),
             }
         );
