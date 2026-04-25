@@ -4,6 +4,7 @@ use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -1066,7 +1067,11 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
         .join(STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE);
 
     {
-        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        let mut mcp = McpProcess::new_with_env(
+            codex_home.path(),
+            &[(TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR, None)],
+        )
+        .await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
         wait_for_path_exists(&marker_path).await?;
@@ -1102,7 +1107,11 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
 
     {
-        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        let mut mcp = McpProcess::new_with_env(
+            codex_home.path(),
+            &[(TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR, None)],
+        )
+        .await?;
         timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     }
 
@@ -1490,7 +1499,11 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(TEST_DISABLE_PLUGIN_STARTUP_TASKS_ENV_VAR, None)],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     wait_for_featured_plugin_request_count(&server, /*expected_count*/ 1).await?;
 

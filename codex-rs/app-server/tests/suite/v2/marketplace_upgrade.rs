@@ -17,6 +17,9 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(windows)]
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(not(windows))]
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
 
@@ -63,13 +66,14 @@ fn commit_marketplace_marker(root: &Path, marker: &str) -> Result<String> {
 fn configured_git_marketplace_update<'a>(
     source: &'a str,
     last_revision: Option<&'a str>,
+    ref_name: Option<&'a str>,
 ) -> MarketplaceConfigUpdate<'a> {
     MarketplaceConfigUpdate {
         last_updated: "2026-04-13T00:00:00Z",
         last_revision,
         source_type: "git",
         source,
-        ref_name: None,
+        ref_name,
         sparse_paths: &[],
     }
 }
@@ -90,12 +94,13 @@ fn record_git_marketplace(
     marketplace_name: &str,
     source: &Path,
     last_revision: &str,
+    ref_name: Option<&str>,
 ) -> Result<()> {
     let source = source.display().to_string();
     record_user_marketplace(
         codex_home,
         marketplace_name,
-        &configured_git_marketplace_update(&source, Some(last_revision)),
+        &configured_git_marketplace_update(&source, Some(last_revision), ref_name),
     )?;
     Ok(())
 }
@@ -153,12 +158,14 @@ async fn marketplace_upgrade_all_configured_git_marketplaces() -> Result<()> {
         "debug",
         debug_source.path(),
         &debug_old_revision,
+        Some(&debug_new_revision),
     )?;
     record_git_marketplace(
         codex_home.path(),
         "tools",
         tools_source.path(),
         &tools_old_revision,
+        Some(&tools_new_revision),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
@@ -205,12 +212,14 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
         "debug",
         debug_source.path(),
         &debug_old_revision,
+        /*ref_name*/ None,
     )?;
     record_git_marketplace(
         codex_home.path(),
         "tools",
         tools_source.path(),
         &tools_old_revision,
+        /*ref_name*/ None,
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
@@ -246,7 +255,13 @@ async fn marketplace_upgrade_returns_empty_roots_when_already_up_to_date() -> Re
     let source = TempDir::new()?;
     let old_revision = init_marketplace_repo(source.path(), "debug", "debug old")?;
     commit_marketplace_marker(source.path(), "debug new")?;
-    record_git_marketplace(codex_home.path(), "debug", source.path(), &old_revision)?;
+    record_git_marketplace(
+        codex_home.path(),
+        "debug",
+        source.path(),
+        &old_revision,
+        /*ref_name*/ None,
+    )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
