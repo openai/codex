@@ -487,7 +487,7 @@ pub async fn uninstall_remote_plugin(
     }
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/ps/plugins/{plugin_id}/uninstall");
+    let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
     let client = build_reqwest_client();
     let request = authenticated_request(client.post(&url), auth)?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
