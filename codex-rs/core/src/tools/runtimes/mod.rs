@@ -55,6 +55,7 @@ pub(crate) fn exec_env_for_sandbox_permissions(
         for key in PROXY_ENV_KEYS {
             env.remove(*key);
         }
+        // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
         #[cfg(target_os = "macos")]
         if env
             .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
